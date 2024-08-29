@@ -1,0 +1,18 @@
+[package]
+name = "trustworthiness_checker"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["lib"]
+bench = false
+
+[dependencies]
+winnow = "0.6.18"
+futures = "0.3.30"
+tokio = { version = "1", features = ["full"] }
+dyn-clone = "1.0.17"
+backtrace-on-stack-overflow = "0.3.0"
+tokio-util = "0.7.11"
