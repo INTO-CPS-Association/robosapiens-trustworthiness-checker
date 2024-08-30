@@ -146,7 +146,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S
         .spawn_tasks()
     }
 
-    fn monitor(&self) -> &M {
+    fn spec(&self) -> &M {
         &self.model
     }
 

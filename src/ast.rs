@@ -44,6 +44,7 @@ impl StreamExpr for SExpr<VarName> {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LOLASpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,

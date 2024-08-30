@@ -5,17 +5,25 @@ use futures::stream::LocalBoxStream;
 use futures::StreamExt;
 use std::collections::BTreeMap;
 use std::iter::zip;
+use std::mem;
 
+use crate::ast::LOLASpecification;
+use crate::ast::SExpr;
 use crate::constraint_solver::*;
+use crate::core::FixedSemantics;
 use crate::core::IndexedVarName;
+use crate::core::InputProvider;
+use crate::core::Monitor;
+use crate::core::Specification;
 use crate::core::StreamData;
 use crate::core::VarName;
 
+#[derive(Default)]
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, StreamData>>);
 
 impl ValStreamCollection {
-    fn stream(&mut self) -> BoxStream<'_, BTreeMap<VarName, StreamData>> {
-        Box::pin(futures::stream::unfold(self, |streams| async move {
+    fn into_stream(self) -> BoxStream<'static, BTreeMap<VarName, StreamData>> {
+        Box::pin(futures::stream::unfold(self, |mut streams| async move {
             let mut res = BTreeMap::new();
             let nexts = streams.0.values_mut().map(|s| s.next());
             let next_vals = join_all(nexts).await;
@@ -67,66 +75,55 @@ fn constraints_to_outputs<'a>(
 
 pub struct ConstraintBasedMonitor {
     input_streams: ValStreamCollection,
-    constraints: SExprConstraintStore<VarName>,
-    input_vars: Vec<VarName>,
-    output_vars: Vec<VarName>,
+    model: LOLASpecification,
     input_index: usize,
 }
 
-// unsafe impl Send for SExprConstraintStore<VarName> {}
-// unsafe impl Sync for SExprConstraintStore<VarName> {}
-// unsafe impl Send for SExprConstraintStore<IndexedVarName> {}
-// unsafe impl Sync for SExprConstraintStore<IndexedVarName> {}
+impl Monitor<SExpr<VarName>, FixedSemantics, LOLASpecification> for ConstraintBasedMonitor {
+    fn new(model: LOLASpecification, mut input: impl InputProvider) -> Self {
+        let input_streams = model
+            .input_vars()
+            .iter()
+            .map(move |var| {
+                let stream = input.input_stream(var);
+                (var.clone(), stream.unwrap())
+            })
+            .collect::<BTreeMap<_, _>>();
+        let input_streams = ValStreamCollection(input_streams);
 
-impl ConstraintBasedMonitor {
-    pub fn new(
-        input_vars: Vec<VarName>,
-        output_vars: Vec<VarName>,
-        constraints: SExprConstraintStore<VarName>,
-        input_streams: ValStreamCollection,
-    ) -> Self {
         ConstraintBasedMonitor {
             input_streams,
-            constraints,
-            input_vars,
-            output_vars,
+            model,
             input_index: 0,
         }
     }
 
-    pub fn stream_constraints(&mut self) -> BoxStream<'_, SExprConstraintStore<IndexedVarName>> {
-        inputs_to_constraints(self.input_streams.stream())
+    fn spec(&self) -> &LOLASpecification {
+        &self.model
     }
 
-    pub fn stream_outputs(&mut self) -> LocalBoxStream<'_, BTreeMap<VarName, StreamData>> {
-        let outputs = self.output_vars.clone();
-        let input_index = self.input_index.clone();
-        Box::pin(self.stream_constraints().map(move |cs| {
-            let mut res = BTreeMap::new();
-            for k in &outputs {
-                res.insert(
-                    k.clone(),
-                    cs.resolved
-                        .iter()
-                        .find_map(|(v, s)| {
-                            if *v == k.to_indexed(input_index.try_into().unwrap()) {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| StreamData::Unknown)
-                        .clone(),
-                );
-            }
-            res
-        }))
+    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, StreamData>> {
+        constraints_to_outputs(
+            self.stream_output_constraints(),
+            self.model.output_vars.clone(),
+        )
+    }
+}
+
+impl ConstraintBasedMonitor {
+    fn inputs_into_constraints(
+        &mut self,
+    ) -> BoxStream<'static, SExprConstraintStore<IndexedVarName>> {
+        let mut input_streams = mem::take(&mut self.input_streams);
+        inputs_to_constraints(input_streams.into_stream())
     }
 
-    pub fn monitor_constraints(&mut self) -> BoxStream<'_, SExprConstraintStore<IndexedVarName>> {
+    fn stream_output_constraints(
+        &mut self,
+    ) -> BoxStream<'static, SExprConstraintStore<IndexedVarName>> {
         let initial_constraints = SExprConstraintStore::<IndexedVarName>::default();
-        let overall_constraints = self.constraints.clone();
-        let inputs_initial = self.stream_constraints();
+        let overall_constraints = model_constraints(self.model.clone());
+        let inputs_initial = self.inputs_into_constraints();
         Box::pin(stream::unfold(
             (0, initial_constraints, inputs_initial, overall_constraints),
             |(index, mut constraints, mut inputs, cs)| async move {
@@ -148,10 +145,5 @@ impl ConstraintBasedMonitor {
                 Some((constraints.clone(), (index + 1, constraints, inputs, cs)))
             },
         ))
-    }
-
-    pub fn monitor_outputs(&mut self) -> BoxStream<'_, BTreeMap<VarName, StreamData>> {
-        let output_vars = self.output_vars.clone();
-        constraints_to_outputs(self.monitor_constraints(), output_vars)
     }
 }

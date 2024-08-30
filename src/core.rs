@@ -73,11 +73,11 @@ pub trait MonitoringSemantics<T>: Clone + Send + 'static {
 // A dummy monitoring semantics for monitors which do not support pluggable
 // monitoring semantics
 #[derive(Clone)]
-struct FixedSemantics;
+pub struct FixedSemantics;
 
-impl MonitoringSemantics<StreamData> for FixedSemantics {
-    fn to_async_stream(expr: StreamData, _: &impl StreamContext) -> OutputStream {
-        Box::pin(futures::stream::once(async move { expr }))
+impl<T> MonitoringSemantics<T> for FixedSemantics {
+    fn to_async_stream(_: T, _: &impl StreamContext) -> OutputStream {
+        unimplemented!("Dummy monitoring semantics; should not be called")
     }
 }
 
@@ -97,7 +97,7 @@ where
 {
     fn new(model: M, input: impl InputProvider) -> Self;
 
-    fn monitor(&self) -> &M;
+    fn spec(&self) -> &M;
 
     fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, StreamData>>;
 }

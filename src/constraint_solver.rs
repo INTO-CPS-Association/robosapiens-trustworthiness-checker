@@ -14,6 +14,14 @@ pub struct SExprConstraintStore<VarT: Debug> {
     pub unresolved: Vec<SExprConstraint<VarT>>,
 }
 
+pub fn model_constraints(model: LOLASpecification) -> SExprConstraintStore<VarName> {
+    let mut constraints = SExprConstraintStore::default();
+    for (var, sexpr) in model.exprs.iter() {
+        constraints.add_constraint((VarName(var.0.clone()), sexpr.clone()));
+    }
+    constraints
+}
+
 impl<VarT: Debug> Default for SExprConstraintStore<VarT> {
     fn default() -> Self {
         SExprConstraintStore {
@@ -425,7 +433,7 @@ mod tests {
         );
     }
 
-    #[ignore="currently we can't handle recursive constraints in the solver as need a way to handle the inner indexes"]
+    #[ignore = "currently we can't handle recursive constraints in the solver as need a way to handle the inner indexes"]
     #[test]
     fn test_solve_indexed_constraints() {
         let mut constraints = to_indexed_constraints(&recursive_constraints(), 0);
