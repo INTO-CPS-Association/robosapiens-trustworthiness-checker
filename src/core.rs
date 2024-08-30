@@ -67,7 +67,18 @@ pub trait StreamExpr {
 // We require copy because we want to be able to
 // manage the lifetime of the semantics object
 pub trait MonitoringSemantics<T>: Clone + Send + 'static {
-    fn to_async_stream(&self, expr: T, ctx: &impl StreamContext) -> OutputStream;
+    fn to_async_stream(expr: T, ctx: &impl StreamContext) -> OutputStream;
+}
+
+// A dummy monitoring semantics for monitors which do not support pluggable
+// monitoring semantics
+#[derive(Clone)]
+struct FixedSemantics;
+
+impl MonitoringSemantics<StreamData> for FixedSemantics {
+    fn to_async_stream(expr: StreamData, _: &impl StreamContext) -> OutputStream {
+        Box::pin(futures::stream::once(async move { expr }))
+    }
 }
 
 pub trait Specification<T: StreamExpr> {
@@ -84,11 +95,9 @@ where
     S: MonitoringSemantics<T>,
     M: Specification<T>,
 {
-    fn new(model: M, semantics: S, input: impl InputProvider) -> Self;
+    fn new(model: M, input: impl InputProvider) -> Self;
 
     fn monitor(&self) -> &M;
-
-    fn semantics(&self) -> &S;
 
     fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, StreamData>>;
 }

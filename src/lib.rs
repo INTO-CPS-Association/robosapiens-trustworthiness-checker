@@ -7,7 +7,7 @@ pub use async_runtime::AsyncMonitorRunner;
 pub mod constraint_based_runtime;
 pub mod constraint_solver;
 pub mod monitoring_semantics;
-pub use monitoring_semantics::UNTIMED_LOLA_SEMANTICS;
+pub use monitoring_semantics::UntimedLolaSemantics;
 pub mod parser;
 pub use parser::lola_expression;
 pub mod untimed_monitoring_combinators;

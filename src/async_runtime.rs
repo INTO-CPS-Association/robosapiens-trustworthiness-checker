@@ -100,16 +100,16 @@ where
     var_exchange: Arc<AsyncVarExchange>,
     // tasks: Option<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>,
     output_streams: BTreeMap<VarName, OutputStream>,
-    semantics: S,
     cancellation_token: CancellationToken,
     cancellation_guard: DropGuard,
     phantom_t: PhantomData<T>,
+    semantics_t: PhantomData<S>,
 }
 
 impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S, M>
     for AsyncMonitorRunner<T, S, M>
 {
-    fn new(model: M, semantics: S, mut input_streams: impl InputProvider) -> Self {
+    fn new(model: M, mut input_streams: impl InputProvider) -> Self {
         let var_names = model
             .input_vars()
             .into_iter()
@@ -128,7 +128,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S
             .collect::<BTreeMap<_, _>>();
         let input_streams = Arc::new(Mutex::new(input_streams));
 
-        let mut output_streams = BTreeMap::new();
+        let output_streams = BTreeMap::new();
 
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = cancellation_token.clone().drop_guard();
@@ -138,7 +138,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S
             input_streams,
             var_exchange,
             output_streams,
-            semantics,
+            semantics_t: PhantomData,
             phantom_t: PhantomData,
             cancellation_token,
             cancellation_guard,
@@ -148,10 +148,6 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S
 
     fn monitor(&self) -> &M {
         &self.model
-    }
-
-    fn semantics(&self) -> &S {
-        &self.semantics
     }
 
     fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, StreamData>> {
@@ -224,7 +220,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> AsyncMonitor
         let var_exchange = self.var_exchange.clone();
 
         let sexpr = self.model.var_expr(&var).unwrap();
-        let mut output = self.semantics().to_async_stream(sexpr, &var_exchange);
+        let mut output = S::to_async_stream(sexpr, &var_exchange);
 
         let cancellation_token = self.cancellation_token.clone();
 
@@ -266,7 +262,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> AsyncMonitor
 
             // Add output steams that subscribe to the inputs
             let var_expr = T::var(var);
-            let var_output_stream = self.semantics.to_async_stream(var_expr, &self.var_exchange);
+            let var_output_stream = S::to_async_stream(var_expr, &self.var_exchange);
             self.output_streams.insert(var.clone(), var_output_stream);
         }
 

@@ -2,11 +2,12 @@
 
 use futures::stream;
 use futures::stream::{BoxStream, StreamExt};
+use trustworthiness_checker::UntimedLolaSemantics;
 use std::{collections::BTreeMap, pin::Pin};
 use trustworthiness_checker::{
     ast::{LOLASpecification, SExpr},
     async_runtime::AsyncMonitorRunner,
-    monitoring_semantics::UNTIMED_LOLA_SEMANTICS,
+    monitoring_semantics::UntimedLolaSemantics,
     Monitor, StreamData, VarName,
 };
 
@@ -43,7 +44,7 @@ async fn test_simple_add_monitor() {
         .into_iter()
         .collect(),
     };
-    let mut async_monitor = AsyncMonitorRunner::new(spec, UNTIMED_LOLA_SEMANTICS, input_streams);
+    let mut async_monitor = AsyncMonitorRunner::<_, UntimedLolaSemantics, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, StreamData>)> = async_monitor
         .monitor_outputs()
         .take(2)
@@ -89,7 +90,7 @@ async fn test_count_monitor() {
         .into_iter()
         .collect(),
     };
-    let mut async_monitor = AsyncMonitorRunner::new(spec, UNTIMED_LOLA_SEMANTICS, input_streams);
+    let mut async_monitor = AsyncMonitorRunner::<_, UntimedLolaSemantics, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, StreamData>)> = async_monitor
         .monitor_outputs()
         .take(4)

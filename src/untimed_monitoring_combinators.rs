@@ -157,15 +157,14 @@ pub fn mult(x: OutputStream, y: OutputStream) -> OutputStream {
     )
 }
 
-pub fn eval(
-    sem: impl MonitoringSemantics<SExpr<VarName>>,
+pub fn eval<S: MonitoringSemantics<SExpr<VarName>>>(
     ctx: &impl StreamContext,
     x: OutputStream,
 ) -> OutputStream {
     let ctx = ctx.clone();
     Box::pin(stream::unfold(
-        (sem, ctx, x, None::<(StreamData, OutputStream)>),
-        |(sem, ctx, mut x, last)| async move {
+        (ctx, x, None::<(StreamData, OutputStream)>),
+        |(ctx, mut x, last)| async move {
             let current = x.next().await;
             println!("Current: {:?}", current);
 
@@ -180,7 +179,7 @@ pub fn eval(
                 if prev == current {
                     let eval_res = es.next().await;
                     return match eval_res {
-                        Some(eval_res) => Some((eval_res, (sem, ctx, x, Some((current, es))))),
+                        Some(eval_res) => Some((eval_res, (ctx, x, Some((current, es))))),
                         None => None,
                     };
                 }
@@ -195,12 +194,9 @@ pub fn eval(
                         Err(_) => unimplemented!("Invalid eval str"),
                     };
                     println!("expr: {}", expr);
-                    let es = sem.to_async_stream(expr, &ctx.clone());
+                    let es = S::to_async_stream(expr, &ctx.clone());
                     //let eval_res = es.next().await;
-                    return Some((
-                        StreamData::Unit,
-                        (sem, ctx, x, Some((StreamData::Str(s), es))),
-                    ));
+                    return Some((StreamData::Unit, (ctx, x, Some((StreamData::Str(s), es)))));
 
                     // return match eval_res {
                     //     Some(eval_res) => {
