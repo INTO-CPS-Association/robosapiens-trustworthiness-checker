@@ -3,63 +3,39 @@ use crate::{
     StreamData,
 };
 
-use std::{collections::BTreeMap, fmt::Debug, fmt::Display};
+use std::fmt::Debug;
 
+// Stream expression typed
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SExprInt<VarT: Debug> {
-    // if-then-else
-    If(Box<BExpr<VarT>>, Box<SExprInt<VarT>>, Box<SExprInt<VarT>>),
+pub enum SExprT<ValT, VarT: Debug> {
+    If(Box<BExpr<VarT>>, Box<Self>, Box<Self>),
 
     // Stream indexing
     Index(
         // Inner SExpr e
-        Box<SExprInt<VarT>>,
+        Box<Self>,
         // Index i
         isize,
         // Default c
-        i64,
+        ValT,
     ),
 
     // Arithmetic Stream expression
-    Val(i64),
-    Plus(Box<SExprInt<VarT>>, Box<SExprInt<VarT>>),
-    Minus(Box<SExprInt<VarT>>, Box<SExprInt<VarT>>),
-    Mult(Box<SExprInt<VarT>>, Box<SExprInt<VarT>>),
+    Val(ValT),
+    Plus(Box<Self>, Box<Self>),
+    Minus(Box<Self>, Box<Self>),
+    Mult(Box<Self>, Box<Self>),
     Var(VarT),
 
     // Eval
-    Eval(Box<SExprInt<VarT>>),
+    Eval(Box<Self>),
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SExprStr<VarT: Debug> {
-    If(Box<BExpr<VarT>>, Box<SExprStr<VarT>>, Box<SExprStr<VarT>>),
-
-    // Stream indexing
-    Index(
-        // Inner SExpr e
-        Box<SExprStr<VarT>>,
-        // Index i
-        isize,
-        // Default c
-        String,
-    ),
-
-    // Arithmetic Stream expression
-    Val(String),
-    Plus(Box<SExprStr<VarT>>, Box<SExprStr<VarT>>),
-    Minus(Box<SExprStr<VarT>>, Box<SExprStr<VarT>>),
-    Mult(Box<SExprStr<VarT>>, Box<SExprStr<VarT>>),
-    Var(VarT),
-
-    // Eval
-    Eval(Box<SExprStr<VarT>>),
-}
-
+// Stream expression typed enum
 #[derive(Debug, PartialEq, Eq)]
-pub enum SExprT<VarT: Debug> {
-    IntT(SExprInt<VarT>),
-    StrT(SExprStr<VarT>),
+pub enum SExprTE<VarT: Debug> {
+    IntT(SExprT<i64, VarT>),
+    StrT(SExprT<String, VarT>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -68,21 +44,20 @@ pub enum ErrorType {
     UndefinedVariable(String),
 }
 
-pub fn type_check_expr(sexpr: SExpr<String>) -> Result<SExprT<String>, ErrorType> {
+pub fn type_check_expr(sexpr: SExpr<String>) -> Result<SExprTE<String>, ErrorType> {
     match sexpr {
         SExpr::Val(sdata) => match sdata {
-            StreamData::Int(v) => Ok(SExprT::IntT(SExprInt::Val(v))),
-            StreamData::Str(v) => Ok(SExprT::StrT(SExprStr::Val(v))),
+            StreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
+            StreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
             _ => Err(ErrorType::TypeError("Not implemented".into())),
         },
         SExpr::Plus(se1, se2) => {
             let se1_check = type_check_expr(*se1);
             let se2_check = type_check_expr(*se2);
             match (se1_check, se2_check) {
-                (Ok(SExprT::IntT(se1)), Ok(SExprT::IntT(se2))) => Ok(SExprT::IntT(SExprInt::Plus(
-                    Box::new(se1.clone()),
-                    Box::new(se2.clone()),
-                ))),
+                (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(
+                    SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
+                )),
                 _ => Err(ErrorType::TypeError("Not implemented".into())),
             }
         }

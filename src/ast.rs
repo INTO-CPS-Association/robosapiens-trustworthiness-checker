@@ -15,12 +15,12 @@ pub enum BExpr<VarT: Debug> {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else
-    If(Box<BExpr<VarT>>, Box<SExpr<VarT>>, Box<SExpr<VarT>>),
+    If(Box<BExpr<VarT>>, Box<Self>, Box<Self>),
 
     // Stream indexing
     Index(
         // Inner SExpr e
-        Box<SExpr<VarT>>,
+        Box<Self>,
         // Index i
         isize,
         // Default c
@@ -29,13 +29,13 @@ pub enum SExpr<VarT: Debug> {
 
     // Arithmetic Stream expression
     Val(StreamData),
-    Plus(Box<SExpr<VarT>>, Box<SExpr<VarT>>),
-    Minus(Box<SExpr<VarT>>, Box<SExpr<VarT>>),
-    Mult(Box<SExpr<VarT>>, Box<SExpr<VarT>>),
+    Plus(Box<Self>, Box<Self>),
+    Minus(Box<Self>, Box<Self>),
+    Mult(Box<Self>, Box<Self>),
     Var(VarT),
 
     // Eval
-    Eval(Box<SExpr<VarT>>),
+    Eval(Box<Self>),
 }
 
 impl StreamExpr for SExpr<VarName> {
