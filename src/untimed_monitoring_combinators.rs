@@ -8,47 +8,47 @@ use winnow::Parser;
 
 use crate::{
     ast::SExpr,
-    core::{MonitoringSemantics, OutputStream, StreamContext, StreamData, VarName},
+    core::{ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, StreamData, VarName},
 };
 
-pub trait CloneFn1: Fn(StreamData) -> StreamData + Clone + Sync + Send + 'static {}
-impl<T> CloneFn1 for T where T: Fn(StreamData) -> StreamData + Sync + Send + Clone + 'static {}
+pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + Sync + Send + 'static {}
+impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Sync + Send + Clone + 'static {}
 
-pub fn lift1(f: impl CloneFn1, x_mon: OutputStream) -> OutputStream {
+pub fn lift1<S: StreamData, R: StreamData>(f: impl CloneFn1<S, R>, x_mon: OutputStream<S>) -> OutputStream<R> {
     let f = f.clone();
 
     Box::pin(x_mon.map(move |x| f(x)))
 }
 
-pub trait CloneFn2:
-    Fn(StreamData, StreamData) -> StreamData + Clone + Sync + Send + 'static
+pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
+    Fn(S, R) -> U + Clone + Sync + Send + 'static
 {
 }
-impl<T> CloneFn2 for T where
-    T: Fn(StreamData, StreamData) -> StreamData + Clone + Sync + Send + 'static
+impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T where
+    T: Fn(S, R) -> U + Clone + Sync + Send + 'static
 {
 }
 
-pub fn lift2(f: impl CloneFn2, x_mon: OutputStream, y_mon: OutputStream) -> OutputStream {
+pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(f: impl CloneFn2<S, R, U>, x_mon: OutputStream<S>, y_mon: OutputStream<R>) -> OutputStream<U> {
     let f = f.clone();
     Box::pin(x_mon.zip(y_mon).map(move |(x, y)| f(x, y)))
 }
 
-pub trait CloneFn3:
-    Fn(StreamData, StreamData, StreamData) -> StreamData + Clone + Sync + Send + 'static
+pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
+    Fn(S, R, U) -> V + Clone + Sync + Send + 'static
 {
 }
-impl<T> CloneFn3 for T where
-    T: Fn(StreamData, StreamData, StreamData) -> StreamData + Clone + Sync + Send + 'static
+impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T where
+    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static
 {
 }
 
-pub fn lift3(
-    f: impl CloneFn3,
-    x_mon: OutputStream,
-    y_mon: OutputStream,
-    z_mon: OutputStream,
-) -> OutputStream {
+pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
+    f: impl CloneFn3<S, R, V, U>,
+    x_mon: OutputStream<S>,
+    y_mon: OutputStream<R>,
+    z_mon: OutputStream<V>,
+) -> OutputStream<U> {
     let f = f.clone();
 
     Box::pin(
@@ -56,38 +56,38 @@ pub fn lift3(
             .zip(y_mon)
             .zip(z_mon)
             .map(move |((x, y), z)| f(x, y, z)),
-    ) as BoxStream<'static, StreamData>
+    ) as BoxStream<'static, U>
 }
 
-pub fn and(x: OutputStream, y: OutputStream) -> OutputStream {
+pub fn and(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
     lift2(
-        |x, y| StreamData::Bool(x == StreamData::Bool(true) && y == StreamData::Bool(true)),
+        |x, y| ConcreteStreamData::Bool(x == ConcreteStreamData::Bool(true) && y == ConcreteStreamData::Bool(true)),
         x,
         y,
     )
 }
 
-pub fn or(x: OutputStream, y: OutputStream) -> OutputStream {
+pub fn or(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
     lift2(
-        |x, y| StreamData::Bool(x == StreamData::Bool(true) || y == StreamData::Bool(true)),
+        |x, y| ConcreteStreamData::Bool(x == ConcreteStreamData::Bool(true) || y == ConcreteStreamData::Bool(true)),
         x,
         y,
     )
 }
 
-pub fn not(x: OutputStream) -> OutputStream {
-    lift1(|x| StreamData::Bool(x == StreamData::Bool(true)), x)
+pub fn not(x: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
+    lift1(|x| ConcreteStreamData::Bool(x == ConcreteStreamData::Bool(true)), x)
 }
 
-pub fn eq(x: OutputStream, y: OutputStream) -> OutputStream {
-    lift2(|x, y| StreamData::Bool(x == y), x, y)
+pub fn eq(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
+    lift2(|x, y| ConcreteStreamData::Bool(x == y), x, y)
 }
 
-pub fn le(x: OutputStream, y: OutputStream) -> OutputStream {
+pub fn le(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
     lift2(
         |x, y| match (x, y) {
-            (StreamData::Int(x), StreamData::Int(y)) => StreamData::Bool(x <= y),
-            (StreamData::Bool(a), StreamData::Bool(b)) => StreamData::Bool(a <= b),
+            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => ConcreteStreamData::Bool(x <= y),
+            (ConcreteStreamData::Bool(a), ConcreteStreamData::Bool(b)) => ConcreteStreamData::Bool(a <= b),
             _ => panic!("Invalid comparison"),
         },
         x,
@@ -95,15 +95,16 @@ pub fn le(x: OutputStream, y: OutputStream) -> OutputStream {
     )
 }
 
-pub fn val(x: StreamData) -> OutputStream {
+pub fn val(x: ConcreteStreamData) -> OutputStream<ConcreteStreamData> {
     Box::pin(stream::repeat(x.clone()))
 }
 
-pub fn if_stm(x: OutputStream, y: OutputStream, z: OutputStream) -> OutputStream {
+// Should this return a dyn ConcreteStreamData?
+pub fn if_stm(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>, z: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
     lift3(
         |x, y, z| match x {
-            StreamData::Bool(true) => y,
-            StreamData::Bool(false) => z,
+            ConcreteStreamData::Bool(true) => y,
+            ConcreteStreamData::Bool(false) => z,
             _ => panic!("Invalid if condition"),
         },
         x,
@@ -112,22 +113,22 @@ pub fn if_stm(x: OutputStream, y: OutputStream, z: OutputStream) -> OutputStream
     )
 }
 
-pub fn index(x: OutputStream, i: isize, c: StreamData) -> OutputStream {
+pub fn index(x: OutputStream<ConcreteStreamData>, i: isize, c: ConcreteStreamData) -> OutputStream<ConcreteStreamData> {
     let c = c.clone();
     if i < 0 {
         let n: usize = (-i).try_into().unwrap();
         let cs = stream::repeat(c).take(n);
-        Box::pin(cs.chain(x)) as BoxStream<'static, StreamData>
+        Box::pin(cs.chain(x)) as BoxStream<'static, ConcreteStreamData>
     } else {
         let n: usize = i.try_into().unwrap();
-        Box::pin(x.skip(n)) as BoxStream<'static, StreamData>
+        Box::pin(x.skip(n)) as BoxStream<'static, ConcreteStreamData>
     }
 }
 
-pub fn plus(x: OutputStream, y: OutputStream) -> OutputStream {
+pub fn plus(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
     lift2(
         |x, y| match (x, y) {
-            (StreamData::Int(x), StreamData::Int(y)) => StreamData::Int(x + y),
+            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => ConcreteStreamData::Int(x + y),
             _ => panic!("Invalid addition"),
         },
         x,
@@ -135,10 +136,10 @@ pub fn plus(x: OutputStream, y: OutputStream) -> OutputStream {
     )
 }
 
-pub fn minus(x: OutputStream, y: OutputStream) -> OutputStream {
+pub fn minus(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
     lift2(
         |x, y| match (x, y) {
-            (StreamData::Int(x), StreamData::Int(y)) => StreamData::Int(x - y),
+            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => ConcreteStreamData::Int(x - y),
             _ => panic!("Invalid subtraction"),
         },
         x,
@@ -146,10 +147,10 @@ pub fn minus(x: OutputStream, y: OutputStream) -> OutputStream {
     )
 }
 
-pub fn mult(x: OutputStream, y: OutputStream) -> OutputStream {
+pub fn mult(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
     lift2(
         |x, y| match (x, y) {
-            (StreamData::Int(x), StreamData::Int(y)) => StreamData::Int(x * y),
+            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => ConcreteStreamData::Int(x * y),
             _ => panic!("Invalid multiplication"),
         },
         x,
@@ -157,13 +158,13 @@ pub fn mult(x: OutputStream, y: OutputStream) -> OutputStream {
     )
 }
 
-pub fn eval<S: MonitoringSemantics<SExpr<VarName>>>(
-    ctx: &impl StreamContext,
-    x: OutputStream,
-) -> OutputStream {
+pub fn eval<S: MonitoringSemantics<SExpr<VarName>, ConcreteStreamData>>(
+    ctx: &impl StreamContext<ConcreteStreamData>,
+    x: OutputStream<ConcreteStreamData>,
+) -> OutputStream<ConcreteStreamData> {
     let ctx = ctx.clone();
     Box::pin(stream::unfold(
-        (ctx, x, None::<(StreamData, OutputStream)>),
+        (ctx, x, None::<(ConcreteStreamData, OutputStream<ConcreteStreamData>)>),
         |(ctx, mut x, last)| async move {
             let current = x.next().await;
             println!("Current: {:?}", current);
@@ -186,7 +187,7 @@ pub fn eval<S: MonitoringSemantics<SExpr<VarName>>>(
             }
 
             match current {
-                StreamData::Str(s) => {
+                ConcreteStreamData::Str(s) => {
                     println!("s: {:?}", s);
                     let s_parse = &mut s.as_str();
                     let expr = match crate::parser::lola_expression.parse_next(s_parse) {
@@ -196,7 +197,7 @@ pub fn eval<S: MonitoringSemantics<SExpr<VarName>>>(
                     println!("expr: {}", expr);
                     let es = S::to_async_stream(expr, &ctx.clone());
                     //let eval_res = es.next().await;
-                    return Some((StreamData::Unit, (ctx, x, Some((StreamData::Str(s), es)))));
+                    return Some((ConcreteStreamData::Unit, (ctx, x, Some((ConcreteStreamData::Str(s), es)))));
 
                     // return match eval_res {
                     //     Some(eval_res) => {
@@ -208,10 +209,10 @@ pub fn eval<S: MonitoringSemantics<SExpr<VarName>>>(
                 x => unimplemented!("Invalid eval type {}", x),
             }
         },
-    )) as OutputStream
+    )) as OutputStream<ConcreteStreamData>
 }
 
-pub fn var(ctx: &impl StreamContext, x: VarName) -> OutputStream {
+pub fn var(ctx: &impl StreamContext<ConcreteStreamData>, x: VarName) -> OutputStream<ConcreteStreamData> {
     match ctx.var(&x) {
         Some(x) => x,
         None => {

@@ -10,7 +10,7 @@ use winnow::ascii::alphanumeric1 as ident;
 use winnow::ascii::space0 as whitespace;
 
 use crate::ast::*;
-use crate::core::{StreamData, VarName};
+use crate::core::{ConcreteStreamData, VarName};
 
 // This is the top-level parser for LOLA expressions
 pub fn lola_expression(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -26,15 +26,15 @@ fn string<'a>(s: &mut &'a str) -> PResult<&'a str> {
     delimited('"', alphanumeric0, '"').parse_next(s)
 }
 
-fn streamdata(s: &mut &str) -> PResult<StreamData> {
+fn streamdata(s: &mut &str) -> PResult<ConcreteStreamData> {
     delimited(
         whitespace,
         alt((
-            integer.map(StreamData::Int),
-            string.map(|s: &str| StreamData::Str(s.into())),
-            literal("true").map(|_| StreamData::Bool(true)),
-            literal("false").map(|_| StreamData::Bool(false)),
-            literal("unit").map(|_| StreamData::Unit),
+            integer.map(ConcreteStreamData::Int),
+            string.map(|s: &str| ConcreteStreamData::Str(s.into())),
+            literal("true").map(|_| ConcreteStreamData::Bool(true)),
+            literal("false").map(|_| ConcreteStreamData::Bool(false)),
+            literal("unit").map(|_| ConcreteStreamData::Unit),
         )),
         whitespace,
     )
@@ -212,19 +212,19 @@ mod tests {
     fn test_streamdata() {
         assert_eq!(
             streamdata(&mut (*"42".to_string()).into()),
-            Ok(StreamData::Int(42)),
+            Ok(ConcreteStreamData::Int(42)),
         );
         assert_eq!(
             streamdata(&mut (*"\"abc2d\"".to_string()).into()),
-            Ok(StreamData::Str("abc2d".to_string())),
+            Ok(ConcreteStreamData::Str("abc2d".to_string())),
         );
         assert_eq!(
             streamdata(&mut (*"true".to_string()).into()),
-            Ok(StreamData::Bool(true)),
+            Ok(ConcreteStreamData::Bool(true)),
         );
         assert_eq!(
             streamdata(&mut (*"false".to_string()).into()),
-            Ok(StreamData::Bool(false)),
+            Ok(ConcreteStreamData::Bool(false)),
         );
     }
 
@@ -233,17 +233,17 @@ mod tests {
         assert_eq!(
             sexpr(&mut (*"1 + 2".to_string()).into()),
             Ok(SExpr::Plus(
-                Box::new(SExpr::Val(StreamData::Int(1))),
-                Box::new(SExpr::Val(StreamData::Int(2))),
+                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
             )),
         );
         assert_eq!(
             sexpr(&mut (*"1 + 2 * 3".to_string()).into()),
             Ok(SExpr::Plus(
-                Box::new(SExpr::Val(StreamData::Int(1))),
+                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                 Box::new(SExpr::Mult(
-                    Box::new(SExpr::Val(StreamData::Int(2))),
-                    Box::new(SExpr::Val(StreamData::Int(3))),
+                    Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
+                    Box::new(SExpr::Val(ConcreteStreamData::Int(3))),
                 )),
             )),
         );
@@ -253,7 +253,7 @@ mod tests {
                 Box::new(SExpr::Var(VarName("x".into()))),
                 Box::new(SExpr::Plus(
                     Box::new(SExpr::Var(VarName("y".into()))),
-                    Box::new(SExpr::Val(StreamData::Int(2))),
+                    Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
                 )),
             )),
         )

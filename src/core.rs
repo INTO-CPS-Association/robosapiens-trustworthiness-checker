@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt::Display};
 use futures::stream::BoxStream;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub enum StreamData {
+pub enum ConcreteStreamData {
     Int(i64),
     Str(String),
     Bool(bool),
@@ -11,14 +11,18 @@ pub enum StreamData {
     Unit,
 }
 
-impl Display for StreamData {
+pub trait StreamData: Clone + Send + 'static {}
+
+impl StreamData for ConcreteStreamData {}
+
+impl Display for ConcreteStreamData {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            StreamData::Int(n) => write!(f, "{}", n),
-            StreamData::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
-            StreamData::Str(s) => write!(f, "\"{}\"", s),
-            StreamData::Unknown => write!(f, "unknown"),
-            StreamData::Unit => write!(f, "unit"),
+            ConcreteStreamData::Int(n) => write!(f, "{}", n),
+            ConcreteStreamData::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
+            ConcreteStreamData::Str(s) => write!(f, "\"{}\"", s),
+            ConcreteStreamData::Unknown => write!(f, "unknown"),
+            ConcreteStreamData::Unit => write!(f, "unit"),
         }
     }
 }
@@ -38,22 +42,22 @@ impl Display for VarName {
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub struct IndexedVarName(pub Box<str>, pub usize);
 
-pub type OutputStream = BoxStream<'static, StreamData>;
+pub type OutputStream<T: StreamData> = BoxStream<'static, T>;
 
-pub trait InputProvider {
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream>;
+pub trait InputProvider<T> {
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<T>>;
 }
 
-impl InputProvider for BTreeMap<VarName, OutputStream> {
+impl<T: StreamData> InputProvider<T> for BTreeMap<VarName, OutputStream<T>> {
     // We are consuming the input stream from the map when
     // we return it to ensure single ownership and static lifetime
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream> {
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<T>> {
         self.remove(var)
     }
 }
 
-pub trait StreamContext: Send + Clone + 'static {
-    fn var(&self, x: &VarName) -> Option<OutputStream>;
+pub trait StreamContext<T>: Send + Clone + 'static {
+    fn var(&self, x: &VarName) -> Option<OutputStream<T>>;
 }
 
 pub trait StreamExpr {
@@ -66,8 +70,8 @@ pub trait StreamExpr {
 // expression language.
 // We require copy because we want to be able to
 // manage the lifetime of the semantics object
-pub trait MonitoringSemantics<T>: Clone + Send + 'static {
-    fn to_async_stream(expr: T, ctx: &impl StreamContext) -> OutputStream;
+pub trait MonitoringSemantics<T, S: StreamData>: Clone + Send + 'static {
+    fn to_async_stream(expr: T, ctx: &impl StreamContext<S>) -> OutputStream<S>;
 }
 
 // A dummy monitoring semantics for monitors which do not support pluggable
@@ -75,8 +79,8 @@ pub trait MonitoringSemantics<T>: Clone + Send + 'static {
 #[derive(Clone)]
 pub struct FixedSemantics;
 
-impl<T> MonitoringSemantics<T> for FixedSemantics {
-    fn to_async_stream(_: T, _: &impl StreamContext) -> OutputStream {
+impl<T, R: StreamData> MonitoringSemantics<T, R> for FixedSemantics {
+    fn to_async_stream(_: T, _: &impl StreamContext<R>) -> OutputStream<R> {
         unimplemented!("Dummy monitoring semantics; should not be called")
     }
 }
@@ -89,15 +93,16 @@ pub trait Specification<T: StreamExpr> {
     fn var_expr(&self, var: &VarName) -> Option<T>;
 }
 
-pub trait Monitor<T, S, M>
+pub trait Monitor<T, S, M, R>
 where
     T: StreamExpr,
-    S: MonitoringSemantics<T>,
+    S: MonitoringSemantics<T, R>,
     M: Specification<T>,
+    R: StreamData,
 {
-    fn new(model: M, input: impl InputProvider) -> Self;
+    fn new(model: M, input: impl InputProvider<R>) -> Self;
 
     fn spec(&self) -> &M;
 
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, StreamData>>;
+    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, R>>;
 }

@@ -18,19 +18,20 @@ use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::Specification;
+use crate::core::StreamData;
 use crate::core::StreamExpr;
-use crate::core::{OutputStream, StreamContext, StreamData, VarName};
+use crate::core::{OutputStream, StreamContext, ConcreteStreamData, VarName};
 
-struct AsyncVarExchange {
-    senders: BTreeMap<VarName, Arc<Mutex<Sender<StreamData>>>>,
+struct AsyncVarExchange<T: StreamData> {
+    senders: BTreeMap<VarName, Arc<Mutex<Sender<T>>>>,
 }
 
-impl AsyncVarExchange {
+impl<T: StreamData> AsyncVarExchange<T> {
     fn new(vars: Vec<VarName>) -> Self {
         let mut senders = BTreeMap::new();
 
         for var in vars {
-            let (sender, _) = channel::<StreamData>(100);
+            let (sender, _) = channel::<T>(100);
             senders.insert(var, Arc::new(Mutex::new(sender)));
         }
 
@@ -40,9 +41,9 @@ impl AsyncVarExchange {
     fn publish(
         &self,
         var: &VarName,
-        data: StreamData,
+        data: T,
         max_queued: Option<usize>,
-    ) -> Option<StreamData> {
+    ) -> Option<T> {
         // Don't send if maxed_queued limit is set and reached
         // This check is integrated into publish so that len can
         // be checked within the same lock acquisition as sending the data
@@ -67,8 +68,8 @@ impl AsyncVarExchange {
     }
 }
 
-impl StreamContext for Arc<AsyncVarExchange> {
-    fn var(&self, var: &VarName) -> Option<OutputStream> {
+impl<T: StreamData> StreamContext<T> for Arc<AsyncVarExchange<T>> {
+    fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
         match self.senders.get(&var) {
             Some(sender) => {
                 let receiver = sender.lock().unwrap().subscribe();
@@ -89,27 +90,28 @@ impl StreamContext for Arc<AsyncVarExchange> {
     }
 }
 
-pub struct AsyncMonitorRunner<T, S, M>
+pub struct AsyncMonitorRunner<T, S, M, R>
 where
     T: StreamExpr,
-    S: MonitoringSemantics<T>,
+    S: MonitoringSemantics<T, R>,
     M: Specification<T>,
+    R: StreamData,
 {
-    input_streams: Arc<Mutex<BTreeMap<VarName, BoxStream<'static, StreamData>>>>,
+    input_streams: Arc<Mutex<BTreeMap<VarName, BoxStream<'static, R>>>>,
     model: M,
-    var_exchange: Arc<AsyncVarExchange>,
+    var_exchange: Arc<AsyncVarExchange<R>>,
     // tasks: Option<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>,
-    output_streams: BTreeMap<VarName, OutputStream>,
+    output_streams: BTreeMap<VarName, OutputStream<R>>,
     cancellation_token: CancellationToken,
     cancellation_guard: DropGuard,
     phantom_t: PhantomData<T>,
     semantics_t: PhantomData<S>,
 }
 
-impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S, M>
-    for AsyncMonitorRunner<T, S, M>
+impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData> Monitor<T, S, M, R>
+    for AsyncMonitorRunner<T, S, M, R>
 {
-    fn new(model: M, mut input_streams: impl InputProvider) -> Self {
+    fn new(model: M, mut input_streams: impl InputProvider<R>) -> Self {
         let var_names = model
             .input_vars()
             .into_iter()
@@ -150,7 +152,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S
         &self.model
     }
 
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, StreamData>> {
+    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, R>> {
         let output_streams = mem::take(&mut self.output_streams);
         let mut outputs = self.model.output_vars();
         outputs.sort();
@@ -164,7 +166,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S
                 }
 
                 let next_vals = join_all(futures).await;
-                let mut res: BTreeMap<VarName, StreamData> = BTreeMap::new();
+                let mut res: BTreeMap<VarName, R> = BTreeMap::new();
                 for (var, val) in outputs.clone().iter().zip(next_vals) {
                     res.insert(
                         var.clone(),
@@ -176,11 +178,11 @@ impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> Monitor<T, S
                 }
                 return Some((res, (output_streams, outputs)));
             },
-        )) as BoxStream<'static, BTreeMap<VarName, StreamData>>
+        )) as BoxStream<'static, BTreeMap<VarName, R>>
     }
 }
 
-impl<T: StreamExpr, S: MonitoringSemantics<T>, M: Specification<T>> AsyncMonitorRunner<T, S, M> {
+impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData> AsyncMonitorRunner<T, S, M, R> {
     fn spawn_tasks(mut self) -> Self {
         let tasks = self.monitoring_tasks();
 

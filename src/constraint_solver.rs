@@ -3,10 +3,10 @@ use std::{fmt::Debug, fmt::Display, mem};
 use winnow::Parser;
 
 use crate::ast::*;
-use crate::core::{IndexedVarName, StreamData, VarName};
+use crate::core::{IndexedVarName, ConcreteStreamData, VarName};
 
 pub type SExprConstraint<VarT> = (VarT, SExpr<VarT>);
-pub type SExprConstraintSolved<VarT> = (VarT, StreamData);
+pub type SExprConstraintSolved<VarT> = (VarT, ConcreteStreamData);
 
 #[derive(Debug)]
 pub struct SExprConstraintStore<VarT: Debug> {
@@ -209,7 +209,7 @@ pub trait PartialEvaluable<VarT: Eq + Clone + IndexableVar> {
 impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
     fn partial_eval(&self, cs: &SExprConstraintStore<IndexedVarName>, time: usize) -> Self {
         use SExpr::*;
-        use StreamData::*;
+        use ConcreteStreamData::*;
         match self {
             Val(s) => Val(s.clone()),
             Plus(a, b) => {
@@ -290,7 +290,7 @@ impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
 impl PartialEvaluable<IndexedVarName> for BExpr<IndexedVarName> {
     fn partial_eval(&self, cs: &SExprConstraintStore<IndexedVarName>, time: usize) -> Self {
         use BExpr::*;
-        use StreamData::*;
+        use ConcreteStreamData::*;
         match self {
             Val(bool) => Val(*bool),
             Eq(a, b) => {
@@ -384,11 +384,11 @@ mod tests {
             unresolved: vec![(
                 VarName("x".into()),
                 SExpr::Plus(
-                    Box::new(SExpr::Val(StreamData::Int(1))),
+                    Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                     Box::new(SExpr::Index(
                         Box::new(SExpr::Var(VarName("x".into()))),
                         -1,
-                        StreamData::Int(0),
+                        ConcreteStreamData::Int(0),
                     )),
                 ),
             )],
@@ -404,11 +404,11 @@ mod tests {
                 unresolved: vec![(
                     IndexedVarName("x".into(), 0),
                     SExpr::Plus(
-                        Box::new(SExpr::Val(StreamData::Int(1))),
+                        Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                         Box::new(SExpr::Index(
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 0))),
                             -1,
-                            StreamData::Int(0),
+                            ConcreteStreamData::Int(0),
                         )),
                     ),
                 )],
@@ -421,11 +421,11 @@ mod tests {
                 unresolved: vec![(
                     IndexedVarName("x".into(), 4),
                     SExpr::Plus(
-                        Box::new(SExpr::Val(StreamData::Int(1))),
+                        Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                         Box::new(SExpr::Index(
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 4))),
                             -1,
-                            StreamData::Int(0),
+                            ConcreteStreamData::Int(0),
                         ),),
                     ),
                 )],
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 0), StreamData::Int(1)),],
+                resolved: vec![(IndexedVarName("x".into(), 0), ConcreteStreamData::Int(1)),],
                 unresolved: vec![],
             }
         );
@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 1), StreamData::Int(0)),],
+                resolved: vec![(IndexedVarName("x".into(), 1), ConcreteStreamData::Int(0)),],
                 unresolved: vec![],
             }
         )

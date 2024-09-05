@@ -1,7 +1,7 @@
 pub mod core;
 pub use core::{
     InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext,
-    StreamData, StreamExpr, VarName,
+    ConcreteStreamData, StreamExpr, VarName,
 };
 pub mod ast;
 pub use ast::{LOLASpecification, SExpr};

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt::Debug, fmt::Display};
 
-use crate::core::{IndexedVarName, Specification, StreamData, StreamExpr, VarName};
+use crate::core::{IndexedVarName, Specification, ConcreteStreamData, StreamExpr, VarName};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BExpr<VarT: Debug> {
@@ -24,11 +24,11 @@ pub enum SExpr<VarT: Debug> {
         // Index i
         isize,
         // Default c
-        StreamData,
+        ConcreteStreamData,
     ),
 
     // Arithmetic Stream expression
-    Val(StreamData),
+    Val(ConcreteStreamData),
     Plus(Box<Self>, Box<Self>),
     Minus(Box<Self>, Box<Self>),
     Mult(Box<Self>, Box<Self>),
@@ -108,21 +108,21 @@ impl<VarT: Display + Debug> Display for BExpr<VarT> {
 
 // Trait for indexing a variable producing a new SExpr
 pub trait IndexableVar: Debug {
-    fn index(&self, i: isize, c: &StreamData) -> SExpr<Self>
+    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<Self>
     where
         Self: Sized;
 }
 
 impl IndexableVar for VarName {
     // For unindexed variables, indexing just produces the same expression
-    fn index(&self, i: isize, c: &StreamData) -> SExpr<VarName> {
+    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<VarName> {
         SExpr::Index(Box::new(SExpr::Var(self.clone())), i, c.clone())
     }
 }
 
 impl IndexableVar for IndexedVarName {
     // For indexed variables, we can actually attempt to change the index on the underlying variable
-    fn index(&self, i: isize, c: &StreamData) -> SExpr<IndexedVarName> {
+    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<IndexedVarName> {
         use SExpr::*;
         match self {
             // If the shifted index is positive, we can just shift the index

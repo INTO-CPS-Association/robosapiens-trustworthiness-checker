@@ -1,6 +1,6 @@
 use crate::{
     ast::{BExpr, SExpr},
-    StreamData,
+    ConcreteStreamData,
 };
 
 use std::fmt::Debug;
@@ -50,9 +50,9 @@ pub type SemantResult = Result<SExprTE<String>, SemantError>;
 pub fn type_check_expr(sexpr: SExpr<String>) -> SemantResult {
     match sexpr {
         SExpr::Val(sdata) => match sdata {
-            StreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
-            StreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
-            StreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
+            ConcreteStreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
+            ConcreteStreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
+            ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
             _ => Err(SemantError::TypeError("Not implemented".into())),
         },
         SExpr::Plus(se1, se2) => {
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn test_int_val() {
-        let val: SExpr<String> = SExpr::Val(StreamData::Int(1));
+        let val: SExpr<String> = SExpr::Val(ConcreteStreamData::Int(1));
         let result = type_check_expr(val);
         let expected: Result<SExprTE<String>, SemantError> = Ok(SExprTE::IntT(SExprT::Val(1)));
 
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_string_val() {
-        let val: SExpr<String> = SExpr::Val(StreamData::Str("Hello".into()));
+        let val: SExpr<String> = SExpr::Val(ConcreteStreamData::Str("Hello".into()));
         let result = type_check_expr(val);
         let expected: Result<SExprTE<String>, SemantError> =
             Ok(SExprTE::StrT(SExprT::Val("Hello".into())));
