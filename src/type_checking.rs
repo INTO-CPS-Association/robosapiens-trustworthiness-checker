@@ -36,20 +36,24 @@ pub enum SExprT<ValT, VarT: Debug> {
 pub enum SExprTE<VarT: Debug> {
     IntT(SExprT<i64, VarT>),
     StrT(SExprT<String, VarT>),
+    BoolT(SExprT<bool, VarT>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ErrorType {
+pub enum SemantError {
     TypeError(String),
-    UndefinedVariable(String),
+    UndeclaredVariable(String),
 }
 
-pub fn type_check_expr(sexpr: SExpr<String>) -> Result<SExprTE<String>, ErrorType> {
+pub type SemantResult = Result<SExprTE<String>, SemantError>;
+
+pub fn type_check_expr(sexpr: SExpr<String>) -> SemantResult {
     match sexpr {
         SExpr::Val(sdata) => match sdata {
             StreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
             StreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
-            _ => Err(ErrorType::TypeError("Not implemented".into())),
+            StreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
+            _ => Err(SemantError::TypeError("Not implemented".into())),
         },
         SExpr::Plus(se1, se2) => {
             let se1_check = type_check_expr(*se1);
@@ -58,11 +62,11 @@ pub fn type_check_expr(sexpr: SExpr<String>) -> Result<SExprTE<String>, ErrorTyp
                 (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(
                     SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
                 )),
-                _ => Err(ErrorType::TypeError("Not implemented".into())),
+                _ => Err(SemantError::TypeError("Not implemented".into())),
             }
         }
 
-        _ => Err(ErrorType::TypeError("Not implemented".into())),
+        _ => Err(SemantError::TypeError("Not implemented".into())),
     }
 }
 
@@ -74,7 +78,7 @@ mod tests {
     fn test_int_val() {
         let val: SExpr<String> = SExpr::Val(StreamData::Int(1));
         let result = type_check_expr(val);
-        let expected: Result<SExprTE<String>, ErrorType> = Ok(SExprTE::IntT(SExprT::Val(1)));
+        let expected: Result<SExprTE<String>, SemantError> = Ok(SExprTE::IntT(SExprT::Val(1)));
 
         assert_eq!(result, expected);
     }
@@ -83,7 +87,7 @@ mod tests {
     fn test_string_val() {
         let val: SExpr<String> = SExpr::Val(StreamData::Str("Hello".into()));
         let result = type_check_expr(val);
-        let expected: Result<SExprTE<String>, ErrorType> =
+        let expected: Result<SExprTE<String>, SemantError> =
             Ok(SExprTE::StrT(SExprT::Val("Hello".into())));
 
         assert_eq!(result, expected);
