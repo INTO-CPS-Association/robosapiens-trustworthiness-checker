@@ -5,6 +5,7 @@ mod constraint_solver;
 mod core;
 mod monitoring_semantics;
 mod parser;
+mod ring_buffer;
 mod untimed_monitoring_combinators;
 
 #[tokio::main]
