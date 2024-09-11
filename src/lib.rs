@@ -16,3 +16,4 @@ pub use parser::lola_expression;
 pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use type_checking::{type_check_expr, SExprT, SExprTE, SemantError};
+pub mod ring_buffer;

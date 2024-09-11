@@ -1,13 +1,10 @@
 // Test untimed monitoring of LOLA specifications with the async runtime
 
-use futures::stream;
 use futures::stream::{BoxStream, StreamExt};
-use std::{collections::BTreeMap, pin::Pin};
+use std::collections::BTreeMap;
 use trustworthiness_checker::UntimedLolaSemantics;
 use trustworthiness_checker::{
-    ast::{LOLASpecification, SExpr},
-    async_runtime::AsyncMonitorRunner,
-    ConcreteStreamData, Monitor, VarName,
+    async_runtime::AsyncMonitorRunner, ConcreteStreamData, Monitor, VarName,
 };
 mod lola_fixtures;
 use lola_fixtures::*;
@@ -86,7 +83,6 @@ async fn test_count_monitor() {
     );
 }
 
-#[ignore = "will currently deadlock due to need to provide streams into the eval operator"]
 #[tokio::test]
 async fn test_eval_monitor() {
     let input_streams = input_streams2();

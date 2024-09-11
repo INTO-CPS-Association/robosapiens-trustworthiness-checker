@@ -104,7 +104,7 @@ pub fn spec_eval_monitor() -> LOLASpecification {
             ),
             (
                 VarName("w".into()),
-                SExpr::Eval(Box::new(SExpr::Var(VarName("z".into())))),
+                SExpr::Eval(Box::new(SExpr::Var(VarName("s".into())))),
             ),
         ]
         .into_iter()

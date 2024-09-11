@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Display};
+use std::{collections::BTreeMap, fmt::Debug, fmt::Display};
 
 use futures::stream::BoxStream;
 
@@ -11,7 +11,7 @@ pub enum ConcreteStreamData {
     Unit,
 }
 
-pub trait StreamData: Clone + Send + 'static {}
+pub trait StreamData: Clone + Send + Debug + 'static {}
 
 impl StreamData for ConcreteStreamData {}
 
@@ -56,8 +56,12 @@ impl<T: StreamData> InputProvider<T> for BTreeMap<VarName, OutputStream<T>> {
     }
 }
 
-pub trait StreamContext<T>: Send + Clone + 'static {
+pub trait StreamContext<T>: Send + 'static {
     fn var(&self, x: &VarName) -> Option<OutputStream<T>>;
+
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<T>>;
+
+    fn advance(&self);
 }
 
 pub trait StreamExpr {
@@ -71,7 +75,7 @@ pub trait StreamExpr {
 // We require copy because we want to be able to
 // manage the lifetime of the semantics object
 pub trait MonitoringSemantics<T, S: StreamData>: Clone + Send + 'static {
-    fn to_async_stream(expr: T, ctx: &impl StreamContext<S>) -> OutputStream<S>;
+    fn to_async_stream(expr: T, ctx: &dyn StreamContext<S>) -> OutputStream<S>;
 }
 
 // A dummy monitoring semantics for monitors which do not support pluggable
@@ -80,7 +84,7 @@ pub trait MonitoringSemantics<T, S: StreamData>: Clone + Send + 'static {
 pub struct FixedSemantics;
 
 impl<T, R: StreamData> MonitoringSemantics<T, R> for FixedSemantics {
-    fn to_async_stream(_: T, _: &impl StreamContext<R>) -> OutputStream<R> {
+    fn to_async_stream(_: T, _: &dyn StreamContext<R>) -> OutputStream<R> {
         unimplemented!("Dummy monitoring semantics; should not be called")
     }
 }

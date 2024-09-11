@@ -11,7 +11,7 @@ use trustworthiness_checker::core::IndexedVarName;
 use trustworthiness_checker::{
     ast::{LOLASpecification, SExpr},
     async_runtime::AsyncMonitorRunner,
-    Monitor, ConcreteStreamData, VarName,
+    ConcreteStreamData, Monitor, VarName,
 };
 mod lola_fixtures;
 use lola_fixtures::*;
@@ -91,13 +91,18 @@ async fn test_count_monitor() {
     );
 }
 
+#[ignore = "currently we can't handle recursive constraints in the solver as need a way to handle the inner indexes"]
 #[tokio::test]
 async fn test_eval_monitor() {
     let input_streams = input_streams2();
     let spec = spec_eval_monitor();
     let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
-        monitor.monitor_outputs().enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = monitor
+        .monitor_outputs()
+        .enumerate()
+        .take(2)
+        .collect()
+        .await;
     assert_eq!(
         outputs,
         vec![

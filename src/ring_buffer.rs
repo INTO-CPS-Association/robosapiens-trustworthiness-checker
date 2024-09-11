@@ -1,6 +1,7 @@
 use std::iter;
 use std::mem;
 
+#[derive(Debug, Clone)]
 pub struct RingBuffer<T> {
     buffer: Vec<Option<T>>,
     start: usize,
@@ -76,15 +77,14 @@ impl<T> RingBuffer<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        let mut index = self.start;
-        let mut first = true;
+        let mut i = 0;
         iter::from_fn(move || {
-            if !first && index == self.start {
+            if i >= self.size {
                 None
             } else {
-                first = false;
+                let index = i % self.capacity;
                 let item = self.buffer[index].as_ref().unwrap();
-                index = (index + 1) % self.capacity;
+                i += 1;
                 Some(item)
             }
         })
@@ -164,5 +164,14 @@ mod tests {
         assert_eq!(buffer.pop(), Some(4));
         assert_eq!(buffer.len(), 0);
         assert_eq!(buffer.pop(), None);
+    }
+
+    #[test]
+    fn test_ring_buffer_under_length() {
+        let mut buffer = RingBuffer::new(3);
+        buffer.push_and_replace(1);
+        buffer.push_and_replace(2);
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.iter().collect::<Vec<_>>(), [&1, &2]);
     }
 }

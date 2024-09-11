@@ -1,6 +1,6 @@
 use crate::ast::{BExpr, SExpr};
 use crate::core::{
-    MonitoringSemantics, OutputStream, StreamContext, ConcreteStreamData, StreamExpr, VarName,
+    ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, StreamExpr, VarName,
 };
 use crate::untimed_monitoring_combinators as mc;
 
@@ -8,7 +8,10 @@ use crate::untimed_monitoring_combinators as mc;
 pub struct UntimedLolaSemantics;
 
 impl MonitoringSemantics<SExpr<VarName>, ConcreteStreamData> for UntimedLolaSemantics {
-    fn to_async_stream(expr: SExpr<VarName>, ctx: &impl StreamContext<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
+    fn to_async_stream(
+        expr: SExpr<VarName>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
+    ) -> OutputStream<ConcreteStreamData> {
         match expr {
             SExpr::Val(v) => mc::val(v),
             SExpr::Plus(e1, e2) => {
@@ -46,7 +49,10 @@ impl MonitoringSemantics<SExpr<VarName>, ConcreteStreamData> for UntimedLolaSema
 }
 
 impl MonitoringSemantics<BExpr<VarName>, ConcreteStreamData> for UntimedLolaSemantics {
-    fn to_async_stream(expr: BExpr<VarName>, ctx: &impl StreamContext<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
+    fn to_async_stream(
+        expr: BExpr<VarName>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
+    ) -> OutputStream<ConcreteStreamData> {
         match expr {
             BExpr::Val(b) => mc::val(ConcreteStreamData::Bool(b)),
             BExpr::Eq(e1, e2) => {

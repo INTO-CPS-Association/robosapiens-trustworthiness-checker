@@ -10,7 +10,11 @@ use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use tokio::sync::broadcast::{channel, Sender};
+use tokio::select;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::channel;
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 
@@ -20,10 +24,10 @@ use crate::core::MonitoringSemantics;
 use crate::core::Specification;
 use crate::core::StreamData;
 use crate::core::StreamExpr;
-use crate::core::{OutputStream, StreamContext, ConcreteStreamData, VarName};
+use crate::core::{OutputStream, StreamContext, VarName};
 
 struct AsyncVarExchange<T: StreamData> {
-    senders: BTreeMap<VarName, Arc<Mutex<Sender<T>>>>,
+    senders: BTreeMap<VarName, Arc<Mutex<broadcast::Sender<T>>>>,
 }
 
 impl<T: StreamData> AsyncVarExchange<T> {
@@ -35,15 +39,13 @@ impl<T: StreamData> AsyncVarExchange<T> {
             senders.insert(var, Arc::new(Mutex::new(sender)));
         }
 
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+
         AsyncVarExchange { senders }
     }
 
-    fn publish(
-        &self,
-        var: &VarName,
-        data: T,
-        max_queued: Option<usize>,
-    ) -> Option<T> {
+    fn publish(&self, var: &VarName, data: T, max_queued: Option<usize>) -> Option<T> {
         // Don't send if maxed_queued limit is set and reached
         // This check is integrated into publish so that len can
         // be checked within the same lock acquisition as sending the data
@@ -68,25 +70,184 @@ impl<T: StreamData> AsyncVarExchange<T> {
     }
 }
 
+fn receiver_to_stream<T: StreamData>(recv: broadcast::Receiver<T>) -> BoxStream<'static, T> {
+    Box::pin(stream::unfold(recv, |mut recv| async move {
+        if let Ok(res) = recv.recv().await {
+            Some((res, recv))
+        } else {
+            None
+        }
+    }))
+}
+
 impl<T: StreamData> StreamContext<T> for Arc<AsyncVarExchange<T>> {
     fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
         match self.senders.get(&var) {
             Some(sender) => {
                 let receiver = sender.lock().unwrap().subscribe();
                 println!("Subscribed to {}", var);
-                Some(Box::pin(stream::unfold(
-                    receiver,
-                    |mut receiver| async move {
-                        if let Ok(res) = receiver.recv().await {
-                            Some((res, receiver))
-                        } else {
-                            None
-                        }
-                    },
-                )))
+                Some(receiver_to_stream(receiver))
             }
             None => None,
         }
+    }
+
+    fn advance(&self) {
+        // Do nothing
+    }
+
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<T>> {
+        Box::new(SubMonitor::new(self.clone(), history_length))
+    }
+}
+
+struct SubMonitor<T: StreamData> {
+    parent: Arc<AsyncVarExchange<T>>,
+    cancellation_token: CancellationToken,
+    drop_guard: DropGuard,
+    senders: BTreeMap<VarName, broadcast::Sender<T>>,
+    buffer_size: usize,
+    progress_sender: watch::Sender<usize>,
+}
+
+impl<T: StreamData> SubMonitor<T> {
+    fn new(parent: Arc<AsyncVarExchange<T>>, buffer_size: usize) -> Self {
+        let mut senders = BTreeMap::new();
+
+        for (var, _) in parent.senders.iter() {
+            // buffers.insert(
+            //     var.clone(),
+            //     Arc::new(Mutex::new(RingBuffer::new(buffer_size))),
+            // );
+            senders.insert(var.clone(), broadcast::Sender::new(100));
+        }
+
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+        let progress_sender = watch::channel(0).0;
+
+        SubMonitor {
+            parent,
+            senders,
+            cancellation_token,
+            drop_guard,
+            buffer_size,
+            progress_sender,
+        }
+        .start_monitors()
+    }
+
+    fn start_monitors(self) -> Self {
+        for var in self.parent.senders.keys() {
+            let (send, recv) = mpsc::channel(self.buffer_size);
+            let parent_receiver = self
+                .parent
+                .senders
+                .get(var)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .subscribe();
+            let child_sender = self.senders.get(var).unwrap().clone();
+            let clock = self.progress_sender.subscribe();
+            tokio::spawn(Self::distribute(
+                recv,
+                child_sender,
+                clock,
+                self.cancellation_token.clone(),
+            ));
+            tokio::spawn(Self::monitor(
+                parent_receiver,
+                send.clone(),
+                self.cancellation_token.clone(),
+            ));
+        }
+
+        self
+    }
+
+    async fn distribute(
+        mut recv: mpsc::Receiver<T>,
+        send: broadcast::Sender<T>,
+        mut clock: watch::Receiver<usize>,
+        cancellation_token: CancellationToken,
+    ) {
+        let mut clock_old = 0;
+        loop {
+            select! {
+                biased;
+                _ = cancellation_token.cancelled() => {
+                    return;
+                }
+                _ = clock.changed() => {
+                    let clock_new = *clock.borrow_and_update();
+                    for _ in clock_old..=clock_new {
+                        select! {
+                            biased;
+                            _ = cancellation_token.cancelled() => {
+                                return;
+                            }
+                            data = recv.recv() => {
+                                if let Some(data) = data {
+                                    // let data_copy = data.clone();
+                                    if let Err(_) = send.send(data) {
+                                        // println!("Failed to send data {:?} due to no receivers (err = {:?})", data_copy, e);
+                                    }
+                                }
+                            }
+                            // TODO: should we have a release lock here for deadlock prevention?
+                        }
+                    }
+                    clock_old = clock_new;
+                }
+            }
+        }
+    }
+
+    async fn monitor(
+        mut recv: broadcast::Receiver<T>,
+        send: mpsc::Sender<T>,
+        cancellation_token: CancellationToken,
+    ) {
+        loop {
+            select! {
+                biased;
+                _ = cancellation_token.cancelled() => {
+                    return;
+                }
+                Ok(data) = recv.recv() => {
+                    send.send(data).await;
+                }
+            }
+        }
+    }
+}
+
+impl<T: StreamData> StreamContext<T> for SubMonitor<T> {
+    fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
+        // let buffer = mem::replace(
+        // self.buffers.get(var)?.lock().unwrap().deref_mut(),
+        // RingBuffer::new(self.buffer_size),
+        // );
+        // Don't clear the buffer since the evaled statement might be changed
+        // in < history_length time steps, meaning that we need some of the
+        // buffered data to evaluate the new statement
+
+        let recv = self.senders.get(var).unwrap().subscribe();
+
+        Some(receiver_to_stream(recv))
+    }
+
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<T>> {
+        // TODO: consider if this is the right approach; creating a subcontext
+        // is only used if eval is called within an eval, and it will require
+        // careful thought to decide how much history should be passed down
+        // (the current implementation passes down none)
+        self.parent.subcontext(history_length)
+    }
+
+    fn advance(&self) {
+        self.progress_sender.send_modify(|x| *x += 1)
     }
 }
 
@@ -108,8 +269,8 @@ where
     semantics_t: PhantomData<S>,
 }
 
-impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData> Monitor<T, S, M, R>
-    for AsyncMonitorRunner<T, S, M, R>
+impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData>
+    Monitor<T, S, M, R> for AsyncMonitorRunner<T, S, M, R>
 {
     fn new(model: M, mut input_streams: impl InputProvider<R>) -> Self {
         let var_names = model
@@ -182,7 +343,9 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
     }
 }
 
-impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData> AsyncMonitorRunner<T, S, M, R> {
+impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData>
+    AsyncMonitorRunner<T, S, M, R>
+{
     fn spawn_tasks(mut self) -> Self {
         let tasks = self.monitoring_tasks();
 
@@ -201,6 +364,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
         async move {
             loop {
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         return;
                     }
@@ -210,7 +374,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
                         // to avoid monitoring from blocking the input streams
                         while let Some(unsent_data) = var_exchange.publish(&var, data, Some(80)) {
                             data = unsent_data;
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
                     }
                 }
@@ -229,6 +393,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
         async move {
             loop {
                 tokio::select! {
+                    biased;
                     _ = cancellation_token.cancelled() => {
                         return;
                     }
