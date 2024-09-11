@@ -10,6 +10,7 @@ use winnow::ascii::alphanumeric1 as ident;
 use winnow::ascii::space0 as whitespace;
 
 use crate::ast::*;
+use crate::core::StreamData;
 use crate::core::{ConcreteStreamData, VarName};
 
 // This is the top-level parser for LOLA expressions
@@ -155,7 +156,7 @@ fn bor(s: &mut &str) -> PResult<BExpr<VarName>> {
 fn bexpr(s: &mut &str) -> PResult<BExpr<VarName>> {
     delimited(
         whitespace,
-        alt((band, bor, beq, ble, bnot, btrue, bfalse)),
+        alt((btrue, bfalse, band, bor, beq, ble, bnot)),
         whitespace,
     )
     .parse_next(s)
@@ -165,10 +166,15 @@ fn sif(s: &mut &str) -> PResult<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: "if",
+        _: whitespace,
         bexpr,
+        _: whitespace,
         _: "then",
+        _: whitespace,
         sexpr,
+        _: whitespace,
         _: "else",
+        _: whitespace,
         sexpr,
         _: whitespace,
     ))
@@ -179,9 +185,7 @@ fn sif(s: &mut &str) -> PResult<SExpr<VarName>> {
 fn sindex(s: &mut &str) -> PResult<SExpr<VarName>> {
     seq!((
         _: whitespace,
-        _: "{",
-        sexpr,
-        _: "}",
+        paren_sexpr,
         _: whitespace,
         _: "[",
         _: whitespace,
@@ -201,11 +205,13 @@ fn paren_sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
 }
 
 fn sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
-    alt((sif, paren_sexpr, aexpr)).parse_next(s)
+    alt((sif, sindex, paren_sexpr, aexpr)).parse_next(s)
 }
 
 #[cfg(test)]
 mod tests {
+    use winnow::error::{ContextError, ErrMode};
+
     use super::*;
 
     #[test]
@@ -229,33 +235,53 @@ mod tests {
     }
 
     #[test]
-    fn test_sexpr() {
+    fn test_sexpr() -> Result<(), ErrMode<ContextError>> {
         assert_eq!(
-            sexpr(&mut (*"1 + 2".to_string()).into()),
-            Ok(SExpr::Plus(
+            sexpr(&mut (*"1 + 2".to_string()).into())?,
+            SExpr::Plus(
                 Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                 Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
-            )),
+            ),
         );
         assert_eq!(
-            sexpr(&mut (*"1 + 2 * 3".to_string()).into()),
-            Ok(SExpr::Plus(
+            sexpr(&mut (*"1 + 2 * 3".to_string()).into())?,
+            SExpr::Plus(
                 Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                 Box::new(SExpr::Mult(
                     Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
                     Box::new(SExpr::Val(ConcreteStreamData::Int(3))),
                 )),
-            )),
+            ),
         );
         assert_eq!(
-            sexpr(&mut (*"x + (y + 2)".to_string()).into()),
-            Ok(SExpr::Plus(
+            sexpr(&mut (*"x + (y + 2)".to_string()).into())?,
+            SExpr::Plus(
                 Box::new(SExpr::Var(VarName("x".into()))),
                 Box::new(SExpr::Plus(
                     Box::new(SExpr::Var(VarName("y".into()))),
                     Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
                 )),
-            )),
-        )
+            ),
+        );
+        assert_eq!(
+            sexpr(&mut (*"if true then 1 else 2".to_string()).into())?,
+            SExpr::If(
+                Box::new(BExpr::Val(true)),
+                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
+            ),
+        );
+        assert_eq!(
+            sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
+            SExpr::Index(
+                Box::new(SExpr::Plus(
+                    Box::new(SExpr::Var(VarName("x".into()))),
+                    Box::new(SExpr::Var(VarName("y".into())),)
+                )),
+                -3,
+                ConcreteStreamData::Int(2),
+            ),
+        );
+        Ok(())
     }
 }
