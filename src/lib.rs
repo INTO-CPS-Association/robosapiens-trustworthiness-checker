@@ -1,7 +1,7 @@
 pub mod core;
 pub use core::{
-    InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext,
-    ConcreteStreamData, StreamExpr, VarName,
+    ConcreteStreamData, InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification,
+    StreamContext, StreamExpr, VarName,
 };
 pub mod ast;
 pub use ast::{LOLASpecification, SExpr};
@@ -16,4 +16,5 @@ pub use parser::lola_expression;
 pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use type_checking::{type_check_expr, SExprT, SExprTE, SemantError};
+pub mod queuing_runtime;
 pub mod ring_buffer;
