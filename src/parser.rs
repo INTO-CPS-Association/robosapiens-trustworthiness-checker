@@ -1,3 +1,4 @@
+use winnow::ascii::line_ending;
 use winnow::combinator::*;
 use winnow::token::literal;
 use winnow::PResult;
@@ -10,7 +11,6 @@ use winnow::ascii::alphanumeric1 as ident;
 use winnow::ascii::space0 as whitespace;
 
 use crate::ast::*;
-use crate::core::StreamData;
 use crate::core::{ConcreteStreamData, VarName};
 
 // This is the top-level parser for LOLA expressions
@@ -52,8 +52,25 @@ fn avar(s: &mut &str) -> PResult<SExpr<VarName>> {
         .parse_next(s)
 }
 
+fn aeval(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: literal("eval"),
+        _: whitespace,
+        paren_aexpr,
+        _: whitespace,
+    ))
+    .map(|(x,)| SExpr::Eval(Box::new(x)))
+    .parse_next(s)
+}
+
 fn aatom(s: &mut &str) -> PResult<SExpr<VarName>> {
-    delimited(whitespace, alt((aval, avar, paren_aexpr)), whitespace).parse_next(s)
+    delimited(
+        whitespace,
+        alt((sindex, aval, aeval, avar, paren_aexpr)),
+        whitespace,
+    )
+    .parse_next(s)
 }
 
 fn aplus_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -69,7 +86,7 @@ fn amult_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
 }
 
 fn amult(s: &mut &str) -> PResult<SExpr<VarName>> {
-    delimited(whitespace, alt((amult_raw, paren_aexpr, aval)), whitespace).parse_next(s)
+    delimited(whitespace, alt((amult_raw, aatom)), whitespace).parse_next(s)
 }
 
 fn aminus_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -205,7 +222,81 @@ fn paren_sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
 }
 
 fn sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
-    alt((sif, sindex, paren_sexpr, aexpr)).parse_next(s)
+    alt((sif, aexpr)).parse_next(s)
+}
+
+fn input_decl(s: &mut &str) -> PResult<VarName> {
+    seq!((
+        _: whitespace,
+        _: literal("in"),
+        _: whitespace,
+        ident,
+        _: whitespace,
+    ))
+    .map(|(name,): (&str,)| VarName(name.into()))
+    .parse_next(s)
+}
+
+fn linebreak(s: &mut &str) -> PResult<()> {
+    delimited(whitespace, line_ending, whitespace)
+        .map(|_| ())
+        .parse_next(s)
+}
+
+fn input_decls(s: &mut &str) -> PResult<Vec<VarName>> {
+    separated(0.., input_decl, linebreak).parse_next(s)
+}
+
+fn output_decl(s: &mut &str) -> PResult<VarName> {
+    seq!((
+        _: whitespace,
+        _: literal("out"),
+        _: whitespace,
+        ident,
+        _: whitespace,
+    ))
+    .map(|(name,): (&str,)| VarName(name.into()))
+    .parse_next(s)
+}
+
+fn output_decls(s: &mut &str) -> PResult<Vec<VarName>> {
+    separated(0.., output_decl, linebreak).parse_next(s)
+}
+
+fn expr_decl(s: &mut &str) -> PResult<(VarName, SExpr<VarName>)> {
+    seq!((
+        _: whitespace,
+        ident,
+        _: whitespace,
+        _: literal("="),
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+    ))
+    .map(|(name, expr)| (VarName(name.into()), expr))
+    .parse_next(s)
+}
+
+fn expr_decls(s: &mut &str) -> PResult<Vec<(VarName, SExpr<VarName>)>> {
+    separated(0.., expr_decl, linebreak).parse_next(s)
+}
+
+pub fn lola_specification(s: &mut &str) -> PResult<LOLASpecification> {
+    seq!((
+        _: whitespace,
+        input_decls,
+        _: alt((linebreak.void(), empty)),
+        output_decls,
+        _: alt((linebreak.void(), empty)),
+        expr_decls,
+        _: whitespace,
+    ))
+    .map(|(input_vars, output_vars, exprs)| LOLASpecification {
+        input_vars,
+        output_vars,
+        exprs: exprs.into_iter().collect(),
+    })
+    .parse_next(s)
 }
 
 #[cfg(test)]
@@ -272,6 +363,14 @@ mod tests {
             ),
         );
         assert_eq!(
+            sexpr(&mut (*"(x)[-1, 0]".to_string()).into())?,
+            SExpr::Index(
+                Box::new(SExpr::Var(VarName("x".into()))),
+                -1,
+                ConcreteStreamData::Int(0),
+            ),
+        );
+        assert_eq!(
             sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
             SExpr::Index(
                 Box::new(SExpr::Plus(
@@ -282,6 +381,127 @@ mod tests {
                 ConcreteStreamData::Int(2),
             ),
         );
+        assert_eq!(
+            sexpr(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
+            SExpr::Plus(
+                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                Box::new(SExpr::Index(
+                    Box::new(SExpr::Var(VarName("x".into()))),
+                    -1,
+                    ConcreteStreamData::Int(0),
+                ),)
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_input_decl() -> Result<(), ErrMode<ContextError>> {
+        assert_eq!(
+            input_decl(&mut (*"in x".to_string()).into())?,
+            VarName("x".into()),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_input_decls() -> Result<(), ErrMode<ContextError>> {
+        assert_eq!(input_decls(&mut (*"".to_string()).into())?, vec![],);
+        assert_eq!(
+            input_decls(&mut (*"in x".to_string()).into())?,
+            vec![VarName("x".into())],
+        );
+        assert_eq!(
+            input_decls(&mut (*"in x\nin y".to_string()).into())?,
+            vec![VarName("x".into()), VarName("y".into())],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_lola_simple_add() -> Result<(), ErrMode<ContextError>> {
+        let input = "\
+            in x\n\
+            in y\n\
+            out z\n\
+            z = x + y";
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec![VarName("x".into()), VarName("y".into())],
+            output_vars: vec![VarName("z".into())],
+            exprs: vec![(
+                VarName("z".into()),
+                SExpr::Plus(
+                    Box::new(SExpr::Var(VarName("x".into()))),
+                    Box::new(SExpr::Var(VarName("y".into()))),
+                ),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_lola_count() -> Result<(), ErrMode<ContextError>> {
+        let input = "\
+            out x\n\
+            x = 1 + (x)[-1, 0]";
+        let count_spec = LOLASpecification {
+            input_vars: vec![],
+            output_vars: vec![VarName("x".into())],
+            exprs: vec![(
+                VarName("x".into()),
+                SExpr::Plus(
+                    Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                    Box::new(SExpr::Index(
+                        Box::new(SExpr::Var(VarName("x".into()))),
+                        -1,
+                        ConcreteStreamData::Int(0),
+                    )),
+                ),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(lola_specification(&mut (*input).into())?, count_spec);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_lola_eval() -> Result<(), ErrMode<ContextError>> {
+        let input = "\
+            in x\n\
+            in y\n\
+            in s\n\
+            out z\n\
+            out w\n\
+            z = x + y\n\
+            w = eval(s)";
+        let eval_spec = LOLASpecification {
+            input_vars: vec![
+                VarName("x".into()),
+                VarName("y".into()),
+                VarName("s".into()),
+            ],
+            output_vars: vec![VarName("z".into()), VarName("w".into())],
+            exprs: vec![
+                (
+                    VarName("z".into()),
+                    SExpr::Plus(
+                        Box::new(SExpr::Var(VarName("x".into()))),
+                        Box::new(SExpr::Var(VarName("y".into()))),
+                    ),
+                ),
+                (
+                    VarName("w".into()),
+                    SExpr::Eval(Box::new(SExpr::Var(VarName("s".into())))),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(lola_specification(&mut (*input).into())?, eval_spec);
         Ok(())
     }
 }
