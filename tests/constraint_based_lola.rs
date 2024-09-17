@@ -8,6 +8,7 @@ use trustworthiness_checker::constraint_based_runtime::{
 };
 use trustworthiness_checker::constraint_solver::SExprConstraintStore;
 use trustworthiness_checker::core::IndexedVarName;
+use trustworthiness_checker::lola_specification;
 use trustworthiness_checker::{
     ast::{LOLASpecification, SExpr},
     async_runtime::AsyncMonitorRunner,
@@ -19,7 +20,7 @@ use lola_fixtures::*;
 #[tokio::test]
 async fn test_simple_add_monitor() {
     let input_streams = input_streams1();
-    let spec = spec_simple_add_monitor();
+    let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
         monitor.monitor_outputs().enumerate().collect().await;
@@ -46,7 +47,7 @@ async fn test_simple_add_monitor() {
 #[tokio::test]
 async fn test_count_monitor() {
     let input_streams = BTreeMap::new();
-    let spec = spec_count_monitor();
+    let spec = lola_specification(&mut spec_count_monitor()).unwrap();
     let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = monitor
         .monitor_outputs()
@@ -95,7 +96,7 @@ async fn test_count_monitor() {
 #[tokio::test]
 async fn test_eval_monitor() {
     let input_streams = input_streams2();
-    let spec = spec_eval_monitor();
+    let spec = lola_specification(&mut spec_eval_monitor()).unwrap();
     let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = monitor
         .monitor_outputs()

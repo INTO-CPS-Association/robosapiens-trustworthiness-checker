@@ -50,64 +50,24 @@ pub fn input_streams2() -> BTreeMap<VarName, BoxStream<'static, ConcreteStreamDa
     input_streams
 }
 
-pub fn spec_simple_add_monitor() -> LOLASpecification {
-    LOLASpecification {
-        input_vars: vec![VarName("x".into()), VarName("y".into())],
-        output_vars: vec![VarName("z".into())],
-        exprs: vec![(
-            VarName("z".into()),
-            SExpr::Plus(
-                Box::new(SExpr::Var(VarName("x".into()))),
-                Box::new(SExpr::Var(VarName("y".into()))),
-            ),
-        )]
-        .into_iter()
-        .collect(),
-    }
+pub fn spec_simple_add_monitor() -> &'static str {
+    "in x\n\
+     in y\n\
+     out z\n\
+     z = x + y"   
 }
 
-pub fn spec_count_monitor() -> LOLASpecification {
-    LOLASpecification {
-        input_vars: vec![],
-        output_vars: vec![VarName("x".into())],
-        exprs: vec![(
-            VarName("x".into()),
-            SExpr::Plus(
-                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
-                Box::new(SExpr::Index(
-                    Box::new(SExpr::Var(VarName("x".into()))),
-                    -1,
-                    ConcreteStreamData::Int(0),
-                )),
-            ),
-        )]
-        .into_iter()
-        .collect(),
-    }
+pub fn spec_count_monitor() -> &'static str {
+    "out x\n\
+     x = 1 + (x)[-1, 0]"
 }
 
-pub fn spec_eval_monitor() -> LOLASpecification {
-    LOLASpecification {
-        input_vars: vec![
-            VarName("x".into()),
-            VarName("y".into()),
-            VarName("s".into()),
-        ],
-        output_vars: vec![VarName("z".into()), VarName("w".into())],
-        exprs: vec![
-            (
-                VarName("z".into()),
-                SExpr::Plus(
-                    Box::new(SExpr::Var(VarName("x".into()))),
-                    Box::new(SExpr::Var(VarName("y".into()))),
-                ),
-            ),
-            (
-                VarName("w".into()),
-                SExpr::Eval(Box::new(SExpr::Var(VarName("s".into())))),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    }
+pub fn spec_eval_monitor() -> &'static str {
+   "in x\n\
+    in y\n\
+    in s\n\
+    out z\n\
+    out w\n\
+    z = x + y\n\
+    w = eval(s)"
 }

@@ -12,7 +12,7 @@ pub mod constraint_solver;
 pub mod monitoring_semantics;
 pub use monitoring_semantics::UntimedLolaSemantics;
 pub mod parser;
-pub use parser::lola_expression;
+pub use parser::{lola_expression, lola_specification};
 pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use type_checking::{type_check_expr, SExprT, SExprTE, SemantError};

@@ -4,7 +4,7 @@ use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
 use trustworthiness_checker::UntimedLolaSemantics;
 use trustworthiness_checker::{
-    async_runtime::AsyncMonitorRunner, ConcreteStreamData, Monitor, VarName,
+    async_runtime::AsyncMonitorRunner, lola_specification, ConcreteStreamData, Monitor, VarName,
 };
 mod lola_fixtures;
 use lola_fixtures::*;
@@ -12,7 +12,7 @@ use lola_fixtures::*;
 #[tokio::test]
 async fn test_simple_add_monitor() {
     let input_streams = input_streams1();
-    let spec = spec_simple_add_monitor();
+    let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut async_monitor =
         AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
@@ -43,7 +43,7 @@ async fn test_simple_add_monitor() {
 #[tokio::test]
 async fn test_count_monitor() {
     let input_streams: BTreeMap<VarName, BoxStream<'static, ConcreteStreamData>> = BTreeMap::new();
-    let spec = spec_count_monitor();
+    let spec = lola_specification(&mut spec_count_monitor()).unwrap();
     let mut async_monitor =
         AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
@@ -86,7 +86,7 @@ async fn test_count_monitor() {
 #[tokio::test]
 async fn test_eval_monitor() {
     let input_streams = input_streams2();
-    let spec = spec_eval_monitor();
+    let spec = lola_specification(&mut spec_eval_monitor()).unwrap();
     let mut async_monitor =
         AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
