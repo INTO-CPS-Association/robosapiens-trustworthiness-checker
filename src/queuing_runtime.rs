@@ -27,10 +27,11 @@ use crate::core::{OutputStream, StreamContext, VarName};
 struct QueuingVarExchange<T: StreamData> {
     queues: BTreeMap<VarName, Arc<Mutex<Vec<T>>>>,
     max_read: BTreeMap<VarName, Arc<Mutex<usize>>>,
+    input_vars: Vec<VarName>,
 }
 
 impl<T: StreamData> QueuingVarExchange<T> {
-    fn new(vars: Vec<VarName>) -> Self {
+    fn new(vars: Vec<VarName>, input_vars: Vec<VarName>) -> Self {
         let mut queues = BTreeMap::new();
         let mut max_read = BTreeMap::new();
         let max_read_lock = max_read.borrow_mut();
@@ -40,7 +41,11 @@ impl<T: StreamData> QueuingVarExchange<T> {
             max_read_lock.insert(var, Arc::new(Mutex::new(0)));
         }
 
-        QueuingVarExchange { queues, max_read }
+        QueuingVarExchange {
+            queues,
+            max_read,
+            input_vars,
+        }
     }
 
     fn publish(&self, var: &VarName, data: T, max_queued: Option<usize>) -> Option<T> {
@@ -48,7 +53,7 @@ impl<T: StreamData> QueuingVarExchange<T> {
 
         let queue = self.queues.get(var).unwrap();
         let mut queue = queue.lock().unwrap();
-        let mut max_read = self.max_read.get(var).unwrap().lock().unwrap();
+        let max_read = self.max_read.get(var).unwrap().lock().unwrap();
         if max_queued.is_none() || queue.len() - *max_read < max_queued.unwrap() {
             println!(
                 "publishing data: {:?} with max_read: {:?} and queue length {:?}",
@@ -62,6 +67,15 @@ impl<T: StreamData> QueuingVarExchange<T> {
             Some(data)
         }
     }
+
+    fn var_counted(&self, var: &VarName) -> Option<BoxStream<'static, T>> {
+        let queue = self.queues.get(var)?;
+        let max_read = self.max_read.get(var)?.clone();
+        Some(count_read(
+            queue_to_stream_incremental(queue.clone()),
+            max_read,
+        ))
+    }
 }
 
 fn queue_to_stream<T: StreamData>(xs: Vec<T>) -> BoxStream<'static, T> {
@@ -74,8 +88,13 @@ fn count_read<T: StreamData>(
 ) -> BoxStream<'static, T> {
     let max_reads = stream::iter(iter::repeat(max_read));
     Box::pin(stream.enumerate().zip(max_reads).map(|((i, x), max_read)| {
-        println!("setting max_read = {:?}", i);
-        *max_read.lock().unwrap().deref_mut() = i;
+        {
+            let mut max_read = max_read.lock().unwrap();
+            if i > *max_read {
+                println!("setting max_read = {:?}", i);
+                *max_read = i;
+            }
+        }
         x
     }))
 }
@@ -107,9 +126,12 @@ fn queue_to_stream_incremental<T: StreamData>(xs: Arc<Mutex<Vec<T>>>) -> BoxStre
 
 impl<T: StreamData> StreamContext<T> for Arc<QueuingVarExchange<T>> {
     fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
-        let queue = self.queues.get(var)?;
-        // let queue = queue.lock().unwrap();
-        Some(queue_to_stream_incremental(queue.clone()))
+        if self.input_vars.contains(var) {
+            self.var_counted(var)
+        } else {
+            let queue = self.queues.get(var)?;
+            Some(queue_to_stream_incremental(queue.clone()))
+        }
     }
 
     fn advance(&self) {
@@ -187,7 +209,10 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
             .chain(model.output_vars().into_iter())
             .collect();
 
-        let var_exchange = Arc::new(QueuingVarExchange::new(var_names));
+        let var_exchange = Arc::new(QueuingVarExchange::new(
+            var_names,
+            model.input_vars().clone(),
+        ));
 
         let input_streams = model
             .input_vars()
@@ -317,9 +342,6 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
     }
 
     fn output_stream(&self, var: VarName) -> OutputStream<R> {
-        count_read(
-            self.var_exchange.var(&var).unwrap(),
-            self.var_exchange.max_read.get(&var).unwrap().clone(),
-        )
+        self.var_exchange.var_counted(&var).unwrap()
     }
 }
