@@ -136,3 +136,5 @@ impl IndexableVar for IndexedVarName {
         }
     }
 }
+
+pub type InputFileData = BTreeMap<usize, BTreeMap<VarName, ConcreteStreamData>>;

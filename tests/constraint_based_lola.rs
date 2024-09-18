@@ -46,7 +46,7 @@ async fn test_simple_add_monitor() {
 #[ignore = "currently we can't handle recursive constraints in the solver as need a way to handle the inner indexes"]
 #[tokio::test]
 async fn test_count_monitor() {
-    let input_streams = BTreeMap::new();
+    let input_streams = input_streams1();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();
     let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = monitor

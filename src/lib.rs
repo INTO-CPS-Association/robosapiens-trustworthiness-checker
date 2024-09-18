@@ -16,5 +16,8 @@ pub use parser::{lola_expression, lola_specification};
 pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use type_checking::{type_check_expr, SExprT, SExprTE, SemantError};
+pub mod file_input_provider;
 pub mod queuing_runtime;
 pub mod ring_buffer;
+pub mod file_handling;
+pub use file_handling::parse_file;
