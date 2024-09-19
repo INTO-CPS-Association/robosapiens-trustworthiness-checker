@@ -1,20 +1,18 @@
-use std::borrow::BorrowMut;
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::iter;
 use std::marker::PhantomData;
-use std::ops::DerefMut;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::u64::MAX;
+// use std::sync::Mutex;
+use std::sync::Mutex as StdMutex;
+use std::sync::RwLock as StdRwLock;
 use std::vec;
+use tokio::sync::watch;
+use tokio::sync::Mutex;
 
 use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use tokio_util::sync::CancellationToken;
-use tokio_util::sync::DropGuard;
 
 use crate::core::InputProvider;
 use crate::core::Monitor;
@@ -23,114 +21,99 @@ use crate::core::Specification;
 use crate::core::StreamData;
 use crate::core::StreamExpr;
 use crate::core::{OutputStream, StreamContext, VarName};
+use crate::ConcreteStreamData;
 
-struct QueuingVarExchange<T: StreamData> {
+struct QueuingVarContext<T: StreamData> {
     queues: BTreeMap<VarName, Arc<Mutex<Vec<T>>>>,
-    max_read: BTreeMap<VarName, Arc<Mutex<usize>>>,
-    input_vars: Vec<VarName>,
+    input_streams: BTreeMap<VarName, Arc<Mutex<OutputStream<T>>>>,
+    output_streams: BTreeMap<VarName, WaitingStream<T>>,
 }
 
-impl<T: StreamData> QueuingVarExchange<T> {
-    fn new(vars: Vec<VarName>, input_vars: Vec<VarName>) -> Self {
+impl<T: StreamData> QueuingVarContext<T> {
+    fn new(
+        vars: Vec<VarName>,
+        input_streams: BTreeMap<VarName, Arc<Mutex<OutputStream<T>>>>,
+        output_streams: BTreeMap<VarName, WaitingStream<T>>,
+    ) -> Self {
         let mut queues = BTreeMap::new();
-        let mut max_read = BTreeMap::new();
-        let max_read_lock = max_read.borrow_mut();
 
         for var in vars {
             queues.insert(var.clone(), Arc::new(Mutex::new(Vec::new())));
-            max_read_lock.insert(var, Arc::new(Mutex::new(0)));
         }
 
-        QueuingVarExchange {
+        QueuingVarContext {
             queues,
-            max_read,
-            input_vars,
+            input_streams,
+            output_streams,
         }
     }
+}
 
-    fn publish(&self, var: &VarName, data: T, max_queued: Option<usize>) -> Option<T> {
-        // TODO: currently uses unbounded queues
+// A stream that is either already arrived or is waiting to be lazily supplied
+#[derive(Clone)]
+enum WaitingStream<T: StreamData> {
+    Arrived(Arc<Mutex<OutputStream<T>>>),
+    Waiting(tokio::sync::watch::Receiver<Option<Arc<Mutex<OutputStream<T>>>>>),
+}
 
-        let queue = self.queues.get(var).unwrap();
-        let mut queue = queue.lock().unwrap();
-        let max_read = self.max_read.get(var).unwrap().lock().unwrap();
-        if max_queued.is_none() || queue.len() - *max_read < max_queued.unwrap() {
-            println!(
-                "publishing data: {:?} with max_read: {:?} and queue length {:?}",
-                data,
-                *max_read,
-                queue.len()
-            );
-            queue.push(data);
-            None
+impl<T: StreamData> WaitingStream<T> {
+    async fn get_stream(&mut self) -> Arc<Mutex<OutputStream<T>>> {
+        let mut ret_stream = None;
+        match self {
+            WaitingStream::Arrived(stream) => return stream.clone(),
+            WaitingStream::Waiting(receiver) => {
+                let stream_lock = receiver.wait_for(|x| x.is_some()).await.unwrap();
+                let stream = stream_lock.as_ref().unwrap().clone();
+                ret_stream = Some(stream)
+            }
+        }
+        *self = WaitingStream::Arrived(ret_stream.unwrap().clone());
+        if let WaitingStream::Arrived(stream) = self {
+            return stream.clone();
         } else {
-            Some(data)
+            panic!("Stream should be arrived")
         }
     }
-
-    fn var_counted(&self, var: &VarName) -> Option<BoxStream<'static, T>> {
-        let queue = self.queues.get(var)?;
-        let max_read = self.max_read.get(var)?.clone();
-        Some(count_read(
-            queue_to_stream_incremental(queue.clone()),
-            max_read,
-        ))
-    }
 }
 
-fn queue_to_stream<T: StreamData>(xs: Vec<T>) -> BoxStream<'static, T> {
-    Box::pin(stream::iter(xs.into_iter()))
-}
-
-fn count_read<T: StreamData>(
-    stream: BoxStream<'static, T>,
-    max_read: Arc<Mutex<usize>>,
+fn queue_buffered_stream<T: StreamData>(
+    xs: Arc<Mutex<Vec<T>>>,
+    waiting_stream: WaitingStream<T>,
 ) -> BoxStream<'static, T> {
-    let max_reads = stream::iter(iter::repeat(max_read));
-    Box::pin(stream.enumerate().zip(max_reads).map(|((i, x), max_read)| {
-        {
-            let mut max_read = max_read.lock().unwrap();
-            if i > *max_read {
-                println!("setting max_read = {:?}", i);
-                *max_read = i;
-            }
-        }
-        x
-    }))
-}
-
-fn queue_to_stream_incremental<T: StreamData>(xs: Arc<Mutex<Vec<T>>>) -> BoxStream<'static, T> {
-    Box::pin(stream::unfold((0, xs), |(i, xs)| async move {
-        loop {
-            match {
-                // Separate out the scope which requires the lock
-                // to avoid holding it whilst waiting
-                let xs = xs.lock().unwrap();
-                if i < xs.len() {
-                    // *max_read.lock().unwrap().deref_mut() = i;
-                    Some(xs[i].clone())
+    Box::pin(stream::unfold(
+        (0, xs, waiting_stream),
+        |(i, xs, mut ws)| async move {
+            loop {
+                // TODO: is this really race condition free?
+                // println!("producing value for i: {}", i);
+                // println!("locking xs");
+                // let mut xs_lock = xs.lock().await;
+                if i >= xs.lock().await.len() {
+                    // println!("getting stream");
+                    let stream = ws.get_stream().await;
+                    // println!("locking stream");
+                    let mut stream_lock = stream.lock().await;
+                    let x_next = stream_lock.next().await;
+                    xs.lock().await.push(x_next.unwrap());
                 } else {
-                    None
-                }
-            } {
-                Some(next) => {
-                    return Some((next, (i + 1, xs.clone())));
-                }
-                None => {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    return Some((xs.lock().await[i].clone(), (i + 1, xs.clone(), ws)));
                 }
             }
-        }
-    }))
+        },
+    ))
 }
 
-impl<T: StreamData> StreamContext<T> for Arc<QueuingVarExchange<T>> {
+impl<T: StreamData> StreamContext<T> for Arc<QueuingVarContext<T>> {
     fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
-        if self.input_vars.contains(var) {
-            self.var_counted(var)
+        let queue = self.queues.get(var)?;
+        if let Some(stream) = self.input_streams.get(var).cloned() {
+            return Some(queue_buffered_stream(
+                queue.clone(),
+                WaitingStream::Arrived(stream),
+            ));
         } else {
-            let queue = self.queues.get(var)?;
-            Some(queue_to_stream_incremental(queue.clone()))
+            let waiting_stream = self.output_streams.get(var)?.clone();
+            return Some(queue_buffered_stream(queue.clone(), waiting_stream));
         }
     }
 
@@ -144,17 +127,17 @@ impl<T: StreamData> StreamContext<T> for Arc<QueuingVarExchange<T>> {
 }
 
 struct SubMonitor<T: StreamData> {
-    parent: Arc<QueuingVarExchange<T>>,
+    parent: Arc<QueuingVarContext<T>>,
     buffer_size: usize,
-    index: Arc<Mutex<usize>>,
+    index: Arc<StdMutex<usize>>,
 }
 
 impl<T: StreamData> SubMonitor<T> {
-    fn new(parent: Arc<QueuingVarExchange<T>>, buffer_size: usize) -> Self {
+    fn new(parent: Arc<QueuingVarContext<T>>, buffer_size: usize) -> Self {
         SubMonitor {
             parent,
             buffer_size,
-            index: Arc::new(Mutex::new(0)),
+            index: Arc::new(StdMutex::new(0)),
         }
     }
 }
@@ -188,13 +171,8 @@ where
     M: Specification<T>,
     R: StreamData,
 {
-    input_streams: Arc<Mutex<BTreeMap<VarName, BoxStream<'static, R>>>>,
     model: M,
-    var_exchange: Arc<QueuingVarExchange<R>>,
-    // tasks: Option<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>,
-    // output_streams: BTreeMap<VarName, OutputStream<R>>,
-    cancellation_token: CancellationToken,
-    cancellation_guard: DropGuard,
+    var_exchange: Arc<QueuingVarContext<R>>,
     phantom_t: PhantomData<T>,
     semantics_t: PhantomData<S>,
 }
@@ -209,34 +187,46 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
             .chain(model.output_vars().into_iter())
             .collect();
 
-        let var_exchange = Arc::new(QueuingVarExchange::new(
-            var_names,
-            model.input_vars().clone(),
-        ));
-
         let input_streams = model
             .input_vars()
             .iter()
             .map(|var| {
                 let stream = (&mut input_streams).input_stream(var);
-                (var.clone(), stream.unwrap())
+                (var.clone(), Arc::new(Mutex::new(stream.unwrap())))
             })
             .collect::<BTreeMap<_, _>>();
-        let input_streams = Arc::new(Mutex::new(input_streams));
+        // let input_streams = Arc::new(Mutex::new(input_streams));
 
-        let cancellation_token = CancellationToken::new();
-        let cancellation_guard = cancellation_token.clone().drop_guard();
+        let mut output_stream_senders = BTreeMap::new();
+        let mut output_stream_waiting = BTreeMap::new();
+        for var in model.output_vars() {
+            let (tx, rx) = tokio::sync::watch::channel(None);
+            output_stream_senders.insert(var.clone(), tx);
+            output_stream_waiting.insert(var.clone(), WaitingStream::Waiting(rx));
+        }
+
+        let var_exchange = Arc::new(QueuingVarContext::new(
+            var_names,
+            input_streams.clone(),
+            output_stream_waiting,
+        ));
+
+        for var in model.output_vars() {
+            let stream = S::to_async_stream(model.var_expr(&var).unwrap(), &var_exchange);
+            let stream = Arc::new(Mutex::new(stream));
+            output_stream_senders
+                .get(&var)
+                .unwrap()
+                .send(Some(stream))
+                .unwrap();
+        }
 
         Self {
             model,
-            input_streams,
             var_exchange,
             semantics_t: PhantomData,
             phantom_t: PhantomData,
-            cancellation_token,
-            cancellation_guard,
         }
-        .spawn_tasks()
     }
 
     fn spec(&self) -> &M {
@@ -279,69 +269,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
 impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData>
     QueuingMonitorRunner<T, S, M, R>
 {
-    fn spawn_tasks(self) -> Self {
-        for var in self.model.input_vars() {
-            let input = self.monitor_input(var.clone());
-            tokio::spawn(input);
-        }
-
-        for var in self.model.output_vars() {
-            let output = self.monitor_output(var.clone());
-            tokio::spawn(output);
-        }
-
-        self
-    }
-
-    fn monitor_input(&self, var: VarName) -> impl Future<Output = ()> + Send + 'static {
-        let var_exchange = self.var_exchange.clone();
-        let mut input = self.input_streams.lock().unwrap().remove(&var).unwrap();
-        let cancellation_token = self.cancellation_token.clone();
-
-        async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = cancellation_token.cancelled() => {
-                        return;
-                    }
-                    Some(mut data) = input.next() => {
-                        // Try and send the data until the exchange is able to accept it
-                        // Currently we can consume unbounded input
-                        while let Some(unsent_data) = var_exchange.publish(&var, data, None) {
-                            data = unsent_data;
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn monitor_output(&self, var: VarName) -> impl Future<Output = ()> + Send + 'static {
-        let var_exchange = self.var_exchange.clone();
-        let mut var_stream = S::to_async_stream(self.model.var_expr(&var).unwrap(), &var_exchange);
-        let cancellation_token = self.cancellation_token.clone();
-        async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = cancellation_token.cancelled() => {
-                        return;
-                    }
-                    Some(mut data) = var_stream.next() => {
-                        // Try and send the data until the exchange is able to accept it
-                        while let Some(unsent_data) = var_exchange.publish(&var, data, Some(60)) {
-                            data = unsent_data;
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn output_stream(&self, var: VarName) -> OutputStream<R> {
-        self.var_exchange.var_counted(&var).unwrap()
+        self.var_exchange.var(&var).unwrap()
     }
 }
