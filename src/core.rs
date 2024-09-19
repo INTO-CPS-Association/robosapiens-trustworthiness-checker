@@ -11,7 +11,7 @@ pub enum ConcreteStreamData {
     Unit,
 }
 
-pub trait StreamData: Clone + Send + Debug + 'static {}
+pub trait StreamData: Clone + Send + Sync + Debug + 'static {}
 
 impl StreamData for ConcreteStreamData {}
 

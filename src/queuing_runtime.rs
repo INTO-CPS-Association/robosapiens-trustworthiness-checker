@@ -3,6 +3,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 // use std::sync::Mutex;
+use futures::lock;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock as StdRwLock;
 use std::vec;
@@ -13,6 +14,7 @@ use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
+use tokio::sync::RwLock;
 
 use crate::core::InputProvider;
 use crate::core::Monitor;
@@ -27,6 +29,7 @@ struct QueuingVarContext<T: StreamData> {
     queues: BTreeMap<VarName, Arc<Mutex<Vec<T>>>>,
     input_streams: BTreeMap<VarName, Arc<Mutex<OutputStream<T>>>>,
     output_streams: BTreeMap<VarName, WaitingStream<T>>,
+    production_locks: BTreeMap<VarName, Arc<Mutex<()>>>,
 }
 
 impl<T: StreamData> QueuingVarContext<T> {
@@ -36,15 +39,18 @@ impl<T: StreamData> QueuingVarContext<T> {
         output_streams: BTreeMap<VarName, WaitingStream<T>>,
     ) -> Self {
         let mut queues = BTreeMap::new();
+        let mut production_locks = BTreeMap::new();
 
         for var in vars {
             queues.insert(var.clone(), Arc::new(Mutex::new(Vec::new())));
+            production_locks.insert(var.clone(), Arc::new(Mutex::new(())));
         }
 
         QueuingVarContext {
             queues,
             input_streams,
             output_streams,
+            production_locks,
         }
     }
 }
@@ -79,24 +85,36 @@ impl<T: StreamData> WaitingStream<T> {
 fn queue_buffered_stream<T: StreamData>(
     xs: Arc<Mutex<Vec<T>>>,
     waiting_stream: WaitingStream<T>,
+    lock: Arc<Mutex<()>>,
 ) -> BoxStream<'static, T> {
     Box::pin(stream::unfold(
-        (0, xs, waiting_stream),
-        |(i, xs, mut ws)| async move {
+        (0, xs, waiting_stream, lock),
+        |(i, xs, mut ws, lock)| async move {
             loop {
-                // TODO: is this really race condition free?
+                // We have these three cases to ensure deadlock freedom
                 // println!("producing value for i: {}", i);
                 // println!("locking xs");
                 // let mut xs_lock = xs.lock().await;
-                if i >= xs.lock().await.len() {
-                    // println!("getting stream");
+                if i == xs.lock().await.len() {
+                    // Compute the next value, potentially using the previous one
+                    let _ = lock.lock().await;
+                    if i != xs.lock().await.len() {
+                        continue;
+                    }
                     let stream = ws.get_stream().await;
-                    // println!("locking stream");
+                    // We are guaranteed that this will not need to lock
+                    // the production lock and hence should not deadlock
                     let mut stream_lock = stream.lock().await;
                     let x_next = stream_lock.next().await;
-                    xs.lock().await.push(x_next.unwrap());
+                    xs.lock().await.push(x_next?);
+                } else if i < xs.lock().await.len() {
+                    // We already have the value buffered, so return it
+                    return Some((xs.lock().await[i].clone(), (i + 1, xs.clone(), ws, lock)));
                 } else {
-                    return Some((xs.lock().await[i].clone(), (i + 1, xs.clone(), ws)));
+                    // Cause more previous values to be produced
+                    let stream = ws.get_stream().await;
+                    let mut stream_lock = stream.lock().await;
+                    let _ = stream_lock.next().await;
                 }
             }
         },
@@ -106,14 +124,20 @@ fn queue_buffered_stream<T: StreamData>(
 impl<T: StreamData> StreamContext<T> for Arc<QueuingVarContext<T>> {
     fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
         let queue = self.queues.get(var)?;
+        let production_lock = self.production_locks.get(var)?.clone();
         if let Some(stream) = self.input_streams.get(var).cloned() {
             return Some(queue_buffered_stream(
                 queue.clone(),
                 WaitingStream::Arrived(stream),
+                production_lock,
             ));
         } else {
             let waiting_stream = self.output_streams.get(var)?.clone();
-            return Some(queue_buffered_stream(queue.clone(), waiting_stream));
+            return Some(queue_buffered_stream(
+                queue.clone(),
+                waiting_stream,
+                production_lock,
+            ));
         }
     }
 
