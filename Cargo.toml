@@ -16,3 +16,4 @@ tokio = { version = "1", features = ["full"] }
 dyn-clone = "1.0.17"
 backtrace-on-stack-overflow = "0.3.0"
 tokio-util = "0.7.11"
+clap = { version = "4.5.17", features = ["derive"] }

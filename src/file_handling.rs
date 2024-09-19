@@ -25,7 +25,7 @@ impl Display for FileParseError {
 
 impl Error for FileParseError {}
 
-pub async fn parse_file<O: Clone, E: Debug>(
+pub async fn parse_file<O: Clone + Debug, E: Debug>(
     // The for<'a> syntax is a higher-ranked trait bound which is
     // necessary to specify that the lifetime of the string passed
     // into the parser does not need to outlive this function call
@@ -37,7 +37,37 @@ pub async fn parse_file<O: Clone, E: Debug>(
     let mut file = File::open(file).await?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
+    // println!(
+    //     "Parsed file: {:?}",
+    //     parser.parse_next(&mut contents.as_str().into()).unwrap()
+    // );
     parser
         .parse_next(&mut contents.as_str().into())
         .map_err(|e| Box::new(FileParseError::new(e.to_string())) as Box<dyn Error>)
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+
+    use crate::core::VarName;
+    use crate::{ConcreteStreamData, InputProvider};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_parse_file() {
+        let parser = crate::parser::lola_input_file;
+        let file = "examples/simple_add.input";
+        let mut data = parse_file(parser, file).await.unwrap();
+        let x_vals = data
+            .input_stream(&VarName("x".into()))
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(
+            x_vals,
+            vec![ConcreteStreamData::Int(1), ConcreteStreamData::Int(3)]
+        );
+    }
 }

@@ -302,7 +302,7 @@ pub fn lola_specification(s: &mut &str) -> PResult<LOLASpecification> {
     .parse_next(s)
 }
 
-pub fn value_assignment(s: &mut &str) -> PResult<(VarName, ConcreteStreamData)> {
+fn value_assignment(s: &mut &str) -> PResult<(VarName, ConcreteStreamData)> {
     seq!((
         _: whitespace,
         ident,
@@ -316,7 +316,7 @@ pub fn value_assignment(s: &mut &str) -> PResult<(VarName, ConcreteStreamData)> 
     .parse_next(s)
 }
 
-pub fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, ConcreteStreamData>> {
+fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, ConcreteStreamData>> {
     seq!((
         separated(0.., value_assignment, linebreak),
         _: alt((linebreak.void(), empty)),
@@ -325,7 +325,7 @@ pub fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, ConcreteStre
     .parse_next(s)
 }
 
-pub fn time_stamped_assignments(
+fn time_stamped_assignments(
     s: &mut &str,
 ) -> PResult<(usize, BTreeMap<VarName, ConcreteStreamData>)> {
     seq!((
@@ -340,10 +340,15 @@ pub fn time_stamped_assignments(
     .parse_next(s)
 }
 
-pub fn timed_assignments(
+fn timed_assignments(
     s: &mut &str,
 ) -> PResult<InputFileData> {
     repeat(0.., time_stamped_assignments).parse_next(s)
+}
+
+pub fn lola_input_file(s: &mut &str) -> PResult<InputFileData> {
+    timed_assignments
+    .parse_next(s)
 }
 
 #[cfg(test)]
