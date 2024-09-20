@@ -82,18 +82,13 @@ async fn main() {
     // the tokio threads feeding the output_streams is tied to the lifetime of
     // the runner object. This should be refactorable after some adjustment to
     // the types involved or the lifetimes of the
-    match (runtime, semantics) {
+    let mut enumerated_outputs = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
             let mut runner = tc::AsyncMonitorRunner::<_, tc::UntimedLolaSemantics, _, _>::new(
                 model,
                 input_streams,
             );
-            let mut enum_output = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enum_output.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs().enumerate()
         }
         (Runtime::Queuing, Semantics::Untimed) => {
             let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
@@ -102,22 +97,17 @@ async fn main() {
                 _,
                 _,
             >::new(model, input_streams);
-            let mut enum_output = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enum_output.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs().enumerate()
         }
         (Runtime::Constraints, Semantics::Untimed) => {
             let mut runner =
                 tc::constraint_based_runtime::ConstraintBasedMonitor::new(model, input_streams);
-            let mut enum_output = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enum_output.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs().enumerate()
         }
     };
+    while let Some((i, output)) = enumerated_outputs.next().await {
+        for (var, data) in output {
+            println!("{}[{}] = {:?}", var, i, data);
+        }
+    }
 }

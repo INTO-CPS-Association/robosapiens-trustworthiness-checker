@@ -41,6 +41,36 @@ async fn test_simple_add_monitor() {
 }
 
 #[tokio::test]
+async fn test_simple_add_monitor_does_not_go_away() {
+    let input_streams = input_streams1();
+    let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+    let outputs = {
+        let mut async_monitor =
+            AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
+        async_monitor.monitor_outputs()
+    };
+    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
+        outputs.take(2).enumerate().collect().await;
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                vec![(VarName("z".into()), ConcreteStreamData::Int(3))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                1,
+                vec![(VarName("z".into()), ConcreteStreamData::Int(7))]
+                    .into_iter()
+                    .collect(),
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_count_monitor() {
     let input_streams: BTreeMap<VarName, BoxStream<'static, ConcreteStreamData>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();

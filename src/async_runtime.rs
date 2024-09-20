@@ -28,10 +28,16 @@ use crate::core::{OutputStream, StreamContext, VarName};
 
 struct AsyncVarExchange<T: StreamData> {
     senders: BTreeMap<VarName, Arc<Mutex<broadcast::Sender<T>>>>,
+    cancellation_token: CancellationToken,
+    drop_guard: Arc<DropGuard>,
 }
 
 impl<T: StreamData> AsyncVarExchange<T> {
-    fn new(vars: Vec<VarName>) -> Self {
+    fn new(
+        vars: Vec<VarName>,
+        cancellation_token: CancellationToken,
+        drop_guard: Arc<DropGuard>,
+    ) -> Self {
         let mut senders = BTreeMap::new();
 
         for var in vars {
@@ -39,10 +45,11 @@ impl<T: StreamData> AsyncVarExchange<T> {
             senders.insert(var, Arc::new(Mutex::new(sender)));
         }
 
-        let cancellation_token = CancellationToken::new();
-        let drop_guard = cancellation_token.clone().drop_guard();
-
-        AsyncVarExchange { senders }
+        AsyncVarExchange {
+            senders,
+            cancellation_token,
+            drop_guard,
+        }
     }
 
     fn publish(&self, var: &VarName, data: T, max_queued: Option<usize>) -> Option<T> {
@@ -103,8 +110,6 @@ impl<T: StreamData> StreamContext<T> for Arc<AsyncVarExchange<T>> {
 
 struct SubMonitor<T: StreamData> {
     parent: Arc<AsyncVarExchange<T>>,
-    cancellation_token: CancellationToken,
-    drop_guard: DropGuard,
     senders: BTreeMap<VarName, broadcast::Sender<T>>,
     buffer_size: usize,
     progress_sender: watch::Sender<usize>,
@@ -122,15 +127,11 @@ impl<T: StreamData> SubMonitor<T> {
             senders.insert(var.clone(), broadcast::Sender::new(100));
         }
 
-        let cancellation_token = CancellationToken::new();
-        let drop_guard = cancellation_token.clone().drop_guard();
         let progress_sender = watch::channel(0).0;
 
         SubMonitor {
             parent,
             senders,
-            cancellation_token,
-            drop_guard,
             buffer_size,
             progress_sender,
         }
@@ -154,12 +155,12 @@ impl<T: StreamData> SubMonitor<T> {
                 recv,
                 child_sender,
                 clock,
-                self.cancellation_token.clone(),
+                self.parent.cancellation_token.clone(),
             ));
             tokio::spawn(Self::monitor(
                 parent_receiver,
                 send.clone(),
-                self.cancellation_token.clone(),
+                self.parent.cancellation_token.clone(),
             ));
         }
 
@@ -264,7 +265,7 @@ where
     // tasks: Option<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>,
     output_streams: BTreeMap<VarName, OutputStream<R>>,
     cancellation_token: CancellationToken,
-    cancellation_guard: DropGuard,
+    cancellation_guard: Arc<DropGuard>,
     phantom_t: PhantomData<T>,
     semantics_t: PhantomData<S>,
 }
@@ -279,8 +280,6 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
             .chain(model.output_vars().into_iter())
             .collect();
 
-        let var_exchange = Arc::new(AsyncVarExchange::new(var_names));
-
         let input_streams = model
             .input_vars()
             .iter()
@@ -294,7 +293,13 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
         let output_streams = BTreeMap::new();
 
         let cancellation_token = CancellationToken::new();
-        let cancellation_guard = cancellation_token.clone().drop_guard();
+        let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
+
+        let var_exchange = Arc::new(AsyncVarExchange::new(
+            var_names,
+            cancellation_token.clone(),
+            cancellation_guard.clone(),
+        ));
 
         Self {
             model,
