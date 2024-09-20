@@ -201,6 +201,8 @@ impl<T: StreamData> SubMonitor<T> {
                                     if let Err(_) = send.send(data) {
                                         // println!("Failed to send data {:?} due to no receivers (err = {:?})", data_copy, e);
                                     }
+                                } else {
+                                    return;
                                 }
                             }
                             // TODO: should we have a release lock here for deadlock prevention?
@@ -224,7 +226,11 @@ impl<T: StreamData> SubMonitor<T> {
                     return;
                 }
                 Ok(data) = recv.recv() => {
+                    let finished = data.is_none();
                     send.send(data).await;
+                    if finished {
+                        return;
+                    }
                 }
             }
         }
