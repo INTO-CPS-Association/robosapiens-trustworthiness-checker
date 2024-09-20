@@ -75,13 +75,6 @@ async fn main() {
     // println!("Inputs: {:?}", model.input_vars);
     // println!("Model: {:?}", model);
 
-    // TODO: This code is rather repetitive, but currently cannot be refactored
-    // in the obvious way because of the types involved
-    // That is, the type of the runner is not object safe so cannot be stored
-    // outside of the scope of a match clause, and the lifetime of
-    // the tokio threads feeding the output_streams is tied to the lifetime of
-    // the runner object. This should be refactorable after some adjustment to
-    // the types involved or the lifetimes of the
     let mut enumerated_outputs = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
             let mut runner = tc::AsyncMonitorRunner::<_, tc::UntimedLolaSemantics, _, _>::new(
