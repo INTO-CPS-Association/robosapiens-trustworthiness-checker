@@ -101,7 +101,6 @@ async fn test_eval_monitor() {
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = monitor
         .monitor_outputs()
         .enumerate()
-        .take(2)
         .collect()
         .await;
     assert_eq!(

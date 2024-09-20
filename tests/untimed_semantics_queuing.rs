@@ -17,7 +17,6 @@ async fn test_simple_add_monitor() {
         QueuingMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
         .monitor_outputs()
-        .take(2)
         .enumerate()
         .collect()
         .await;
@@ -91,7 +90,6 @@ async fn test_eval_monitor() {
         QueuingMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
         .monitor_outputs()
-        .take(2)
         .enumerate()
         .collect()
         .await;

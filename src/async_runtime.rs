@@ -27,7 +27,7 @@ use crate::core::StreamExpr;
 use crate::core::{OutputStream, StreamContext, VarName};
 
 struct AsyncVarExchange<T: StreamData> {
-    senders: BTreeMap<VarName, Arc<Mutex<broadcast::Sender<T>>>>,
+    senders: BTreeMap<VarName, Arc<Mutex<broadcast::Sender<Option<T>>>>>,
     cancellation_token: CancellationToken,
     drop_guard: Arc<DropGuard>,
 }
@@ -41,7 +41,7 @@ impl<T: StreamData> AsyncVarExchange<T> {
         let mut senders = BTreeMap::new();
 
         for var in vars {
-            let (sender, _) = channel::<T>(100);
+            let (sender, _) = channel::<Option<T>>(100);
             senders.insert(var, Arc::new(Mutex::new(sender)));
         }
 
@@ -52,7 +52,12 @@ impl<T: StreamData> AsyncVarExchange<T> {
         }
     }
 
-    fn publish(&self, var: &VarName, data: T, max_queued: Option<usize>) -> Option<T> {
+    fn publish(
+        &self,
+        var: &VarName,
+        data: Option<T>,
+        max_queued: Option<usize>,
+    ) -> Option<Option<T>> {
         // Don't send if maxed_queued limit is set and reached
         // This check is integrated into publish so that len can
         // be checked within the same lock acquisition as sending the data
@@ -77,14 +82,16 @@ impl<T: StreamData> AsyncVarExchange<T> {
     }
 }
 
-fn receiver_to_stream<T: StreamData>(recv: broadcast::Receiver<T>) -> BoxStream<'static, T> {
+fn receiver_to_stream<T: StreamData>(
+    recv: broadcast::Receiver<Option<T>>,
+) -> BoxStream<'static, T> {
     Box::pin(stream::unfold(recv, |mut recv| async move {
         if let Ok(res) = recv.recv().await {
-            Some((res, recv))
+            Some((res?, recv))
         } else {
             None
         }
-    }))
+    }).fuse())
 }
 
 impl<T: StreamData> StreamContext<T> for Arc<AsyncVarExchange<T>> {
@@ -110,7 +117,7 @@ impl<T: StreamData> StreamContext<T> for Arc<AsyncVarExchange<T>> {
 
 struct SubMonitor<T: StreamData> {
     parent: Arc<AsyncVarExchange<T>>,
-    senders: BTreeMap<VarName, broadcast::Sender<T>>,
+    senders: BTreeMap<VarName, broadcast::Sender<Option<T>>>,
     buffer_size: usize,
     progress_sender: watch::Sender<usize>,
 }
@@ -168,8 +175,8 @@ impl<T: StreamData> SubMonitor<T> {
     }
 
     async fn distribute(
-        mut recv: mpsc::Receiver<T>,
-        send: broadcast::Sender<T>,
+        mut recv: mpsc::Receiver<Option<T>>,
+        send: broadcast::Sender<Option<T>>,
         mut clock: watch::Receiver<usize>,
         cancellation_token: CancellationToken,
     ) {
@@ -206,8 +213,8 @@ impl<T: StreamData> SubMonitor<T> {
     }
 
     async fn monitor(
-        mut recv: broadcast::Receiver<T>,
-        send: mpsc::Sender<T>,
+        mut recv: broadcast::Receiver<Option<T>>,
+        send: mpsc::Sender<Option<T>>,
         cancellation_token: CancellationToken,
     ) {
         loop {
@@ -373,13 +380,17 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
                     _ = cancellation_token.cancelled() => {
                         return;
                     }
-                    Some(mut data) = input.next() => {
+                    mut data = input.next() => {
                         // Try and send the data until the exchange is able to accept it
                         // We try and receive upto 80/100 input messages
                         // to avoid monitoring from blocking the input streams
+                        let finished = data.is_none();
                         while let Some(unsent_data) = var_exchange.publish(&var, data, Some(80)) {
                             data = unsent_data;
                             // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
+                        if finished {
+                            return;
                         }
                     }
                 }
@@ -402,11 +413,15 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
                     _ = cancellation_token.cancelled() => {
                         return;
                     }
-                    Some(mut data) = output.next() => {
+                    mut data = output.next() => {
                         // Try and send the data until the exchange is able to accept it
+                        let finished = data.is_none();
                         while let Some(unsent_data) = var_exchange.publish(&var, data, Some(10)) {
                             data = unsent_data;
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
+                        if finished {
+                            return;
                         }
                     }
                 }

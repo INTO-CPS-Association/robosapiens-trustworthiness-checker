@@ -17,7 +17,6 @@ async fn test_simple_add_monitor() {
         AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
         .monitor_outputs()
-        .take(2)
         .enumerate()
         .collect()
         .await;
@@ -50,7 +49,7 @@ async fn test_simple_add_monitor_does_not_go_away() {
         async_monitor.monitor_outputs()
     };
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
-        outputs.take(2).enumerate().collect().await;
+        outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
@@ -121,7 +120,6 @@ async fn test_eval_monitor() {
         AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
         .monitor_outputs()
-        .take(2)
         .enumerate()
         .collect()
         .await;
