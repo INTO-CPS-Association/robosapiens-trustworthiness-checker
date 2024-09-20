@@ -2,8 +2,7 @@ use core::panic;
 use std::ops::Deref;
 
 use futures::{
-    stream::{self, BoxStream},
-    Stream, StreamExt,
+    stream::{self, BoxStream}, StreamExt,
 };
 use winnow::Parser;
 

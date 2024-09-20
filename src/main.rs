@@ -1,4 +1,4 @@
-use futures::{stream::LocalBoxStream, StreamExt};
+use futures::StreamExt;
 // mod ast;
 // mod async_runtime;
 // mod constraint_based_runtime;
@@ -10,7 +10,7 @@ use futures::{stream::LocalBoxStream, StreamExt};
 // mod ring_buffer;
 // mod untimed_monitoring_combinators;
 use trustworthiness_checker::{
-    self as tc, file_input_provider, parse_file, InputProvider, Monitor, VarName,
+    self as tc, parse_file, Monitor,
 };
 
 use clap::{Parser, ValueEnum};

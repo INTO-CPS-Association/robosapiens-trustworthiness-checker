@@ -2,7 +2,6 @@ use futures::stream;
 use futures::stream::BoxStream;
 use std::{collections::BTreeMap, pin::Pin};
 use trustworthiness_checker::{
-    ast::{LOLASpecification, SExpr},
     ConcreteStreamData, VarName,
 };
 

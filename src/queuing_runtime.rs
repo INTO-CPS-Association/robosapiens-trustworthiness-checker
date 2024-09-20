@@ -1,20 +1,15 @@
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 // use std::sync::Mutex;
-use futures::lock;
 use std::sync::Mutex as StdMutex;
-use std::sync::RwLock as StdRwLock;
 use std::vec;
-use tokio::sync::watch;
 use tokio::sync::Mutex;
 
 use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use tokio::sync::RwLock;
 
 use crate::core::InputProvider;
 use crate::core::Monitor;
@@ -23,7 +18,6 @@ use crate::core::Specification;
 use crate::core::StreamData;
 use crate::core::StreamExpr;
 use crate::core::{OutputStream, StreamContext, VarName};
-use crate::ConcreteStreamData;
 
 struct QueuingVarContext<T: StreamData> {
     queues: BTreeMap<VarName, Arc<Mutex<Vec<T>>>>,

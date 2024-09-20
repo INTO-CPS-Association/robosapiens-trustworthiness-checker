@@ -42,7 +42,7 @@ impl Display for VarName {
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub struct IndexedVarName(pub Box<str>, pub usize);
 
-pub type OutputStream<T: StreamData> = BoxStream<'static, T>;
+pub type OutputStream<T> = BoxStream<'static, T>;
 
 pub trait InputProvider<T> {
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<T>>;

@@ -1,7 +1,6 @@
 use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
-use futures::stream::LocalBoxStream;
 use futures::StreamExt;
 use std::collections::BTreeMap;
 use std::iter::zip;

@@ -1,17 +1,10 @@
 // Test untimed monitoring of LOLA specifications with the async runtime
 
-use futures::stream;
-use futures::stream::{BoxStream, StreamExt};
-use std::{collections::BTreeMap, pin::Pin};
-use trustworthiness_checker::constraint_based_runtime::{
-    ConstraintBasedMonitor, ValStreamCollection,
-};
-use trustworthiness_checker::constraint_solver::SExprConstraintStore;
-use trustworthiness_checker::core::IndexedVarName;
+use futures::stream::StreamExt;
+use std::collections::BTreeMap;
+use trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor;
 use trustworthiness_checker::lola_specification;
 use trustworthiness_checker::{
-    ast::{LOLASpecification, SExpr},
-    async_runtime::AsyncMonitorRunner,
     ConcreteStreamData, Monitor, VarName,
 };
 mod lola_fixtures;

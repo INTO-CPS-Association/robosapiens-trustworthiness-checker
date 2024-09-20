@@ -1,6 +1,6 @@
 use crate::ast::{BExpr, SExpr};
 use crate::core::{
-    ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, StreamExpr, VarName,
+    ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, VarName,
 };
 use crate::untimed_monitoring_combinators as mc;
 

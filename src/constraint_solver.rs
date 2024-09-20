@@ -375,7 +375,7 @@ impl SExprConstraintStore<IndexedVarName> {
 mod tests {
     use super::*;
     use crate::ast::SExpr;
-    use crate::constraint_solver::*;
+    
     use crate::core::IndexedVarName;
 
     fn recursive_constraints() -> SExprConstraintStore<VarName> {
@@ -447,7 +447,7 @@ mod tests {
                 unresolved: vec![],
             }
         );
-        let mut constraints = to_indexed_constraints(&recursive_constraints(), 1);
+        let constraints = to_indexed_constraints(&recursive_constraints(), 1);
         constraints.solve_step(1);
         // constraints.solve_step(0);
         // constraints.solve_step(0);
