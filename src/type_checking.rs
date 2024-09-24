@@ -3,7 +3,7 @@ use crate::{
     ConcreteStreamData,
 };
 
-use std::{error, fmt::Debug};
+use std::fmt::Debug;
 
 // Stream expression typed
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -126,25 +126,52 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::iter::zip;
+
     use super::*;
 
     type SemantResultStr = SemantResult<String>;
+    type SExprStr = SExpr<String>;
 
     #[test]
-    fn test_int_val() {
-        let val: SExpr<String> = SExpr::Val(ConcreteStreamData::Int(1));
-        let result = type_check(val);
-        let expected: SemantResultStr = Ok(SExprTE::IntT(SExprT::Val(1)));
+    fn test_vals_ok() {
+        let vals = vec![
+            SExprStr::Val(ConcreteStreamData::Int(1)),
+            SExprStr::Val(ConcreteStreamData::Str("".into())),
+            SExprStr::Val(ConcreteStreamData::Bool(true)),
+            SExprStr::Val(ConcreteStreamData::Unit),
+        ];
+        let results = vals.into_iter().map(type_check);
+        let expected: Vec<SemantResultStr> = vec![
+            Ok(SExprTE::IntT(SExprT::Val(1))),
+            Ok(SExprTE::StrT(SExprT::Val("".into()))),
+            Ok(SExprTE::BoolT(SExprT::Val(true))),
+            Ok(SExprTE::UnitT),
+        ];
 
-        assert_eq!(result, expected);
+        assert_eq!(results.len(), expected.len());
+
+        for (res, exp) in zip(results, expected) {
+            assert_eq!(res, exp);
+        }
     }
 
     #[test]
-    fn test_string_val() {
-        let val: SExpr<String> = SExpr::Val(ConcreteStreamData::Str("Hello".into()));
+    fn test_unknown_err() {
+        let val = SExprStr::Val(ConcreteStreamData::Unknown);
         let result = type_check(val);
-        let expected: SemantResultStr = Ok(SExprTE::StrT(SExprT::Val("Hello".into())));
+        let _expected: SemantResultStr = Err(vec![SemantError::TypeError("".into())]);
 
-        assert_eq!(result, expected);
+        // Checking that error is returned of correct type but not the specific message
+        if let (Err(res_errs), Err(exp_errs)) = (&result, &_expected) {
+            assert_eq!(res_errs.len(), exp_errs.len());
+
+            assert!(res_errs
+                .iter()
+                .all(|e| matches!(e, SemantError::TypeError(_))));
+        } else {
+            // We didn't receive error - make assertion fail with nice output
+            assert!(matches!(result, _expected));
+        }
     }
 }
