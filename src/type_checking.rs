@@ -3,7 +3,7 @@ use crate::{
     ConcreteStreamData,
 };
 
-use std::fmt::Debug;
+use std::{error, fmt::Debug};
 
 // Stream expression typed
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -46,26 +46,40 @@ pub enum SemantError {
     UndeclaredVariable(String),
 }
 
-pub type SemantResult = Result<SExprTE<String>, SemantError>;
+pub type SemantErrors = Vec<SemantError>;
 
-pub fn type_check_expr<VarT: Debug>(sexpr: SExpr<VarT>) -> SemantResult {
+pub type TypeContext<VarT> = Vec<VarT>;
+
+pub type SemantResult<VarT> = Result<SExprTE<VarT>, SemantErrors>;
+
+pub fn type_check_expr<VarT: Debug>(
+    sexpr: SExpr<VarT>,
+    ctx: &mut TypeContext<VarT>,
+    errs: &mut SemantErrors,
+) -> Result<SExprTE<VarT>, ()>
+where
+    VarT: Clone,
+{
     match sexpr {
         SExpr::Val(sdata) => match sdata {
             ConcreteStreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
             ConcreteStreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
             ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
             ConcreteStreamData::Unit => Ok(SExprTE::UnitT),
-            ConcreteStreamData::Unknown => Err(SemantError::TypeError(
-                format!(
-                    "Stream expression {:?} not assigned a type before semantic analysis",
-                    sdata
-                )
-                .into(),
-            )),
+            ConcreteStreamData::Unknown => {
+                errs.push(SemantError::TypeError(
+                    format!(
+                        "Stream expression {:?} not assigned a type before semantic analysis",
+                        sdata
+                    )
+                    .into(),
+                ));
+                Err(())
+            }
         },
         SExpr::Plus(se1, se2) => {
-            let se1_check = type_check_expr(*se1);
-            let se2_check = type_check_expr(*se2);
+            let se1_check = type_check_expr(*se1, ctx, errs);
+            let se2_check = type_check_expr(*se2, ctx, errs);
             match (se1_check, se2_check) {
                 (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(
                     SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
@@ -74,18 +88,39 @@ pub fn type_check_expr<VarT: Debug>(sexpr: SExpr<VarT>) -> SemantResult {
                     SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
                 )),
                 // Any other case where we are otherwise OK
-                (Ok(ste1), Ok(ste2)) => Err(SemantError::TypeError(
-                    format!(
+                (Ok(ste1), Ok(ste2)) => {
+                    errs.push(SemantError::TypeError(
+                        format!(
                         "Cannot apply binary function Plus to expressions of type {:?} and {:?}",
                         ste1, ste2
                     )
-                    .into(),
-                )),
-                _ => Err(SemantError::TypeError("Not implemented".into())),
+                        .into(),
+                    ));
+                    Err(())
+                }
+                _ => {
+                    errs.push(SemantError::TypeError("Not implemented".into()));
+                    Err(())
+                }
             }
         }
+        _ => {
+            errs.push(SemantError::TypeError("Not implemented".into()));
+            Err(())
+        }
+    }
+}
 
-        _ => Err(SemantError::TypeError("Not implemented".into())),
+pub fn type_check<VarT: Debug>(sexpr: SExpr<VarT>) -> SemantResult<VarT>
+where
+    VarT: Clone,
+{
+    let mut context = Vec::new();
+    let mut errors = Vec::new();
+    let res = type_check_expr(sexpr, &mut context, &mut errors);
+    match res {
+        Ok(se) => Ok(se),
+        Err(()) => Err(errors),
     }
 }
 
@@ -93,11 +128,13 @@ pub fn type_check_expr<VarT: Debug>(sexpr: SExpr<VarT>) -> SemantResult {
 mod tests {
     use super::*;
 
+    type SemantResultStr = SemantResult<String>;
+
     #[test]
     fn test_int_val() {
         let val: SExpr<String> = SExpr::Val(ConcreteStreamData::Int(1));
-        let result = type_check_expr(val);
-        let expected: Result<SExprTE<String>, SemantError> = Ok(SExprTE::IntT(SExprT::Val(1)));
+        let result = type_check(val);
+        let expected: SemantResultStr = Ok(SExprTE::IntT(SExprT::Val(1)));
 
         assert_eq!(result, expected);
     }
@@ -105,9 +142,8 @@ mod tests {
     #[test]
     fn test_string_val() {
         let val: SExpr<String> = SExpr::Val(ConcreteStreamData::Str("Hello".into()));
-        let result = type_check_expr(val);
-        let expected: Result<SExprTE<String>, SemantError> =
-            Ok(SExprTE::StrT(SExprT::Val("Hello".into())));
+        let result = type_check(val);
+        let expected: SemantResultStr = Ok(SExprTE::StrT(SExprT::Val("Hello".into())));
 
         assert_eq!(result, expected);
     }
