@@ -37,6 +37,7 @@ pub enum SExprTE<VarT: Debug> {
     IntT(SExprT<i64, VarT>),
     StrT(SExprT<String, VarT>),
     BoolT(SExprT<bool, VarT>),
+    UnitT,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -47,13 +48,20 @@ pub enum SemantError {
 
 pub type SemantResult = Result<SExprTE<String>, SemantError>;
 
-pub fn type_check_expr(sexpr: SExpr<String>) -> SemantResult {
+pub fn type_check_expr<VarT: Debug>(sexpr: SExpr<VarT>) -> SemantResult {
     match sexpr {
         SExpr::Val(sdata) => match sdata {
             ConcreteStreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
             ConcreteStreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
             ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
-            _ => Err(SemantError::TypeError("Not implemented".into())),
+            ConcreteStreamData::Unit => Ok(SExprTE::UnitT),
+            ConcreteStreamData::Unknown => Err(SemantError::TypeError(
+                format!(
+                    "Stream expression {:?} not assigned a type before semantic analysis",
+                    sdata
+                )
+                .into(),
+            )),
         },
         SExpr::Plus(se1, se2) => {
             let se1_check = type_check_expr(*se1);
@@ -61,6 +69,17 @@ pub fn type_check_expr(sexpr: SExpr<String>) -> SemantResult {
             match (se1_check, se2_check) {
                 (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(
                     SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
+                )),
+                (Ok(SExprTE::StrT(se1)), Ok(SExprTE::StrT(se2))) => Ok(SExprTE::StrT(
+                    SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
+                )),
+                // Any other case where we are otherwise OK
+                (Ok(ste1), Ok(ste2)) => Err(SemantError::TypeError(
+                    format!(
+                        "Cannot apply binary function Plus to expressions of type {:?} and {:?}",
+                        ste1, ste2
+                    )
+                    .into(),
                 )),
                 _ => Err(SemantError::TypeError("Not implemented".into())),
             }
