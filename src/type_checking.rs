@@ -50,6 +50,7 @@ pub enum SExprTE<VarT: Debug> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemantError {
     TypeError(String),
+    UnknownError(String),
     UndeclaredVariable(String),
 }
 
@@ -74,7 +75,7 @@ where
             ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
             ConcreteStreamData::Unit => Ok(SExprTE::UnitT),
             ConcreteStreamData::Unknown => {
-                errs.push(SemantError::TypeError(
+                errs.push(SemantError::UnknownError(
                     format!(
                         "Stream expression {:?} not assigned a type before semantic analysis",
                         sdata
@@ -105,10 +106,8 @@ where
                     ));
                     Err(())
                 }
-                _ => {
-                    errs.push(SemantError::TypeError("Not implemented".into()));
-                    Err(())
-                }
+                // If the underlying values already result in an error then simply propagate
+                (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
             }
         }
         _ => {
@@ -118,8 +117,9 @@ where
     }
 }
 
-pub fn type_check<VarT: Debug>(sexpr: SExpr<VarT>) -> SemantResult<VarT>
+pub fn type_check<VarT>(sexpr: SExpr<VarT>) -> SemantResult<VarT>
 where
+    VarT: Debug,
     VarT: Clone,
 {
     let mut context = Vec::new();
@@ -133,12 +133,43 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::iter::zip;
+    use std::{iter::zip, mem::discriminant};
 
     use super::*;
 
     type SemantResultStr = SemantResult<String>;
     type SExprStr = SExpr<String>;
+    type SExprTStr<Val> = SExprT<Val, String>;
+
+    fn check_correct_error_type(result: &SemantResultStr, expected: &SemantResultStr) {
+        // Checking that error type is correct but not the specific message
+        if let (Err(res_errs), Err(exp_errs)) = (&result, &expected) {
+            assert_eq!(res_errs.len(), exp_errs.len());
+            let mut errs = zip(res_errs, exp_errs);
+            assert!(
+                errs.all(|(res, exp)| discriminant(res) == discriminant(exp)),
+                "Error variants do not match: got {:?}, expected {:?}",
+                res_errs,
+                exp_errs
+            );
+        } else {
+            // We didn't receive error - make assertion fail with nice output
+            assert!(matches!(result, _expected));
+        }
+    }
+
+    fn check_correct_error_types(results: &Vec<SemantResultStr>, expected: &Vec<SemantResultStr>) {
+        assert_eq!(
+            results.len(),
+            expected.len(),
+            "Result and expected vectors must have the same length"
+        );
+
+        // Iterate over both vectors and call check_correct_error_type on each pair
+        for (result, exp) in results.iter().zip(expected.iter()) {
+            check_correct_error_type(result, exp);
+        }
+    }
 
     #[test]
     fn test_vals_ok() {
@@ -157,30 +188,103 @@ mod tests {
             Ok(SExprTE::UnitT),
         ];
 
-        assert_eq!(results.len(), expected.len());
-
-        for (res, exp) in zip(results, expected) {
-            assert_eq!(res, exp);
-        }
+        assert!(results.eq(expected.into_iter()));
     }
 
     #[test]
     fn test_unknown_err() {
-        // Checks that if a Val is unknown during semantic analysis it produces a TypeError
+        // Checks that if a Val is unknown during semantic analysis it produces a UnknownError
         let val = SExprStr::Val(ConcreteStreamData::Unknown);
         let result = type_check(val);
-        let _expected: SemantResultStr = Err(vec![SemantError::TypeError("".into())]);
+        let expected: SemantResultStr = Err(vec![SemantError::UnknownError("".into())]);
+        check_correct_error_type(&result, &expected);
+    }
 
-        // Checking that error is returned of correct type but not the specific message
-        if let (Err(res_errs), Err(exp_errs)) = (&result, &_expected) {
-            assert_eq!(res_errs.len(), exp_errs.len());
+    #[test]
+    fn test_plus_ok() {
+        // Checks that if we plus two Ints or Strings together it results in typed AST after semantic analysis
+        let vals = vec![
+            SExprStr::Plus(
+                Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
+                Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
+            ),
+            SExprStr::Plus(
+                Box::new(SExprStr::Val(ConcreteStreamData::Str("".into()))),
+                Box::new(SExprStr::Val(ConcreteStreamData::Str("".into()))),
+            ),
+        ];
+        let results = vals.into_iter().map(type_check);
+        let int_val = Box::new(SExprTStr::Val(0));
+        let str_val = Box::new(SExprTStr::Val("".into()));
+        let expected: Vec<SemantResultStr> = vec![
+            Ok(SExprTE::IntT(SExprTStr::Plus(int_val.clone(), int_val))),
+            Ok(SExprTE::StrT(SExprTStr::Plus(str_val.clone(), str_val))),
+        ];
 
-            assert!(res_errs
-                .iter()
-                .all(|e| matches!(e, SemantError::TypeError(_))));
-        } else {
-            // We didn't receive error - make assertion fail with nice output
-            assert!(matches!(result, _expected));
+        assert!(results.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn test_plus_err_ident_types() {
+        // Checks that if we add two identical types together that are not addable,
+        let vals = vec![
+            SExprStr::Plus(
+                Box::new(SExprStr::Val(ConcreteStreamData::Bool(false))),
+                Box::new(SExprStr::Val(ConcreteStreamData::Bool(false))),
+            ),
+            SExprStr::Plus(
+                Box::new(SExprStr::Val(ConcreteStreamData::Unit)),
+                Box::new(SExprStr::Val(ConcreteStreamData::Unit)),
+            ),
+        ];
+        let results = vals.into_iter().map(type_check).collect();
+        let expected: Vec<SemantResultStr> = vec![
+            Err(vec![SemantError::TypeError("".into())]),
+            Err(vec![SemantError::TypeError("".into())]),
+        ];
+        check_correct_error_types(&results, &expected);
+    }
+
+    #[test]
+    fn test_plus_err_unknown() {
+        // Checks that if either value is unknown then Plus does not generate further errors
+        // Checks that if we add two identical types together that are not addable,
+        let vals = vec![
+            SExprStr::Plus(
+                Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
+                Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
+            ),
+            SExprStr::Plus(
+                Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
+                Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
+            ),
+            SExprStr::Plus(
+                Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
+                Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
+            ),
+        ];
+        let results = vals.into_iter().map(type_check);
+        let expected_err_lens = vec![1, 1, 2];
+        for (res, exp_err_len) in zip(results, expected_err_lens) {
+            match res {
+                Err(errs) => {
+                    assert_eq!(
+                        errs.len(),
+                        exp_err_len,
+                        "Expected {} errors but got {}: {:?}",
+                        exp_err_len,
+                        errs.len(),
+                        errs
+                    );
+                }
+                Ok(_) => {
+                    assert!(
+                        false,
+                        "Expected an error but got a successful result: {:?}",
+                        res
+                    );
+                }
+            }
         }
     }
 }
