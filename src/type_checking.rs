@@ -5,9 +5,16 @@ use crate::{
 
 use std::fmt::Debug;
 
-// Stream expression typed
+// Trait defining the allowed types for expression values
+pub trait SExprValue: Clone + Debug + PartialEq + Eq {}
+impl SExprValue for i64 {}
+impl SExprValue for String {}
+impl SExprValue for bool {}
+impl SExprValue for () {}
+
+// Stream expressions - now with types
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SExprT<ValT, VarT: Debug> {
+pub enum SExprT<ValT: SExprValue, VarT: Debug> {
     If(Box<BExpr<VarT>>, Box<Self>, Box<Self>),
 
     // Stream indexing
@@ -135,6 +142,7 @@ mod tests {
 
     #[test]
     fn test_vals_ok() {
+        // Checks that vals returns the expected typed AST after semantic analysis
         let vals = vec![
             SExprStr::Val(ConcreteStreamData::Int(1)),
             SExprStr::Val(ConcreteStreamData::Str("".into())),
@@ -158,6 +166,7 @@ mod tests {
 
     #[test]
     fn test_unknown_err() {
+        // Checks that if a Val is unknown during semantic analysis it produces a TypeError
         let val = SExprStr::Val(ConcreteStreamData::Unknown);
         let result = type_check(val);
         let _expected: SemantResultStr = Err(vec![SemantError::TypeError("".into())]);
