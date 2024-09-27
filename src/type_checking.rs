@@ -60,6 +60,48 @@ pub type TypeContext<VarT> = Vec<VarT>;
 
 pub type SemantResult<VarT> = Result<SExprTE<VarT>, SemantErrors>;
 
+fn type_check_binop<VarT: Debug>(
+    se1: SExpr<VarT>,
+    se2: SExpr<VarT>,
+    op: SBinOp,
+    ctx: &mut TypeContext<VarT>,
+    errs: &mut SemantErrors,
+) -> Result<SExprTE<VarT>, ()>
+where
+    VarT: Clone,
+{
+    let se1_check = type_check_expr(se1, ctx, errs);
+    let se2_check = type_check_expr(se2, ctx, errs);
+
+    match (se1_check, se2_check) {
+        (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(SExprT::BinOp(
+            Box::new(se1.clone()),
+            Box::new(se2.clone()),
+            op,
+        ))),
+        (Ok(SExprTE::StrT(se1)), Ok(SExprTE::StrT(se2))) if op == SBinOp::Plus => {
+            Ok(SExprTE::StrT(SExprT::BinOp(
+                Box::new(se1.clone()),
+                Box::new(se2.clone()),
+                op,
+            )))
+        }
+        // Any other case where sub-expressions are Ok, but `op` is not supported
+        (Ok(ste1), Ok(ste2)) => {
+            errs.push(SemantError::TypeError(
+                format!(
+                    "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
+                    op, ste1, ste2
+                )
+                .into(),
+            ));
+            Err(())
+        }
+        // If the underlying values already result in an error then simply propagate
+        (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
+    }
+}
+
 pub fn type_check_expr<VarT: Debug>(
     sexpr: SExpr<VarT>,
     ctx: &mut TypeContext<VarT>,
@@ -85,35 +127,7 @@ where
                 Err(())
             }
         },
-        SExpr::BinOp(se1, se2, op) => {
-            let se1_check = type_check_expr(*se1, ctx, errs);
-            let se2_check = type_check_expr(*se2, ctx, errs);
-            match (se1_check, se2_check) {
-                (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(
-                    SExprT::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op),
-                )),
-                (Ok(SExprTE::StrT(se1)), Ok(SExprTE::StrT(se2))) if op == SBinOp::Plus => {
-                    Ok(SExprTE::StrT(SExprT::BinOp(
-                        Box::new(se1.clone()),
-                        Box::new(se2.clone()),
-                        op,
-                    )))
-                }
-                // Any other case where we are otherwise OK
-                (Ok(ste1), Ok(ste2)) => {
-                    errs.push(SemantError::TypeError(
-                        format!(
-                    "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
-                    op, ste1, ste2
-                )
-                        .into(),
-                    ));
-                    Err(())
-                }
-                // If the underlying values already result in an error then simply propagate
-                (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
-            }
-        }
+        SExpr::BinOp(se1, se2, op) => type_check_binop(*se1, *se2, op, ctx, errs),
         _ => {
             errs.push(SemantError::TypeError("Not implemented".into()));
             Err(())
@@ -145,6 +159,22 @@ mod tests {
     type SExprStr = SExpr<String>;
     type SExprTStr<Val> = SExprT<Val, String>;
 
+    trait BinOpExpr<Op, Expr> {
+        fn bin_op(lhs: Expr, rhs: Expr, op: Op) -> Self;
+    }
+
+    impl BinOpExpr<SBinOp, Box<SExprStr>> for SExprStr {
+        fn bin_op(lhs: Box<SExprStr>, rhs: Box<SExprStr>, op: SBinOp) -> Self {
+            SExprStr::BinOp(lhs, rhs, op)
+        }
+    }
+
+    impl<Val: SExprValue> BinOpExpr<SBinOp, Box<SExprTStr<Val>>> for SExprTStr<Val> {
+        fn bin_op(lhs: Box<SExprTStr<Val>>, rhs: Box<SExprTStr<Val>>, op: SBinOp) -> Self {
+            SExprTStr::BinOp(lhs, rhs, op)
+        }
+    }
+
     fn check_correct_error_type(result: &SemantResultStr, expected: &SemantResultStr) {
         // Checking that error type is correct but not the specific message
         if let (Err(res_errs), Err(exp_errs)) = (&result, &expected) {
@@ -158,7 +188,11 @@ mod tests {
             );
         } else {
             // We didn't receive error - make assertion fail with nice output
-            assert!(matches!(result, _expected));
+            let msg = format!(
+                "Expected error: {:?}. Received result: {:?}",
+                expected, result
+            );
+            assert!(false, "{}", msg);
         }
     }
 
@@ -173,6 +207,33 @@ mod tests {
         for (result, exp) in results.iter().zip(expected.iter()) {
             check_correct_error_type(result, exp);
         }
+    }
+
+    // Helper function that returns all the sbinop variants at the time of writing these tests
+    // (Not guaranteed to be maintained)
+    fn all_sbinop_variants() -> Vec<SBinOp> {
+        vec![SBinOp::Plus, SBinOp::Minus, SBinOp::Mult]
+    }
+
+    fn generate_binop_combinations<T, Expr>(
+        variants_a: &[Expr],
+        variants_b: &[Expr],
+        sbinops: Vec<SBinOp>,
+    ) -> Vec<T>
+    where
+        T: BinOpExpr<SBinOp, Box<Expr>>,
+        Expr: Clone,
+    {
+        let mut vals = Vec::new();
+
+        for a in variants_a.iter() {
+            for b in variants_b.iter() {
+                for op in &sbinops {
+                    vals.push(T::bin_op(Box::new(a.clone()), Box::new(b.clone()), *op));
+                }
+            }
+        }
+        vals
     }
 
     #[test]
@@ -262,6 +323,44 @@ mod tests {
     }
 
     #[test]
+    fn test_binop_err_diff_types() {
+        // Checks that calling a BinOp on two different types results in a TypeError
+
+        // Create a vector of all ConcreteStreamData variants (except Unknown)
+        let variants = vec![
+            SExprStr::Val(ConcreteStreamData::Int(0)),
+            SExprStr::Val(ConcreteStreamData::Str("".into())),
+            SExprStr::Val(ConcreteStreamData::Bool(true)),
+            SExprStr::Val(ConcreteStreamData::Unit),
+        ];
+
+        // Create a vector of all SBinOp variants
+        let sbinops = all_sbinop_variants();
+
+        let vals_tmp = generate_binop_combinations(&variants, &variants, sbinops);
+        let vals = vals_tmp.into_iter().filter(|bin_op| {
+            match bin_op {
+                SExprStr::BinOp(left, right, _) => {
+                    // Only keep values where left != right
+                    left != right
+                }
+                _ => true, // Keep non-BinOps (unused in this case)
+            }
+        });
+
+        let results = vals.into_iter().map(type_check).collect::<Vec<_>>();
+
+        // Since all combinations of different types should yield an error,
+        // we'll expect each result to be an Err with a type error.
+        let expected: Vec<SemantResultStr> = results
+            .iter()
+            .map(|_| Err(vec![SemantError::TypeError("".into())]))
+            .collect();
+
+        check_correct_error_types(&results, &expected);
+    }
+
+    #[test]
     fn test_plus_err_unknown() {
         // Checks that if either value is unknown then Plus does not generate further errors
         // Checks that if we add two identical types together that are not addable,
@@ -284,6 +383,8 @@ mod tests {
         ];
         let results = vals.into_iter().map(type_check);
         let expected_err_lens = vec![1, 1, 2];
+
+        // For each result, check that we got errors and that we got the correct amount:
         for (res, exp_err_len) in zip(results, expected_err_lens) {
             match res {
                 Err(errs) => {
@@ -295,6 +396,7 @@ mod tests {
                         errs.len(),
                         errs
                     );
+                    // TODO: Check that it is actually UnknownErrors
                 }
                 Ok(_) => {
                     assert!(
@@ -305,5 +407,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_int_binop_ok() {
+        // Checks that if we BinOp two Ints together it results in typed AST after semantic analysis
+        let int_val = vec![SExprStr::Val(ConcreteStreamData::Int(0))];
+        let sbinops = all_sbinop_variants();
+        let vals = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
+        let results = vals.into_iter().map(type_check);
+
+        let int_t_val = vec![SExprTStr::<i64>::Val(0)];
+
+        // Generate the different combinations and turn them into "Ok" results
+        let expected_tmp: Vec<SExprTStr<i64>> =
+            generate_binop_combinations(&int_t_val, &int_t_val, sbinops);
+        let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::IntT(v)));
+        assert!(results.eq(expected.into_iter()));
     }
 }
