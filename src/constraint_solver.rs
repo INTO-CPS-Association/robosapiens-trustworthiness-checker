@@ -3,7 +3,7 @@ use std::{fmt::Debug, fmt::Display, mem};
 use winnow::Parser;
 
 use crate::ast::*;
-use crate::core::{IndexedVarName, ConcreteStreamData, VarName};
+use crate::core::{ConcreteStreamData, IndexedVarName, VarName};
 
 pub type SExprConstraint<VarT> = (VarT, SExpr<VarT>);
 pub type SExprConstraintSolved<VarT> = (VarT, ConcreteStreamData);
@@ -153,17 +153,10 @@ fn to_indexed_expr(s: &SExpr<VarName>, current_index: usize) -> SExpr<IndexedVar
     use SExpr::*;
     match s {
         Val(n) => Val(n.clone()),
-        Plus(a, b) => Plus(
+        BinOp(a, b, op) => BinOp(
             Box::new(to_indexed_expr(a, current_index)),
             Box::new(to_indexed_expr(b, current_index)),
-        ),
-        Minus(a, b) => Minus(
-            Box::new(to_indexed_expr(a, current_index)),
-            Box::new(to_indexed_expr(b, current_index)),
-        ),
-        Mult(a, b) => Mult(
-            Box::new(to_indexed_expr(a, current_index)),
-            Box::new(to_indexed_expr(b, current_index)),
+            *op,
         ),
         Var(VarName(v)) => Var(IndexedVarName(v.clone(), current_index)),
         Index(s, i, c) => Index(Box::new(to_indexed_expr(s, current_index)), *i, c.clone()),
@@ -208,48 +201,36 @@ pub trait PartialEvaluable<VarT: Eq + Clone + IndexableVar> {
 
 impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
     fn partial_eval(&self, cs: &SExprConstraintStore<IndexedVarName>, time: usize) -> Self {
-        use SExpr::*;
         use ConcreteStreamData::*;
+        use SExpr::*;
         match self {
             Val(s) => Val(s.clone()),
-            Plus(a, b) => {
+            BinOp(a, b, op) if *op == SBinOp::Plus || *op == SBinOp::Mult => {
                 let a_s = a.partial_eval(cs, time);
                 let b_s = b.partial_eval(cs, time);
                 match (a_s, b_s) {
                     // TODO: Sort other datatypes after exprs
                     (Val(Int(n1)), Val(Int(n2))) => Val(Int(n1 + n2)),
                     (Val(Int(n1)), b1) => {
-                        Plus(Box::new(b1), Box::new(Val(Int(n1)))).partial_eval(cs, time)
+                        BinOp(Box::new(b1), Box::new(Val(Int(n1))), *op).partial_eval(cs, time)
                     }
-                    (Plus(a1, b1), c1) => {
-                        Plus(a1, Box::new(Plus(b1, Box::new(c1)))).partial_eval(cs, time)
+                    (BinOp(a1, b1, inner_op), c1) if inner_op == *op => {
+                        BinOp(a1, Box::new(BinOp(b1, Box::new(c1), *op)), inner_op)
+                            .partial_eval(cs, time)
                     }
                     // Explicitly match the variables to avoid use after move
-                    (a_ss, b_ss) => Plus(Box::new(a_ss), Box::new(b_ss)),
+                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), *op),
                 }
             }
-            Minus(a, b) => {
+            BinOp(a, b, op) if *op == SBinOp::Minus => {
                 let a_s = a.partial_eval(cs, time);
                 let b_s = b.partial_eval(cs, time);
                 match (a_s, b_s) {
                     (Val(Int(n1)), Val(Int(n2))) => Val(Int(n1 - n2)),
-                    (a_ss, b_ss) => Minus(Box::new(a_ss), Box::new(b_ss)),
+                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), *op),
                 }
             }
-            Mult(a, b) => {
-                let a_s = a.partial_eval(cs, time);
-                let b_s = b.partial_eval(cs, time);
-                match (a_s, b_s) {
-                    (Val(Int(n1)), Val(Int(n2))) => Val(Int(n1 * n2)),
-                    (Val(Int(n1)), b1) => {
-                        Mult(Box::new(b1.clone()), Box::new(Val(Int(n1)))).partial_eval(cs, time)
-                    }
-                    (Mult(a1, b1), c1) => {
-                        Mult(a1, Box::new(Mult(b1, Box::new(c1.clone())))).partial_eval(cs, time)
-                    }
-                    (a_ss, b_ss) => Mult(Box::new(a_ss), Box::new(b_ss)),
-                }
-            }
+            BinOp(_, _, _) => unreachable!("Covered in other cases"),
             If(b, e1, e2) => {
                 let b_s = b.partial_eval(cs, time);
                 let e1_s = e1.partial_eval(cs, time);
@@ -375,7 +356,7 @@ impl SExprConstraintStore<IndexedVarName> {
 mod tests {
     use super::*;
     use crate::ast::SExpr;
-    
+
     use crate::core::IndexedVarName;
 
     fn recursive_constraints() -> SExprConstraintStore<VarName> {
@@ -383,13 +364,14 @@ mod tests {
             resolved: vec![],
             unresolved: vec![(
                 VarName("x".into()),
-                SExpr::Plus(
+                SExpr::BinOp(
                     Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                     Box::new(SExpr::Index(
                         Box::new(SExpr::Var(VarName("x".into()))),
                         -1,
                         ConcreteStreamData::Int(0),
                     )),
+                    SBinOp::Plus,
                 ),
             )],
         }
@@ -403,13 +385,14 @@ mod tests {
                 resolved: vec![],
                 unresolved: vec![(
                     IndexedVarName("x".into(), 0),
-                    SExpr::Plus(
+                    SExpr::BinOp(
                         Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                         Box::new(SExpr::Index(
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 0))),
                             -1,
                             ConcreteStreamData::Int(0),
                         )),
+                        SBinOp::Plus
                     ),
                 )],
             }
@@ -420,13 +403,14 @@ mod tests {
                 resolved: vec![],
                 unresolved: vec![(
                     IndexedVarName("x".into(), 4),
-                    SExpr::Plus(
+                    SExpr::BinOp(
                         Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                         Box::new(SExpr::Index(
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 4))),
                             -1,
                             ConcreteStreamData::Int(0),
                         ),),
+                        SBinOp::Plus,
                     ),
                 )],
             }

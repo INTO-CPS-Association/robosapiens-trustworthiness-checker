@@ -1,5 +1,5 @@
 use crate::{
-    ast::{BExpr, SExpr},
+    ast::{BExpr, SBinOp, SExpr},
     ConcreteStreamData,
 };
 
@@ -29,9 +29,9 @@ pub enum SExprT<ValT: SExprValue, VarT: Debug> {
 
     // Arithmetic Stream expression
     Val(ValT),
-    Plus(Box<Self>, Box<Self>),
-    Minus(Box<Self>, Box<Self>),
-    Mult(Box<Self>, Box<Self>),
+
+    BinOp(Box<Self>, Box<Self>, SBinOp),
+
     Var(VarT),
 
     // Eval
@@ -85,23 +85,27 @@ where
                 Err(())
             }
         },
-        SExpr::Plus(se1, se2) => {
+        SExpr::BinOp(se1, se2, op) => {
             let se1_check = type_check_expr(*se1, ctx, errs);
             let se2_check = type_check_expr(*se2, ctx, errs);
             match (se1_check, se2_check) {
                 (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(
-                    SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
+                    SExprT::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op),
                 )),
-                (Ok(SExprTE::StrT(se1)), Ok(SExprTE::StrT(se2))) => Ok(SExprTE::StrT(
-                    SExprT::Plus(Box::new(se1.clone()), Box::new(se2.clone())),
-                )),
+                (Ok(SExprTE::StrT(se1)), Ok(SExprTE::StrT(se2))) if op == SBinOp::Plus => {
+                    Ok(SExprTE::StrT(SExprT::BinOp(
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                        op,
+                    )))
+                }
                 // Any other case where we are otherwise OK
                 (Ok(ste1), Ok(ste2)) => {
                     errs.push(SemantError::TypeError(
                         format!(
-                        "Cannot apply binary function Plus to expressions of type {:?} and {:?}",
-                        ste1, ste2
-                    )
+                    "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
+                    op, ste1, ste2
+                )
                         .into(),
                     ));
                     Err(())
@@ -204,21 +208,31 @@ mod tests {
     fn test_plus_ok() {
         // Checks that if we plus two Ints or Strings together it results in typed AST after semantic analysis
         let vals = vec![
-            SExprStr::Plus(
+            SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
                 Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
+                SBinOp::Plus,
             ),
-            SExprStr::Plus(
+            SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Str("".into()))),
                 Box::new(SExprStr::Val(ConcreteStreamData::Str("".into()))),
+                SBinOp::Plus,
             ),
         ];
         let results = vals.into_iter().map(type_check);
         let int_val = Box::new(SExprTStr::Val(0));
         let str_val = Box::new(SExprTStr::Val("".into()));
         let expected: Vec<SemantResultStr> = vec![
-            Ok(SExprTE::IntT(SExprTStr::Plus(int_val.clone(), int_val))),
-            Ok(SExprTE::StrT(SExprTStr::Plus(str_val.clone(), str_val))),
+            Ok(SExprTE::IntT(SExprTStr::BinOp(
+                int_val.clone(),
+                int_val,
+                SBinOp::Plus,
+            ))),
+            Ok(SExprTE::StrT(SExprTStr::BinOp(
+                str_val.clone(),
+                str_val,
+                SBinOp::Plus,
+            ))),
         ];
 
         assert!(results.eq(expected.into_iter()));
@@ -228,13 +242,15 @@ mod tests {
     fn test_plus_err_ident_types() {
         // Checks that if we add two identical types together that are not addable,
         let vals = vec![
-            SExprStr::Plus(
+            SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Bool(false))),
                 Box::new(SExprStr::Val(ConcreteStreamData::Bool(false))),
+                SBinOp::Plus,
             ),
-            SExprStr::Plus(
+            SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Unit)),
                 Box::new(SExprStr::Val(ConcreteStreamData::Unit)),
+                SBinOp::Plus,
             ),
         ];
         let results = vals.into_iter().map(type_check).collect();
@@ -250,17 +266,20 @@ mod tests {
         // Checks that if either value is unknown then Plus does not generate further errors
         // Checks that if we add two identical types together that are not addable,
         let vals = vec![
-            SExprStr::Plus(
+            SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
                 Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
+                SBinOp::Plus,
             ),
-            SExprStr::Plus(
+            SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
                 Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
+                SBinOp::Plus,
             ),
-            SExprStr::Plus(
+            SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
                 Box::new(SExprStr::Val(ConcreteStreamData::Unknown)),
+                SBinOp::Plus,
             ),
         ];
         let results = vals.into_iter().map(type_check);

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt::Debug, fmt::Display};
 
-use crate::core::{IndexedVarName, Specification, ConcreteStreamData, StreamExpr, VarName};
+use crate::core::{ConcreteStreamData, IndexedVarName, Specification, StreamExpr, VarName};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BExpr<VarT: Debug> {
@@ -10,6 +10,14 @@ pub enum BExpr<VarT: Debug> {
     Not(Box<BExpr<VarT>>),
     And(Box<BExpr<VarT>>, Box<BExpr<VarT>>),
     Or(Box<BExpr<VarT>>, Box<BExpr<VarT>>),
+}
+
+// Stream BinOp
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SBinOp {
+    Plus,
+    Minus,
+    Mult,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -29,9 +37,9 @@ pub enum SExpr<VarT: Debug> {
 
     // Arithmetic Stream expression
     Val(ConcreteStreamData),
-    Plus(Box<Self>, Box<Self>),
-    Minus(Box<Self>, Box<Self>),
-    Mult(Box<Self>, Box<Self>),
+
+    BinOp(Box<Self>, Box<Self>, SBinOp),
+
     Var(VarT),
 
     // Eval
@@ -84,9 +92,9 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             SExpr::If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
             SExpr::Index(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
             SExpr::Val(n) => write!(f, "{}", n),
-            SExpr::Plus(e1, e2) => write!(f, "({} + {})", e1, e2),
-            SExpr::Minus(e1, e2) => write!(f, "({} - {})", e1, e2),
-            SExpr::Mult(e1, e2) => write!(f, "({} * {})", e1, e2),
+            SExpr::BinOp(e1, e2, SBinOp::Plus) => write!(f, "({} + {})", e1, e2),
+            SExpr::BinOp(e1, e2, SBinOp::Minus) => write!(f, "({} - {})", e1, e2),
+            SExpr::BinOp(e1, e2, SBinOp::Mult) => write!(f, "({} * {})", e1, e2),
             SExpr::Var(v) => write!(f, "{}", v),
             SExpr::Eval(e) => write!(f, "eval({})", e),
         }

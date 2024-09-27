@@ -77,7 +77,10 @@ fn aatom(s: &mut &str) -> PResult<SExpr<VarName>> {
 }
 
 fn aplus_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
-    separated_foldr1(amult, "+", |x, _, y| SExpr::Plus(Box::new(x), Box::new(y))).parse_next(s)
+    separated_foldr1(amult, "+", |x, _, y| {
+        SExpr::BinOp(Box::new(x), Box::new(y), SBinOp::Plus)
+    })
+    .parse_next(s)
 }
 
 fn aplus(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -85,7 +88,10 @@ fn aplus(s: &mut &str) -> PResult<SExpr<VarName>> {
 }
 
 fn amult_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
-    separated_foldr1(aatom, "*", |x, _, y| SExpr::Mult(Box::new(x), Box::new(y))).parse_next(s)
+    separated_foldr1(aatom, "*", |x, _, y| {
+        SExpr::BinOp(Box::new(x), Box::new(y), SBinOp::Mult)
+    })
+    .parse_next(s)
 }
 
 fn amult(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -93,7 +99,10 @@ fn amult(s: &mut &str) -> PResult<SExpr<VarName>> {
 }
 
 fn aminus_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
-    separated_foldl1(aplus, "-", |x, _, y| SExpr::Minus(Box::new(x), Box::new(y))).parse_next(s)
+    separated_foldl1(aplus, "-", |x, _, y| {
+        SExpr::BinOp(Box::new(x), Box::new(y), SBinOp::Minus)
+    })
+    .parse_next(s)
 }
 
 fn aminus(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -340,15 +349,12 @@ fn time_stamped_assignments(
     .parse_next(s)
 }
 
-fn timed_assignments(
-    s: &mut &str,
-) -> PResult<InputFileData> {
+fn timed_assignments(s: &mut &str) -> PResult<InputFileData> {
     repeat(0.., time_stamped_assignments).parse_next(s)
 }
 
 pub fn lola_input_file(s: &mut &str) -> PResult<InputFileData> {
-    timed_assignments
-    .parse_next(s)
+    timed_assignments.parse_next(s)
 }
 
 #[cfg(test)]
@@ -381,29 +387,34 @@ mod tests {
     fn test_sexpr() -> Result<(), ErrMode<ContextError>> {
         assert_eq!(
             sexpr(&mut (*"1 + 2".to_string()).into())?,
-            SExpr::Plus(
+            SExpr::BinOp(
                 Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                 Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
+                SBinOp::Plus
             ),
         );
         assert_eq!(
             sexpr(&mut (*"1 + 2 * 3".to_string()).into())?,
-            SExpr::Plus(
+            SExpr::BinOp(
                 Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
-                Box::new(SExpr::Mult(
+                Box::new(SExpr::BinOp(
                     Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
                     Box::new(SExpr::Val(ConcreteStreamData::Int(3))),
+                    SBinOp::Mult
                 )),
+                SBinOp::Plus,
             ),
         );
         assert_eq!(
             sexpr(&mut (*"x + (y + 2)".to_string()).into())?,
-            SExpr::Plus(
+            SExpr::BinOp(
                 Box::new(SExpr::Var(VarName("x".into()))),
-                Box::new(SExpr::Plus(
+                Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var(VarName("y".into()))),
                     Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
+                    SBinOp::Plus
                 )),
+                SBinOp::Plus
             ),
         );
         assert_eq!(
@@ -425,9 +436,10 @@ mod tests {
         assert_eq!(
             sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
             SExpr::Index(
-                Box::new(SExpr::Plus(
+                Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var(VarName("x".into()))),
-                    Box::new(SExpr::Var(VarName("y".into())),)
+                    Box::new(SExpr::Var(VarName("y".into())),),
+                    SBinOp::Plus
                 )),
                 -3,
                 ConcreteStreamData::Int(2),
@@ -435,13 +447,14 @@ mod tests {
         );
         assert_eq!(
             sexpr(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
-            SExpr::Plus(
+            SExpr::BinOp(
                 Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                 Box::new(SExpr::Index(
                     Box::new(SExpr::Var(VarName("x".into()))),
                     -1,
                     ConcreteStreamData::Int(0),
-                ),)
+                ),),
+                SBinOp::Plus
             )
         );
         Ok(())
@@ -482,9 +495,10 @@ mod tests {
             output_vars: vec![VarName("z".into())],
             exprs: vec![(
                 VarName("z".into()),
-                SExpr::Plus(
+                SExpr::BinOp(
                     Box::new(SExpr::Var(VarName("x".into()))),
                     Box::new(SExpr::Var(VarName("y".into()))),
+                    SBinOp::Plus,
                 ),
             )]
             .into_iter()
@@ -504,13 +518,14 @@ mod tests {
             output_vars: vec![VarName("x".into())],
             exprs: vec![(
                 VarName("x".into()),
-                SExpr::Plus(
+                SExpr::BinOp(
                     Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
                     Box::new(SExpr::Index(
                         Box::new(SExpr::Var(VarName("x".into()))),
                         -1,
                         ConcreteStreamData::Int(0),
                     )),
+                    SBinOp::Plus,
                 ),
             )]
             .into_iter()
@@ -540,9 +555,10 @@ mod tests {
             exprs: vec![
                 (
                     VarName("z".into()),
-                    SExpr::Plus(
+                    SExpr::BinOp(
                         Box::new(SExpr::Var(VarName("x".into()))),
                         Box::new(SExpr::Var(VarName("y".into()))),
+                        SBinOp::Plus,
                     ),
                 ),
                 (

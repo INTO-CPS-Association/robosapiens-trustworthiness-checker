@@ -1,7 +1,5 @@
-use crate::ast::{BExpr, SExpr};
-use crate::core::{
-    ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, VarName,
-};
+use crate::ast::{BExpr, SBinOp, SExpr};
+use crate::core::{ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, VarName};
 use crate::untimed_monitoring_combinators as mc;
 
 #[derive(Clone)]
@@ -14,20 +12,14 @@ impl MonitoringSemantics<SExpr<VarName>, ConcreteStreamData> for UntimedLolaSema
     ) -> OutputStream<ConcreteStreamData> {
         match expr {
             SExpr::Val(v) => mc::val(v),
-            SExpr::Plus(e1, e2) => {
+            SExpr::BinOp(e1, e2, op) => {
                 let e1 = Self::to_async_stream(*e1, ctx);
                 let e2 = Self::to_async_stream(*e2, ctx);
-                mc::plus(e1, e2)
-            }
-            SExpr::Minus(e1, e2) => {
-                let e1 = Self::to_async_stream(*e1, ctx);
-                let e2 = Self::to_async_stream(*e2, ctx);
-                mc::minus(e1, e2)
-            }
-            SExpr::Mult(e1, e2) => {
-                let e1 = Self::to_async_stream(*e1, ctx);
-                let e2 = Self::to_async_stream(*e2, ctx);
-                mc::mult(e1, e2)
+                match op {
+                    SBinOp::Plus => mc::plus(e1, e2),
+                    SBinOp::Minus => mc::minus(e1, e2),
+                    SBinOp::Mult => mc::mult(e1, e2),
+                }
             }
             SExpr::Var(v) => mc::var(ctx, v),
             SExpr::Eval(e) => {
