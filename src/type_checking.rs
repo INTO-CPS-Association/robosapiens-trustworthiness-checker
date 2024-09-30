@@ -39,7 +39,7 @@ pub enum SExprT<ValT: SExprValue, VarT: Debug> {
 }
 
 // Stream expression typed enum
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SExprTE<VarT: Debug> {
     IntT(SExprT<i64, VarT>),
     StrT(SExprT<String, VarT>),
@@ -208,20 +208,32 @@ mod tests {
     type SemantResultStr = SemantResult<String>;
     type SExprStr = SExpr<String>;
     type SExprTStr<Val> = SExprT<Val, String>;
+    type BExprStr = BExpr<String>;
 
-    trait BinOpExpr<Op, Expr> {
-        fn bin_op(lhs: Expr, rhs: Expr, op: Op) -> Self;
+    trait AsExpr<Expr> {
+        fn binop_expr(lhs: Expr, rhs: Expr, op: SBinOp) -> Self;
+        fn if_expr(b: Box<BExprStr>, texpr: Expr, fexpr: Expr) -> Self;
     }
 
-    impl BinOpExpr<SBinOp, Box<SExprStr>> for SExprStr {
-        fn bin_op(lhs: Box<SExprStr>, rhs: Box<SExprStr>, op: SBinOp) -> Self {
+    impl AsExpr<Box<SExprStr>> for SExprStr {
+        fn binop_expr(lhs: Box<SExprStr>, rhs: Box<SExprStr>, op: SBinOp) -> Self {
             SExprStr::BinOp(lhs, rhs, op)
+        }
+        fn if_expr(b: Box<BExprStr>, texpr: Box<SExprStr>, fexpr: Box<SExprStr>) -> Self {
+            SExprStr::If(b, texpr, fexpr)
         }
     }
 
-    impl<Val: SExprValue> BinOpExpr<SBinOp, Box<SExprTStr<Val>>> for SExprTStr<Val> {
-        fn bin_op(lhs: Box<SExprTStr<Val>>, rhs: Box<SExprTStr<Val>>, op: SBinOp) -> Self {
+    impl<Val: SExprValue> AsExpr<Box<SExprTStr<Val>>> for SExprTStr<Val> {
+        fn binop_expr(lhs: Box<SExprTStr<Val>>, rhs: Box<SExprTStr<Val>>, op: SBinOp) -> Self {
             SExprTStr::BinOp(lhs, rhs, op)
+        }
+        fn if_expr(
+            b: Box<BExprStr>,
+            texpr: Box<SExprTStr<Val>>,
+            fexpr: Box<SExprTStr<Val>>,
+        ) -> Self {
+            SExprTStr::If(b, texpr, fexpr)
         }
     }
 
@@ -265,25 +277,62 @@ mod tests {
         vec![SBinOp::Plus, SBinOp::Minus, SBinOp::Mult]
     }
 
+    // Function to generate combinations to use in tests, e.g., for binops
+    fn generate_combinations<T, Expr, F>(
+        variants_a: &[Expr],
+        variants_b: &[Expr],
+        generate_expr: F,
+    ) -> Vec<T>
+    where
+        T: AsExpr<Box<Expr>>,
+        Expr: Clone,
+        F: Fn(Box<Expr>, Box<Expr>) -> T,
+    {
+        let mut vals = Vec::new();
+
+        for a in variants_a.iter() {
+            for b in variants_b.iter() {
+                vals.push(generate_expr(Box::new(a.clone()), Box::new(b.clone())));
+            }
+        }
+
+        vals
+    }
+
+    // Example usage for binary operations
     fn generate_binop_combinations<T, Expr>(
         variants_a: &[Expr],
         variants_b: &[Expr],
         sbinops: Vec<SBinOp>,
     ) -> Vec<T>
     where
-        T: BinOpExpr<SBinOp, Box<Expr>>,
+        T: AsExpr<Box<Expr>>,
         Expr: Clone,
     {
         let mut vals = Vec::new();
 
-        for a in variants_a.iter() {
-            for b in variants_b.iter() {
-                for op in &sbinops {
-                    vals.push(T::bin_op(Box::new(a.clone()), Box::new(b.clone()), *op));
-                }
-            }
+        for op in sbinops {
+            vals.extend(generate_combinations(variants_a, variants_b, |lhs, rhs| {
+                T::binop_expr(lhs, rhs, op)
+            }));
         }
+
         vals
+    }
+
+    // Example usage for if-expressions
+    fn generate_if_combinations<T, Expr>(
+        variants_a: &[Expr],
+        variants_b: &[Expr],
+        b_expr: Box<BExprStr>,
+    ) -> Vec<T>
+    where
+        T: AsExpr<Box<Expr>>,
+        Expr: Clone,
+    {
+        generate_combinations(variants_a, variants_b, |lhs, rhs| {
+            T::if_expr(b_expr.clone(), lhs, rhs)
+        })
     }
 
     #[test]
@@ -459,13 +508,100 @@ mod tests {
     }
 
     #[test]
-    fn test_if_ok() {}
+    fn test_if_ok() {
+        // Checks that typechecking if-statements with identical types for if- and else- part results in correct typed AST
+
+        // Create a vector of all ConcreteStreamData variants (except Unknown)
+        let val_variants = vec![
+            SExprStr::Val(ConcreteStreamData::Int(0)),
+            SExprStr::Val(ConcreteStreamData::Str("".into())),
+            SExprStr::Val(ConcreteStreamData::Bool(true)),
+        ];
+
+        // Create a vector of all SBinOp variants
+        let bexpr = Box::new(BExprStr::Val(true));
+
+        let vals_tmp = generate_if_combinations(&val_variants, &val_variants, bexpr.clone());
+
+        // Only consider cases where true and false cases are equal
+        let vals = vals_tmp.into_iter().filter(|bin_op| {
+            match bin_op {
+                SExprStr::If(_, t, f) => t == f,
+                _ => true, // Keep non-ifs (unused in this case)
+            }
+        });
+        let results = vals.into_iter().map(type_check);
+
+        let expected: Vec<SemantResultStr> = vec![
+            Ok(SExprTE::IntT(SExprT::If(
+                bexpr.clone(),
+                Box::new(SExprT::Val(0)),
+                Box::new(SExprT::Val(0)),
+            ))),
+            Ok(SExprTE::StrT(SExprT::If(
+                bexpr.clone(),
+                Box::new(SExprT::Val("".into())),
+                Box::new(SExprT::Val("".into())),
+            ))),
+            Ok(SExprTE::BoolT(SExprT::If(
+                bexpr.clone(),
+                Box::new(SExprT::Val(true)),
+                Box::new(SExprT::Val(true)),
+            ))),
+        ];
+
+        assert!(results.eq(expected.into_iter()));
+    }
 
     #[test]
-    fn test_if_unit_ok() {}
+    fn test_if_unit_ok() {
+        // Checks if creating an if-statement with two Unit cases returns a typed AST with Unit (not an if-statement)
+
+        // Create a vector of all ConcreteStreamData variants (except Unknown)
+        let variants = vec![SExprStr::Val(ConcreteStreamData::Unit)];
+
+        // Create a vector of all SBinOp variants
+        let bexpr = Box::new(BExprStr::Val(true));
+
+        let vals = generate_if_combinations(&variants, &variants, bexpr.clone());
+        let results = vals.into_iter().map(type_check);
+        let expected: Vec<Result<SExprTE<String>, _>> = vec![Ok(SExprTE::UnitT)];
+        assert!(results.eq(expected.into_iter()));
+    }
 
     #[test]
-    fn test_if_err() {}
+    fn test_if_err() {
+        // Checks that creating an if-expression with two different types results in a TypeError
 
-    // TODO: Test that any SExpr leaf is a Val
+        // Create a vector of all ConcreteStreamData variants (except Unknown)
+        let variants = vec![
+            SExprStr::Val(ConcreteStreamData::Int(0)),
+            SExprStr::Val(ConcreteStreamData::Str("".into())),
+            SExprStr::Val(ConcreteStreamData::Bool(true)),
+            SExprStr::Val(ConcreteStreamData::Unit),
+        ];
+
+        let bexpr = Box::new(BExprStr::Val(true));
+
+        let vals_tmp = generate_if_combinations(&variants, &variants, bexpr.clone());
+        let vals = vals_tmp.into_iter().filter(|bin_op| {
+            match bin_op {
+                SExprStr::If(_, t, f) => t != f,
+                _ => true, // Keep non-BinOps (unused in this case)
+            }
+        });
+
+        let results = vals.into_iter().map(type_check).collect::<Vec<_>>();
+
+        // Since all combinations of different types should yield an error,
+        // we'll expect each result to be an Err with a type error.
+        let expected: Vec<SemantResultStr> = results
+            .iter()
+            .map(|_| Err(vec![SemantError::TypeError("".into())]))
+            .collect();
+
+        check_correct_error_types(&results, &expected);
+    }
+
+    // TODO: Test that any SExpr leaf is a Val. If not it should return a Type-Error
 }
