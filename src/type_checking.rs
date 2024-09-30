@@ -102,6 +102,55 @@ where
     }
 }
 
+fn type_check_if<VarT: Debug>(
+    b: Box<BExpr<VarT>>,
+    se1: SExpr<VarT>,
+    se2: SExpr<VarT>,
+    ctx: &mut TypeContext<VarT>,
+    errs: &mut SemantErrors,
+) -> Result<SExprTE<VarT>, ()>
+where
+    VarT: Clone,
+{
+    let se1_check = type_check_expr(se1, ctx, errs);
+    let se2_check = type_check_expr(se2, ctx, errs);
+    match (se1_check, se2_check) {
+        (Ok(ste1), Ok(ste2)) => {
+            // Matching on type-checked expressions. If same then Ok, else error.
+            match (ste1, ste2) {
+                (SExprTE::IntT(se1), SExprTE::IntT(se2)) => Ok(SExprTE::IntT(SExprT::If(
+                    b,
+                    Box::new(se1.clone()),
+                    Box::new(se2.clone()),
+                ))),
+                (SExprTE::StrT(se1), SExprTE::StrT(se2)) => Ok(SExprTE::StrT(SExprT::If(
+                    b,
+                    Box::new(se1.clone()),
+                    Box::new(se2.clone()),
+                ))),
+                (SExprTE::BoolT(se1), SExprTE::BoolT(se2)) => Ok(SExprTE::BoolT(SExprT::If(
+                    b,
+                    Box::new(se1.clone()),
+                    Box::new(se2.clone()),
+                ))),
+                (SExprTE::UnitT, SExprTE::UnitT) => Ok(SExprTE::UnitT), // No cloning or sub-expr needed for UnitT
+                (stenum1, stenum2) => {
+                    errs.push(SemantError::TypeError(
+                        format!(
+                            "Cannot create if-expression with two different types: {:?} and {:?}",
+                            stenum1, stenum2
+                        )
+                        .into(),
+                    ));
+                    Err(())
+                }
+            }
+        }
+        // If there's already an error in any branch, propagate the error
+        (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
+    }
+}
+
 pub fn type_check_expr<VarT: Debug>(
     sexpr: SExpr<VarT>,
     ctx: &mut TypeContext<VarT>,
@@ -128,6 +177,7 @@ where
             }
         },
         SExpr::BinOp(se1, se2, op) => type_check_binop(*se1, *se2, op, ctx, errs),
+        SExpr::If(b, se1, se2) => type_check_if(b, *se1, *se2, ctx, errs),
         _ => {
             errs.push(SemantError::TypeError("Not implemented".into()));
             Err(())
@@ -407,4 +457,15 @@ mod tests {
         let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::StrT(v)));
         assert!(results.eq(expected.into_iter()));
     }
+
+    #[test]
+    fn test_if_ok() {}
+
+    #[test]
+    fn test_if_unit_ok() {}
+
+    #[test]
+    fn test_if_err() {}
+
+    // TODO: Test that any SExpr leaf is a Val
 }
