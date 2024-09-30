@@ -266,40 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn test_plus_ok() {
-        // Checks that if we plus two Ints or Strings together it results in typed AST after semantic analysis
-        let vals = vec![
-            SExprStr::BinOp(
-                Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
-                Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
-                SBinOp::Plus,
-            ),
-            SExprStr::BinOp(
-                Box::new(SExprStr::Val(ConcreteStreamData::Str("".into()))),
-                Box::new(SExprStr::Val(ConcreteStreamData::Str("".into()))),
-                SBinOp::Plus,
-            ),
-        ];
-        let results = vals.into_iter().map(type_check);
-        let int_val = Box::new(SExprTStr::Val(0));
-        let str_val = Box::new(SExprTStr::Val("".into()));
-        let expected: Vec<SemantResultStr> = vec![
-            Ok(SExprTE::IntT(SExprTStr::BinOp(
-                int_val.clone(),
-                int_val,
-                SBinOp::Plus,
-            ))),
-            Ok(SExprTE::StrT(SExprTStr::BinOp(
-                str_val.clone(),
-                str_val,
-                SBinOp::Plus,
-            ))),
-        ];
-
-        assert!(results.eq(expected.into_iter()));
-    }
-
-    #[test]
     fn test_plus_err_ident_types() {
         // Checks that if we add two identical types together that are not addable,
         let vals = vec![
@@ -363,7 +329,6 @@ mod tests {
     #[test]
     fn test_plus_err_unknown() {
         // Checks that if either value is unknown then Plus does not generate further errors
-        // Checks that if we add two identical types together that are not addable,
         let vals = vec![
             SExprStr::BinOp(
                 Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
@@ -423,6 +388,23 @@ mod tests {
         let expected_tmp: Vec<SExprTStr<i64>> =
             generate_binop_combinations(&int_t_val, &int_t_val, sbinops);
         let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::IntT(v)));
+        assert!(results.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn test_str_plus_ok() {
+        // Checks that if we add two Strings together it results in typed AST after semantic analysis
+        let str_val = vec![SExprStr::Val(ConcreteStreamData::Str("".into()))];
+        let sbinops = vec![SBinOp::Plus];
+        let vals = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
+        let results = vals.into_iter().map(type_check);
+
+        let str_t_val = vec![SExprTStr::<String>::Val("".into())];
+
+        // Generate the different combinations and turn them into "Ok" results
+        let expected_tmp: Vec<SExprTStr<String>> =
+            generate_binop_combinations(&str_t_val, &str_t_val, sbinops);
+        let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::StrT(v)));
         assert!(results.eq(expected.into_iter()));
     }
 }
