@@ -1,5 +1,5 @@
 use crate::{
-    ast::{BExpr, SBinOp, SExpr, StreamTypes},
+    ast::{BExpr, SBinOp, SExpr, StreamType},
     ConcreteStreamData,
 };
 use std::collections::BTreeMap;
@@ -55,7 +55,7 @@ pub enum SemantError {
 }
 
 pub type SemantErrors = Vec<SemantError>;
-pub type TypeContext<VarT> = BTreeMap<VarT, StreamTypes>;
+pub type TypeContext<VarT> = BTreeMap<VarT, StreamType>;
 
 pub type SemantResult<VarT> = Result<SExprTE<VarT>, SemantErrors>;
 
@@ -222,7 +222,7 @@ where
 
 fn type_check_var<VarT>(
     id: VarT,
-    ctx: &mut BTreeMap<VarT, StreamTypes>,
+    ctx: &mut BTreeMap<VarT, StreamType>,
     errs: &mut Vec<SemantError>,
 ) -> Result<SExprTE<VarT>, ()>
 where
@@ -231,10 +231,10 @@ where
     let type_opt = ctx.get(&id);
     match type_opt {
         Some(t) => match t {
-            StreamTypes::Int => Ok(SExprTE::IntT(SExprT::Var(id))),
-            StreamTypes::Str => Ok(SExprTE::StrT(SExprT::Var(id))),
-            StreamTypes::Bool => Ok(SExprTE::BoolT(SExprT::Var(id))),
-            StreamTypes::Unit => Ok(SExprTE::UnitT(SExprT::Var(id))),
+            StreamType::Int => Ok(SExprTE::IntT(SExprT::Var(id))),
+            StreamType::Str => Ok(SExprTE::StrT(SExprT::Var(id))),
+            StreamType::Bool => Ok(SExprTE::BoolT(SExprT::Var(id))),
+            StreamType::Unit => Ok(SExprTE::UnitT(SExprT::Var(id))),
         },
         None => {
             errs.push(SemantError::UndeclaredVariable(
@@ -285,7 +285,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::net;
     use std::{iter::zip, mem::discriminant};
+
+    use futures::stream::ForEach;
 
     use super::*;
 
@@ -683,5 +686,48 @@ mod tests {
         check_correct_error_types(&results, &expected);
     }
 
+    #[test]
+    fn test_var_ok() {
+        // Checks that Vars are correctly typechecked if they exist in the context
+
+        let variant_names = vec!["int", "str", "bool", "unit"];
+        let variant_types = vec![
+            StreamType::Int,
+            StreamType::Str,
+            StreamType::Bool,
+            StreamType::Unit,
+        ];
+        let vals = variant_names
+            .clone()
+            .into_iter()
+            .map(|n| SExprStr::Var(n.into()));
+
+        // Fake context/environment that simulates type-checking context
+        let mut ctx = TypeContext::new();
+        for (n, t) in variant_names.into_iter().zip(variant_types.into_iter()) {
+            ctx.insert(n.to_string(), t);
+        }
+
+        let results = vals.into_iter().map(|sexpr| type_check(sexpr, &mut ctx));
+
+        let expected = vec![
+            Ok(SExprTE::IntT(SExprT::Var("int".to_string()))),
+            Ok(SExprTE::StrT(SExprT::Var("str".to_string()))),
+            Ok(SExprTE::BoolT(SExprT::Var("bool".to_string()))),
+            Ok(SExprTE::UnitT(SExprT::Var("unit".to_string()))),
+        ];
+
+        assert!(results.eq(expected));
+    }
+
+    #[test]
+    fn test_var_err() {
+        // Checks that Vars produce UndeclaredVariable errors if they do not exist in the context
+
+        let val = SExprStr::Var("undeclared_name".into());
+        let result = type_check_with_default(val);
+        let expected: SemantResultStr = Err(vec![SemantError::UndeclaredVariable("".into())]);
+        check_correct_error_type(&result, &expected);
+    }
     // TODO: Test that any SExpr leaf is a Val. If not it should return a Type-Error
 }

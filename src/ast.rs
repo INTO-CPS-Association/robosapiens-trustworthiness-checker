@@ -20,7 +20,7 @@ pub enum SBinOp {
     Mult,
 }
 
-pub enum StreamTypes {
+pub enum StreamType {
     Int,
     Str,
     Bool,
