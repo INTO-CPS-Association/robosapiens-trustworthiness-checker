@@ -285,10 +285,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use core::net;
     use std::{iter::zip, mem::discriminant};
-
-    use futures::stream::ForEach;
 
     use super::*;
 
