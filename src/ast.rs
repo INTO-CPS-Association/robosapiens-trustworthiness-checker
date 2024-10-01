@@ -20,6 +20,13 @@ pub enum SBinOp {
     Mult,
 }
 
+pub enum StreamTypes {
+    Int,
+    Str,
+    Bool,
+    Unit,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else

@@ -1,9 +1,9 @@
 use crate::{
-    ast::{BExpr, SBinOp, SExpr},
+    ast::{BExpr, SBinOp, SExpr, StreamTypes},
     ConcreteStreamData,
 };
-
-use std::{default, fmt::Debug};
+use std::collections::BTreeMap;
+use std::fmt::Debug;
 
 // Trait defining the allowed types for expression values
 pub trait SExprValue: Clone + Debug + PartialEq + Eq {}
@@ -55,8 +55,7 @@ pub enum SemantError {
 }
 
 pub type SemantErrors = Vec<SemantError>;
-
-pub type TypeContext<VarT> = Vec<VarT>;
+pub type TypeContext<VarT> = BTreeMap<VarT, StreamTypes>;
 
 pub type SemantResult<VarT> = Result<SExprTE<VarT>, SemantErrors>;
 
@@ -230,21 +229,24 @@ where
             Err(())
         }
         SExpr::Eval(_) => Err(()),
-        _ => {
-            errs.push(SemantError::TypeError("Not implemented".into()));
-            Err(())
-        }
     }
 }
 
-pub fn type_check<VarT>(sexpr: SExpr<VarT>) -> SemantResult<VarT>
+pub fn type_check_with_default<VarT>(sexpr: SExpr<VarT>) -> SemantResult<VarT>
+where
+    VarT: Debug + Clone,
+{
+    let mut context = TypeContext::new();
+    type_check(sexpr, &mut context)
+}
+
+pub fn type_check<VarT>(sexpr: SExpr<VarT>, context: &mut TypeContext<VarT>) -> SemantResult<VarT>
 where
     VarT: Debug,
     VarT: Clone,
 {
-    let mut context = Vec::new();
     let mut errors = Vec::new();
-    let res = type_check_expr(sexpr, &mut context, &mut errors);
+    let res = type_check_expr(sexpr, context, &mut errors);
     match res {
         Ok(se) => Ok(se),
         Err(()) => Err(errors),
@@ -396,7 +398,7 @@ mod tests {
             SExprStr::Val(ConcreteStreamData::Bool(true)),
             SExprStr::Val(ConcreteStreamData::Unit),
         ];
-        let results = vals.into_iter().map(type_check);
+        let results = vals.into_iter().map(type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::IntT(SExprT::Val(1))),
             Ok(SExprTE::StrT(SExprT::Val("".into()))),
@@ -411,7 +413,7 @@ mod tests {
     fn test_unknown_err() {
         // Checks that if a Val is unknown during semantic analysis it produces a UnknownError
         let val = SExprStr::Val(ConcreteStreamData::Unknown);
-        let result = type_check(val);
+        let result = type_check_with_default(val);
         let expected: SemantResultStr = Err(vec![SemantError::UnknownError("".into())]);
         check_correct_error_type(&result, &expected);
     }
@@ -431,7 +433,7 @@ mod tests {
                 SBinOp::Plus,
             ),
         ];
-        let results = vals.into_iter().map(type_check).collect();
+        let results = vals.into_iter().map(type_check_with_default).collect();
         let expected: Vec<SemantResultStr> = vec![
             Err(vec![SemantError::TypeError("".into())]),
             Err(vec![SemantError::TypeError("".into())]),
@@ -465,7 +467,10 @@ mod tests {
             }
         });
 
-        let results = vals.into_iter().map(type_check).collect::<Vec<_>>();
+        let results = vals
+            .into_iter()
+            .map(type_check_with_default)
+            .collect::<Vec<_>>();
 
         // Since all combinations of different types should yield an error,
         // we'll expect each result to be an Err with a type error.
@@ -497,7 +502,7 @@ mod tests {
                 SBinOp::Plus,
             ),
         ];
-        let results = vals.into_iter().map(type_check);
+        let results = vals.into_iter().map(type_check_with_default);
         let expected_err_lens = vec![1, 1, 2];
 
         // For each result, check that we got errors and that we got the correct amount:
@@ -531,7 +536,7 @@ mod tests {
         let int_val = vec![SExprStr::Val(ConcreteStreamData::Int(0))];
         let sbinops = all_sbinop_variants();
         let vals = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
-        let results = vals.into_iter().map(type_check);
+        let results = vals.into_iter().map(type_check_with_default);
 
         let int_t_val = vec![SExprTStr::<i64>::Val(0)];
 
@@ -548,7 +553,7 @@ mod tests {
         let str_val = vec![SExprStr::Val(ConcreteStreamData::Str("".into()))];
         let sbinops = vec![SBinOp::Plus];
         let vals = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
-        let results = vals.into_iter().map(type_check);
+        let results = vals.into_iter().map(type_check_with_default);
 
         let str_t_val = vec![SExprTStr::<String>::Val("".into())];
 
@@ -583,7 +588,7 @@ mod tests {
                 _ => true, // Keep non-ifs (unused in this case)
             }
         });
-        let results = vals.into_iter().map(type_check);
+        let results = vals.into_iter().map(type_check_with_default);
 
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::IntT(SExprT::If(
@@ -633,7 +638,10 @@ mod tests {
             }
         });
 
-        let results = vals.into_iter().map(type_check).collect::<Vec<_>>();
+        let results = vals
+            .into_iter()
+            .map(type_check_with_default)
+            .collect::<Vec<_>>();
 
         // Since all combinations of different types should yield an error,
         // we'll expect each result to be an Err with a type error.
