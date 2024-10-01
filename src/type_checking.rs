@@ -59,7 +59,32 @@ pub type TypeContext<VarT> = BTreeMap<VarT, StreamTypes>;
 
 pub type SemantResult<VarT> = Result<SExprTE<VarT>, SemantErrors>;
 
-fn type_check_binop<VarT: Debug>(
+fn type_check_val<VarT>(
+    sdata: ConcreteStreamData,
+    errs: &mut Vec<SemantError>,
+) -> Result<SExprTE<VarT>, ()>
+where
+    VarT: Debug + Clone + Ord,
+{
+    match sdata {
+        ConcreteStreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
+        ConcreteStreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
+        ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
+        ConcreteStreamData::Unit => Ok(SExprTE::UnitT(SExprT::Val(()))),
+        ConcreteStreamData::Unknown => {
+            errs.push(SemantError::UnknownError(
+                format!(
+                    "Stream expression {:?} not assigned a type before semantic analysis",
+                    sdata
+                )
+                .into(),
+            ));
+            Err(())
+        }
+    }
+}
+
+fn type_check_binop<VarT>(
     se1: SExpr<VarT>,
     se2: SExpr<VarT>,
     op: SBinOp,
@@ -67,7 +92,7 @@ fn type_check_binop<VarT: Debug>(
     errs: &mut SemantErrors,
 ) -> Result<SExprTE<VarT>, ()>
 where
-    VarT: Clone,
+    VarT: Debug + Clone + Ord,
 {
     let se1_check = type_check_expr(se1, ctx, errs);
     let se2_check = type_check_expr(se2, ctx, errs);
@@ -109,7 +134,7 @@ fn type_check_if<VarT: Debug>(
     errs: &mut SemantErrors,
 ) -> Result<SExprTE<VarT>, ()>
 where
-    VarT: Clone,
+    VarT: Debug + Clone + Ord,
 {
     let se1_check = type_check_expr(se1, ctx, errs);
     let se2_check = type_check_expr(se2, ctx, errs);
@@ -154,7 +179,7 @@ where
     }
 }
 
-fn type_check_index<VarT: Debug>(
+fn type_check_index<VarT>(
     inner: SExpr<VarT>,
     idx: isize,
     default: ConcreteStreamData,
@@ -162,7 +187,7 @@ fn type_check_index<VarT: Debug>(
     errs: &mut SemantErrors,
 ) -> Result<SExprTE<VarT>, ()>
 where
-    VarT: Clone,
+    VarT: Debug + Clone + Ord,
 {
     // Type-check Box<Self>. Is this same type as ConcreteStreamData?
     let in_expr = type_check_expr(inner, ctx, errs);
@@ -190,51 +215,57 @@ where
                 }
             }
         }
+        // If there's already an error just propagate it
         Err(_) => Err(()),
     }
 }
 
-pub fn type_check_expr<VarT: Debug>(
+fn type_check_var<VarT>(
+    id: VarT,
+    ctx: &mut BTreeMap<VarT, StreamTypes>,
+    errs: &mut Vec<SemantError>,
+) -> Result<SExprTE<VarT>, ()>
+where
+    VarT: Debug + Clone + Ord,
+{
+    let type_opt = ctx.get(&id);
+    match type_opt {
+        Some(t) => match t {
+            StreamTypes::Int => Ok(SExprTE::IntT(SExprT::Var(id))),
+            StreamTypes::Str => Ok(SExprTE::StrT(SExprT::Var(id))),
+            StreamTypes::Bool => Ok(SExprTE::BoolT(SExprT::Var(id))),
+            StreamTypes::Unit => Ok(SExprTE::UnitT(SExprT::Var(id))),
+        },
+        None => {
+            errs.push(SemantError::UndeclaredVariable(
+                format!("Usage of undeclared variable: {:?}", id).into(),
+            ));
+            Err(())
+        }
+    }
+}
+
+pub fn type_check_expr<VarT>(
     sexpr: SExpr<VarT>,
     ctx: &mut TypeContext<VarT>,
     errs: &mut SemantErrors,
 ) -> Result<SExprTE<VarT>, ()>
 where
-    VarT: Clone,
+    VarT: Debug + Clone + Ord,
 {
     match sexpr {
-        SExpr::Val(sdata) => match sdata {
-            ConcreteStreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
-            ConcreteStreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
-            ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
-            ConcreteStreamData::Unit => Ok(SExprTE::UnitT(SExprT::Val(()))),
-            ConcreteStreamData::Unknown => {
-                errs.push(SemantError::UnknownError(
-                    format!(
-                        "Stream expression {:?} not assigned a type before semantic analysis",
-                        sdata
-                    )
-                    .into(),
-                ));
-                Err(())
-            }
-        },
+        SExpr::Val(sdata) => type_check_val(sdata, errs),
         SExpr::BinOp(se1, se2, op) => type_check_binop(*se1, *se2, op, ctx, errs),
         SExpr::If(b, se1, se2) => type_check_if(b, *se1, *se2, ctx, errs),
         SExpr::Index(inner, idx, default) => type_check_index(*inner, idx, default, ctx, errs),
-        SExpr::Var(_) => {
-            // Check if name exists in ctx. If not: UndeclaredVariable error.
-            // Else: Return the typed Var which is gained from "the thing in the context"
-            // Change Ctx to be a map with {id -> type}
-            Err(())
-        }
-        SExpr::Eval(_) => Err(()),
+        SExpr::Var(id) => type_check_var(id, ctx, errs),
+        SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
     }
 }
 
 pub fn type_check_with_default<VarT>(sexpr: SExpr<VarT>) -> SemantResult<VarT>
 where
-    VarT: Debug + Clone,
+    VarT: Debug + Clone + Ord,
 {
     let mut context = TypeContext::new();
     type_check(sexpr, &mut context)
@@ -242,8 +273,7 @@ where
 
 pub fn type_check<VarT>(sexpr: SExpr<VarT>, context: &mut TypeContext<VarT>) -> SemantResult<VarT>
 where
-    VarT: Debug,
-    VarT: Clone,
+    VarT: Debug + Clone + Ord,
 {
     let mut errors = Vec::new();
     let res = type_check_expr(sexpr, context, &mut errors);
