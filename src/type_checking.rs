@@ -44,7 +44,7 @@ pub enum SExprTE<VarT: Debug> {
     IntT(SExprT<i64, VarT>),
     StrT(SExprT<String, VarT>),
     BoolT(SExprT<bool, VarT>),
-    UnitT,
+    UnitT(SExprT<(), VarT>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -133,7 +133,11 @@ where
                     Box::new(se1.clone()),
                     Box::new(se2.clone()),
                 ))),
-                (SExprTE::UnitT, SExprTE::UnitT) => Ok(SExprTE::UnitT), // No cloning or sub-expr needed for UnitT
+                (SExprTE::UnitT(se1), SExprTE::UnitT(se2)) => Ok(SExprTE::UnitT(SExprT::If(
+                    b,
+                    Box::new(se1.clone()),
+                    Box::new(se2.clone()),
+                ))),
                 (stenum1, stenum2) => {
                     errs.push(SemantError::TypeError(
                         format!(
@@ -164,25 +168,29 @@ where
     // Type-check Box<Self>. Is this same type as ConcreteStreamData?
     let in_expr = type_check_expr(inner, ctx, errs);
     match in_expr {
-        Ok(texpr) => match (texpr, default) {
-            (SExprTE::IntT(expr), ConcreteStreamData::Int(def)) => Ok(SExprTE::IntT(
-                SExprT::Index(Box::new(expr.clone()), idx, def),
-            )),
-            (SExprTE::StrT(expr), ConcreteStreamData::Str(def)) => Ok(SExprTE::StrT(
-                SExprT::Index(Box::new(expr.clone()), idx, def),
-            )),
-            (SExprTE::BoolT(expr), ConcreteStreamData::Bool(def)) => Ok(SExprTE::BoolT(
-                SExprT::Index(Box::new(expr.clone()), idx, def),
-            )),
-            (SExprTE::UnitT, ConcreteStreamData::Unit) => Ok(SExprTE::UnitT),
-            (expr, def) => {
-                errs.push(SemantError::TypeError(format!(
+        Ok(texpr) => {
+            match (texpr, default) {
+                (SExprTE::IntT(expr), ConcreteStreamData::Int(def)) => Ok(SExprTE::IntT(
+                    SExprT::Index(Box::new(expr.clone()), idx, def),
+                )),
+                (SExprTE::StrT(expr), ConcreteStreamData::Str(def)) => Ok(SExprTE::StrT(
+                    SExprT::Index(Box::new(expr.clone()), idx, def),
+                )),
+                (SExprTE::BoolT(expr), ConcreteStreamData::Bool(def)) => Ok(SExprTE::BoolT(
+                    SExprT::Index(Box::new(expr.clone()), idx, def),
+                )),
+                (SExprTE::UnitT(expr), ConcreteStreamData::Unit) => Ok(SExprTE::UnitT(
+                    SExprT::Index(Box::new(expr.clone()), idx, ()),
+                )),
+                (expr, def) => {
+                    errs.push(SemantError::TypeError(format!(
                     "Mismatched type in Index expression, expression and default does not match: {:?}",
                     (expr, def)
                 ).into()));
-                Err(())
+                    Err(())
+                }
             }
-        },
+        }
         Err(_) => Err(()),
     }
 }
@@ -200,7 +208,7 @@ where
             ConcreteStreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
             ConcreteStreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
             ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
-            ConcreteStreamData::Unit => Ok(SExprTE::UnitT),
+            ConcreteStreamData::Unit => Ok(SExprTE::UnitT(SExprT::Val(()))),
             ConcreteStreamData::Unknown => {
                 errs.push(SemantError::UnknownError(
                     format!(
@@ -393,7 +401,7 @@ mod tests {
             Ok(SExprTE::IntT(SExprT::Val(1))),
             Ok(SExprTE::StrT(SExprT::Val("".into()))),
             Ok(SExprTE::BoolT(SExprT::Val(true))),
-            Ok(SExprTE::UnitT),
+            Ok(SExprTE::UnitT(SExprT::Val(()))),
         ];
 
         assert!(results.eq(expected.into_iter()));
@@ -560,6 +568,7 @@ mod tests {
             SExprStr::Val(ConcreteStreamData::Int(0)),
             SExprStr::Val(ConcreteStreamData::Str("".into())),
             SExprStr::Val(ConcreteStreamData::Bool(true)),
+            SExprStr::Val(ConcreteStreamData::Unit),
         ];
 
         // Create a vector of all SBinOp variants
@@ -592,24 +601,13 @@ mod tests {
                 Box::new(SExprT::Val(true)),
                 Box::new(SExprT::Val(true)),
             ))),
+            Ok(SExprTE::UnitT(SExprT::If(
+                bexpr.clone(),
+                Box::new(SExprT::Val(())),
+                Box::new(SExprT::Val(())),
+            ))),
         ];
 
-        assert!(results.eq(expected.into_iter()));
-    }
-
-    #[test]
-    fn test_if_unit_ok() {
-        // Checks if creating an if-statement with two Unit cases returns a typed AST with Unit (not an if-statement)
-
-        // Create a vector of all ConcreteStreamData variants (except Unknown)
-        let variants = vec![SExprStr::Val(ConcreteStreamData::Unit)];
-
-        // Create a vector of all SBinOp variants
-        let bexpr = Box::new(BExprStr::Val(true));
-
-        let vals = generate_if_combinations(&variants, &variants, bexpr.clone());
-        let results = vals.into_iter().map(type_check);
-        let expected: Vec<Result<SExprTE<String>, _>> = vec![Ok(SExprTE::UnitT)];
         assert!(results.eq(expected.into_iter()));
     }
 
