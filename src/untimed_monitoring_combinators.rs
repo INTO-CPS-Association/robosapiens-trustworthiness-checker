@@ -2,7 +2,8 @@ use core::panic;
 use std::ops::Deref;
 
 use futures::{
-    stream::{self, BoxStream}, StreamExt,
+    stream::{self, BoxStream},
+    StreamExt,
 };
 use winnow::Parser;
 
@@ -295,5 +296,25 @@ pub fn var(
             let VarName(x) = x;
             panic!("Variable {} not found", x)
         }
+    }
+}
+
+mod tests {
+    use super::*;
+    use futures::stream;
+    use futures::stream::StreamExt;
+
+    #[tokio::test]
+    async fn test_plus() {
+        let x = Box::pin(stream::iter(
+            vec![ConcreteStreamData::Int(1), ConcreteStreamData::Int(3)].into_iter(),
+        )) as OutputStream<ConcreteStreamData>;
+        let y = Box::pin(stream::iter(
+            vec![ConcreteStreamData::Int(2), ConcreteStreamData::Int(4)].into_iter(),
+        )) as OutputStream<ConcreteStreamData>;
+        let z = vec![ConcreteStreamData::Int(3), ConcreteStreamData::Int(7)];
+
+        let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
+        assert_eq!(res, z);
     }
 }
