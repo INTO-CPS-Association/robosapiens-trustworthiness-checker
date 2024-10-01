@@ -3,7 +3,7 @@ use crate::{
     ConcreteStreamData,
 };
 
-use std::fmt::Debug;
+use std::{default, fmt::Debug};
 
 // Trait defining the allowed types for expression values
 pub trait SExprValue: Clone + Debug + PartialEq + Eq {}
@@ -151,6 +151,42 @@ where
     }
 }
 
+fn type_check_index<VarT: Debug>(
+    inner: SExpr<VarT>,
+    idx: isize,
+    default: ConcreteStreamData,
+    ctx: &mut TypeContext<VarT>,
+    errs: &mut SemantErrors,
+) -> Result<SExprTE<VarT>, ()>
+where
+    VarT: Clone,
+{
+    // Type-check Box<Self>. Is this same type as ConcreteStreamData?
+    let in_expr = type_check_expr(inner, ctx, errs);
+    match in_expr {
+        Ok(texpr) => match (texpr, default) {
+            (SExprTE::IntT(expr), ConcreteStreamData::Int(def)) => Ok(SExprTE::IntT(
+                SExprT::Index(Box::new(expr.clone()), idx, def),
+            )),
+            (SExprTE::StrT(expr), ConcreteStreamData::Str(def)) => Ok(SExprTE::StrT(
+                SExprT::Index(Box::new(expr.clone()), idx, def),
+            )),
+            (SExprTE::BoolT(expr), ConcreteStreamData::Bool(def)) => Ok(SExprTE::BoolT(
+                SExprT::Index(Box::new(expr.clone()), idx, def),
+            )),
+            (SExprTE::UnitT, ConcreteStreamData::Unit) => Ok(SExprTE::UnitT),
+            (expr, def) => {
+                errs.push(SemantError::TypeError(format!(
+                    "Mismatched type in Index expression, expression and default does not match: {:?}",
+                    (expr, def)
+                ).into()));
+                Err(())
+            }
+        },
+        Err(_) => Err(()),
+    }
+}
+
 pub fn type_check_expr<VarT: Debug>(
     sexpr: SExpr<VarT>,
     ctx: &mut TypeContext<VarT>,
@@ -178,6 +214,14 @@ where
         },
         SExpr::BinOp(se1, se2, op) => type_check_binop(*se1, *se2, op, ctx, errs),
         SExpr::If(b, se1, se2) => type_check_if(b, *se1, *se2, ctx, errs),
+        SExpr::Index(inner, idx, default) => type_check_index(*inner, idx, default, ctx, errs),
+        SExpr::Var(_) => {
+            // Check if name exists in ctx. If not: UndeclaredVariable error.
+            // Else: Return the typed Var which is gained from "the thing in the context"
+            // Change Ctx to be a map with {id -> type}
+            Err(())
+        }
+        SExpr::Eval(_) => Err(()),
         _ => {
             errs.push(SemantError::TypeError("Not implemented".into()));
             Err(())
