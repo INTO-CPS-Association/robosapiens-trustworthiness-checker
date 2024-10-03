@@ -727,4 +727,24 @@ mod tests {
         check_correct_error_type(&result, &expected);
     }
     // TODO: Test that any SExpr leaf is a Val. If not it should return a Type-Error
+
+    #[test]
+    fn test_dodgy_if() {
+        let dodgy_bexpr = BExpr::Eq(
+            Box::new(SExprStr::Val(ConcreteStreamData::Int(0))),
+            Box::new(SExprStr::BinOp(
+                Box::new(SExprStr::Val(ConcreteStreamData::Int(3))),
+                Box::new(SExprStr::Val(ConcreteStreamData::Str("Banana".into()))),
+                SBinOp::Plus,
+            )),
+        );
+        let sexpr = SExprStr::If(
+            Box::new(dodgy_bexpr),
+            Box::new(SExprStr::Val(ConcreteStreamData::Int(1))),
+            Box::new(SExprStr::Val(ConcreteStreamData::Int(2))),
+        );
+        if let Ok(_) = type_check_with_default(sexpr) {
+            assert!(false, "Expected type error but got a successful result");
+        }
+    }
 }
