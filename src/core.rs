@@ -15,6 +15,34 @@ pub enum ConcreteStreamData {
     Unit,
 }
 
+impl From<&str> for ConcreteStreamData {
+    fn from(value: &str) -> Self {
+        ConcreteStreamData::Str(value.to_string())
+    }
+}
+impl From<String> for ConcreteStreamData {
+    fn from(value: String) -> Self {
+        ConcreteStreamData::Str(value)
+    }
+}
+
+impl From<i64> for ConcreteStreamData {
+    fn from(value: i64) -> Self {
+        ConcreteStreamData::Int(value)
+    }
+}
+impl From<bool> for ConcreteStreamData {
+    fn from(value: bool) -> Self {
+        ConcreteStreamData::Bool(value)
+    }
+}
+
+impl From<()> for ConcreteStreamData {
+    fn from(_value: ()) -> Self {
+        ConcreteStreamData::Unit
+    }
+}
+
 pub trait TypeSystem: Sync + Send + 'static {
     // Type identifying the type of an object within the type system
     // e.g. an enum or an ID type
