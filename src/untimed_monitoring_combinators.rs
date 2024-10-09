@@ -185,6 +185,10 @@ pub fn plus(
             (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
                 ConcreteStreamData::Int(x + y)
             }
+            (ConcreteStreamData::Str(x), ConcreteStreamData::Str(y)) => {
+                // ConcreteStreamData::Str(format!("{x}{y}").into());
+                ConcreteStreamData::Str(format!("{x}{y}"))
+            }
             _ => panic!("Invalid addition"),
         },
         x,
@@ -316,5 +320,26 @@ mod tests {
 
         let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
         assert_eq!(res, z);
+    }
+
+    #[tokio::test]
+    async fn test_str_plus() {
+        let x = Box::pin(stream::iter(vec![
+            ConcreteStreamData::Str("hello ".into()),
+            ConcreteStreamData::Str("olleh ".into()),
+        ])) as OutputStream<ConcreteStreamData>;
+
+        let y = Box::pin(stream::iter(vec![
+            ConcreteStreamData::Str("world".into()),
+            ConcreteStreamData::Str("dlrow".into()),
+        ])) as OutputStream<ConcreteStreamData>;
+
+        let exp = vec![
+            ConcreteStreamData::Str("hello world".into()),
+            ConcreteStreamData::Str("olleh dlrow".into()),
+        ];
+
+        let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
+        assert_eq!(res, exp)
     }
 }
