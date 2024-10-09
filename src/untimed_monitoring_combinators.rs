@@ -1,4 +1,5 @@
 use core::panic;
+use std::collections::BTreeMap;
 use std::ops::Deref;
 
 use futures::{
@@ -15,13 +16,12 @@ use crate::{
 };
 
 pub trait CloneFn1<T: StreamData, S: StreamData>:
-    Fn(T) -> S + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where
-    T: Fn(S) -> R + Sync + Send + Clone + 'static
-{
-}
+Fn(T) -> S + Clone + Sync + Send + 'static
+{}
+impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T
+where
+    T: Fn(S) -> R + Sync + Send + Clone + 'static,
+{}
 
 pub fn lift1<S: StreamData, R: StreamData>(
     f: impl CloneFn1<S, R>,
@@ -33,13 +33,12 @@ pub fn lift1<S: StreamData, R: StreamData>(
 }
 
 pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
-    Fn(S, R) -> U + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T where
-    T: Fn(S, R) -> U + Clone + Sync + Send + 'static
-{
-}
+Fn(S, R) -> U + Clone + Sync + Send + 'static
+{}
+impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T
+where
+    T: Fn(S, R) -> U + Clone + Sync + Send + 'static,
+{}
 
 pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
     f: impl CloneFn2<S, R, U>,
@@ -51,13 +50,12 @@ pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
 }
 
 pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
-    Fn(S, R, U) -> V + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T where
-    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static
-{
-}
+Fn(S, R, U) -> V + Clone + Sync + Send + 'static
+{}
+impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T
+where
+    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static,
+{}
 
 pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
     f: impl CloneFn3<S, R, V, U>,
@@ -304,19 +302,39 @@ pub fn var(
 }
 
 mod tests {
+    use std::collections::BTreeMap;
     use super::*;
     use futures::stream;
     use futures::stream::StreamExt;
+    use crate::UntimedLolaSemantics;
+
+    #[derive(Clone)]
+    struct MockContext {
+        xs: BTreeMap<VarName, Vec<ConcreteStreamData>>,
+    }
+    impl StreamContext<ConcreteStreamData> for MockContext {
+        fn var(&self, x: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
+            let tmp = self.xs.get(x)?;
+            Some(Box::pin(stream::iter(tmp.clone())))
+        }
+        fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<ConcreteStreamData>> {
+            Box::new(self.clone())
+        }
+        fn advance(&self) {
+            /* Meant to: Generate more of the output stream for runtime that have a push-model instead of a pull-model*/
+            return;
+        }
+    }
 
     #[tokio::test]
     async fn test_plus() {
         let x = Box::pin(stream::iter(
-            vec![ConcreteStreamData::Int(1), ConcreteStreamData::Int(3)].into_iter(),
+            vec![ConcreteStreamData::Int(1), 3.into()].into_iter(),
         )) as OutputStream<ConcreteStreamData>;
         let y = Box::pin(stream::iter(
-            vec![ConcreteStreamData::Int(2), ConcreteStreamData::Int(4)].into_iter(),
+            vec![ConcreteStreamData::Int(2), 4.into()].into_iter(),
         )) as OutputStream<ConcreteStreamData>;
-        let z = vec![ConcreteStreamData::Int(3), ConcreteStreamData::Int(7)];
+        let z = vec![ConcreteStreamData::Int(3), 7.into()];
 
         let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
         assert_eq!(res, z);
@@ -325,21 +343,32 @@ mod tests {
     #[tokio::test]
     async fn test_str_plus() {
         let x = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Str("hello ".into()),
-            ConcreteStreamData::Str("olleh ".into()),
+            "hello ".into(),
+            "olleh ".into(),
         ])) as OutputStream<ConcreteStreamData>;
 
         let y = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Str("world".into()),
-            ConcreteStreamData::Str("dlrow".into()),
+            "world".into(),
+            "dlrow".into(),
         ])) as OutputStream<ConcreteStreamData>;
 
         let exp = vec![
-            ConcreteStreamData::Str("hello world".into()),
-            ConcreteStreamData::Str("olleh dlrow".into()),
+            "hello world".into(),
+            "olleh dlrow".into(),
         ];
 
         let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
+        assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
+    async fn test_eval() {
+        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 1".into()])) as OutputStream<ConcreteStreamData>;
+        let map = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()].into_iter().collect::<BTreeMap<_, _>>();
+        let ctx = MockContext { xs: map };
+        let res = eval::<UntimedLolaSemantics>(&ctx, e).collect::<Vec<ConcreteStreamData>>().await;
+        let exp =
+            vec![ConcreteStreamData::Int(2), 3.into()];
         assert_eq!(res, exp)
     }
 }
