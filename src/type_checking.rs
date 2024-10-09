@@ -1,20 +1,71 @@
+use futures::stream::BoxStream;
+
 use crate::{
     ast::{BExpr, SBinOp, SExpr, StreamType},
-    ConcreteStreamData,
+    core::{SemanticError, TypeCheckable, TypeCheckableHelper, TypeSystem, Value},
+    ConcreteStreamData, VarName,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Deref};
 use std::fmt::Debug;
 
+pub struct LOLATypeSystem;
+
+impl TypeSystem for LOLATypeSystem {
+    type Type = StreamType;
+    type TypedExpr = SExprTE<VarName>;
+    type TypedStream = LOLAStream;
+
+    fn type_of_expr(expr: &Self::TypedExpr) -> Self::Type {
+        match expr {
+            SExprTE::Int(_) => StreamType::Int,
+            SExprTE::Str(_) => StreamType::Str,
+            SExprTE::Bool(_) => StreamType::Bool,
+            SExprTE::Unit(_) => StreamType::Unit,
+        }
+    }
+
+    fn type_of_stream(value: &Self::TypedStream) -> Self::Type {
+        match value {
+            LOLAStream::Int(_) => StreamType::Int,
+            LOLAStream::Str(_) => StreamType::Str,
+            LOLAStream::Bool(_) => StreamType::Bool,
+            LOLAStream::Unit(_) => StreamType::Unit,
+        }
+    }
+}
+
+pub enum LOLAStream {
+    Int(BoxStream<'static, i64>),
+    Str(BoxStream<'static, String>),
+    Bool(BoxStream<'static, bool>),
+    Unit(BoxStream<'static, ()>),
+}
+
 // Trait defining the allowed types for expression values
-pub trait SExprValue: Clone + Debug + PartialEq + Eq {}
-impl SExprValue for i64 {}
-impl SExprValue for String {}
-impl SExprValue for bool {}
-impl SExprValue for () {}
+impl Value<LOLATypeSystem> for i64 {
+    fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
+        StreamType::Int
+    }
+}
+impl Value<LOLATypeSystem> for String {
+    fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
+        StreamType::Str
+    }
+}
+impl Value<LOLATypeSystem> for bool {
+    fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
+        StreamType::Bool
+    }
+}
+impl Value<LOLATypeSystem> for () {
+    fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
+        StreamType::Int
+    }
+}
 
 // Stream expressions - now with types
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SExprT<ValT: SExprValue, VarT: Debug> {
+pub enum SExprT<ValT: Value<LOLATypeSystem>, VarT: Debug> {
     If(Box<BExpr<VarT>>, Box<Self>, Box<Self>),
 
     // Stream indexing
@@ -41,245 +92,226 @@ pub enum SExprT<ValT: SExprValue, VarT: Debug> {
 // Stream expression typed enum
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SExprTE<VarT: Debug> {
-    IntT(SExprT<i64, VarT>),
-    StrT(SExprT<String, VarT>),
-    BoolT(SExprT<bool, VarT>),
-    UnitT(SExprT<(), VarT>),
+    Int(SExprT<i64, VarT>),
+    Str(SExprT<String, VarT>),
+    Bool(SExprT<bool, VarT>),
+    Unit(SExprT<(), VarT>),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum SemantError {
-    TypeError(String),
-    UnknownError(String),
-    UndeclaredVariable(String),
-}
-
-pub type SemantErrors = Vec<SemantError>;
-pub type TypeContext<VarT> = BTreeMap<VarT, StreamType>;
-
-pub type SemantResult<VarT> = Result<SExprTE<VarT>, SemantErrors>;
-
-fn type_check_val<VarT>(
-    sdata: ConcreteStreamData,
-    errs: &mut Vec<SemantError>,
-) -> Result<SExprTE<VarT>, ()>
-where
-    VarT: Debug + Clone + Ord,
-{
-    match sdata {
-        ConcreteStreamData::Int(v) => Ok(SExprTE::IntT(SExprT::Val(v))),
-        ConcreteStreamData::Str(v) => Ok(SExprTE::StrT(SExprT::Val(v))),
-        ConcreteStreamData::Bool(v) => Ok(SExprTE::BoolT(SExprT::Val(v))),
-        ConcreteStreamData::Unit => Ok(SExprTE::UnitT(SExprT::Val(()))),
-        ConcreteStreamData::Unknown => {
-            errs.push(SemantError::UnknownError(
-                format!(
-                    "Stream expression {:?} not assigned a type before semantic analysis",
-                    sdata
-                )
-                .into(),
-            ));
-            Err(())
+impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
+    fn type_check_raw(
+            &self,
+            _: &mut crate::core::TypeContext<LOLATypeSystem>,
+            errs: &mut crate::core::SemanticErrors,
+        ) -> Result<SExprTE<VarName>, ()> {
+        match self {
+            ConcreteStreamData::Int(v) => Ok(SExprTE::Int(SExprT::Val(*v))),
+            ConcreteStreamData::Str(v) => Ok(
+                SExprTE::Str(SExprT::Val(v.clone()))),
+            ConcreteStreamData::Bool(v) => Ok(SExprTE::Bool(SExprT::Val(*v))),
+            ConcreteStreamData::Unit => Ok(SExprTE::Unit(SExprT::Val(()))),
+            ConcreteStreamData::Unknown => {
+                errs.push(crate::core::SemanticError::UnknownError(
+                    format!(
+                        "Stream expression {:?} not assigned a type before semantic analysis",
+                        self
+                    )
+                    .into(),
+                ));
+                Err(())
+            }
         }
     }
 }
 
-fn type_check_binop<VarT>(
-    se1: SExpr<VarT>,
-    se2: SExpr<VarT>,
-    op: SBinOp,
-    ctx: &mut TypeContext<VarT>,
-    errs: &mut SemantErrors,
-) -> Result<SExprTE<VarT>, ()>
-where
-    VarT: Debug + Clone + Ord,
-{
-    let se1_check = type_check_expr(se1, ctx, errs);
-    let se2_check = type_check_expr(se2, ctx, errs);
+// Type check a binary operation
+impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, SExpr<VarName>, SExpr<VarName>) {
+    fn type_check_raw(
+            &self,
+            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+            errs: &mut crate::core::SemanticErrors,
+        ) -> Result<SExprTE<VarName>, ()> {
+        let (op, se1, se2) = self;
+        let se1_check = se1.type_check_raw(ctx, errs);
+        let se2_check = se2.type_check_raw(ctx, errs);
 
-    match (se1_check, se2_check) {
-        (Ok(SExprTE::IntT(se1)), Ok(SExprTE::IntT(se2))) => Ok(SExprTE::IntT(SExprT::BinOp(
-            Box::new(se1.clone()),
-            Box::new(se2.clone()),
-            op,
-        ))),
-        (Ok(SExprTE::StrT(se1)), Ok(SExprTE::StrT(se2))) if op == SBinOp::Plus => {
-            Ok(SExprTE::StrT(SExprT::BinOp(
+        match (se1_check, se2_check) {
+            (Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => Ok(SExprTE::Int(SExprT::BinOp(
                 Box::new(se1.clone()),
                 Box::new(se2.clone()),
-                op,
-            )))
+                *op,
+            ))),
+            (Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) if *op == SBinOp::Plus => {
+                Ok(SExprTE::Str(SExprT::BinOp(
+                    Box::new(se1.clone()),
+                    Box::new(se2.clone()),
+                    *op,
+                )))
+            }
+            // Any other case where sub-expressions are Ok, but `op` is not supported
+            (Ok(ste1), Ok(ste2)) => {
+                errs.push(SemanticError::TypeError(
+                    format!(
+                        "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
+                        op, ste1, ste2
+                    )
+                    .into(),
+                ));
+                Err(())
+            }
+            // If the underlying values already result in an error then simply propagate
+            (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
         }
-        // Any other case where sub-expressions are Ok, but `op` is not supported
-        (Ok(ste1), Ok(ste2)) => {
-            errs.push(SemantError::TypeError(
-                format!(
-                    "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
-                    op, ste1, ste2
-                )
-                .into(),
-            ));
-            Err(())
-        }
-        // If the underlying values already result in an error then simply propagate
-        (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
     }
 }
 
-fn type_check_if<VarT: Debug>(
-    b: Box<BExpr<VarT>>,
-    se1: SExpr<VarT>,
-    se2: SExpr<VarT>,
-    ctx: &mut TypeContext<VarT>,
-    errs: &mut SemantErrors,
-) -> Result<SExprTE<VarT>, ()>
-where
-    VarT: Debug + Clone + Ord,
-{
-    let se1_check = type_check_expr(se1, ctx, errs);
-    let se2_check = type_check_expr(se2, ctx, errs);
-    match (se1_check, se2_check) {
-        (Ok(ste1), Ok(ste2)) => {
-            // Matching on type-checked expressions. If same then Ok, else error.
-            match (ste1, ste2) {
-                (SExprTE::IntT(se1), SExprTE::IntT(se2)) => Ok(SExprTE::IntT(SExprT::If(
-                    b,
-                    Box::new(se1.clone()),
-                    Box::new(se2.clone()),
-                ))),
-                (SExprTE::StrT(se1), SExprTE::StrT(se2)) => Ok(SExprTE::StrT(SExprT::If(
-                    b,
-                    Box::new(se1.clone()),
-                    Box::new(se2.clone()),
-                ))),
-                (SExprTE::BoolT(se1), SExprTE::BoolT(se2)) => Ok(SExprTE::BoolT(SExprT::If(
-                    b,
-                    Box::new(se1.clone()),
-                    Box::new(se2.clone()),
-                ))),
-                (SExprTE::UnitT(se1), SExprTE::UnitT(se2)) => Ok(SExprTE::UnitT(SExprT::If(
-                    b,
-                    Box::new(se1.clone()),
-                    Box::new(se2.clone()),
-                ))),
-                (stenum1, stenum2) => {
-                    errs.push(SemantError::TypeError(
-                        format!(
-                            "Cannot create if-expression with two different types: {:?} and {:?}",
-                            stenum1, stenum2
-                        )
-                        .into(),
-                    ));
-                    Err(())
+// Type check an if expression
+impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<VarName>) {
+    fn type_check_raw(
+            &self,
+            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+            errs: &mut crate::core::SemanticErrors,
+        ) -> Result<SExprTE<VarName>, ()> {
+        let (b, se1, se2) = self;
+        let se1_check = se1.type_check_raw(ctx, errs);
+        let se2_check = se2.type_check_raw(ctx, errs);
+
+        match (se1_check, se2_check) {
+            (Ok(ste1), Ok(ste2)) => {
+                // Matching on type-checked expressions. If same then Ok, else error.
+                match (ste1, ste2) {
+                    (SExprTE::Int(se1), SExprTE::Int(se2)) => Ok(SExprTE::Int(SExprT::If(
+                        Box::new((*b).clone()),
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                    ))),
+                    (SExprTE::Str(se1), SExprTE::Str(se2)) => Ok(SExprTE::Str(SExprT::If(
+                        Box::new((*b).clone()),
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                    ))),
+                    (SExprTE::Bool(se1), SExprTE::Bool(se2)) => Ok(SExprTE::Bool(SExprT::If(
+                        Box::new((*b).clone()),
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                    ))),
+                    (SExprTE::Unit(se1), SExprTE::Unit(se2)) => Ok(SExprTE::Unit(SExprT::If(
+                        Box::new((*b).clone()),
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                    ))),
+                    (stenum1, stenum2) => {
+                        errs.push(SemanticError::TypeError(
+                            format!(
+                                "Cannot create if-expression with two different types: {:?} and {:?}",
+                                stenum1, stenum2
+                            )
+                            .into(),
+                        ));
+                        Err(())
+                    }
                 }
             }
+            // If there's already an error in any branch, propagate the error
+            (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
         }
-        // If there's already an error in any branch, propagate the error
-        (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
     }
 }
 
-fn type_check_index<VarT>(
-    inner: SExpr<VarT>,
-    idx: isize,
-    default: ConcreteStreamData,
-    ctx: &mut TypeContext<VarT>,
-    errs: &mut SemantErrors,
-) -> Result<SExprTE<VarT>, ()>
-where
-    VarT: Debug + Clone + Ord,
-{
-    // Type-check Box<Self>. Is this same type as ConcreteStreamData?
-    let in_expr = type_check_expr(inner, ctx, errs);
-    match in_expr {
-        Ok(texpr) => {
-            match (texpr, default) {
-                (SExprTE::IntT(expr), ConcreteStreamData::Int(def)) => Ok(SExprTE::IntT(
-                    SExprT::Index(Box::new(expr.clone()), idx, def),
-                )),
-                (SExprTE::StrT(expr), ConcreteStreamData::Str(def)) => Ok(SExprTE::StrT(
-                    SExprT::Index(Box::new(expr.clone()), idx, def),
-                )),
-                (SExprTE::BoolT(expr), ConcreteStreamData::Bool(def)) => Ok(SExprTE::BoolT(
-                    SExprT::Index(Box::new(expr.clone()), idx, def),
-                )),
-                (SExprTE::UnitT(expr), ConcreteStreamData::Unit) => Ok(SExprTE::UnitT(
-                    SExprT::Index(Box::new(expr.clone()), idx, ()),
-                )),
-                (expr, def) => {
-                    errs.push(SemantError::TypeError(format!(
-                    "Mismatched type in Index expression, expression and default does not match: {:?}",
-                    (expr, def)
-                ).into()));
-                    Err(())
+// Type check an index expression
+impl TypeCheckableHelper<LOLATypeSystem> for (&SExpr<VarName>, isize, ConcreteStreamData) {
+    fn type_check_raw(
+            &self,
+            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+            errs: &mut crate::core::SemanticErrors,
+        ) -> Result<SExprTE<VarName>, ()> {
+        let (inner, idx, default) = self;
+        let inner_check = inner.type_check_raw(ctx, errs);
+
+        match inner_check {
+            Ok(ste) => {
+                match (ste, default) {
+                    (SExprTE::Int(se), ConcreteStreamData::Int(def)) => Ok(SExprTE::Int(SExprT::Index(
+                        Box::new(se.clone()),
+                        *idx,
+                        *def,
+                    ))),
+                    (SExprTE::Str(se), ConcreteStreamData::Str(def)) => Ok(SExprTE::Str(SExprT::Index(
+                        Box::new(se.clone()),
+                        *idx,
+                        def.clone(),
+                    ))),
+                    (SExprTE::Bool(se), ConcreteStreamData::Bool(def)) => Ok(SExprTE::Bool(SExprT::Index(
+                        Box::new(se.clone()),
+                        *idx,
+                        *def,
+                    ))),
+                    (SExprTE::Unit(se), ConcreteStreamData::Unit) => Ok(SExprTE::Unit(SExprT::Index(
+                        Box::new(se.clone()),
+                        *idx,
+                        (),
+                    ))),
+                    (se, def) => {
+                        errs.push(SemanticError::TypeError(
+                            format!(
+                                "Mismatched type in Index expression, expression and default does not match: {:?}",
+                                (se, def)
+                            )
+                            .into(),
+                        ));
+                        Err(())
+                    }
                 }
             }
-        }
-        // If there's already an error just propagate it
-        Err(_) => Err(()),
-    }
-}
-
-fn type_check_var<VarT>(
-    id: VarT,
-    ctx: &mut BTreeMap<VarT, StreamType>,
-    errs: &mut Vec<SemantError>,
-) -> Result<SExprTE<VarT>, ()>
-where
-    VarT: Debug + Clone + Ord,
-{
-    let type_opt = ctx.get(&id);
-    match type_opt {
-        Some(t) => match t {
-            StreamType::Int => Ok(SExprTE::IntT(SExprT::Var(id))),
-            StreamType::Str => Ok(SExprTE::StrT(SExprT::Var(id))),
-            StreamType::Bool => Ok(SExprTE::BoolT(SExprT::Var(id))),
-            StreamType::Unit => Ok(SExprTE::UnitT(SExprT::Var(id))),
-        },
-        None => {
-            errs.push(SemantError::UndeclaredVariable(
-                format!("Usage of undeclared variable: {:?}", id).into(),
-            ));
-            Err(())
+            // If there's already an error just propagate it
+            Err(_) => Err(()),
         }
     }
 }
 
-pub fn type_check_expr<VarT>(
-    sexpr: SExpr<VarT>,
-    ctx: &mut TypeContext<VarT>,
-    errs: &mut SemantErrors,
-) -> Result<SExprTE<VarT>, ()>
-where
-    VarT: Debug + Clone + Ord,
-{
-    match sexpr {
-        SExpr::Val(sdata) => type_check_val(sdata, errs),
-        SExpr::BinOp(se1, se2, op) => type_check_binop(*se1, *se2, op, ctx, errs),
-        SExpr::If(b, se1, se2) => type_check_if(b, *se1, *se2, ctx, errs),
-        SExpr::Index(inner, idx, default) => type_check_index(*inner, idx, default, ctx, errs),
-        SExpr::Var(id) => type_check_var(id, ctx, errs),
-        SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
+// Type check a variable
+impl TypeCheckableHelper<LOLATypeSystem> for VarName {
+    fn type_check_raw(
+            &self,
+            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+            errs: &mut crate::core::SemanticErrors,
+        ) -> Result<SExprTE<VarName>, ()> {
+        let type_opt = ctx.get(self);
+        match type_opt {
+            Some(t) => {
+                match t {
+                    StreamType::Int => Ok(SExprTE::Int(SExprT::Var(self.clone()))),
+                    StreamType::Str => Ok(SExprTE::Str(SExprT::Var(self.clone()))),
+                    StreamType::Bool => Ok(SExprTE::Bool(SExprT::Var(self.clone()))),
+                    StreamType::Unit => Ok(SExprTE::Unit(SExprT::Var(self.clone())),
+                    ),
+                }
+            }
+            None => {
+                errs.push(SemanticError::UndeclaredVariable(
+                    format!("Usage of undeclared variable: {:?}", self).into(),
+                ));
+                Err(())
+            }
+        }
     }
 }
 
-pub fn type_check_with_default<VarT>(sexpr: SExpr<VarT>) -> SemantResult<VarT>
-where
-    VarT: Debug + Clone + Ord,
-{
-    let mut context = TypeContext::new();
-    type_check(sexpr, &mut context)
-}
-
-pub fn type_check<VarT>(sexpr: SExpr<VarT>, context: &mut TypeContext<VarT>) -> SemantResult<VarT>
-where
-    VarT: Debug + Clone + Ord,
-{
-    let mut errors = Vec::new();
-    let res = type_check_expr(sexpr, context, &mut errors);
-    match res {
-        Ok(se) => Ok(se),
-        Err(()) => Err(errors),
+// Type check an expression
+impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
+    fn type_check_raw(
+            &self,
+            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+            errs: &mut crate::core::SemanticErrors,
+        ) -> Result<SExprTE<VarName>, ()> {
+        match self {
+            SExpr::Val(sdata) => sdata.type_check_raw(ctx, errs),
+            SExpr::BinOp(se1, se2, op) => (op.clone(), *se1.clone(), *se2.clone()).type_check_raw(ctx, errs),
+            SExpr::If(b, se1, se2) => (b.deref(), se1.deref(), se2.deref()).type_check_raw(ctx, errs),
+            SExpr::Index(inner, idx, default) => (inner.deref(), *idx, default.clone()).type_check_raw(ctx, errs),
+            SExpr::Var(id) => id.type_check_raw(ctx, errs),
+            SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
+        }
     }
 }
 
@@ -287,12 +319,14 @@ where
 mod tests {
     use std::{iter::zip, mem::discriminant};
 
+    use crate::core::{SemanticResult, TypeContext};
+
     use super::*;
 
-    type SemantResultStr = SemantResult<String>;
-    type SExprStr = SExpr<String>;
-    type SExprTStr<Val> = SExprT<Val, String>;
-    type BExprStr = BExpr<String>;
+    type SExprStr = SExpr<VarName>;
+    type SemantResultStr = SemanticResult<SExprTE<VarName>>;
+    type SExprTStr<Val> = SExprT<Val, VarName>;
+    type BExprStr = BExpr<VarName>;
 
     trait AsExpr<Expr> {
         fn binop_expr(lhs: Expr, rhs: Expr, op: SBinOp) -> Self;
@@ -308,7 +342,7 @@ mod tests {
         }
     }
 
-    impl<Val: SExprValue> AsExpr<Box<SExprTStr<Val>>> for SExprTStr<Val> {
+    impl<Val: Value<LOLATypeSystem>> AsExpr<Box<SExprTStr<Val>>> for SExprTStr<Val> {
         fn binop_expr(lhs: Box<SExprTStr<Val>>, rhs: Box<SExprTStr<Val>>, op: SBinOp) -> Self {
             SExprTStr::BinOp(lhs, rhs, op)
         }
@@ -428,12 +462,12 @@ mod tests {
             SExprStr::Val(ConcreteStreamData::Bool(true)),
             SExprStr::Val(ConcreteStreamData::Unit),
         ];
-        let results = vals.into_iter().map(type_check_with_default);
+        let results = vals.iter().map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
-            Ok(SExprTE::IntT(SExprT::Val(1))),
-            Ok(SExprTE::StrT(SExprT::Val("".into()))),
-            Ok(SExprTE::BoolT(SExprT::Val(true))),
-            Ok(SExprTE::UnitT(SExprT::Val(()))),
+            Ok(SExprTE::Int(SExprT::Val(1))),
+            Ok(SExprTE::Str(SExprT::Val("".into()))),
+            Ok(SExprTE::Bool(SExprT::Val(true))),
+            Ok(SExprTE::Unit(SExprT::Val(()))),
         ];
 
         assert!(results.eq(expected.into_iter()));
@@ -443,8 +477,8 @@ mod tests {
     fn test_unknown_err() {
         // Checks that if a Val is unknown during semantic analysis it produces a UnknownError
         let val = SExprStr::Val(ConcreteStreamData::Unknown);
-        let result = type_check_with_default(val);
-        let expected: SemantResultStr = Err(vec![SemantError::UnknownError("".into())]);
+        let result = val.type_check_with_default();
+        let expected: SemantResultStr = Err(vec![SemanticError::UnknownError("".into())]);
         check_correct_error_type(&result, &expected);
     }
 
@@ -463,10 +497,10 @@ mod tests {
                 SBinOp::Plus,
             ),
         ];
-        let results = vals.into_iter().map(type_check_with_default).collect();
+        let results = vals.iter().map(TypeCheckable::type_check_with_default).collect();
         let expected: Vec<SemantResultStr> = vec![
-            Err(vec![SemantError::TypeError("".into())]),
-            Err(vec![SemantError::TypeError("".into())]),
+            Err(vec![SemanticError::TypeError("".into())]),
+            Err(vec![SemanticError::TypeError("".into())]),
         ];
         check_correct_error_types(&results, &expected);
     }
@@ -498,15 +532,14 @@ mod tests {
         });
 
         let results = vals
-            .into_iter()
-            .map(type_check_with_default)
+            .map(|x| TypeCheckable::type_check_with_default(&x))
             .collect::<Vec<_>>();
 
         // Since all combinations of different types should yield an error,
         // we'll expect each result to be an Err with a type error.
         let expected: Vec<SemantResultStr> = results
             .iter()
-            .map(|_| Err(vec![SemantError::TypeError("".into())]))
+            .map(|_| Err(vec![SemanticError::TypeError("".into())]))
             .collect();
 
         check_correct_error_types(&results, &expected);
@@ -532,7 +565,7 @@ mod tests {
                 SBinOp::Plus,
             ),
         ];
-        let results = vals.into_iter().map(type_check_with_default);
+        let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected_err_lens = vec![1, 1, 2];
 
         // For each result, check that we got errors and that we got the correct amount:
@@ -565,15 +598,15 @@ mod tests {
         // Checks that if we BinOp two Ints together it results in typed AST after semantic analysis
         let int_val = vec![SExprStr::Val(ConcreteStreamData::Int(0))];
         let sbinops = all_sbinop_variants();
-        let vals = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
-        let results = vals.into_iter().map(type_check_with_default);
+        let vals: Vec<SExpr<VarName>> = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
+        let results = vals.iter().map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
 
         let int_t_val = vec![SExprTStr::<i64>::Val(0)];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprTStr<i64>> =
             generate_binop_combinations(&int_t_val, &int_t_val, sbinops);
-        let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::IntT(v)));
+        let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::Int(v)));
         assert!(results.eq(expected.into_iter()));
     }
 
@@ -582,15 +615,15 @@ mod tests {
         // Checks that if we add two Strings together it results in typed AST after semantic analysis
         let str_val = vec![SExprStr::Val(ConcreteStreamData::Str("".into()))];
         let sbinops = vec![SBinOp::Plus];
-        let vals = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
-        let results = vals.into_iter().map(type_check_with_default);
+        let vals: Vec<SExpr<VarName>> = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
+        let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
         let str_t_val = vec![SExprTStr::<String>::Val("".into())];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprTStr<String>> =
             generate_binop_combinations(&str_t_val, &str_t_val, sbinops);
-        let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::StrT(v)));
+        let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::Str(v)));
         assert!(results.eq(expected.into_iter()));
     }
 
@@ -618,25 +651,25 @@ mod tests {
                 _ => true, // Keep non-ifs (unused in this case)
             }
         });
-        let results = vals.into_iter().map(type_check_with_default);
+        let results = vals.map(|x| x.type_check_with_default());
 
         let expected: Vec<SemantResultStr> = vec![
-            Ok(SExprTE::IntT(SExprT::If(
+            Ok(SExprTE::Int(SExprT::If(
                 bexpr.clone(),
                 Box::new(SExprT::Val(0)),
                 Box::new(SExprT::Val(0)),
             ))),
-            Ok(SExprTE::StrT(SExprT::If(
+            Ok(SExprTE::Str(SExprT::If(
                 bexpr.clone(),
                 Box::new(SExprT::Val("".into())),
                 Box::new(SExprT::Val("".into())),
             ))),
-            Ok(SExprTE::BoolT(SExprT::If(
+            Ok(SExprTE::Bool(SExprT::If(
                 bexpr.clone(),
                 Box::new(SExprT::Val(true)),
                 Box::new(SExprT::Val(true)),
             ))),
-            Ok(SExprTE::UnitT(SExprT::If(
+            Ok(SExprTE::Unit(SExprT::If(
                 bexpr.clone(),
                 Box::new(SExprT::Val(())),
                 Box::new(SExprT::Val(())),
@@ -669,15 +702,14 @@ mod tests {
         });
 
         let results = vals
-            .into_iter()
-            .map(type_check_with_default)
+            .map(|x| x.type_check_with_default())
             .collect::<Vec<_>>();
 
         // Since all combinations of different types should yield an error,
         // we'll expect each result to be an Err with a type error.
         let expected: Vec<SemantResultStr> = results
             .iter()
-            .map(|_| Err(vec![SemantError::TypeError("".into())]))
+            .map(|_| Err(vec![SemanticError::TypeError("".into())]))
             .collect();
 
         check_correct_error_types(&results, &expected);
@@ -697,21 +729,21 @@ mod tests {
         let vals = variant_names
             .clone()
             .into_iter()
-            .map(|n| SExprStr::Var(n.into()));
+            .map(|n| SExprStr::Var(VarName(n.into())));
 
         // Fake context/environment that simulates type-checking context
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeContext::<LOLATypeSystem>::new();
         for (n, t) in variant_names.into_iter().zip(variant_types.into_iter()) {
-            ctx.insert(n.to_string(), t);
+            ctx.insert(VarName(n.into()), t);
         }
 
-        let results = vals.into_iter().map(|sexpr| type_check(sexpr, &mut ctx));
+        let results = vals.into_iter().map(|sexpr| sexpr.type_check(&mut ctx));
 
         let expected = vec![
-            Ok(SExprTE::IntT(SExprT::Var("int".to_string()))),
-            Ok(SExprTE::StrT(SExprT::Var("str".to_string()))),
-            Ok(SExprTE::BoolT(SExprT::Var("bool".to_string()))),
-            Ok(SExprTE::UnitT(SExprT::Var("unit".to_string()))),
+            Ok(SExprTE::Int(SExprT::Var(VarName("int".into())))),
+            Ok(SExprTE::Str(SExprT::Var(VarName("str".into())))),
+            Ok(SExprTE::Bool(SExprT::Var(VarName("bool".into())))),
+            Ok(SExprTE::Unit(SExprT::Var(VarName("unit".into())))),
         ];
 
         assert!(results.eq(expected));
@@ -721,9 +753,9 @@ mod tests {
     fn test_var_err() {
         // Checks that Vars produce UndeclaredVariable errors if they do not exist in the context
 
-        let val = SExprStr::Var("undeclared_name".into());
-        let result = type_check_with_default(val);
-        let expected: SemantResultStr = Err(vec![SemantError::UndeclaredVariable("".into())]);
+        let val = SExprStr::Var(VarName("undeclared_name".into()));
+        let result = val.type_check_with_default();
+        let expected: SemantResultStr = Err(vec![SemanticError::UndeclaredVariable("".into())]);
         check_correct_error_type(&result, &expected);
     }
     // TODO: Test that any SExpr leaf is a Val. If not it should return a Type-Error
@@ -743,7 +775,7 @@ mod tests {
             Box::new(SExprStr::Val(ConcreteStreamData::Int(1))),
             Box::new(SExprStr::Val(ConcreteStreamData::Int(2))),
         );
-        if let Ok(_) = type_check_with_default(sexpr) {
+        if let Ok(_) = sexpr.type_check_with_default() {
             assert!(false, "Expected type error but got a successful result");
         }
     }

@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, fmt::Debug, fmt::Display};
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Display},
+    process::Output,
+};
 
 use futures::stream::BoxStream;
 
@@ -9,6 +13,51 @@ pub enum ConcreteStreamData {
     Bool(bool),
     Unknown,
     Unit,
+}
+
+pub trait TypeSystem: Sync + Send + 'static {
+    // Type identifying the type of an object within the type system
+    // e.g. an enum or an ID type
+    // Inner type allows for the type annotation to tag a specific object
+    type Type;
+    type TypedExpr;
+    type TypedStream;
+    // Idea:
+    // - types are in Identifier<()>
+    // - typed version of S are in Identifier<S>
+
+    // self param?
+    fn type_of_expr(value: &Self::TypedExpr) -> Self::Type;
+
+    fn type_of_stream(value: &Self::TypedStream) -> Self::Type;
+
+    // Should we support subtyping this way?
+    // fn subtype(&self, x: &Self::Type, ) -> Self::Type;
+}
+
+pub trait Value<TS: TypeSystem>: Clone + Debug + PartialEq + Eq {
+    fn type_of(&self) -> TS::Type;
+}
+
+// struct TypedValue<TS: TypeSystem, Val> {
+//     typ: TS::Identifier<()>,
+//     value: Val<Type>,
+// }
+
+pub struct Untyped;
+// pub trait TypedStreamData<T: Type<TS>, TS: TypeSystem>: StreamData<TS> {}
+impl TypeSystem for Untyped {
+    type Type = ();
+    type TypedExpr = ConcreteStreamData;
+    type TypedStream = OutputStream<ConcreteStreamData>;
+
+    fn type_of_expr(_: &Self::TypedExpr) -> Self::Type {
+        ()
+    }
+
+    fn type_of_stream(_: &Self::TypedStream) -> Self::Type {
+        ()
+    }
 }
 
 pub trait StreamData: Clone + Send + Sync + Debug + 'static {}
@@ -23,6 +72,46 @@ impl Display for ConcreteStreamData {
             ConcreteStreamData::Str(s) => write!(f, "\"{}\"", s),
             ConcreteStreamData::Unknown => write!(f, "unknown"),
             ConcreteStreamData::Unit => write!(f, "unit"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SemanticError {
+    TypeError(String),
+    UnknownError(String),
+    UndeclaredVariable(String),
+}
+
+pub type SemanticErrors = Vec<SemanticError>;
+pub type TypeContext<TS: TypeSystem> = BTreeMap<VarName, TS::Type>;
+
+pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
+
+pub trait TypeCheckableHelper<TS: TypeSystem> {
+    fn type_check_raw(
+        &self,
+        ctx: &mut TypeContext<TS>,
+        errs: &mut SemanticErrors,
+    ) -> Result<TS::TypedExpr, ()>;
+}
+
+pub trait TypeCheckable<TS: TypeSystem> {
+    fn type_check_with_default(&self) -> SemanticResult<TS::TypedExpr> {
+        let mut context = TypeContext::<TS>::new();
+        self.type_check(&mut context)
+    }
+
+    fn type_check(&self, context: &mut TypeContext<TS>) -> SemanticResult<TS::TypedExpr>;
+}
+
+impl<TS: TypeSystem, R: TypeCheckableHelper<TS>> TypeCheckable<TS> for R {
+    fn type_check(&self, context: &mut TypeContext<TS>) -> SemanticResult<TS::TypedExpr> {
+        let mut errors = Vec::new();
+        let res = self.type_check_raw(context, &mut errors);
+        match res {
+            Ok(se) => Ok(se),
+            Err(()) => Err(errors),
         }
     }
 }
