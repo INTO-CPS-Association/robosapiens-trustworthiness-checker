@@ -24,7 +24,7 @@ impl MonitoringSemantics<SExpr<VarName>, ConcreteStreamData> for UntimedLolaSema
             SExpr::Var(v) => mc::var(ctx, v),
             SExpr::Eval(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::eval::<Self>(ctx, e)
+                mc::eval(ctx, e, 10)
             }
             SExpr::Index(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);

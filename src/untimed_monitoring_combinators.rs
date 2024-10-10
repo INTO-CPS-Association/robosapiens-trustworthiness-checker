@@ -1,19 +1,13 @@
+use crate::core::StreamData;
+use crate::ConcreteStreamData;
+use crate::{lola_expression, MonitoringSemantics, OutputStream, StreamContext, UntimedLolaSemantics, VarName};
 use core::panic;
-use std::collections::BTreeMap;
-use std::ops::Deref;
-
 use futures::{
     stream::{self, BoxStream},
     StreamExt,
 };
+use std::ops::Deref;
 use winnow::Parser;
-
-use crate::{
-    ast::SExpr,
-    core::{
-        ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, StreamData, VarName,
-    },
-};
 
 pub trait CloneFn1<T: StreamData, S: StreamData>:
 Fn(T) -> S + Clone + Sync + Send + 'static
@@ -187,7 +181,7 @@ pub fn plus(
                 // ConcreteStreamData::Str(format!("{x}{y}").into());
                 ConcreteStreamData::Str(format!("{x}{y}"))
             }
-            _ => panic!("Invalid addition"),
+            (x, y) => panic!("Invalid addition with types: {:?}, {:?}", x, y),
         },
         x,
         y,
@@ -226,12 +220,15 @@ pub fn mult(
     )
 }
 
-pub fn eval<S: MonitoringSemantics<SExpr<VarName>, ConcreteStreamData>>(
+// Eval for an UntimedLolaExpression using the lola_expression parser
+pub fn eval(
     ctx: &dyn StreamContext<ConcreteStreamData>,
     x: OutputStream<ConcreteStreamData>,
+    history_length: usize,
 ) -> OutputStream<ConcreteStreamData> {
-    // Create a subcontext with a history window length of 1
-    let subcontext = ctx.subcontext(10);
+    // Create a subcontext with a history window length of 10
+    let subcontext = ctx.subcontext(history_length);
+    /*unfold() creates a Stream from a seed value.*/
     Box::pin(stream::unfold(
         (
             subcontext,
@@ -239,15 +236,8 @@ pub fn eval<S: MonitoringSemantics<SExpr<VarName>, ConcreteStreamData>>(
             None::<(ConcreteStreamData, OutputStream<ConcreteStreamData>)>,
         ),
         |(subcontext, mut x, last)| async move {
-            let current = x.next().await;
-            println!("Current: {:?}", current);
-
-            // If the current stream is has stopped, stop
-            // eval steam
-            if current == None {
-                return None;
-            }
-            let current = current.unwrap();
+            /* x.next() returns None if we are done unfolding. Return in that case.*/
+            let current = x.next().await?;
 
             // If the evaled statement has not stopped, continue using the
             // existing stream
@@ -268,11 +258,11 @@ pub fn eval<S: MonitoringSemantics<SExpr<VarName>, ConcreteStreamData>>(
                 ConcreteStreamData::Str(s) => {
                     println!("s: {:?}", s);
                     let s_parse = &mut s.as_str();
-                    let expr = match crate::parser::lola_expression.parse_next(s_parse) {
+                    let expr = match lola_expression.parse_next(s_parse) {
                         Ok(expr) => expr,
                         Err(_) => unimplemented!("Invalid eval str"),
                     };
-                    let mut es = S::to_async_stream(expr, subcontext.deref());
+                    let mut es = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
                     subcontext.advance();
                     let eval_res = es.next().await;
                     return Some((
@@ -301,27 +291,121 @@ pub fn var(
     }
 }
 
-mod tests {
-    use std::collections::BTreeMap;
-    use super::*;
-    use futures::stream;
-    use futures::stream::StreamExt;
-    use crate::UntimedLolaSemantics;
+// Defer for an UntimedLolaExpression using the lola_expression parser
+pub fn defer(
+    ctx: &dyn StreamContext<ConcreteStreamData>,
+    prop_stream: OutputStream<ConcreteStreamData>,
+    history_length: usize,
+) -> OutputStream<ConcreteStreamData> {
+    /* Subcontext with current values only*/
+    let subcontext = ctx.subcontext(history_length);
+    /*unfold() creates a Stream from a seed value.*/
+    Box::pin(stream::unfold(
+        (
+            subcontext,
+            prop_stream,
+            None::<ConcreteStreamData>,
+        ),
+        |(subcontext, mut x, saved)| async move {
+            /* x.next() returns None if we are done unfolding. Return in that case.*/
+            let current = x.next().await?;
+            /* If we have a saved state then use that otherwise use current */
+            let eval_str = saved.unwrap_or_else(|| current);
 
-    #[derive(Clone)]
-    struct MockContext {
-        xs: BTreeMap<VarName, Vec<ConcreteStreamData>>,
+            match eval_str {
+                ConcreteStreamData::Str(eval_s) => {
+                    let eval_parse = &mut eval_s.as_str();
+                    let expr = match lola_expression.parse_next(eval_parse) {
+                        Ok(expr) => expr,
+                        Err(_) => unimplemented!("Invalid eval str"),
+                    };
+                    let mut es = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
+                    let eval_res = es.next().await;
+                    subcontext.advance();
+                    return Some((
+                        eval_res.unwrap(),
+                        (subcontext, x, Some(ConcreteStreamData::Str(eval_s))),
+                    ));
+                }
+                _ => panic!("We did not have memory and eval_str was not a Str"),
+            }
+        },
+    ))
+}
+
+mod tests {
+    use super::*;
+    use crate::core::{ConcreteStreamData, VarName};
+    use futures::stream;
+    use std::collections::BTreeMap;
+    use std::iter::FromIterator;
+    use std::ops::{Deref, DerefMut};
+    use std::sync::Mutex;
+
+    pub struct VarMap(BTreeMap<VarName, Mutex<Vec<ConcreteStreamData>>>);
+    impl Deref for VarMap {
+        type Target = BTreeMap<VarName, Mutex<Vec<ConcreteStreamData>>>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
     }
+
+    impl DerefMut for VarMap {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    #[allow(dead_code)] // Only used in test code
+    struct MockContext {
+        xs: VarMap,
+    }
+
+    impl FromIterator<(VarName, Vec<ConcreteStreamData>)> for VarMap {
+        fn from_iter<I: IntoIterator<Item=(VarName, Vec<ConcreteStreamData>)>>(iter: I) -> Self {
+            let mut map = VarMap(BTreeMap::new());
+            for (key, vec) in iter {
+                map.insert(key, Mutex::new(vec));
+            }
+            map
+        }
+    }
+
     impl StreamContext<ConcreteStreamData> for MockContext {
         fn var(&self, x: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
-            let tmp = self.xs.get(x)?;
-            Some(Box::pin(stream::iter(tmp.clone())))
+            let mutex = self.xs.get(x)?;
+            if let Ok(vec) = mutex.lock() {
+                Some(Box::pin(stream::iter(vec.clone())))
+            } else {
+                std::panic!("Mutex was poisoned");
+            }
         }
         fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<ConcreteStreamData>> {
-            Box::new(self.clone())
+            // Create new xs with only the `history_length` latest values for the Vec
+            let new_xs = self.xs.iter()
+                .map(|(key, mutex)| {
+                    if let Ok(vec) = mutex.lock() {
+                        let start = if vec.len() > history_length { vec.len() - history_length } else { 0 };
+                        let latest_elements = vec[start..].to_vec();
+                        (key.clone(), latest_elements)
+                    } else {
+                        std::panic!("Mutex was poisoned");
+                    }
+                }).collect();
+            Box::new(MockContext { xs: new_xs })
         }
         fn advance(&self) {
-            /* Meant to: Generate more of the output stream for runtime that have a push-model instead of a pull-model*/
+            // Remove the first element from each Vec (the oldest value)
+            for (_, vec_mutex) in self.xs.iter() {
+                if let Ok(mut vec) = vec_mutex.lock() {
+                    if !vec.is_empty() {
+                        let _ = vec.remove(0);
+                    }
+                } else {
+                    std::panic!("Mutex was poisoned");
+                }
+            }
             return;
         }
     }
@@ -363,10 +447,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_eval() {
-        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 1".into()])) as OutputStream<ConcreteStreamData>;
-        let map = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()].into_iter().collect::<BTreeMap<_, _>>();
+        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()])) as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()].into_iter().collect();
         let ctx = MockContext { xs: map };
-        let res = eval::<UntimedLolaSemantics>(&ctx, e).collect::<Vec<ConcreteStreamData>>().await;
+        let res = eval(&ctx, e, 10).collect::<Vec<ConcreteStreamData>>().await;
+        let exp =
+            vec![ConcreteStreamData::Int(2), 4.into()];
+        assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
+    async fn test_defer() {
+        // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
+        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()])) as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()].into_iter().collect();
+        let ctx = MockContext { xs: map };
+        let res = defer(&ctx, e, 2).collect::<Vec<ConcreteStreamData>>().await;
         let exp =
             vec![ConcreteStreamData::Int(2), 3.into()];
         assert_eq!(res, exp)
