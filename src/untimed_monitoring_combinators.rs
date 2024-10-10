@@ -458,6 +458,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_eval_x_squared() {
+        // This test is interesting since we use x twice in the eval strings
+        let e = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()])) as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()].into_iter().collect();
+        let ctx = MockContext { xs: map };
+        let res = eval(&ctx, e, 10).collect::<Vec<ConcreteStreamData>>().await;
+        let exp =
+            vec![ConcreteStreamData::Int(4), 9.into()];
+        assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
     async fn test_defer() {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
         let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]))
@@ -468,6 +480,17 @@ mod tests {
         let ctx = MockContext { xs: map };
         let res = defer(&ctx, e, 2).collect::<Vec<ConcreteStreamData>>().await;
         let exp = vec![ConcreteStreamData::Int(2), 3.into()];
+        assert_eq!(res, exp)
+    }
+    #[tokio::test]
+    async fn test_defer_x_squared() {
+        // This test is interesting since we use x twice in the eval strings
+        let e = Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()])) as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()].into_iter().collect();
+        let ctx = MockContext { xs: map };
+        let res = defer(&ctx, e, 10).collect::<Vec<ConcreteStreamData>>().await;
+        let exp =
+            vec![ConcreteStreamData::Int(4), 9.into()];
         assert_eq!(res, exp)
     }
 }
