@@ -1,17 +1,56 @@
-use futures::stream::BoxStream;
+use futures::future::TryFlattenStream;
+use futures::Stream;
+use futures::{stream::BoxStream, StreamExt};
 
+use crate::{OutputStream, StreamExpr};
 use crate::{
     ast::{BExpr, SBinOp, SExpr, StreamType},
-    core::{SemanticError, TypeCheckable, TypeCheckableHelper, TypeSystem, Value},
+    core::{
+        SemanticError, StreamTransformationFn, TypeCheckable, TypeCheckableHelper, TypeSystem,
+        Value,
+    },
     ConcreteStreamData, VarName,
 };
+use std::fmt::{Debug, Display};
+use std::ops::DerefMut;
+use std::pin::Pin;
 use std::{collections::BTreeMap, ops::Deref};
-use std::fmt::Debug;
 
 pub struct LOLATypeSystem;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LOLATypedValue {
+    Int(i64),
+    Str(String),
+    Bool(bool),
+    Unit,
+}
+
+impl Display for LOLATypedValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LOLATypedValue::Int(i) => write!(f, "{}", i),
+            LOLATypedValue::Str(s) => write!(f, "{}", s),
+            LOLATypedValue::Bool(b) => write!(f, "{}", b),
+            LOLATypedValue::Unit => write!(f, "()"),
+        }
+    }
+}
+
+impl StreamExpr<StreamType> for SExprTE<VarName> {
+    fn var(typ: StreamType, var: &VarName) -> Self {
+        match typ {
+            StreamType::Int => SExprTE::Int(SExprT::Var(var.clone())),
+            StreamType::Str => SExprTE::Str(SExprT::Var(var.clone())),
+            StreamType::Bool => SExprTE::Bool(SExprT::Var(var.clone())),
+            StreamType::Unit => SExprTE::Unit(SExprT::Var(var.clone())),
+        }
+    }
+}
+
 impl TypeSystem for LOLATypeSystem {
     type Type = StreamType;
+    type TypedValue = LOLATypedValue;
     type TypedExpr = SExprTE<VarName>;
     type TypedStream = LOLAStream;
 
@@ -32,6 +71,63 @@ impl TypeSystem for LOLATypeSystem {
             LOLAStream::Unit(_) => StreamType::Unit,
         }
     }
+
+    fn transform_stream(
+        transformation: impl StreamTransformationFn,
+        stream: <Self as TypeSystem>::TypedStream,
+    ) -> <Self as TypeSystem>::TypedStream {
+        match stream {
+            LOLAStream::Int(pin) => {
+                let new_stream = transformation.transform(pin);
+                LOLAStream::Int(new_stream)
+            }
+            LOLAStream::Str(pin) => {
+                let new_stream = transformation.transform(pin);
+                LOLAStream::Str(new_stream)
+            }
+            LOLAStream::Bool(pin) => {
+                let new_stream = transformation.transform(pin);
+                LOLAStream::Bool(new_stream)
+            }
+            LOLAStream::Unit(pin) => {
+                let new_stream = transformation.transform(pin);
+                LOLAStream::Unit(new_stream)
+            }
+        }
+    }
+
+    fn type_of_value(value: &Self::TypedValue) -> Self::Type {
+        match value {
+            LOLATypedValue::Int(_) => StreamType::Int,
+            LOLATypedValue::Str(_) => StreamType::Str,
+            LOLATypedValue::Bool(_) => StreamType::Bool,
+            LOLATypedValue::Unit => StreamType::Unit,
+        }
+    }
+
+    fn to_typed_stream(
+        typ: Self::Type,
+        stream: OutputStream<Self::TypedValue>,
+    ) -> Self::TypedStream {
+        match typ {
+            StreamType::Int => LOLAStream::Int(Box::pin(stream.map(|v| match v {
+                LOLATypedValue::Int(i) => i,
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+            StreamType::Str => LOLAStream::Str(Box::pin(stream.map(|v| match v {
+                LOLATypedValue::Str(s) => s,
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+            StreamType::Bool => LOLAStream::Bool(Box::pin(stream.map(|v| match v {
+                LOLATypedValue::Bool(b) => b,
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+            StreamType::Unit => LOLAStream::Unit(Box::pin(stream.map(|v| match v {
+                LOLATypedValue::Unit => (),
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+        }
+    }
 }
 
 pub enum LOLAStream {
@@ -41,25 +137,90 @@ pub enum LOLAStream {
     Unit(BoxStream<'static, ()>),
 }
 
+impl Stream for LOLAStream {
+    type Item = LOLATypedValue;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        match self.get_mut() {
+            LOLAStream::Int(pin) => pin
+                .poll_next_unpin(cx)
+                .map(|opt| opt.map(|v| LOLATypedValue::Int(v))),
+            LOLAStream::Str(pin) => pin
+                .poll_next_unpin(cx)
+                .map(|opt| opt.map(|v| LOLATypedValue::Str(v))),
+            LOLAStream::Bool(pin) => pin
+                .poll_next_unpin(cx)
+                .map(|opt| opt.map(|v| LOLATypedValue::Bool(v))),
+            LOLAStream::Unit(pin) => pin
+                .poll_next_unpin(cx)
+                .map(|opt| opt.map(|_| LOLATypedValue::Unit)),
+        }
+    }
+}
+
+impl From<(StreamType, OutputStream<LOLATypedValue>)> for LOLAStream {
+    fn from((typ, x): (StreamType, OutputStream<LOLATypedValue>)) -> Self {
+        match typ {
+            StreamType::Int => LOLAStream::Int(Box::pin(x.map(|v| match v {
+                LOLATypedValue::Int(i) => i,
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+            StreamType::Str => LOLAStream::Str(Box::pin(x.map(|v| match v {
+                LOLATypedValue::Str(s) => s,
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+            StreamType::Bool => LOLAStream::Bool(Box::pin(x.map(|v| match v {
+                LOLATypedValue::Bool(b) => b,
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+            StreamType::Unit => LOLAStream::Unit(Box::pin(x.map(|v| match v {
+                LOLATypedValue::Unit => (),
+                _ => panic!("Invalid stream type specialization in runtime"),
+            }))),
+        }
+    }
+}
+
+impl LOLATypeSystem {}
+
 // Trait defining the allowed types for expression values
 impl Value<LOLATypeSystem> for i64 {
     fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
         StreamType::Int
+    }
+
+    fn to_typed_value(&self) -> <LOLATypeSystem as TypeSystem>::TypedValue {
+        LOLATypedValue::Int(*self)
     }
 }
 impl Value<LOLATypeSystem> for String {
     fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
         StreamType::Str
     }
+
+    fn to_typed_value(&self) -> <LOLATypeSystem as TypeSystem>::TypedValue {
+        LOLATypedValue::Str(self.clone())
+    }
 }
 impl Value<LOLATypeSystem> for bool {
     fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
         StreamType::Bool
     }
+
+    fn to_typed_value(&self) -> <LOLATypeSystem as TypeSystem>::TypedValue {
+        LOLATypedValue::Bool(*self)
+    }
 }
 impl Value<LOLATypeSystem> for () {
     fn type_of(&self) -> <LOLATypeSystem as TypeSystem>::Type {
         StreamType::Int
+    }
+
+    fn to_typed_value(&self) -> <LOLATypeSystem as TypeSystem>::TypedValue {
+        LOLATypedValue::Unit
     }
 }
 
@@ -100,14 +261,13 @@ pub enum SExprTE<VarT: Debug> {
 
 impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
     fn type_check_raw(
-            &self,
-            _: &mut crate::core::TypeContext<LOLATypeSystem>,
-            errs: &mut crate::core::SemanticErrors,
-        ) -> Result<SExprTE<VarName>, ()> {
+        &self,
+        _: &mut crate::core::TypeContext<LOLATypeSystem>,
+        errs: &mut crate::core::SemanticErrors,
+    ) -> Result<SExprTE<VarName>, ()> {
         match self {
             ConcreteStreamData::Int(v) => Ok(SExprTE::Int(SExprT::Val(*v))),
-            ConcreteStreamData::Str(v) => Ok(
-                SExprTE::Str(SExprT::Val(v.clone()))),
+            ConcreteStreamData::Str(v) => Ok(SExprTE::Str(SExprT::Val(v.clone()))),
             ConcreteStreamData::Bool(v) => Ok(SExprTE::Bool(SExprT::Val(*v))),
             ConcreteStreamData::Unit => Ok(SExprTE::Unit(SExprT::Val(()))),
             ConcreteStreamData::Unknown => {
@@ -127,10 +287,10 @@ impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
 // Type check a binary operation
 impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, SExpr<VarName>, SExpr<VarName>) {
     fn type_check_raw(
-            &self,
-            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-            errs: &mut crate::core::SemanticErrors,
-        ) -> Result<SExprTE<VarName>, ()> {
+        &self,
+        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+        errs: &mut crate::core::SemanticErrors,
+    ) -> Result<SExprTE<VarName>, ()> {
         let (op, se1, se2) = self;
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
@@ -168,10 +328,10 @@ impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, SExpr<VarName>, SExpr<VarN
 // Type check an if expression
 impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<VarName>) {
     fn type_check_raw(
-            &self,
-            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-            errs: &mut crate::core::SemanticErrors,
-        ) -> Result<SExprTE<VarName>, ()> {
+        &self,
+        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+        errs: &mut crate::core::SemanticErrors,
+    ) -> Result<SExprTE<VarName>, ()> {
         let (b, se1, se2) = self;
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
@@ -221,48 +381,38 @@ impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, 
 // Type check an index expression
 impl TypeCheckableHelper<LOLATypeSystem> for (&SExpr<VarName>, isize, ConcreteStreamData) {
     fn type_check_raw(
-            &self,
-            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-            errs: &mut crate::core::SemanticErrors,
-        ) -> Result<SExprTE<VarName>, ()> {
+        &self,
+        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+        errs: &mut crate::core::SemanticErrors,
+    ) -> Result<SExprTE<VarName>, ()> {
         let (inner, idx, default) = self;
         let inner_check = inner.type_check_raw(ctx, errs);
 
         match inner_check {
-            Ok(ste) => {
-                match (ste, default) {
-                    (SExprTE::Int(se), ConcreteStreamData::Int(def)) => Ok(SExprTE::Int(SExprT::Index(
-                        Box::new(se.clone()),
-                        *idx,
-                        *def,
-                    ))),
-                    (SExprTE::Str(se), ConcreteStreamData::Str(def)) => Ok(SExprTE::Str(SExprT::Index(
-                        Box::new(se.clone()),
-                        *idx,
-                        def.clone(),
-                    ))),
-                    (SExprTE::Bool(se), ConcreteStreamData::Bool(def)) => Ok(SExprTE::Bool(SExprT::Index(
-                        Box::new(se.clone()),
-                        *idx,
-                        *def,
-                    ))),
-                    (SExprTE::Unit(se), ConcreteStreamData::Unit) => Ok(SExprTE::Unit(SExprT::Index(
-                        Box::new(se.clone()),
-                        *idx,
-                        (),
-                    ))),
-                    (se, def) => {
-                        errs.push(SemanticError::TypeError(
+            Ok(ste) => match (ste, default) {
+                (SExprTE::Int(se), ConcreteStreamData::Int(def)) => Ok(SExprTE::Int(
+                    SExprT::Index(Box::new(se.clone()), *idx, *def),
+                )),
+                (SExprTE::Str(se), ConcreteStreamData::Str(def)) => Ok(SExprTE::Str(
+                    SExprT::Index(Box::new(se.clone()), *idx, def.clone()),
+                )),
+                (SExprTE::Bool(se), ConcreteStreamData::Bool(def)) => Ok(SExprTE::Bool(
+                    SExprT::Index(Box::new(se.clone()), *idx, *def),
+                )),
+                (SExprTE::Unit(se), ConcreteStreamData::Unit) => {
+                    Ok(SExprTE::Unit(SExprT::Index(Box::new(se.clone()), *idx, ())))
+                }
+                (se, def) => {
+                    errs.push(SemanticError::TypeError(
                             format!(
                                 "Mismatched type in Index expression, expression and default does not match: {:?}",
                                 (se, def)
                             )
                             .into(),
                         ));
-                        Err(())
-                    }
+                    Err(())
                 }
-            }
+            },
             // If there's already an error just propagate it
             Err(_) => Err(()),
         }
@@ -272,21 +422,18 @@ impl TypeCheckableHelper<LOLATypeSystem> for (&SExpr<VarName>, isize, ConcreteSt
 // Type check a variable
 impl TypeCheckableHelper<LOLATypeSystem> for VarName {
     fn type_check_raw(
-            &self,
-            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-            errs: &mut crate::core::SemanticErrors,
-        ) -> Result<SExprTE<VarName>, ()> {
+        &self,
+        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+        errs: &mut crate::core::SemanticErrors,
+    ) -> Result<SExprTE<VarName>, ()> {
         let type_opt = ctx.get(self);
         match type_opt {
-            Some(t) => {
-                match t {
-                    StreamType::Int => Ok(SExprTE::Int(SExprT::Var(self.clone()))),
-                    StreamType::Str => Ok(SExprTE::Str(SExprT::Var(self.clone()))),
-                    StreamType::Bool => Ok(SExprTE::Bool(SExprT::Var(self.clone()))),
-                    StreamType::Unit => Ok(SExprTE::Unit(SExprT::Var(self.clone())),
-                    ),
-                }
-            }
+            Some(t) => match t {
+                StreamType::Int => Ok(SExprTE::Int(SExprT::Var(self.clone()))),
+                StreamType::Str => Ok(SExprTE::Str(SExprT::Var(self.clone()))),
+                StreamType::Bool => Ok(SExprTE::Bool(SExprT::Var(self.clone()))),
+                StreamType::Unit => Ok(SExprTE::Unit(SExprT::Var(self.clone()))),
+            },
             None => {
                 errs.push(SemanticError::UndeclaredVariable(
                     format!("Usage of undeclared variable: {:?}", self).into(),
@@ -300,15 +447,21 @@ impl TypeCheckableHelper<LOLATypeSystem> for VarName {
 // Type check an expression
 impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
     fn type_check_raw(
-            &self,
-            ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-            errs: &mut crate::core::SemanticErrors,
-        ) -> Result<SExprTE<VarName>, ()> {
+        &self,
+        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
+        errs: &mut crate::core::SemanticErrors,
+    ) -> Result<SExprTE<VarName>, ()> {
         match self {
             SExpr::Val(sdata) => sdata.type_check_raw(ctx, errs),
-            SExpr::BinOp(se1, se2, op) => (op.clone(), *se1.clone(), *se2.clone()).type_check_raw(ctx, errs),
-            SExpr::If(b, se1, se2) => (b.deref(), se1.deref(), se2.deref()).type_check_raw(ctx, errs),
-            SExpr::Index(inner, idx, default) => (inner.deref(), *idx, default.clone()).type_check_raw(ctx, errs),
+            SExpr::BinOp(se1, se2, op) => {
+                (op.clone(), *se1.clone(), *se2.clone()).type_check_raw(ctx, errs)
+            }
+            SExpr::If(b, se1, se2) => {
+                (b.deref(), se1.deref(), se2.deref()).type_check_raw(ctx, errs)
+            }
+            SExpr::Index(inner, idx, default) => {
+                (inner.deref(), *idx, default.clone()).type_check_raw(ctx, errs)
+            }
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
             SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
         }
@@ -462,7 +615,9 @@ mod tests {
             SExprStr::Val(ConcreteStreamData::Bool(true)),
             SExprStr::Val(ConcreteStreamData::Unit),
         ];
-        let results = vals.iter().map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
+        let results = vals
+            .iter()
+            .map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprT::Val(1))),
             Ok(SExprTE::Str(SExprT::Val("".into()))),
@@ -497,7 +652,10 @@ mod tests {
                 SBinOp::Plus,
             ),
         ];
-        let results = vals.iter().map(TypeCheckable::type_check_with_default).collect();
+        let results = vals
+            .iter()
+            .map(TypeCheckable::type_check_with_default)
+            .collect();
         let expected: Vec<SemantResultStr> = vec![
             Err(vec![SemanticError::TypeError("".into())]),
             Err(vec![SemanticError::TypeError("".into())]),
@@ -598,8 +756,11 @@ mod tests {
         // Checks that if we BinOp two Ints together it results in typed AST after semantic analysis
         let int_val = vec![SExprStr::Val(ConcreteStreamData::Int(0))];
         let sbinops = all_sbinop_variants();
-        let vals: Vec<SExpr<VarName>> = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
-        let results = vals.iter().map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
+        let vals: Vec<SExpr<VarName>> =
+            generate_binop_combinations(&int_val, &int_val, sbinops.clone());
+        let results = vals
+            .iter()
+            .map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
 
         let int_t_val = vec![SExprTStr::<i64>::Val(0)];
 
@@ -615,7 +776,8 @@ mod tests {
         // Checks that if we add two Strings together it results in typed AST after semantic analysis
         let str_val = vec![SExprStr::Val(ConcreteStreamData::Str("".into()))];
         let sbinops = vec![SBinOp::Plus];
-        let vals: Vec<SExpr<VarName>> = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
+        let vals: Vec<SExpr<VarName>> =
+            generate_binop_combinations(&str_val, &str_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
         let str_t_val = vec![SExprTStr::<String>::Val("".into())];

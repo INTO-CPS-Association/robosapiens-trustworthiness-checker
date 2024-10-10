@@ -22,27 +22,34 @@ use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::Specification;
-use crate::core::StreamData;
 use crate::core::StreamExpr;
+use crate::core::TypeAnnotated;
+use crate::core::TypeSystem;
 use crate::core::{OutputStream, StreamContext, VarName};
 
-struct AsyncVarExchange<T: StreamData> {
-    senders: BTreeMap<VarName, Arc<Mutex<broadcast::Sender<Option<T>>>>>,
+struct AsyncVarExchange<TS: TypeSystem> {
+    senders: BTreeMap<
+        VarName,
+        (
+            TS::Type,
+            Arc<Mutex<broadcast::Sender<Option<TS::TypedValue>>>>,
+        ),
+    >,
     cancellation_token: CancellationToken,
     drop_guard: Arc<DropGuard>,
 }
 
-impl<T: StreamData> AsyncVarExchange<T> {
+impl<TS: TypeSystem> AsyncVarExchange<TS> {
     fn new(
-        vars: Vec<VarName>,
+        vars: Vec<(VarName, TS::Type)>,
         cancellation_token: CancellationToken,
         drop_guard: Arc<DropGuard>,
     ) -> Self {
         let mut senders = BTreeMap::new();
 
-        for var in vars {
-            let (sender, _) = channel::<Option<T>>(100);
-            senders.insert(var, Arc::new(Mutex::new(sender)));
+        for (var, typ) in vars {
+            let (sender, _) = channel::<Option<TS::TypedValue>>(100);
+            senders.insert(var, (typ, Arc::new(Mutex::new(sender))));
         }
 
         AsyncVarExchange {
@@ -55,16 +62,20 @@ impl<T: StreamData> AsyncVarExchange<T> {
     fn publish(
         &self,
         var: &VarName,
-        data: Option<T>,
+        data: Option<TS::TypedValue>,
         max_queued: Option<usize>,
-    ) -> Option<Option<T>> {
+    ) -> Option<Option<TS::TypedValue>> {
         // Don't send if maxed_queued limit is set and reached
         // This check is integrated into publish so that len can
         // be checked within the same lock acquisition as sending the data
         // Return None if the data was not sent
 
-        let sender = self.senders.get(&var).unwrap();
+        let (typ, sender) = self.senders.get(&var).unwrap();
         {
+            if let Some(data) = &data {
+                assert_eq!(TS::type_of_value(data), typ.clone())
+            }
+
             let sender = sender.lock().unwrap();
 
             if let Some(max_queued) = max_queued {
@@ -82,56 +93,59 @@ impl<T: StreamData> AsyncVarExchange<T> {
     }
 }
 
-fn receiver_to_stream<T: StreamData>(
-    recv: broadcast::Receiver<Option<T>>,
-) -> BoxStream<'static, T> {
-    Box::pin(stream::unfold(recv, |mut recv| async move {
-        if let Ok(res) = recv.recv().await {
-            Some((res?, recv))
-        } else {
-            None
-        }
-    }).fuse())
+fn receiver_to_stream<TS: TypeSystem>(
+    typ: TS::Type,
+    recv: broadcast::Receiver<Option<TS::TypedValue>>,
+) -> TS::TypedStream {
+    TS::to_typed_stream(
+        typ,
+        Box::pin(
+            stream::unfold(recv, |mut recv| async move {
+                if let Ok(res) = recv.recv().await {
+                    Some((res?, recv))
+                } else {
+                    None
+                }
+            })
+            .fuse(),
+        ) as OutputStream<TS::TypedValue>,
+    )
 }
 
-impl<T: StreamData> StreamContext<T> for Arc<AsyncVarExchange<T>> {
-    fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
-        match self.senders.get(&var) {
-            Some(sender) => {
-                let receiver = sender.lock().unwrap().subscribe();
-                println!("Subscribed to {}", var);
-                Some(receiver_to_stream(receiver))
-            }
-            None => None,
-        }
+impl<TS: TypeSystem> StreamContext<TS> for Arc<AsyncVarExchange<TS>> {
+    fn var(&self, var: &VarName) -> Option<TS::TypedStream> {
+        let (typ, sender) = self.senders.get(var)?;
+        let receiver = sender.lock().unwrap().subscribe();
+        println!("Subscribed to {}", var);
+        Some(receiver_to_stream::<TS>(typ.clone(), receiver))
     }
 
     fn advance(&self) {
         // Do nothing
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<T>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<TS>> {
         Box::new(SubMonitor::new(self.clone(), history_length))
     }
 }
 
-struct SubMonitor<T: StreamData> {
-    parent: Arc<AsyncVarExchange<T>>,
-    senders: BTreeMap<VarName, broadcast::Sender<Option<T>>>,
+struct SubMonitor<TS: TypeSystem> {
+    parent: Arc<AsyncVarExchange<TS>>,
+    senders: BTreeMap<VarName, (TS::Type, broadcast::Sender<Option<TS::TypedValue>>)>,
     buffer_size: usize,
     progress_sender: watch::Sender<usize>,
 }
 
-impl<T: StreamData> SubMonitor<T> {
-    fn new(parent: Arc<AsyncVarExchange<T>>, buffer_size: usize) -> Self {
+impl<TS: TypeSystem> SubMonitor<TS> {
+    fn new(parent: Arc<AsyncVarExchange<TS>>, buffer_size: usize) -> Self {
         let mut senders = BTreeMap::new();
 
-        for (var, _) in parent.senders.iter() {
+        for (var, (typ, _)) in parent.senders.iter() {
             // buffers.insert(
             //     var.clone(),
             //     Arc::new(Mutex::new(RingBuffer::new(buffer_size))),
             // );
-            senders.insert(var.clone(), broadcast::Sender::new(100));
+            senders.insert(var.clone(), (typ.clone(), broadcast::Sender::new(100)));
         }
 
         let progress_sender = watch::channel(0).0;
@@ -153,10 +167,11 @@ impl<T: StreamData> SubMonitor<T> {
                 .senders
                 .get(var)
                 .unwrap()
+                .1
                 .lock()
                 .unwrap()
                 .subscribe();
-            let child_sender = self.senders.get(var).unwrap().clone();
+            let (_, child_sender) = self.senders.get(var).unwrap().clone();
             let clock = self.progress_sender.subscribe();
             tokio::spawn(Self::distribute(
                 recv,
@@ -175,8 +190,8 @@ impl<T: StreamData> SubMonitor<T> {
     }
 
     async fn distribute(
-        mut recv: mpsc::Receiver<Option<T>>,
-        send: broadcast::Sender<Option<T>>,
+        mut recv: mpsc::Receiver<Option<TS::TypedValue>>,
+        send: broadcast::Sender<Option<TS::TypedValue>>,
         mut clock: watch::Receiver<usize>,
         cancellation_token: CancellationToken,
     ) {
@@ -215,8 +230,8 @@ impl<T: StreamData> SubMonitor<T> {
     }
 
     async fn monitor(
-        mut recv: broadcast::Receiver<Option<T>>,
-        send: mpsc::Sender<Option<T>>,
+        mut recv: broadcast::Receiver<Option<TS::TypedValue>>,
+        send: mpsc::Sender<Option<TS::TypedValue>>,
         cancellation_token: CancellationToken,
     ) {
         loop {
@@ -237,8 +252,8 @@ impl<T: StreamData> SubMonitor<T> {
     }
 }
 
-impl<T: StreamData> StreamContext<T> for SubMonitor<T> {
-    fn var(&self, var: &VarName) -> Option<OutputStream<T>> {
+impl<TS: TypeSystem> StreamContext<TS> for SubMonitor<TS> {
+    fn var(&self, var: &VarName) -> Option<TS::TypedStream> {
         // let buffer = mem::replace(
         // self.buffers.get(var)?.lock().unwrap().deref_mut(),
         // RingBuffer::new(self.buffer_size),
@@ -247,12 +262,14 @@ impl<T: StreamData> StreamContext<T> for SubMonitor<T> {
         // in < history_length time steps, meaning that we need some of the
         // buffered data to evaluate the new statement
 
-        let recv = self.senders.get(var).unwrap().subscribe();
+        let (typ, sender) = self.senders.get(var).unwrap();
 
-        Some(receiver_to_stream(recv))
+        let recv = sender.subscribe();
+
+        Some(receiver_to_stream::<TS>(typ.clone(), recv))
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<T>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<TS>> {
         // TODO: consider if this is the right approach; creating a subcontext
         // is only used if eval is called within an eval, and it will require
         // careful thought to decide how much history should be passed down
@@ -265,32 +282,34 @@ impl<T: StreamData> StreamContext<T> for SubMonitor<T> {
     }
 }
 
-pub struct AsyncMonitorRunner<T, S, M, R>
+pub struct AsyncMonitorRunner<TS, S, M>
 where
-    T: StreamExpr,
-    S: MonitoringSemantics<T, R>,
-    M: Specification<T>,
-    R: StreamData,
+    TS: TypeSystem,
+    S: MonitoringSemantics<TS::TypedExpr, TS>,
+    M: Specification<TS> + TypeAnnotated<TS>,
 {
-    input_streams: Arc<Mutex<BTreeMap<VarName, BoxStream<'static, R>>>>,
+    input_streams: Arc<Mutex<BTreeMap<VarName, TS::TypedStream>>>,
     model: M,
-    var_exchange: Arc<AsyncVarExchange<R>>,
+    var_exchange: Arc<AsyncVarExchange<TS>>,
     // tasks: Option<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>,
-    output_streams: BTreeMap<VarName, OutputStream<R>>,
+    output_streams: BTreeMap<VarName, TS::TypedStream>,
     cancellation_token: CancellationToken,
     cancellation_guard: Arc<DropGuard>,
-    phantom_t: PhantomData<T>,
     semantics_t: PhantomData<S>,
 }
 
-impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData>
-    Monitor<T, S, M, R> for AsyncMonitorRunner<T, S, M, R>
+impl<
+        TS: TypeSystem,
+        S: MonitoringSemantics<TS::TypedExpr, TS>,
+        M: Specification<TS> + TypeAnnotated<TS>,
+    > Monitor<TS, S, M> for AsyncMonitorRunner<TS, S, M>
 {
-    fn new(model: M, mut input_streams: impl InputProvider<R>) -> Self {
+    fn new(model: M, mut input_streams: impl InputProvider<TS::TypedStream>) -> Self {
         let var_names = model
             .input_vars()
             .into_iter()
             .chain(model.output_vars().into_iter())
+            .map(|var| (var.clone(), model.type_of_var(&var)))
             .collect();
 
         let input_streams = model
@@ -320,7 +339,6 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
             var_exchange,
             output_streams,
             semantics_t: PhantomData,
-            phantom_t: PhantomData,
             cancellation_token,
             cancellation_guard,
         }
@@ -331,7 +349,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
         &self.model
     }
 
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, R>> {
+    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, TS::TypedValue>> {
         let output_streams = mem::take(&mut self.output_streams);
         let mut outputs = self.model.output_vars();
         outputs.sort();
@@ -345,7 +363,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
                 }
 
                 let next_vals = join_all(futures).await;
-                let mut res: BTreeMap<VarName, R> = BTreeMap::new();
+                let mut res: BTreeMap<VarName, TS::TypedValue> = BTreeMap::new();
                 for (var, val) in outputs.clone().iter().zip(next_vals) {
                     res.insert(
                         var.clone(),
@@ -357,12 +375,15 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
                 }
                 return Some((res, (output_streams, outputs)));
             },
-        )) as BoxStream<'static, BTreeMap<VarName, R>>
+        )) as BoxStream<'static, BTreeMap<VarName, TS::TypedValue>>
     }
 }
 
-impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: StreamData>
-    AsyncMonitorRunner<T, S, M, R>
+impl<
+        TS: TypeSystem,
+        S: MonitoringSemantics<TS::TypedExpr, TS>,
+        M: Specification<TS> + TypeAnnotated<TS>,
+    > AsyncMonitorRunner<TS, S, M>
 {
     fn spawn_tasks(mut self) -> Self {
         let tasks = self.monitoring_tasks();
@@ -454,7 +475,7 @@ impl<T: StreamExpr, S: MonitoringSemantics<T, R>, M: Specification<T>, R: Stream
             tasks.push(Box::pin(self.monitor_output(var.clone())));
 
             // Add output steams that subscribe to the inputs
-            let var_expr = T::var(var);
+            let var_expr = TS::TypedExpr::var(self.spec().type_of_var(var), var);
             let var_output_stream = S::to_async_stream(var_expr, &self.var_exchange);
             self.output_streams.insert(var.clone(), var_output_stream);
         }

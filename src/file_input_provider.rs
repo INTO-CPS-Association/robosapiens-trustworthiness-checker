@@ -19,7 +19,7 @@ fn input_file_data_iter(
     })
 }
 
-impl InputProvider<ConcreteStreamData> for InputFileData {
+impl InputProvider<OutputStream<ConcreteStreamData>> for InputFileData {
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
         Some(Box::pin(stream::iter(input_file_data_iter(
             self.clone(),

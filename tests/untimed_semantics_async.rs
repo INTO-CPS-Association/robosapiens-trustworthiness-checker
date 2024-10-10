@@ -14,12 +14,9 @@ async fn test_simple_add_monitor() {
     let input_streams = input_streams1();
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut async_monitor =
-        AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
-        .monitor_outputs()
-        .enumerate()
-        .collect()
-        .await;
+        AsyncMonitorRunner::<_, UntimedLolaSemantics, _>::new(spec, input_streams);
+    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
+        async_monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
@@ -45,7 +42,7 @@ async fn test_simple_add_monitor_does_not_go_away() {
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let outputs = {
         let mut async_monitor =
-            AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
+            AsyncMonitorRunner::<_, UntimedLolaSemantics, _>::new(spec, input_streams);
         async_monitor.monitor_outputs()
     };
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
@@ -74,7 +71,7 @@ async fn test_count_monitor() {
     let input_streams: BTreeMap<VarName, BoxStream<'static, ConcreteStreamData>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();
     let mut async_monitor =
-        AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
+        AsyncMonitorRunner::<_, UntimedLolaSemantics, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
         .monitor_outputs()
         .take(4)
@@ -117,12 +114,9 @@ async fn test_eval_monitor() {
     let input_streams = input_streams2();
     let spec = lola_specification(&mut spec_eval_monitor()).unwrap();
     let mut async_monitor =
-        AsyncMonitorRunner::<_, UntimedLolaSemantics, _, _>::new(spec, input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
-        .monitor_outputs()
-        .enumerate()
-        .collect()
-        .await;
+        AsyncMonitorRunner::<_, UntimedLolaSemantics, _>::new(spec, input_streams);
+    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
+        async_monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![

@@ -8,14 +8,16 @@ use std::mem;
 
 use crate::ast::LOLASpecification;
 use crate::ast::SExpr;
+use crate::ast::UntypedLOLA;
 use crate::constraint_solver::*;
+use crate::core::ConcreteStreamData;
 use crate::core::FixedSemantics;
 use crate::core::IndexedVarName;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::Specification;
-use crate::core::ConcreteStreamData;
 use crate::core::VarName;
+use crate::OutputStream;
 
 #[derive(Default)]
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, ConcreteStreamData>>);
@@ -78,8 +80,11 @@ pub struct ConstraintBasedMonitor {
     input_index: usize,
 }
 
-impl Monitor<SExpr<VarName>, FixedSemantics, LOLASpecification, ConcreteStreamData> for ConstraintBasedMonitor {
-    fn new(model: LOLASpecification, mut input: impl InputProvider<ConcreteStreamData>) -> Self {
+impl Monitor<UntypedLOLA, FixedSemantics, LOLASpecification> for ConstraintBasedMonitor {
+    fn new(
+        model: LOLASpecification,
+        mut input: impl InputProvider<OutputStream<ConcreteStreamData>>,
+    ) -> Self {
         let input_streams = model
             .input_vars()
             .iter()
@@ -101,7 +106,7 @@ impl Monitor<SExpr<VarName>, FixedSemantics, LOLASpecification, ConcreteStreamDa
         &self.model
     }
 
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, ConcreteStreamData>> {
+    fn monitor_outputs(&mut self) -> OutputStream<BTreeMap<VarName, ConcreteStreamData>> {
         constraints_to_outputs(
             self.stream_output_constraints(),
             self.model.output_vars.clone(),

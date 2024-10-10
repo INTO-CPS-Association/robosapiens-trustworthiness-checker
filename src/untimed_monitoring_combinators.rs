@@ -1,6 +1,9 @@
 use crate::core::StreamData;
 use crate::ConcreteStreamData;
-use crate::{lola_expression, MonitoringSemantics, OutputStream, StreamContext, UntimedLolaSemantics, VarName};
+use crate::{
+    lola_expression, MonitoringSemantics, OutputStream, StreamContext, UntimedLolaSemantics,
+    VarName,
+};
 use core::panic;
 use futures::{
     stream::{self, BoxStream},
@@ -9,13 +12,16 @@ use futures::{
 use std::ops::Deref;
 use winnow::Parser;
 
+use crate::ast::{SExpr, UntypedLOLA};
+
 pub trait CloneFn1<T: StreamData, S: StreamData>:
-Fn(T) -> S + Clone + Sync + Send + 'static
-{}
-impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T
-where
-    T: Fn(S) -> R + Sync + Send + Clone + 'static,
-{}
+    Fn(T) -> S + Clone + Sync + Send + 'static
+{
+}
+impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where
+    T: Fn(S) -> R + Sync + Send + Clone + 'static
+{
+}
 
 pub fn lift1<S: StreamData, R: StreamData>(
     f: impl CloneFn1<S, R>,
@@ -27,12 +33,13 @@ pub fn lift1<S: StreamData, R: StreamData>(
 }
 
 pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
-Fn(S, R) -> U + Clone + Sync + Send + 'static
-{}
-impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T
-where
-    T: Fn(S, R) -> U + Clone + Sync + Send + 'static,
-{}
+    Fn(S, R) -> U + Clone + Sync + Send + 'static
+{
+}
+impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T where
+    T: Fn(S, R) -> U + Clone + Sync + Send + 'static
+{
+}
 
 pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
     f: impl CloneFn2<S, R, U>,
@@ -44,12 +51,13 @@ pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
 }
 
 pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
-Fn(S, R, U) -> V + Clone + Sync + Send + 'static
-{}
-impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T
-where
-    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static,
-{}
+    Fn(S, R, U) -> V + Clone + Sync + Send + 'static
+{
+}
+impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T where
+    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static
+{
+}
 
 pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
     f: impl CloneFn3<S, R, V, U>,
@@ -220,9 +228,8 @@ pub fn mult(
     )
 }
 
-// Eval for an UntimedLolaExpression using the lola_expression parser
 pub fn eval(
-    ctx: &dyn StreamContext<ConcreteStreamData>,
+    ctx: &dyn StreamContext<UntypedLOLA>,
     x: OutputStream<ConcreteStreamData>,
     history_length: usize,
 ) -> OutputStream<ConcreteStreamData> {
@@ -278,10 +285,7 @@ pub fn eval(
     )) as OutputStream<ConcreteStreamData>
 }
 
-pub fn var(
-    ctx: &dyn StreamContext<ConcreteStreamData>,
-    x: VarName,
-) -> OutputStream<ConcreteStreamData> {
+pub fn var(ctx: &dyn StreamContext<UntypedLOLA>, x: VarName) -> OutputStream<ConcreteStreamData> {
     match ctx.var(&x) {
         Some(x) => x,
         None => {
@@ -293,7 +297,7 @@ pub fn var(
 
 // Defer for an UntimedLolaExpression using the lola_expression parser
 pub fn defer(
-    ctx: &dyn StreamContext<ConcreteStreamData>,
+    ctx: &dyn StreamContext<UntypedLOLA>,
     prop_stream: OutputStream<ConcreteStreamData>,
     history_length: usize,
 ) -> OutputStream<ConcreteStreamData> {
@@ -301,11 +305,7 @@ pub fn defer(
     let subcontext = ctx.subcontext(history_length);
     /*unfold() creates a Stream from a seed value.*/
     Box::pin(stream::unfold(
-        (
-            subcontext,
-            prop_stream,
-            None::<ConcreteStreamData>,
-        ),
+        (subcontext, prop_stream, None::<ConcreteStreamData>),
         |(subcontext, mut x, saved)| async move {
             /* x.next() returns None if we are done unfolding. Return in that case.*/
             let current = x.next().await?;
@@ -363,7 +363,7 @@ mod tests {
     }
 
     impl FromIterator<(VarName, Vec<ConcreteStreamData>)> for VarMap {
-        fn from_iter<I: IntoIterator<Item=(VarName, Vec<ConcreteStreamData>)>>(iter: I) -> Self {
+        fn from_iter<I: IntoIterator<Item = (VarName, Vec<ConcreteStreamData>)>>(iter: I) -> Self {
             let mut map = VarMap(BTreeMap::new());
             for (key, vec) in iter {
                 map.insert(key, Mutex::new(vec));
@@ -372,7 +372,7 @@ mod tests {
         }
     }
 
-    impl StreamContext<ConcreteStreamData> for MockContext {
+    impl StreamContext<UntypedLOLA> for MockContext {
         fn var(&self, x: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
             let mutex = self.xs.get(x)?;
             if let Ok(vec) = mutex.lock() {
@@ -381,18 +381,25 @@ mod tests {
                 std::panic!("Mutex was poisoned");
             }
         }
-        fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<ConcreteStreamData>> {
+        fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<UntypedLOLA>> {
             // Create new xs with only the `history_length` latest values for the Vec
-            let new_xs = self.xs.iter()
+            let new_xs = self
+                .xs
+                .iter()
                 .map(|(key, mutex)| {
                     if let Ok(vec) = mutex.lock() {
-                        let start = if vec.len() > history_length { vec.len() - history_length } else { 0 };
+                        let start = if vec.len() > history_length {
+                            vec.len() - history_length
+                        } else {
+                            0
+                        };
                         let latest_elements = vec[start..].to_vec();
                         (key.clone(), latest_elements)
                     } else {
                         std::panic!("Mutex was poisoned");
                     }
-                }).collect();
+                })
+                .collect();
             Box::new(MockContext { xs: new_xs })
         }
         fn advance(&self) {
@@ -426,20 +433,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_str_plus() {
-        let x = Box::pin(stream::iter(vec![
-            "hello ".into(),
-            "olleh ".into(),
-        ])) as OutputStream<ConcreteStreamData>;
+        let x = Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]))
+            as OutputStream<ConcreteStreamData>;
 
-        let y = Box::pin(stream::iter(vec![
-            "world".into(),
-            "dlrow".into(),
-        ])) as OutputStream<ConcreteStreamData>;
+        let y = Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]))
+            as OutputStream<ConcreteStreamData>;
 
-        let exp = vec![
-            "hello world".into(),
-            "olleh dlrow".into(),
-        ];
+        let exp = vec!["hello world".into(), "olleh dlrow".into()];
 
         let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
         assert_eq!(res, exp)
@@ -447,24 +447,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_eval() {
-        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()])) as OutputStream<ConcreteStreamData>;
-        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()].into_iter().collect();
+        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]))
+            as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()]
+            .into_iter()
+            .collect();
         let ctx = MockContext { xs: map };
         let res = eval(&ctx, e, 10).collect::<Vec<ConcreteStreamData>>().await;
-        let exp =
-            vec![ConcreteStreamData::Int(2), 4.into()];
+        let exp = vec![ConcreteStreamData::Int(2), 4.into()];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_defer() {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
-        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()])) as OutputStream<ConcreteStreamData>;
-        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()].into_iter().collect();
+        let e = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]))
+            as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()]
+            .into_iter()
+            .collect();
         let ctx = MockContext { xs: map };
         let res = defer(&ctx, e, 2).collect::<Vec<ConcreteStreamData>>().await;
-        let exp =
-            vec![ConcreteStreamData::Int(2), 3.into()];
+        let exp = vec![ConcreteStreamData::Int(2), 3.into()];
         assert_eq!(res, exp)
     }
 }

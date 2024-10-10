@@ -9,9 +9,7 @@ use futures::StreamExt;
 // mod parser;
 // mod ring_buffer;
 // mod untimed_monitoring_combinators;
-use trustworthiness_checker::{
-    self as tc, parse_file, Monitor,
-};
+use trustworthiness_checker::{self as tc, parse_file, Monitor};
 
 use clap::{Parser, ValueEnum};
 
@@ -77,17 +75,14 @@ async fn main() {
 
     let mut enumerated_outputs = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
-            let mut runner = tc::AsyncMonitorRunner::<_, tc::UntimedLolaSemantics, _, _>::new(
-                model,
-                input_streams,
-            );
+            let mut runner =
+                tc::AsyncMonitorRunner::<_, tc::UntimedLolaSemantics, _>::new(model, input_streams);
             runner.monitor_outputs().enumerate()
         }
         (Runtime::Queuing, Semantics::Untimed) => {
             let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
                 _,
                 tc::UntimedLolaSemantics,
-                _,
                 _,
             >::new(model, input_streams);
             runner.monitor_outputs().enumerate()

@@ -1,6 +1,51 @@
-use std::{collections::BTreeMap, fmt::Debug, fmt::Display};
+use std::{
+    any::Any,
+    collections::BTreeMap,
+    fmt::{Debug, Display},
+};
 
-use crate::core::{ConcreteStreamData, IndexedVarName, Specification, StreamExpr, VarName};
+use futures::StreamExt;
+
+use crate::{
+    core::{
+        ConcreteStreamData, IndexedVarName, Specification, StreamExpr, TypeAnnotated, TypeSystem,
+        VarName,
+    },
+    OutputStream,
+};
+
+pub struct UntypedLOLA;
+// pub trait TypedStreamData<T: Type<TS>, TS: TypeSystem>: StreamData<TS> {}
+impl TypeSystem for UntypedLOLA {
+    type Type = ();
+    type TypedExpr = SExpr<VarName>;
+    type TypedStream = OutputStream<ConcreteStreamData>;
+    type TypedValue = ConcreteStreamData;
+    // type TypedValue = ConcreteStreamData;
+
+    fn type_of_expr(_: &Self::TypedExpr) -> Self::Type {
+        ()
+    }
+
+    fn type_of_stream(_: &Self::TypedStream) -> Self::Type {
+        ()
+    }
+
+    fn type_of_value(_: &Self::TypedValue) -> Self::Type {
+        ()
+    }
+
+    fn transform_stream(
+        transformation: impl crate::core::StreamTransformationFn,
+        stream: Self::TypedStream,
+    ) -> Self::TypedStream {
+        transformation.transform(stream)
+    }
+
+    fn to_typed_stream(_: Self::Type, stream: OutputStream<Self::TypedValue>) -> Self::TypedStream {
+        stream
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BExpr<VarT: Debug> {
@@ -20,6 +65,7 @@ pub enum SBinOp {
     Mult,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StreamType {
     Int,
     Str,
@@ -53,8 +99,8 @@ pub enum SExpr<VarT: Debug> {
     Eval(Box<Self>),
 }
 
-impl StreamExpr for SExpr<VarName> {
-    fn var(var: &VarName) -> Self {
+impl StreamExpr<()> for SExpr<VarName> {
+    fn var(_: (), var: &VarName) -> Self {
         SExpr::Var(var.clone())
     }
 }
@@ -66,7 +112,7 @@ pub struct LOLASpecification {
     pub exprs: BTreeMap<VarName, SExpr<VarName>>,
 }
 
-impl Specification<SExpr<VarName>> for LOLASpecification {
+impl Specification<UntypedLOLA> for LOLASpecification {
     fn input_vars(&self) -> Vec<VarName> {
         self.input_vars.clone()
     }
@@ -77,6 +123,12 @@ impl Specification<SExpr<VarName>> for LOLASpecification {
 
     fn var_expr(&self, var: &VarName) -> Option<SExpr<VarName>> {
         Some(self.exprs.get(var)?.clone())
+    }
+}
+
+impl TypeAnnotated<UntypedLOLA> for LOLASpecification {
+    fn type_of_var(&self, _: &VarName) -> () {
+        ()
     }
 }
 
