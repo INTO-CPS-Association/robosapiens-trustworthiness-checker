@@ -263,7 +263,6 @@ pub fn eval(
 
             match current {
                 ConcreteStreamData::Str(s) => {
-                    println!("s: {:?}", s);
                     let s_parse = &mut s.as_str();
                     let expr = match lola_expression.parse_next(s_parse) {
                         Ok(expr) => expr,
@@ -271,9 +270,9 @@ pub fn eval(
                     };
                     let mut es = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
                     subcontext.advance();
-                    let eval_res = es.next().await;
+                    let eval_res = es.next().await?;
                     return Some((
-                        eval_res.unwrap(),
+                        eval_res,
                         (subcontext, x, Some((ConcreteStreamData::Str(s), es))),
                     ));
                 }
@@ -320,10 +319,10 @@ pub fn defer(
                         Err(_) => unimplemented!("Invalid eval str"),
                     };
                     let mut es = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
-                    let eval_res = es.next().await;
+                    let eval_res = es.next().await?;
                     subcontext.advance();
                     return Some((
-                        eval_res.unwrap(),
+                        eval_res,
                         (subcontext, x, Some(ConcreteStreamData::Str(eval_s))),
                     ));
                 }
