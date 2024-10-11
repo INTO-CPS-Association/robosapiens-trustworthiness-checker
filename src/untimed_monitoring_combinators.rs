@@ -330,56 +330,65 @@ pub fn defer(
 // We use Unknown for simulating no data on the stream
 pub fn update(x: OutputStream<ConcreteStreamData>, y: OutputStream<ConcreteStreamData>)
               -> OutputStream<ConcreteStreamData> {
+    // Pre is x isn't ready yet
     enum Phase {
         Pre,
         Sync,
         Post,
     }
     use Phase::*;
-
-    let phase = Pre;
-    // Pre is x isn't ready yet
-    // Sync is x is ready but y isn't
-    // Post is y was ready - so forget about x
-
-    Box::pin(futures::stream::unfold(
-        (x, y, phase),
-        move |(mut x, mut y, phase)| async move {
-            match phase {
-                Pre => {
-                    let x_next = x.next().await;
-                    match x_next {
-                        Some(x_val) if x_val != ConcreteStreamData::Unknown => {
-                            let y_val = y.next().await?;
-                            match y_val {
-                                ConcreteStreamData::Unknown => Some((x_val, (x, y, Sync))),
-                                y_val => Some((y_val, (x, y, Post))),
-                            }
-                        }
-                        Some(x_val) => Some((x_val, (x, y, Pre))),
-                        _ => None
-                    }
-                }
-                Sync => {
-                    let (x_next, y_next) = join!(x.next(), y.next());
-                    match (x_next, y_next) {
-                        (Some(x_val), Some(ConcreteStreamData::Unknown)) => {
-                            // y is still unknown - yield x
-                            Some((x_val, (x, y, Sync)))
-                        }
-                        (_, Some(y_val)) => {
-                            // first time y is known - yield y
-                            Some((y_val, (x, y, Post)))
-                        }
-                        _ => None, // End of stream
-                    }
-                }
-                Post => {
-                    let y_val = y.next().await?;
-                    Some((y_val, (x, y, Post)))
+    // Pre phase means that x is not ready yet
+    // Note: Returns the three values uses by unfold below
+    async fn handle_pre_phase(
+        mut x: OutputStream<ConcreteStreamData>,
+        mut y: OutputStream<ConcreteStreamData>,
+    ) -> Option<(ConcreteStreamData, (OutputStream<ConcreteStreamData>, OutputStream<ConcreteStreamData>, Phase))> {
+        match x.next().await {
+            Some(x_val) if x_val != ConcreteStreamData::Unknown => {
+                let y_val = y.next().await?;
+                match y_val {
+                    // If y_val is unknown go into syncing phase
+                    ConcreteStreamData::Unknown => Some((x_val, (x, y, Sync))),
+                    // Otherwise go directly to post
+                    y_val => Some((y_val, (x, y, Post))),
                 }
             }
-        }))
+            Some(ConcreteStreamData::Unknown) => Some((ConcreteStreamData::Unknown, (x, y, Pre))),
+            _ => None
+        }
+    }
+    // Sync phase is x is ready but y isn't
+    async fn handle_sync_phase(
+        mut x: OutputStream<ConcreteStreamData>,
+        mut y: OutputStream<ConcreteStreamData>,
+    ) -> Option<(ConcreteStreamData, (OutputStream<ConcreteStreamData>, OutputStream<ConcreteStreamData>, Phase))> {
+        let (x_next, y_next) = join!(x.next(), y.next());
+        match (x_next, y_next) {
+            // y is still unknown - yield x:
+            (Some(x_val), Some(ConcreteStreamData::Unknown)) => Some((x_val, (x, y, Sync))),
+            // first time y is known - yield y:
+            (_, Some(y_val)) => Some((y_val, (x, y, Post))),
+            // End of stream
+            _ => None,
+        }
+    }
+    // Post phase is y was ready - so care about x
+    async fn handle_post_phase(
+        x: OutputStream<ConcreteStreamData>,
+        mut y: OutputStream<ConcreteStreamData>,
+    ) -> Option<(ConcreteStreamData, (OutputStream<ConcreteStreamData>, OutputStream<ConcreteStreamData>, Phase))> {
+        let y_val = y.next().await?;
+        Some((y_val, (x, y, Post)))
+    }
+    // Unfold while keeping track of phase
+    Box::pin(futures::stream::unfold(
+    (x, y, Pre), move |(x, y, phase)| async move {
+        match phase {
+            Pre => handle_pre_phase(x, y).await,
+            Sync => handle_sync_phase(x, y).await,
+            Post => handle_post_phase(x, y).await,
+        }
+    }))
 }
 
 mod tests {
