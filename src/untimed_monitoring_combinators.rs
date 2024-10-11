@@ -12,7 +12,7 @@ use futures::{
 use std::ops::Deref;
 use winnow::Parser;
 
-use crate::ast::{SExpr, UntypedLOLA};
+use crate::ast::UntypedLOLA;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>:
     Fn(T) -> S + Clone + Sync + Send + 'static
@@ -309,12 +309,12 @@ pub fn defer(
             /* x.next() returns None if we are done unfolding. Return in that case.*/
             let current = x.next().await?;
             /* If we have a saved state then use that otherwise use current */
-            let eval_str = saved.unwrap_or_else(|| current);
+            let defer_str = saved.unwrap_or_else(|| current);
 
-            match eval_str {
-                ConcreteStreamData::Str(eval_s) => {
-                    let eval_parse = &mut eval_s.as_str();
-                    let expr = match lola_expression.parse_next(eval_parse) {
+            match defer_str {
+                ConcreteStreamData::Str(defer_s) => {
+                    let defer_parse = &mut defer_s.as_str();
+                    let expr = match lola_expression.parse_next(defer_parse) {
                         Ok(expr) => expr,
                         Err(_) => unimplemented!("Invalid eval str"),
                     };
@@ -323,10 +323,15 @@ pub fn defer(
                     subcontext.advance();
                     return Some((
                         eval_res,
-                        (subcontext, x, Some(ConcreteStreamData::Str(eval_s))),
+                        (subcontext, x, Some(ConcreteStreamData::Str(defer_s))),
                     ));
                 }
-                _ => panic!("We did not have memory and eval_str was not a Str"),
+                ConcreteStreamData::Unknown => {
+                    // Consume a sample from the subcontext but return Unknown (aka. Waiting)
+                    subcontext.advance();
+                    Some((ConcreteStreamData::Unknown, (subcontext, x, None)))
+                }
+                _ => panic!("We did not have memory and defer_str was not a Str"),
             }
         },
     ))
@@ -418,15 +423,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_plus() {
-        let x = Box::pin(stream::iter(
+        let x: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(
             vec![ConcreteStreamData::Int(1), 3.into()].into_iter(),
-        )) as OutputStream<ConcreteStreamData>;
-        let y = Box::pin(stream::iter(
-            vec![ConcreteStreamData::Int(2), 4.into()].into_iter(),
-        )) as OutputStream<ConcreteStreamData>;
-        let z = vec![ConcreteStreamData::Int(3), 7.into()];
+        ));
+        let y: OutputStream<ConcreteStreamData> =
+            Box::pin(stream::iter(vec![2.into(), 4.into()].into_iter()));
+        let z: Vec<ConcreteStreamData> = vec![3.into(), 7.into()];
 
-        let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
+        let res: Vec<ConcreteStreamData> = plus(x, y).collect().await;
         assert_eq!(res, z);
     }
 
@@ -440,7 +444,7 @@ mod tests {
 
         let exp = vec!["hello world".into(), "olleh dlrow".into()];
 
-        let res = plus(x, y).collect::<Vec<ConcreteStreamData>>().await;
+        let res: Vec<ConcreteStreamData> = plus(x, y).collect().await;
         assert_eq!(res, exp)
     }
 
@@ -452,20 +456,22 @@ mod tests {
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
-        let res = eval(&ctx, e, 10).collect::<Vec<ConcreteStreamData>>().await;
-        let exp = vec![ConcreteStreamData::Int(2), 4.into()];
+        let res: Vec<ConcreteStreamData> = eval(&ctx, e, 10).collect().await;
+        let exp: Vec<ConcreteStreamData> = vec![2.into(), 4.into()];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_eval_x_squared() {
         // This test is interesting since we use x twice in the eval strings
-        let e = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()])) as OutputStream<ConcreteStreamData>;
-        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()].into_iter().collect();
+        let e = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]))
+            as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
+            .into_iter()
+            .collect();
         let ctx = MockContext { xs: map };
-        let res = eval(&ctx, e, 10).collect::<Vec<ConcreteStreamData>>().await;
-        let exp =
-            vec![ConcreteStreamData::Int(4), 9.into()];
+        let res: Vec<ConcreteStreamData> = eval(&ctx, e, 10).collect().await;
+        let exp: Vec<ConcreteStreamData> = vec![4.into(), 9.into()];
         assert_eq!(res, exp)
     }
 
@@ -478,19 +484,58 @@ mod tests {
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
-        let res = defer(&ctx, e, 2).collect::<Vec<ConcreteStreamData>>().await;
-        let exp = vec![ConcreteStreamData::Int(2), 3.into()];
+        let res: Vec<ConcreteStreamData> = defer(&ctx, e, 2).collect().await;
+        let exp: Vec<ConcreteStreamData> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
     }
     #[tokio::test]
     async fn test_defer_x_squared() {
         // This test is interesting since we use x twice in the eval strings
-        let e = Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()])) as OutputStream<ConcreteStreamData>;
-        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()].into_iter().collect();
+        let e = Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]))
+            as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
+            .into_iter()
+            .collect();
         let ctx = MockContext { xs: map };
-        let res = defer(&ctx, e, 10).collect::<Vec<ConcreteStreamData>>().await;
-        let exp =
-            vec![ConcreteStreamData::Int(4), 9.into()];
+        let res: Vec<ConcreteStreamData> = defer(&ctx, e, 10).collect().await;
+        let exp: Vec<ConcreteStreamData> = vec![4.into(), 9.into()];
+        assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
+    async fn test_defer_unknown() {
+        // Using unknown to represent no data on the stream
+        let e = Box::pin(stream::iter(vec![
+            ConcreteStreamData::Unknown,
+            "x + 1".into(),
+        ])) as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
+            .into_iter()
+            .collect();
+        let ctx = MockContext { xs: map };
+        let res = defer(&ctx, e, 10)
+            .collect::<Vec<ConcreteStreamData>>()
+            .await;
+        let exp: Vec<ConcreteStreamData> = vec![ConcreteStreamData::Unknown, 4.into()];
+        assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
+    async fn test_defer_unknown2() {
+        // Unknown followed by property followed by unknown returns [U; val; val].
+        let e = Box::pin(stream::iter(vec![
+            ConcreteStreamData::Unknown,
+            "x + 1".into(),
+            ConcreteStreamData::Unknown,
+        ])) as OutputStream<ConcreteStreamData>;
+        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into(), 4.into()]).into()]
+            .into_iter()
+            .collect();
+        let ctx = MockContext { xs: map };
+        let res = defer(&ctx, e, 10)
+            .collect::<Vec<ConcreteStreamData>>()
+            .await;
+        let exp: Vec<ConcreteStreamData> = vec![ConcreteStreamData::Unknown, 4.into(), 5.into()];
         assert_eq!(res, exp)
     }
 }
