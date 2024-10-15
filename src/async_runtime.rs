@@ -295,7 +295,7 @@ where
     ET: ExpressionTyping,
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
     SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-    S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+    S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
     M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
 {
     input_streams: Arc<Mutex<BTreeMap<VarName, SS::TypedStream>>>,
@@ -313,7 +313,7 @@ where
 impl<
         ET: ExpressionTyping,
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-        S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+        S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
         M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
     > Monitor<ET, SS, S, M> for AsyncMonitorRunner<ET, SS, S, M>
 where
@@ -324,7 +324,7 @@ where
             .input_vars()
             .into_iter()
             .chain(model.output_vars().into_iter())
-            .map(|var| (var.clone(), model.type_of_var(&var)))
+            .map(|var| (var.clone(), model.type_of_var(&var).unwrap()))
             .collect();
 
         let input_streams = model
@@ -402,7 +402,7 @@ where
 impl<
         ET: ExpressionTyping,
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-        S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+        S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
         M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
     > AsyncMonitorRunner<ET, SS, S, M>
 where
@@ -498,7 +498,7 @@ where
             tasks.push(Box::pin(self.monitor_output(var.clone())));
 
             // Add output steams that subscribe to the inputs
-            let var_expr = ET::TypedExpr::var(self.spec().type_of_var(var), var);
+            let var_expr = ET::TypedExpr::var(self.spec().type_of_var(var).unwrap(), var);
             let var_output_stream = S::to_async_stream(var_expr, &self.var_exchange);
             self.output_streams.insert(var.clone(), var_output_stream);
         }

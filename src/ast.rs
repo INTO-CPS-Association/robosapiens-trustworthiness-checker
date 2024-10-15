@@ -11,6 +11,7 @@ use crate::{
         ConcreteStreamData, ExpressionTyping, IndexedVarName, Specification, StreamExpr,
         StreamSystem, TypeAnnotated, TypeSystem, VarName,
     },
+    lola_type_system::{LOLATypeSystem, StreamType},
     MonitoringSemantics, OutputStream, StreamContext,
 };
 
@@ -75,14 +76,6 @@ pub enum SBinOp {
     Mult,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum StreamType {
-    Int,
-    Str,
-    Bool,
-    Unit,
-}
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else
@@ -120,6 +113,7 @@ pub struct LOLASpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
     pub exprs: BTreeMap<VarName, SExpr<VarName>>,
+    pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
 impl Specification<UntypedLOLA> for LOLASpecification {
@@ -136,9 +130,15 @@ impl Specification<UntypedLOLA> for LOLASpecification {
     }
 }
 
+impl TypeAnnotated<LOLATypeSystem> for LOLASpecification {
+    fn type_of_var(&self, var: &VarName) -> Option<StreamType> {
+        self.type_annotations.get(var).cloned()
+    }
+}
+
 impl TypeAnnotated<UntypedLOLA> for LOLASpecification {
-    fn type_of_var(&self, _: &VarName) -> () {
-        ()
+    fn type_of_var(&self, _: &VarName) -> Option<()> {
+        Some(())
     }
 }
 
@@ -147,7 +147,7 @@ impl TypeAnnotated<UntypedLOLA> for LOLASpecification {
 #[derive(Clone)]
 pub struct FixedSemantics;
 
-impl<E> MonitoringSemantics<E> for FixedSemantics {
+impl<E> MonitoringSemantics<E, OutputStream<ConcreteStreamData>> for FixedSemantics {
     type StreamSystem = UntypedStreams;
 
     fn to_async_stream(

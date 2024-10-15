@@ -1,7 +1,12 @@
-use futures::stream;
+use core::panic;
+
+use futures::{stream, StreamExt};
 
 use crate::ast::{InputFileData, UntypedStreams};
-use crate::core::{InputProvider, OutputStream, VarName};
+use crate::core::TypeSystem;
+use crate::core::{InputProvider, OutputStream, StreamSystem, TypeAnnotated, Value, VarName};
+use crate::lola_streams::{LOLAStream, TypedStreams};
+use crate::lola_type_system::{LOLATypeSystem, StreamType};
 use crate::ConcreteStreamData;
 
 fn input_file_data_iter(
@@ -25,6 +30,44 @@ impl InputProvider<UntypedStreams> for InputFileData {
             self.clone(),
             var.clone(),
         ))))
+    }
+}
+
+impl<T: TypeAnnotated<LOLATypeSystem>> InputProvider<TypedStreams> for (InputFileData, T) {
+    fn input_stream(&mut self, var: &VarName) -> Option<LOLAStream> {
+        let (data, ta) = self;
+        let base_stream = data.input_stream(var)?;
+        let var_type = ta.type_of_var(var)?;
+        let var_type_clone = var_type.clone();
+        let converting_stream = Box::pin(base_stream.map(move |data| match data {
+            ConcreteStreamData::Int(i) => {
+                let value = i.to_typed_value();
+                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
+                value
+            }
+            ConcreteStreamData::Str(s) => {
+                let value = s.to_typed_value();
+                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
+                value
+            }
+            ConcreteStreamData::Bool(b) => {
+                let value = b.to_typed_value();
+                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
+                value
+            }
+            ConcreteStreamData::Unit => {
+                let value = ().to_typed_value();
+                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
+                value
+            }
+            ConcreteStreamData::Unknown => {
+                panic!("Unknown data type in input stream")
+            }
+        }));
+        Some(TypedStreams::to_typed_stream(
+            var_type_clone,
+            converting_stream,
+        ))
     }
 }
 

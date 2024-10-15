@@ -217,7 +217,7 @@ where
     ET: ExpressionTyping,
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
     SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-    S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+    S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
     M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
 {
     model: M,
@@ -230,18 +230,18 @@ where
 impl<
         ET: ExpressionTyping,
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-        S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+        S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
         M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
     > Monitor<ET, SS, S, M> for QueuingMonitorRunner<ET, SS, S, M>
 where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
     fn new(model: M, mut input_streams: impl InputProvider<SS>) -> Self {
-        let var_names = model
+        let var_names: Vec<(VarName, <SS::TypeSystem as TypeSystem>::Type)> = model
             .input_vars()
             .into_iter()
             .chain(model.output_vars().into_iter())
-            .map(|var| (var.clone(), model.type_of_var(&var)))
+            .map(|var| (var.clone(), model.type_of_var(&var).unwrap()))
             .collect();
 
         let input_streams = model
@@ -338,7 +338,7 @@ where
 impl<
         ET: ExpressionTyping,
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-        S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+        S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
         M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
     > QueuingMonitorRunner<ET, SS, S, M>
 where

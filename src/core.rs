@@ -69,10 +69,12 @@ pub trait StreamTransformationFn {
     fn transform<T: 'static>(&self, stream: OutputStream<T>) -> OutputStream<T>;
 }
 
-pub trait Value<TS: TypeSystem>: Clone + Debug + PartialEq + Eq {
+pub trait Value<TS: TypeSystem>: Clone + Debug + PartialEq + Eq + StreamData {
     fn type_of(&self) -> TS::Type;
 
     fn to_typed_value(&self) -> TS::TypedValue;
+
+    fn from_typed_value(value: TS::TypedValue) -> Option<Self>;
 }
 
 // struct TypedValue<TS: TypeSystem, Val> {
@@ -140,6 +142,15 @@ impl<ET: ExpressionTyping, R: TypeCheckableHelper<ET>> TypeCheckable<ET> for R {
             Err(()) => Err(errors),
         }
     }
+}
+
+pub trait TypeCheckableSpecification<
+    InputET: ExpressionTyping,
+    OutputET: ExpressionTyping,
+    OutputSpec: Specification<OutputET>,
+>: Specification<InputET>
+{
+    fn type_check(&self) -> SemanticResult<OutputSpec>;
 }
 
 // Could also do this with async steams
@@ -224,14 +235,11 @@ pub trait StreamSystem: Send + 'static {
 // expression language.
 // We require copy because we want to be able to
 // manage the lifetime of the semantics object
-pub trait MonitoringSemantics<Expr>: Clone + Send + 'static {
+pub trait MonitoringSemantics<Expr, StreamType>: Clone + Send + 'static {
     // type ExpressionTyping: ExpressionTyping<TypeSystem = <Self::StreamSystem as StreamSystem>::TypeSystem>;
     type StreamSystem: StreamSystem;
 
-    fn to_async_stream(
-        expr: Expr,
-        ctx: &dyn StreamContext<Self::StreamSystem>,
-    ) -> <Self::StreamSystem as StreamSystem>::TypedStream;
+    fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<Self::StreamSystem>) -> StreamType;
 }
 
 pub trait Specification<ET: ExpressionTyping> {
@@ -244,7 +252,7 @@ pub trait Specification<ET: ExpressionTyping> {
 
 // Annotations on the types of variables in a specification
 pub trait TypeAnnotated<TS: TypeSystem> {
-    fn type_of_var(&self, var: &VarName) -> TS::Type;
+    fn type_of_var(&self, var: &VarName) -> Option<TS::Type>;
 }
 
 pub trait Monitor<ET, SS, S, M>
@@ -252,7 +260,7 @@ where
     ET: ExpressionTyping,
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
     SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-    S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+    S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
     M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
 {
     fn new(model: M, input: impl InputProvider<SS>) -> Self;
