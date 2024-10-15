@@ -8,30 +8,30 @@ use futures::StreamExt;
 
 use crate::{
     core::{
-        ConcreteStreamData, IndexedVarName, Specification, StreamExpr, TypeAnnotated, TypeSystem,
-        VarName,
+        ConcreteStreamData, ExpressionTyping, IndexedVarName, Specification, StreamExpr,
+        StreamSystem, TypeAnnotated, TypeSystem, VarName,
     },
-    OutputStream,
+    MonitoringSemantics, OutputStream, StreamContext,
 };
 
 pub struct UntypedLOLA;
 // pub trait TypedStreamData<T: Type<TS>, TS: TypeSystem>: StreamData<TS> {}
-impl TypeSystem for UntypedLOLA {
-    type Type = ();
+
+impl ExpressionTyping for UntypedLOLA {
+    type TypeSystem = UntypedLOLA;
     type TypedExpr = SExpr<VarName>;
+
+    fn type_of_expr(_: &Self::TypedExpr) -> () {
+        ()
+    }
+}
+
+pub struct UntypedStreams;
+impl StreamSystem for UntypedStreams {
     type TypedStream = OutputStream<ConcreteStreamData>;
-    type TypedValue = ConcreteStreamData;
-    // type TypedValue = ConcreteStreamData;
+    type TypeSystem = UntypedLOLA;
 
-    fn type_of_expr(_: &Self::TypedExpr) -> Self::Type {
-        ()
-    }
-
-    fn type_of_stream(_: &Self::TypedStream) -> Self::Type {
-        ()
-    }
-
-    fn type_of_value(_: &Self::TypedValue) -> Self::Type {
+    fn type_of_stream(_: &Self::TypedStream) -> () {
         ()
     }
 
@@ -42,8 +42,18 @@ impl TypeSystem for UntypedLOLA {
         transformation.transform(stream)
     }
 
-    fn to_typed_stream(_: Self::Type, stream: OutputStream<Self::TypedValue>) -> Self::TypedStream {
+    fn to_typed_stream(_: (), stream: OutputStream<ConcreteStreamData>) -> Self::TypedStream {
         stream
+    }
+}
+
+impl TypeSystem for UntypedLOLA {
+    type Type = ();
+    type TypedValue = ConcreteStreamData;
+    // type TypedValue = ConcreteStreamData;
+
+    fn type_of_value(_: &Self::TypedValue) -> Self::Type {
+        ()
     }
 }
 
@@ -129,6 +139,22 @@ impl Specification<UntypedLOLA> for LOLASpecification {
 impl TypeAnnotated<UntypedLOLA> for LOLASpecification {
     fn type_of_var(&self, _: &VarName) -> () {
         ()
+    }
+}
+
+// A dummy monitoring semantics for monitors which do not support pluggable
+// monitoring semantics
+#[derive(Clone)]
+pub struct FixedSemantics;
+
+impl<E> MonitoringSemantics<E> for FixedSemantics {
+    type StreamSystem = UntypedStreams;
+
+    fn to_async_stream(
+        _: E,
+        _: &dyn StreamContext<UntypedStreams>,
+    ) -> OutputStream<ConcreteStreamData> {
+        unimplemented!("Dummy monitoring semantics; should not be called")
     }
 }
 

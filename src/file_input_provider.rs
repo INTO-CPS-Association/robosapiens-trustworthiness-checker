@@ -1,6 +1,6 @@
 use futures::stream;
 
-use crate::ast::InputFileData;
+use crate::ast::{InputFileData, UntypedStreams};
 use crate::core::{InputProvider, OutputStream, VarName};
 use crate::ConcreteStreamData;
 
@@ -19,7 +19,7 @@ fn input_file_data_iter(
     })
 }
 
-impl InputProvider<OutputStream<ConcreteStreamData>> for InputFileData {
+impl InputProvider<UntypedStreams> for InputFileData {
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
         Some(Box::pin(stream::iter(input_file_data_iter(
             self.clone(),

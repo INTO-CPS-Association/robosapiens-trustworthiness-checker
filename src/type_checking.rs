@@ -1,20 +1,15 @@
-use futures::future::TryFlattenStream;
 use futures::Stream;
 use futures::{stream::BoxStream, StreamExt};
 
-use crate::{OutputStream, StreamExpr};
+use crate::core::{ExpressionTyping, StreamSystem};
 use crate::{
     ast::{BExpr, SBinOp, SExpr, StreamType},
-    core::{
-        SemanticError, StreamTransformationFn, TypeCheckable, TypeCheckableHelper, TypeSystem,
-        Value,
-    },
+    core::{SemanticError, StreamTransformationFn, TypeCheckableHelper, TypeSystem, Value},
     ConcreteStreamData, VarName,
 };
+use crate::{OutputStream, StreamExpr};
 use std::fmt::{Debug, Display};
-use std::ops::DerefMut;
-use std::pin::Pin;
-use std::{collections::BTreeMap, ops::Deref};
+use std::ops::Deref;
 
 pub struct LOLATypeSystem;
 
@@ -48,13 +43,11 @@ impl StreamExpr<StreamType> for SExprTE<VarName> {
     }
 }
 
-impl TypeSystem for LOLATypeSystem {
-    type Type = StreamType;
-    type TypedValue = LOLATypedValue;
+impl ExpressionTyping for LOLATypeSystem {
+    type TypeSystem = LOLATypeSystem;
     type TypedExpr = SExprTE<VarName>;
-    type TypedStream = LOLAStream;
 
-    fn type_of_expr(expr: &Self::TypedExpr) -> Self::Type {
+    fn type_of_expr(expr: &Self::TypedExpr) -> <LOLATypeSystem as TypeSystem>::Type {
         match expr {
             SExprTE::Int(_) => StreamType::Int,
             SExprTE::Str(_) => StreamType::Str,
@@ -62,52 +55,33 @@ impl TypeSystem for LOLATypeSystem {
             SExprTE::Unit(_) => StreamType::Unit,
         }
     }
+}
 
-    fn type_of_stream(value: &Self::TypedStream) -> Self::Type {
-        match value {
-            LOLAStream::Int(_) => StreamType::Int,
-            LOLAStream::Str(_) => StreamType::Str,
-            LOLAStream::Bool(_) => StreamType::Bool,
-            LOLAStream::Unit(_) => StreamType::Unit,
-        }
-    }
+struct TypedStreams {}
+
+impl StreamSystem for TypedStreams {
+    type TypeSystem = LOLATypeSystem;
+    type TypedStream = LOLAStream;
 
     fn transform_stream(
         transformation: impl StreamTransformationFn,
-        stream: <Self as TypeSystem>::TypedStream,
-    ) -> <Self as TypeSystem>::TypedStream {
+        stream: Self::TypedStream,
+    ) -> Self::TypedStream {
         match stream {
-            LOLAStream::Int(pin) => {
-                let new_stream = transformation.transform(pin);
-                LOLAStream::Int(new_stream)
+            LOLAStream::Int(stream) => LOLAStream::Int(Box::pin(transformation.transform(stream))),
+            LOLAStream::Str(stream) => LOLAStream::Str(Box::pin(transformation.transform(stream))),
+            LOLAStream::Bool(stream) => {
+                LOLAStream::Bool(Box::pin(transformation.transform(stream)))
             }
-            LOLAStream::Str(pin) => {
-                let new_stream = transformation.transform(pin);
-                LOLAStream::Str(new_stream)
+            LOLAStream::Unit(stream) => {
+                LOLAStream::Unit(Box::pin(transformation.transform(stream)))
             }
-            LOLAStream::Bool(pin) => {
-                let new_stream = transformation.transform(pin);
-                LOLAStream::Bool(new_stream)
-            }
-            LOLAStream::Unit(pin) => {
-                let new_stream = transformation.transform(pin);
-                LOLAStream::Unit(new_stream)
-            }
-        }
-    }
-
-    fn type_of_value(value: &Self::TypedValue) -> Self::Type {
-        match value {
-            LOLATypedValue::Int(_) => StreamType::Int,
-            LOLATypedValue::Str(_) => StreamType::Str,
-            LOLATypedValue::Bool(_) => StreamType::Bool,
-            LOLATypedValue::Unit => StreamType::Unit,
         }
     }
 
     fn to_typed_stream(
-        typ: Self::Type,
-        stream: OutputStream<Self::TypedValue>,
+        typ: <Self::TypeSystem as TypeSystem>::Type,
+        stream: OutputStream<<LOLATypeSystem as TypeSystem>::TypedValue>,
     ) -> Self::TypedStream {
         match typ {
             StreamType::Int => LOLAStream::Int(Box::pin(stream.map(|v| match v {
@@ -126,6 +100,29 @@ impl TypeSystem for LOLATypeSystem {
                 LOLATypedValue::Unit => (),
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
+        }
+    }
+
+    fn type_of_stream(value: &Self::TypedStream) -> <Self::TypeSystem as TypeSystem>::Type {
+        match value {
+            LOLAStream::Int(_) => StreamType::Int,
+            LOLAStream::Str(_) => StreamType::Str,
+            LOLAStream::Bool(_) => StreamType::Bool,
+            LOLAStream::Unit(_) => StreamType::Unit,
+        }
+    }
+}
+
+impl TypeSystem for LOLATypeSystem {
+    type Type = StreamType;
+    type TypedValue = LOLATypedValue;
+
+    fn type_of_value(value: &Self::TypedValue) -> Self::Type {
+        match value {
+            LOLATypedValue::Int(_) => StreamType::Int,
+            LOLATypedValue::Str(_) => StreamType::Str,
+            LOLATypedValue::Bool(_) => StreamType::Bool,
+            LOLATypedValue::Unit => StreamType::Unit,
         }
     }
 }
@@ -472,7 +469,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
 mod tests {
     use std::{iter::zip, mem::discriminant};
 
-    use crate::core::{SemanticResult, TypeContext};
+    use crate::core::{SemanticResult, TypeCheckable, TypeContext};
 
     use super::*;
 

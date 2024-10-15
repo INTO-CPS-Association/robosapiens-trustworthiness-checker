@@ -10,27 +10,36 @@ use futures::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 
+use crate::core::ExpressionTyping;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::Specification;
+use crate::core::StreamSystem;
 use crate::core::StreamTransformationFn;
 use crate::core::TypeAnnotated;
 use crate::core::TypeSystem;
 use crate::core::{OutputStream, StreamContext, VarName};
+use crate::StreamExpr;
 
-struct QueuingVarContext<TS: TypeSystem> {
-    queues: BTreeMap<VarName, (TS::Type, Arc<Mutex<Vec<TS::TypedValue>>>)>,
-    input_streams: BTreeMap<VarName, Arc<Mutex<TS::TypedStream>>>,
-    output_streams: BTreeMap<VarName, WaitingStream<TS::TypedStream>>,
+struct QueuingVarContext<SS: StreamSystem> {
+    queues: BTreeMap<
+        VarName,
+        (
+            <SS::TypeSystem as TypeSystem>::Type,
+            Arc<Mutex<Vec<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
+        ),
+    >,
+    input_streams: BTreeMap<VarName, Arc<Mutex<SS::TypedStream>>>,
+    output_streams: BTreeMap<VarName, WaitingStream<SS::TypedStream>>,
     production_locks: BTreeMap<VarName, Arc<Mutex<()>>>,
 }
 
-impl<TS: TypeSystem> QueuingVarContext<TS> {
+impl<SS: StreamSystem> QueuingVarContext<SS> {
     fn new(
-        vars: Vec<(VarName, TS::Type)>,
-        input_streams: BTreeMap<VarName, Arc<Mutex<TS::TypedStream>>>,
-        output_streams: BTreeMap<VarName, WaitingStream<TS::TypedStream>>,
+        vars: Vec<(VarName, <SS::TypeSystem as TypeSystem>::Type)>,
+        input_streams: BTreeMap<VarName, Arc<Mutex<SS::TypedStream>>>,
+        output_streams: BTreeMap<VarName, WaitingStream<SS::TypedStream>>,
     ) -> Self {
         let mut queues = BTreeMap::new();
         let mut production_locks = BTreeMap::new();
@@ -84,13 +93,13 @@ impl<S> WaitingStream<S> {
     }
 }
 
-fn queue_buffered_stream<TS: TypeSystem>(
-    typ: TS::Type,
-    xs: Arc<Mutex<Vec<TS::TypedValue>>>,
-    waiting_stream: WaitingStream<TS::TypedStream>,
+fn queue_buffered_stream<SS: StreamSystem>(
+    typ: <SS::TypeSystem as TypeSystem>::Type,
+    xs: Arc<Mutex<Vec<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
+    waiting_stream: WaitingStream<SS::TypedStream>,
     lock: Arc<Mutex<()>>,
-) -> TS::TypedStream {
-    TS::to_typed_stream(
+) -> SS::TypedStream {
+    SS::to_typed_stream(
         typ,
         Box::pin(stream::unfold(
             (0, xs, waiting_stream, lock),
@@ -123,16 +132,16 @@ fn queue_buffered_stream<TS: TypeSystem>(
                     }
                 }
             },
-        )) as OutputStream<TS::TypedValue>,
+        )) as OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>,
     )
 }
 
-impl<TS: TypeSystem> StreamContext<TS> for Arc<QueuingVarContext<TS>> {
-    fn var(&self, var: &VarName) -> Option<TS::TypedStream> {
+impl<SS: StreamSystem> StreamContext<SS> for Arc<QueuingVarContext<SS>> {
+    fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
         let (typ, queue) = self.queues.get(var)?;
         let production_lock = self.production_locks.get(var)?.clone();
         if let Some(stream) = self.input_streams.get(var).cloned() {
-            return Some(queue_buffered_stream::<TS>(
+            return Some(queue_buffered_stream::<SS>(
                 typ.clone(),
                 queue.clone(),
                 WaitingStream::Arrived(stream),
@@ -140,7 +149,7 @@ impl<TS: TypeSystem> StreamContext<TS> for Arc<QueuingVarContext<TS>> {
             ));
         } else {
             let waiting_stream = self.output_streams.get(var)?.clone();
-            return Some(queue_buffered_stream::<TS>(
+            return Some(queue_buffered_stream::<SS>(
                 typ.clone(),
                 queue.clone(),
                 waiting_stream,
@@ -153,19 +162,19 @@ impl<TS: TypeSystem> StreamContext<TS> for Arc<QueuingVarContext<TS>> {
         // Do nothing
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<TS>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>> {
         Box::new(SubMonitor::new(self.clone(), history_length))
     }
 }
 
-struct SubMonitor<TS: TypeSystem> {
-    parent: Arc<QueuingVarContext<TS>>,
+struct SubMonitor<SS: StreamSystem> {
+    parent: Arc<QueuingVarContext<SS>>,
     buffer_size: usize,
     index: Arc<StdMutex<usize>>,
 }
 
-impl<TS: TypeSystem> SubMonitor<TS> {
-    fn new(parent: Arc<QueuingVarContext<TS>>, buffer_size: usize) -> Self {
+impl<SS: StreamSystem> SubMonitor<SS> {
+    fn new(parent: Arc<QueuingVarContext<SS>>, buffer_size: usize) -> Self {
         SubMonitor {
             parent,
             buffer_size,
@@ -181,17 +190,16 @@ impl StreamTransformationFn for StreamSkip {
     }
 }
 
-impl<TS: TypeSystem> StreamContext<TS> for SubMonitor<TS> {
-    fn var(&self, var: &VarName) -> Option<TS::TypedStream> {
-        let parent_stream: <TS as TypeSystem>::TypedStream = self.parent.var(var)?;
+impl<SS: StreamSystem> StreamContext<SS> for SubMonitor<SS> {
+    fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
+        let parent_stream: SS::TypedStream = self.parent.var(var)?;
         let transformation = StreamSkip(*self.index.lock().unwrap());
-        let substream: <TS as TypeSystem>::TypedStream =
-            TS::transform_stream(transformation, parent_stream);
+        let substream: SS::TypedStream = SS::transform_stream(transformation, parent_stream);
 
         Some(substream)
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<TS>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>> {
         // TODO: consider if this is the right approach; creating a subcontext
         // is only used if eval is called within an eval, and it will require
         // careful thought to decide how much history should be passed down
@@ -204,25 +212,31 @@ impl<TS: TypeSystem> StreamContext<TS> for SubMonitor<TS> {
     }
 }
 
-pub struct QueuingMonitorRunner<TS, S, M>
+pub struct QueuingMonitorRunner<ET, SS, S, M>
 where
-    TS: TypeSystem,
-    S: MonitoringSemantics<TS::TypedExpr, TS>,
-    M: Specification<TS> + TypeAnnotated<TS>,
+    ET: ExpressionTyping,
+    ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
+    SS: StreamSystem<TypeSystem = ET::TypeSystem>,
+    S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+    M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
 {
     model: M,
-    var_exchange: Arc<QueuingVarContext<TS>>,
+    var_exchange: Arc<QueuingVarContext<SS>>,
     // phantom_ts: PhantomData<TS>,
     semantics_t: PhantomData<S>,
+    expression_typing_t: PhantomData<ET>,
 }
 
 impl<
-        TS: TypeSystem,
-        S: MonitoringSemantics<TS::TypedExpr, TS>,
-        M: Specification<TS> + TypeAnnotated<TS>,
-    > Monitor<TS, S, M> for QueuingMonitorRunner<TS, S, M>
+        ET: ExpressionTyping,
+        SS: StreamSystem<TypeSystem = ET::TypeSystem>,
+        S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+        M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
+    > Monitor<ET, SS, S, M> for QueuingMonitorRunner<ET, SS, S, M>
+where
+    ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
-    fn new(model: M, mut input_streams: impl InputProvider<TS::TypedStream>) -> Self {
+    fn new(model: M, mut input_streams: impl InputProvider<SS>) -> Self {
         let var_names = model
             .input_vars()
             .into_iter()
@@ -268,6 +282,7 @@ impl<
             model,
             var_exchange,
             semantics_t: PhantomData,
+            expression_typing_t: PhantomData,
         }
     }
 
@@ -275,9 +290,12 @@ impl<
         &self.model
     }
 
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, TS::TypedValue>> {
+    fn monitor_outputs(
+        &mut self,
+    ) -> BoxStream<'static, BTreeMap<VarName, <SS::TypeSystem as TypeSystem>::TypedValue>> {
         let outputs = self.model.output_vars();
-        let mut output_streams: Vec<OutputStream<TS::TypedValue>> = vec![];
+        let mut output_streams: Vec<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>> =
+            vec![];
         for output in outputs.iter().cloned() {
             output_streams.push(Box::pin(self.output_stream(output)));
         }
@@ -290,8 +308,10 @@ impl<
                     futures.push(output_stream.next());
                 }
 
-                let next_vals: Vec<Option<TS::TypedValue>> = join_all(futures).await;
-                let mut res: BTreeMap<VarName, TS::TypedValue> = BTreeMap::new();
+                let next_vals: Vec<Option<<SS::TypeSystem as TypeSystem>::TypedValue>> =
+                    join_all(futures).await;
+                let mut res: BTreeMap<VarName, <SS::TypeSystem as TypeSystem>::TypedValue> =
+                    BTreeMap::new();
                 for (var, val) in outputs.clone().iter().zip(next_vals) {
                     res.insert(
                         var.clone(),
@@ -303,21 +323,28 @@ impl<
                 }
                 Some((res, (output_streams, outputs)))
                     as Option<(
-                        BTreeMap<VarName, TS::TypedValue>,
-                        (Vec<OutputStream<TS::TypedValue>>, Vec<VarName>),
+                        BTreeMap<VarName, <SS::TypeSystem as TypeSystem>::TypedValue>,
+                        (
+                            Vec<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>,
+                            Vec<VarName>,
+                        ),
                     )>
             },
-        )) as BoxStream<'static, BTreeMap<VarName, TS::TypedValue>>
+        ))
+            as BoxStream<'static, BTreeMap<VarName, <SS::TypeSystem as TypeSystem>::TypedValue>>
     }
 }
 
 impl<
-        TS: TypeSystem,
-        S: MonitoringSemantics<TS::TypedExpr, TS>,
-        M: Specification<TS> + TypeAnnotated<TS>,
-    > QueuingMonitorRunner<TS, S, M>
+        ET: ExpressionTyping,
+        SS: StreamSystem<TypeSystem = ET::TypeSystem>,
+        S: MonitoringSemantics<ET::TypedExpr, StreamSystem = SS>,
+        M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
+    > QueuingMonitorRunner<ET, SS, S, M>
+where
+    ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
-    fn output_stream(&self, var: VarName) -> TS::TypedStream {
+    fn output_stream(&self, var: VarName) -> SS::TypedStream {
         self.var_exchange.var(&var).unwrap()
     }
 }
