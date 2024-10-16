@@ -169,6 +169,9 @@ impl<SS: StreamSystem> StreamContext<SS> for Arc<QueuingVarContext<SS>> {
 
 struct SubMonitor<SS: StreamSystem> {
     parent: Arc<QueuingVarContext<SS>>,
+    #[allow(dead_code)]
+    // TODO: implement restricting subcontexts to a certain history length;
+    // this is currently not implemented by the queuing runtime
     buffer_size: usize,
     index: Arc<StdMutex<usize>>,
 }

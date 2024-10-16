@@ -1,4 +1,4 @@
-use crate::core::{StreamData, StreamSystem};
+use crate::core::StreamData;
 use crate::ConcreteStreamData;
 use crate::{
     lola_expression, MonitoringSemantics, OutputStream, StreamContext, UntimedLolaSemantics,
@@ -13,7 +13,7 @@ use std::ops::Deref;
 use tokio::join;
 use winnow::Parser;
 
-use crate::ast::{UntypedLOLA, UntypedStreams};
+use crate::ast::UntypedStreams;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>:
     Fn(T) -> S + Clone + Sync + Send + 'static
@@ -259,7 +259,7 @@ pub fn eval(
                         Some(eval_res) => {
                             // println!("eval producing {:?}", eval_res);
                             Some((eval_res, (subcontext, x, Some((current, es)))))
-                        },
+                        }
                         None => {
                             println!("Eval stream ended");
                             None

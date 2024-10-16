@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
-    process::Output,
 };
 
 use futures::{stream::BoxStream, Stream};
@@ -106,7 +105,7 @@ pub enum SemanticError {
 }
 
 pub type SemanticErrors = Vec<SemanticError>;
-pub type TypeContext<TS: TypeSystem> = BTreeMap<VarName, TS::Type>;
+pub type TypeContext<TS> = BTreeMap<VarName, <TS as TypeSystem>::Type>;
 
 pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
 

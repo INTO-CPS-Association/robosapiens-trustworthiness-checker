@@ -1,9 +1,7 @@
 use futures::StreamExt;
 
-use crate::ast::{BExpr, SBinOp, SExpr, UntypedLOLA, UntypedStreams};
-use crate::core::{
-    ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, Value, VarName,
-};
+use crate::ast::SBinOp;
+use crate::core::{MonitoringSemantics, OutputStream, StreamContext, Value};
 use crate::lola_streams::{LOLAStream, TypedStreams};
 use crate::lola_type_system::{LOLATypeSystem, LOLATypedValue};
 use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprT, SExprTE};
@@ -85,7 +83,7 @@ impl MonitoringSemantics<SExprStr, OutputStream<String>> for TypedUntimedLolaSem
                 mc::if_stm(b, e1, e2)
             }
             SExprStr::Eval(e) => {
-                let e = Self::to_async_stream(*e, ctx);
+                let _ = Self::to_async_stream(*e, ctx);
                 unimplemented!("Eval not implemented")
             }
         }

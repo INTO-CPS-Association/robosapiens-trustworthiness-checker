@@ -162,8 +162,8 @@ fn to_indexed_expr(s: &SExpr<VarName>, current_index: usize) -> SExpr<IndexedVar
         Index(s, i, c) => Index(Box::new(to_indexed_expr(s, current_index)), *i, c.clone()),
         If(b, e1, e2) => If(
             Box::new(to_indexed_bexpr(b)),
-            Box::new(to_indexed_expr(s, current_index)),
-            Box::new(to_indexed_expr(s, current_index)),
+            Box::new(to_indexed_expr(e1, current_index)),
+            Box::new(to_indexed_expr(e2, current_index)),
         ),
         Eval(s) => Eval(Box::new(to_indexed_expr(s, current_index))),
         Defer(s) => Defer(Box::new(to_indexed_expr(s, current_index))),
@@ -418,7 +418,7 @@ mod tests {
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 4))),
                             -1,
                             ConcreteStreamData::Int(0),
-                        ), ),
+                        ),),
                         SBinOp::Plus,
                     ),
                 )],
@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 0), ConcreteStreamData::Int(1)), ],
+                resolved: vec![(IndexedVarName("x".into(), 0), ConcreteStreamData::Int(1)),],
                 unresolved: vec![],
             }
         );
@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 1), ConcreteStreamData::Int(0)), ],
+                resolved: vec![(IndexedVarName("x".into(), 1), ConcreteStreamData::Int(0)),],
                 unresolved: vec![],
             }
         )

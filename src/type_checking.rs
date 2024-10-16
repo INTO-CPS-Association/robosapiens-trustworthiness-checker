@@ -1,7 +1,7 @@
 use crate::ast::UntypedLOLA;
 use crate::core::{
-    ExpressionTyping, SemanticErrors, SemanticResult, TypeAnnotated, TypeCheckable,
-    TypeCheckableSpecification, TypeContext,
+    ExpressionTyping, SemanticErrors, SemanticResult, TypeAnnotated, TypeCheckableSpecification,
+    TypeContext,
 };
 use crate::lola_type_system::{BoolTypeSystem, LOLATypeSystem, StreamType};
 use crate::{
@@ -18,7 +18,7 @@ impl ExpressionTyping for BoolTypeSystem {
     type TypeSystem = BoolTypeSystem;
     type TypedExpr = SExprBool;
 
-    fn type_of_expr(expr: &Self::TypedExpr) -> <BoolTypeSystem as TypeSystem>::Type {
+    fn type_of_expr(_: &Self::TypedExpr) -> <BoolTypeSystem as TypeSystem>::Type {
         StreamType::Bool
     }
 }
@@ -461,7 +461,6 @@ impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
 
 #[cfg(test)]
 mod tests {
-    use core::panic;
     use std::{iter::zip, mem::discriminant};
 
     use crate::core::{SemanticResult, TypeCheckable, TypeContext};
@@ -470,7 +469,6 @@ mod tests {
 
     type SExprV = SExpr<VarName>;
     type SemantResultStr = SemanticResult<SExprTE>;
-    type SExprTStr<Val> = SExprT<Val>;
     type BExprStr = BExpr<VarName>;
 
     trait AsExpr<Expr, BoolExpr> {

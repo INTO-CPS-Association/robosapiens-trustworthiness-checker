@@ -8,7 +8,6 @@ use std::mem;
 
 use crate::ast::FixedSemantics;
 use crate::ast::LOLASpecification;
-use crate::ast::SExpr;
 use crate::ast::UntypedLOLA;
 use crate::ast::UntypedStreams;
 use crate::constraint_solver::*;
@@ -78,7 +77,6 @@ fn constraints_to_outputs<'a>(
 pub struct ConstraintBasedMonitor {
     input_streams: ValStreamCollection,
     model: LOLASpecification,
-    input_index: usize,
 }
 
 impl Monitor<UntypedLOLA, UntypedStreams, FixedSemantics, LOLASpecification>
@@ -98,7 +96,6 @@ impl Monitor<UntypedLOLA, UntypedStreams, FixedSemantics, LOLASpecification>
         ConstraintBasedMonitor {
             input_streams,
             model,
-            input_index: 0,
         }
     }
 

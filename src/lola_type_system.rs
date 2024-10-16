@@ -36,7 +36,7 @@ impl TypeSystem for BoolTypeSystem {
     type Type = StreamType;
     type TypedValue = bool;
 
-    fn type_of_value(value: &Self::TypedValue) -> Self::Type {
+    fn type_of_value(_: &Self::TypedValue) -> Self::Type {
         StreamType::Bool
     }
 }

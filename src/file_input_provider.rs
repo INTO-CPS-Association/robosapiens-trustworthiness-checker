@@ -6,7 +6,7 @@ use crate::ast::{InputFileData, UntypedStreams};
 use crate::core::TypeSystem;
 use crate::core::{InputProvider, OutputStream, StreamSystem, TypeAnnotated, Value, VarName};
 use crate::lola_streams::{LOLAStream, TypedStreams};
-use crate::lola_type_system::{LOLATypeSystem, StreamType};
+use crate::lola_type_system::LOLATypeSystem;
 use crate::ConcreteStreamData;
 
 fn input_file_data_iter(

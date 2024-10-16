@@ -1,19 +1,5 @@
 use futures::StreamExt;
-// mod ast;
-// mod async_runtime;
-// mod constraint_based_runtime;
-// mod constraint_solver;
-// mod core;
-// mod queuing_runtime;
-// mod monitoring_semantics;
-// mod parser;
-// mod ring_buffer;
-// mod untimed_monitoring_combinators;
-use trustworthiness_checker::{
-    self as tc,
-    core::{TypeAnnotated, TypeCheckableSpecification},
-    parse_file, Monitor,
-};
+use trustworthiness_checker::{self as tc, core::TypeCheckableSpecification, parse_file, Monitor};
 
 use clap::{Parser, ValueEnum};
 

@@ -38,6 +38,9 @@ struct AsyncVarExchange<SS: StreamSystem> {
         ),
     >,
     cancellation_token: CancellationToken,
+    #[allow(dead_code)]
+    // This is used for RAII to cancel background tasks when the async var
+    // exchange is dropped
     drop_guard: Arc<DropGuard>,
 }
 
@@ -339,6 +342,9 @@ where
     // tasks: Option<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>,
     output_streams: BTreeMap<VarName, SS::TypedStream>,
     cancellation_token: CancellationToken,
+    #[allow(dead_code)]
+    // This is used for RAII to cancel background tasks when the async var
+    // exchange is dropped
     cancellation_guard: Arc<DropGuard>,
     semantics_t: PhantomData<S>,
     expression_typing_t: PhantomData<ET>,
