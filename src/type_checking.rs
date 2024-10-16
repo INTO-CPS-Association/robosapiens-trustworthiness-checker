@@ -1,9 +1,9 @@
 use crate::ast::UntypedLOLA;
 use crate::core::{
     ExpressionTyping, SemanticResult, TypeAnnotated, TypeCheckable, TypeCheckableSpecification,
-    TypeContext,
+    TypeContext, SemanticErrors
 };
-use crate::lola_type_system::{BoolTypeSystem, LOLATypeSystem, LOLATypedValue, StreamType};
+use crate::lola_type_system::{BoolTypeSystem, LOLATypeSystem, StreamType};
 use crate::{
     ast::{BExpr, SBinOp, SExpr},
     core::{SemanticError, TypeCheckableHelper, TypeSystem, Value},
@@ -160,7 +160,7 @@ impl Specification<LOLATypeSystem> for TypedLOLASpecification {
 }
 
 impl TypeCheckableSpecification<UntypedLOLA, LOLATypeSystem, TypedLOLASpecification>
-    for LOLASpecification
+for LOLASpecification
 {
     fn type_check(&self) -> SemanticResult<TypedLOLASpecification> {
         let type_context = self.type_annotations.clone();
@@ -211,7 +211,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
                         "Stream expression {:?} not assigned a type before semantic analysis",
                         self
                     )
-                    .into(),
+                        .into(),
                 ));
                 Err(())
             }
@@ -220,13 +220,13 @@ impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
 }
 
 // Type check a binary operation
-impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, SExpr<VarName>, SExpr<VarName>) {
+impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>) {
     fn type_check_raw(
         &self,
         ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
         errs: &mut crate::core::SemanticErrors,
     ) -> Result<SExprTE, ()> {
-        let (op, se1, se2) = self;
+        let (op, se1, se2) = *self;
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
 
@@ -234,7 +234,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, SExpr<VarName>, SExpr<VarN
             (Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => Ok(SExprTE::Int(SExprInt::BinOp(
                 Box::new(se1.clone()),
                 Box::new(se2.clone()),
-                *op,
+                op,
             ))),
             // Any other case where sub-expressions are Ok, but `op` is not supported
             (Ok(ste1), Ok(ste2)) => {
@@ -243,7 +243,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, SExpr<VarName>, SExpr<VarN
                         "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
                         op, ste1, ste2
                     )
-                    .into(),
+                        .into(),
                 ));
                 Err(())
             }
@@ -260,7 +260,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, 
         ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
         errs: &mut crate::core::SemanticErrors,
     ) -> Result<SExprTE, ()> {
-        let (b, se1, se2) = self;
+        let (b, se1, se2) = *self;
         let b_check = b.type_check_raw(ctx, errs);
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
@@ -295,7 +295,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, 
                                 "Cannot create if-expression with two different types: {:?} and {:?}",
                                 stenum1, stenum2
                             )
-                            .into(),
+                                .into(),
                         ));
                         Err(())
                     }
@@ -308,37 +308,37 @@ impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, 
 }
 
 // Type check an index expression
-impl TypeCheckableHelper<LOLATypeSystem> for (&SExpr<VarName>, isize, ConcreteStreamData) {
+impl TypeCheckableHelper<LOLATypeSystem> for (&SExpr<VarName>, isize, &ConcreteStreamData) {
     fn type_check_raw(
         &self,
         ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
         errs: &mut crate::core::SemanticErrors,
     ) -> Result<SExprTE, ()> {
-        let (inner, idx, default) = self;
+        let (inner, idx, default) = *self;
         let inner_check = inner.type_check_raw(ctx, errs);
 
         match inner_check {
             Ok(ste) => match (ste, default) {
                 (SExprTE::Int(se), ConcreteStreamData::Int(def)) => Ok(SExprTE::Int(
-                    SExprInt::Index(Box::new(se.clone()), *idx, *def),
+                    SExprInt::Index(Box::new(se.clone()), idx, *def),
                 )),
                 (SExprTE::Str(se), ConcreteStreamData::Str(def)) => Ok(SExprTE::Str(
-                    SExprStr::Index(Box::new(se.clone()), *idx, def.clone()),
+                    SExprStr::Index(Box::new(se.clone()), idx, def.clone()),
                 )),
                 (SExprTE::Bool(se), ConcreteStreamData::Bool(def)) => Ok(SExprTE::Bool(
-                    SExprT::Index(Box::new(se.clone()), *idx, *def),
+                    SExprT::Index(Box::new(se.clone()), idx, *def),
                 )),
                 (SExprTE::Unit(se), ConcreteStreamData::Unit) => {
-                    Ok(SExprTE::Unit(SExprT::Index(Box::new(se.clone()), *idx, ())))
+                    Ok(SExprTE::Unit(SExprT::Index(Box::new(se.clone()), idx, ())))
                 }
                 (se, def) => {
                     errs.push(SemanticError::TypeError(
-                            format!(
-                                "Mismatched type in Index expression, expression and default does not match: {:?}",
-                                (se, def)
-                            )
+                        format!(
+                            "Mismatched type in Index expression, expression and default does not match: {:?}",
+                            (se, def)
+                        )
                             .into(),
-                        ));
+                    ));
                     Err(())
                 }
             },
@@ -396,7 +396,7 @@ impl TypeCheckableHelper<BoolTypeSystem> for BExpr<VarName> {
                                 "Cannot compare expressions of different types: {:?} and {:?}",
                                 se1, se2
                             )
-                            .into(),
+                                .into(),
                         ));
                         Err(())
                     }
@@ -413,7 +413,7 @@ impl TypeCheckableHelper<BoolTypeSystem> for BExpr<VarName> {
                                 "Cannot compare expressions of different types: {:?} and {:?}",
                                 se1, se2
                             )
-                            .into(),
+                                .into(),
                         ));
                         Err(())
                     }
@@ -438,19 +438,19 @@ impl TypeCheckableHelper<BoolTypeSystem> for BExpr<VarName> {
 impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
     fn type_check_raw(
         &self,
-        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-        errs: &mut crate::core::SemanticErrors,
+        ctx: &mut TypeContext<LOLATypeSystem>,
+        errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         match self {
             SExpr::Val(sdata) => sdata.type_check_raw(ctx, errs),
             SExpr::BinOp(se1, se2, op) => {
-                (op.clone(), *se1.clone(), *se2.clone()).type_check_raw(ctx, errs)
+                (op.clone(), se1.deref(), se2.deref()).type_check_raw(ctx, errs)
             }
             SExpr::If(b, se1, se2) => {
                 (b.deref(), se1.deref(), se2.deref()).type_check_raw(ctx, errs)
             }
             SExpr::Index(inner, idx, default) => {
-                (inner.deref(), *idx, default.clone()).type_check_raw(ctx, errs)
+                (inner.deref(), *idx, default).type_check_raw(ctx, errs)
             }
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
             SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
@@ -663,6 +663,7 @@ mod tests {
         check_correct_error_types(&results, &expected);
     }
 
+    #[ignore = "Not implemented yet"]
     #[test]
     fn test_binop_err_diff_types() {
         panic!("Not implemented yet");
@@ -752,6 +753,7 @@ mod tests {
         }
     }
 
+    #[ignore = "Not implemented yet"]
     #[test]
     fn test_int_binop_ok() {
         panic!("Not implemented yet");
@@ -773,6 +775,7 @@ mod tests {
         // assert!(results.eq(expected.into_iter()));
     }
 
+    #[ignore = "Not implemented yet"]
     #[test]
     fn test_str_plus_ok() {
         panic!("Not implemented yet");
@@ -792,6 +795,7 @@ mod tests {
         // assert!(results.eq(expected.into_iter()));
     }
 
+    #[ignore = "Not implemented yet"]
     #[test]
     fn test_if_ok() {
         panic!("Not implemented yet");
@@ -845,6 +849,7 @@ mod tests {
         // assert!(results.eq(expected.into_iter()));
     }
 
+    #[ignore = "Not implemented yet"]
     #[test]
     fn test_if_err() {
         panic!("Not implemented yet");
