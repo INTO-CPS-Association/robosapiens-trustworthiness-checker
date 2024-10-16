@@ -1,7 +1,10 @@
 use futures::{stream::BoxStream, StreamExt};
 
-use crate::{core::{StreamSystem, StreamTransformationFn, TypeSystem}, lola_type_system::{LOLATypeSystem, LOLATypedValue, StreamType}, OutputStream};
-
+use crate::{
+    core::{StreamSystem, StreamTransformationFn, TypeSystem},
+    lola_type_system::{LOLATypeSystem, LOLATypedValue, StreamType},
+    OutputStream,
+};
 
 pub struct TypedStreams {}
 
@@ -58,7 +61,6 @@ impl StreamSystem for TypedStreams {
         }
     }
 }
-
 
 pub enum LOLAStream {
     Int(BoxStream<'static, i64>),

@@ -117,6 +117,17 @@ pub fn plus(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
     lift2(|x, y| x + y, x, y)
 }
 
+pub fn concat(x: OutputStream<String>, y: OutputStream<String>) -> OutputStream<String> {
+    lift2(
+        |mut x, y| {
+            x.push_str(&y);
+            x
+        },
+        x,
+        y,
+    )
+}
+
 pub fn minus(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
     lift2(|x, y| x - y, x, y)
 }

@@ -86,6 +86,10 @@ impl MonitoringSemantics<SExprStr, OutputStream<String>> for TypedUntimedLolaSem
                 let _ = Self::to_async_stream(*e, ctx);
                 unimplemented!("Eval not implemented")
             }
+            SExprStr::Concat(x, y) => mc::concat(
+                Self::to_async_stream(*x, ctx),
+                Self::to_async_stream(*y, ctx),
+            ),
         }
     }
 }

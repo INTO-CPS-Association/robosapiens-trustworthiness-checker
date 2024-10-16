@@ -119,6 +119,8 @@ pub enum SExprStr {
         String,
     ),
 
+    Concat(Box<Self>, Box<Self>),
+
     // Arithmetic Stream expression
     Val(String),
 
@@ -230,14 +232,18 @@ impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, &SExpr<VarName>, &SExpr<Va
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
 
-        match (se1_check, se2_check) {
-            (Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => Ok(SExprTE::Int(SExprInt::BinOp(
+        match (op, se1_check, se2_check) {
+            (_, Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => Ok(SExprTE::Int(SExprInt::BinOp(
                 Box::new(se1.clone()),
                 Box::new(se2.clone()),
                 op,
             ))),
+            // String concatenation
+            (SBinOp::Plus, Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => Ok(SExprTE::Str(
+                SExprStr::Concat(Box::new(se1.clone()), Box::new(se2.clone())),
+            )),
             // Any other case where sub-expressions are Ok, but `op` is not supported
-            (Ok(ste1), Ok(ste2)) => {
+            (_, Ok(ste1), Ok(ste2)) => {
                 errs.push(SemanticError::TypeError(
                     format!(
                         "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
@@ -248,7 +254,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, &SExpr<VarName>, &SExpr<Va
                 Err(())
             }
             // If the underlying values already result in an error then simply propagate
-            (Ok(_), Err(_)) | (Err(_), Ok(_)) | (Err(_), Err(_)) => Err(()),
+            _ => Err(()),
         }
     }
 }
@@ -580,6 +586,15 @@ mod tests {
         vals
     }
 
+    fn generate_concat_combinations(
+        variants_a: &[SExprStr],
+        variants_b: &[SExprStr],
+    ) -> Vec<SExprStr> {
+        generate_combinations(variants_a, variants_b, |lhs, rhs| {
+            SExprStr::Concat(Box::new(*lhs), Box::new(*rhs))
+        })
+    }
+
     // // Example usage for if-expressions
     fn generate_if_combinations<T, Expr, BoolExpr: Clone>(
         variants_a: &[Expr],
@@ -652,10 +667,8 @@ mod tests {
         check_correct_error_types(&results, &expected);
     }
 
-    // #[ignore = "Not implemented yet"]
     #[test]
     fn test_binop_err_diff_types() {
-        // panic!("Not implemented yet");
         // Checks that calling a BinOp on two different types results in a TypeError
 
         // Create a vector of all ConcreteStreamData variants (except Unknown)
@@ -762,23 +775,22 @@ mod tests {
         assert!(results.eq(expected.into_iter()));
     }
 
-    #[ignore = "String concatenation not implemented yet"]
+    // #[ignore = "String concatenation not implemented yet"]
     #[test]
     fn test_str_plus_ok() {
         // Checks that if we add two Strings together it results in typed AST after semantic analysis
-        // let str_val = vec![SExprV::Val(ConcreteStreamData::Str("".into()))];
-        // let sbinops = vec![SBinOp::Plus];
-        // let vals: Vec<SExpr<VarName>> =
-        //     generate_binop_combinations(&str_val, &str_val, sbinops.clone());
-        // let results = vals.iter().map(TypeCheckable::type_check_with_default);
+        let str_val = vec![SExprV::Val(ConcreteStreamData::Str("".into()))];
+        let sbinops = vec![SBinOp::Plus];
+        let vals: Vec<SExpr<VarName>> =
+            generate_binop_combinations(&str_val, &str_val, sbinops.clone());
+        let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
-        // let str_t_val = vec![SExprTStr::<String>::Val("".into())];
+        let str_t_val = vec![SExprStr::Val("".into())];
 
-        // // Generate the different combinations and turn them into "Ok" results
-        // let expected_tmp: Vec<SExprTStr<String>> =
-        //     generate_binop_combinations(&str_t_val, &str_t_val, sbinops);
-        // let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::Str(v)));
-        // assert!(results.eq(expected.into_iter()));
+        // Generate the different combinations and turn them into "Ok" results
+        let expected_tmp: Vec<SExprStr> = generate_concat_combinations(&str_t_val, &str_t_val);
+        let expected = expected_tmp.into_iter().map(|v| Ok(SExprTE::Str(v)));
+        assert!(results.eq(expected.into_iter()));
     }
 
     #[test]
