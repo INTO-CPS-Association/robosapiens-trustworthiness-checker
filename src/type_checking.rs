@@ -1,7 +1,7 @@
 use crate::ast::UntypedLOLA;
 use crate::core::{
-    ExpressionTyping, SemanticResult, TypeAnnotated, TypeCheckable, TypeCheckableSpecification,
-    TypeContext, SemanticErrors
+    ExpressionTyping, SemanticErrors, SemanticResult, TypeAnnotated, TypeCheckable,
+    TypeCheckableSpecification, TypeContext,
 };
 use crate::lola_type_system::{BoolTypeSystem, LOLATypeSystem, StreamType};
 use crate::{
@@ -454,6 +454,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
             }
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
             SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
+            SExpr::Defer(_) => todo!("Implement support for Defer"),
         }
     }
 }

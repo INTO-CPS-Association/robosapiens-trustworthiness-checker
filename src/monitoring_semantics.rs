@@ -1,4 +1,4 @@
-use crate::ast::{BExpr, SBinOp, SExpr, UntypedLOLA, UntypedStreams};
+use crate::ast::{BExpr, SBinOp, SExpr, UntypedStreams};
 use crate::core::{ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, VarName};
 use crate::untimed_monitoring_combinators as mc;
 
@@ -6,7 +6,7 @@ use crate::untimed_monitoring_combinators as mc;
 pub struct UntimedLolaSemantics;
 
 impl MonitoringSemantics<SExpr<VarName>, OutputStream<ConcreteStreamData>>
-    for UntimedLolaSemantics
+for UntimedLolaSemantics
 {
     type StreamSystem = UntypedStreams;
 
@@ -30,6 +30,10 @@ impl MonitoringSemantics<SExpr<VarName>, OutputStream<ConcreteStreamData>>
                 let e = Self::to_async_stream(*e, ctx);
                 mc::eval(ctx, e, 10)
             }
+            SExpr::Defer(e) => {
+                let e = Self::to_async_stream(*e, ctx);
+                mc::defer(ctx, e, 10)
+            }
             SExpr::Index(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::index(e, i, c)
@@ -45,7 +49,7 @@ impl MonitoringSemantics<SExpr<VarName>, OutputStream<ConcreteStreamData>>
 }
 
 impl MonitoringSemantics<BExpr<VarName>, OutputStream<ConcreteStreamData>>
-    for UntimedLolaSemantics
+for UntimedLolaSemantics
 {
     type StreamSystem = UntypedStreams;
 

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::option;
 use winnow::ascii::dec_uint;
 use winnow::ascii::line_ending;
 use winnow::combinator::*;
@@ -41,7 +40,7 @@ fn streamdata(s: &mut &str) -> PResult<ConcreteStreamData> {
         )),
         whitespace,
     )
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn aval(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -62,24 +61,35 @@ fn aeval(s: &mut &str) -> PResult<SExpr<VarName>> {
         paren_aexpr,
         _: whitespace,
     ))
-    .map(|(x,)| SExpr::Eval(Box::new(x)))
-    .parse_next(s)
+        .map(|(x, )| SExpr::Eval(Box::new(x)))
+        .parse_next(s)
+}
+fn adefer(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: literal("defer"),
+        _: whitespace,
+        paren_aexpr,
+        _: whitespace,
+    ))
+        .map(|(x, )| SExpr::Defer(Box::new(x)))
+        .parse_next(s)
 }
 
 fn aatom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
-        alt((sindex, aval, aeval, avar, paren_aexpr)),
+        alt((sindex, aval, aeval, adefer, avar, paren_aexpr)),
         whitespace,
     )
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn aplus_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
     separated_foldr1(amult, "+", |x, _, y| {
         SExpr::BinOp(Box::new(x), Box::new(y), SBinOp::Plus)
     })
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn aplus(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -90,7 +100,7 @@ fn amult_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
     separated_foldr1(aatom, "*", |x, _, y| {
         SExpr::BinOp(Box::new(x), Box::new(y), SBinOp::Mult)
     })
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn amult(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -101,7 +111,7 @@ fn aminus_raw(s: &mut &str) -> PResult<SExpr<VarName>> {
     separated_foldl1(aplus, "-", |x, _, y| {
         SExpr::BinOp(Box::new(x), Box::new(y), SBinOp::Minus)
     })
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn aminus(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -132,8 +142,8 @@ fn beq(s: &mut &str) -> PResult<BExpr<VarName>> {
         aexpr,
         _: whitespace,
     ))
-    .map(|(a1, a2)| BExpr::Eq(Box::new(a1), Box::new(a2)))
-    .parse_next(s)
+        .map(|(a1, a2)| BExpr::Eq(Box::new(a1), Box::new(a2)))
+        .parse_next(s)
 }
 
 fn ble(s: &mut &str) -> PResult<BExpr<VarName>> {
@@ -144,8 +154,8 @@ fn ble(s: &mut &str) -> PResult<BExpr<VarName>> {
         aexpr,
         _: whitespace,
     ))
-    .map(|(a1, a2)| BExpr::Le(Box::new(a1), Box::new(a2)))
-    .parse_next(s)
+        .map(|(a1, a2)| BExpr::Le(Box::new(a1), Box::new(a2)))
+        .parse_next(s)
 }
 
 fn bnot(s: &mut &str) -> PResult<BExpr<VarName>> {
@@ -155,15 +165,15 @@ fn bnot(s: &mut &str) -> PResult<BExpr<VarName>> {
         bexpr,
         _: whitespace,
     ))
-    .map(|(_, b)| BExpr::Not(Box::new(b)))
-    .parse_next(s)
+        .map(|(_, b)| BExpr::Not(Box::new(b)))
+        .parse_next(s)
 }
 
 fn band_raw(s: &mut &str) -> PResult<BExpr<VarName>> {
     separated_foldr1(bexpr, "&&", |b1, _, b2| {
         BExpr::And(Box::new(b1), Box::new(b2))
     })
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn band(s: &mut &str) -> PResult<BExpr<VarName>> {
@@ -174,7 +184,7 @@ fn bor_raw(s: &mut &str) -> PResult<BExpr<VarName>> {
     separated_foldr1(bexpr, "||", |b1, _, b2| {
         BExpr::Or(Box::new(b1), Box::new(b2))
     })
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn bor(s: &mut &str) -> PResult<BExpr<VarName>> {
@@ -187,7 +197,7 @@ fn bexpr(s: &mut &str) -> PResult<BExpr<VarName>> {
         alt((btrue, bfalse, band, bor, beq, ble, bnot)),
         whitespace,
     )
-    .parse_next(s)
+        .parse_next(s)
 }
 
 fn sif(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -206,8 +216,8 @@ fn sif(s: &mut &str) -> PResult<SExpr<VarName>> {
         sexpr,
         _: whitespace,
     ))
-    .map(|(b, s1, s2)| SExpr::If(Box::new(b), Box::new(s1), Box::new(s2)))
-    .parse_next(s)
+        .map(|(b, s1, s2)| SExpr::If(Box::new(b), Box::new(s1), Box::new(s2)))
+        .parse_next(s)
 }
 
 fn sindex(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -224,8 +234,8 @@ fn sindex(s: &mut &str) -> PResult<SExpr<VarName>> {
         _: "]",
         _: whitespace,
     ))
-    .map(|(s, i, c)| SExpr::Index(Box::new(s), i, c))
-    .parse_next(s)
+        .map(|(s, i, c)| SExpr::Index(Box::new(s), i, c))
+        .parse_next(s)
 }
 
 fn paren_sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -244,14 +254,14 @@ fn type_annotation(s: &mut &str) -> PResult<StreamType> {
         alt((literal("Int"), literal("Bool"), literal("Str"), literal("Unit"))),
         _: whitespace,
     ))
-    .map(|(typ,)| match typ {
-        "Int" => StreamType::Int,
-        "Bool" => StreamType::Bool,
-        "Str" => StreamType::Str,
-        "Unit" => StreamType::Unit,
-        _ => unreachable!(),
-    })
-    .parse_next(s)
+        .map(|(typ, )| match typ {
+            "Int" => StreamType::Int,
+            "Bool" => StreamType::Bool,
+            "Str" => StreamType::Str,
+            "Unit" => StreamType::Unit,
+            _ => unreachable!(),
+        })
+        .parse_next(s)
 }
 
 fn input_decl(s: &mut &str) -> PResult<(VarName, Option<StreamType>)> {
@@ -263,8 +273,8 @@ fn input_decl(s: &mut &str) -> PResult<(VarName, Option<StreamType>)> {
         opt(type_annotation),
         _: whitespace,
     ))
-    .map(|(name, typ): (&str, _)| (VarName(name.into()), typ))
-    .parse_next(s)
+        .map(|(name, typ): (&str, _)| (VarName(name.into()), typ))
+        .parse_next(s)
 }
 
 fn linebreak(s: &mut &str) -> PResult<()> {
@@ -286,8 +296,8 @@ fn output_decl(s: &mut &str) -> PResult<(VarName, Option<StreamType>)> {
         opt(type_annotation),
         _: whitespace,
     ))
-    .map(|(name, typ): (&str, _)| (VarName(name.into()), typ))
-    .parse_next(s)
+        .map(|(name, typ): (&str, _)| (VarName(name.into()), typ))
+        .parse_next(s)
 }
 
 fn output_decls(s: &mut &str) -> PResult<Vec<(VarName, Option<StreamType>)>> {
@@ -304,8 +314,8 @@ fn expr_decl(s: &mut &str) -> PResult<(VarName, SExpr<VarName>)> {
         sexpr,
         _: whitespace,
     ))
-    .map(|(name, expr)| (VarName(name.into()), expr))
-    .parse_next(s)
+        .map(|(name, expr)| (VarName(name.into()), expr))
+        .parse_next(s)
 }
 
 fn expr_decls(s: &mut &str) -> PResult<Vec<(VarName, SExpr<VarName>)>> {
@@ -322,21 +332,21 @@ pub fn lola_specification(s: &mut &str) -> PResult<LOLASpecification> {
         expr_decls,
         _: whitespace,
     ))
-    .map(|(input_vars, output_vars, exprs)| LOLASpecification {
-        input_vars: input_vars.iter().map(|(name, _)| name.clone()).collect(),
-        output_vars: output_vars.iter().map(|(name, _)| name.clone()).collect(),
-        exprs: exprs.into_iter().collect(),
-        type_annotations: input_vars
-            .iter()
-            .chain(output_vars.iter())
-            .cloned()
-            .filter_map(|(name, typ)| match typ {
-                Some(typ) => Some((name, typ)),
-                None => None,
-            })
-            .collect(),
-    })
-    .parse_next(s)
+        .map(|(input_vars, output_vars, exprs)| LOLASpecification {
+            input_vars: input_vars.iter().map(|(name, _)| name.clone()).collect(),
+            output_vars: output_vars.iter().map(|(name, _)| name.clone()).collect(),
+            exprs: exprs.into_iter().collect(),
+            type_annotations: input_vars
+                .iter()
+                .chain(output_vars.iter())
+                .cloned()
+                .filter_map(|(name, typ)| match typ {
+                    Some(typ) => Some((name, typ)),
+                    None => None,
+                })
+                .collect(),
+        })
+        .parse_next(s)
 }
 
 fn value_assignment(s: &mut &str) -> PResult<(VarName, ConcreteStreamData)> {
@@ -349,8 +359,8 @@ fn value_assignment(s: &mut &str) -> PResult<(VarName, ConcreteStreamData)> {
         streamdata,
         _: whitespace,
     ))
-    .map(|(name, value)| (VarName(name.into()), value))
-    .parse_next(s)
+        .map(|(name, value)| (VarName(name.into()), value))
+        .parse_next(s)
 }
 
 fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, ConcreteStreamData>> {
@@ -358,8 +368,8 @@ fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, ConcreteStreamDa
         separated(0.., value_assignment, linebreak),
         _: alt((linebreak.void(), empty)),
     ))
-    .map(|(x,)| x)
-    .parse_next(s)
+        .map(|(x, )| x)
+        .parse_next(s)
 }
 
 fn time_stamped_assignments(
@@ -373,8 +383,8 @@ fn time_stamped_assignments(
         _: separated(0.., whitespace, linebreak).map(|_: Vec<_>| ()),
         value_assignments
     ))
-    .map(|(time, assignments)| (time, assignments))
-    .parse_next(s)
+        .map(|(time, assignments)| (time, assignments))
+        .parse_next(s)
 }
 
 fn timed_assignments(s: &mut &str) -> PResult<InputFileData> {
@@ -485,7 +495,7 @@ mod tests {
                     Box::new(SExpr::Var(VarName("x".into()))),
                     -1,
                     ConcreteStreamData::Int(0),
-                ),),
+                ), ),
                 SBinOp::Plus
             )
         );
@@ -542,8 +552,8 @@ mod tests {
                     SBinOp::Plus,
                 ),
             )]
-            .into_iter()
-            .collect(),
+                .into_iter()
+                .collect(),
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
@@ -570,8 +580,8 @@ mod tests {
                     SBinOp::Plus,
                 ),
             )]
-            .into_iter()
-            .collect(),
+                .into_iter()
+                .collect(),
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, count_spec);
@@ -609,8 +619,8 @@ mod tests {
                     SExpr::Eval(Box::new(SExpr::Var(VarName("s".into())))),
                 ),
             ]
-            .into_iter()
-            .collect(),
+                .into_iter()
+                .collect(),
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, eval_spec);

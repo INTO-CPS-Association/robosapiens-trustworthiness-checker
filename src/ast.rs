@@ -1,10 +1,7 @@
 use std::{
-    any::Any,
     collections::BTreeMap,
     fmt::{Debug, Display},
 };
-
-use futures::StreamExt;
 
 use crate::{
     core::{
@@ -100,6 +97,8 @@ pub enum SExpr<VarT: Debug> {
 
     // Eval
     Eval(Box<Self>),
+
+    Defer(Box<Self>),
 }
 
 impl StreamExpr<()> for SExpr<VarName> {
@@ -182,6 +181,7 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             SExpr::BinOp(e1, e2, SBinOp::Mult) => write!(f, "({} * {})", e1, e2),
             SExpr::Var(v) => write!(f, "{}", v),
             SExpr::Eval(e) => write!(f, "eval({})", e),
+            SExpr::Defer(e) => write!(f, "defer({})", e),
         }
     }
 }

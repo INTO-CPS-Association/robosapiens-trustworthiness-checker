@@ -166,6 +166,7 @@ fn to_indexed_expr(s: &SExpr<VarName>, current_index: usize) -> SExpr<IndexedVar
             Box::new(to_indexed_expr(s, current_index)),
         ),
         Eval(s) => Eval(Box::new(to_indexed_expr(s, current_index))),
+        Defer(s) => Defer(Box::new(to_indexed_expr(s, current_index))),
     }
 }
 
@@ -263,6 +264,14 @@ impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
                 },
                 Val(x) => Val(x),
                 s_s => Eval(Box::new(s_s)),
+            },
+            Defer(s) => match s.partial_eval(cs, time) {
+                Val(Str(s)) => match crate::parser::lola_expression.parse_next(&mut s.as_str()) {
+                    Ok(s_s) => to_indexed_expr(&s_s, 0).partial_eval(cs, time),
+                    Err(_) => Defer(Box::new(Val(Str(s)))),
+                },
+                Val(x) => Val(x),
+                s_s => Defer(Box::new(s_s)),
             },
         }
     }
@@ -409,7 +418,7 @@ mod tests {
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 4))),
                             -1,
                             ConcreteStreamData::Int(0),
-                        ),),
+                        ), ),
                         SBinOp::Plus,
                     ),
                 )],
@@ -427,7 +436,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 0), ConcreteStreamData::Int(1)),],
+                resolved: vec![(IndexedVarName("x".into(), 0), ConcreteStreamData::Int(1)), ],
                 unresolved: vec![],
             }
         );
@@ -438,7 +447,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 1), ConcreteStreamData::Int(0)),],
+                resolved: vec![(IndexedVarName("x".into(), 1), ConcreteStreamData::Int(0)), ],
                 unresolved: vec![],
             }
         )

@@ -1,0 +1,4 @@
+in x
+in e
+out z
+z = defer(e)
