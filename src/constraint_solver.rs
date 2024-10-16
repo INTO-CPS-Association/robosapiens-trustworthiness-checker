@@ -167,6 +167,10 @@ fn to_indexed_expr(s: &SExpr<VarName>, current_index: usize) -> SExpr<IndexedVar
         ),
         Eval(s) => Eval(Box::new(to_indexed_expr(s, current_index))),
         Defer(s) => Defer(Box::new(to_indexed_expr(s, current_index))),
+        Update(e1, e2) => Update(
+            Box::new(to_indexed_expr(e1, current_index)),
+            Box::new(to_indexed_expr(e2, current_index)),
+        ),
     }
 }
 
@@ -273,6 +277,9 @@ impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
                 Val(x) => Val(x),
                 s_s => Defer(Box::new(s_s)),
             },
+            Update(_, _) => {
+                todo!("MHK: Not sure how to implement this")
+            }
         }
     }
 }

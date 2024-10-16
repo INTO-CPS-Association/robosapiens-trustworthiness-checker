@@ -1,8 +1,3 @@
-use std::{
-    collections::BTreeMap,
-    fmt::{Debug, Display},
-};
-
 use crate::{
     core::{
         ConcreteStreamData, ExpressionTyping, IndexedVarName, Specification, StreamExpr,
@@ -11,6 +6,11 @@ use crate::{
     lola_type_system::{LOLATypeSystem, StreamType},
     MonitoringSemantics, OutputStream, StreamContext,
 };
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Display},
+};
+use winnow::stream::Accumulate;
 
 pub struct UntypedLOLA;
 // pub trait TypedStreamData<T: Type<TS>, TS: TypeSystem>: StreamData<TS> {}
@@ -97,8 +97,8 @@ pub enum SExpr<VarT: Debug> {
 
     // Eval
     Eval(Box<Self>),
-
     Defer(Box<Self>),
+    Update(Box<Self>, Box<Self>),
 }
 
 impl StreamExpr<()> for SExpr<VarName> {
@@ -182,6 +182,7 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             SExpr::Var(v) => write!(f, "{}", v),
             SExpr::Eval(e) => write!(f, "eval({})", e),
             SExpr::Defer(e) => write!(f, "defer({})", e),
+            SExpr::Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
         }
     }
 }

@@ -34,6 +34,11 @@ impl MonitoringSemantics<SExpr<VarName>, OutputStream<ConcreteStreamData>>
                 let e = Self::to_async_stream(*e, ctx);
                 mc::defer(ctx, e, 10)
             }
+            SExpr::Update(e1, e2) => {
+                let e1 = Self::to_async_stream(*e1, ctx);
+                let e2 = Self::to_async_stream(*e2, ctx);
+                mc::update(e1, e2)
+            }
             SExpr::Index(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::index(e, i, c)

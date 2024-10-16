@@ -461,6 +461,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
             SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
             SExpr::Defer(_) => todo!("Implement support for Defer"),
+            SExpr::Update(_,_) => todo!("Implement support for Update"),
         }
     }
 }

@@ -76,10 +76,22 @@ fn adefer(s: &mut &str) -> PResult<SExpr<VarName>> {
         .parse_next(s)
 }
 
+fn aupdate(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: literal("update"),
+        _: whitespace,
+        paren_bin_aexpr,
+        _: whitespace,
+    ))
+        .map(|es| { let x = es.0.0; let y = es.0.1; SExpr::Update(Box::new(x), Box::new(y)) })
+        .parse_next(s)
+}
+
 fn aatom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
-        alt((sindex, aval, aeval, adefer, avar, paren_aexpr)),
+        alt((sindex, aval, aeval, adefer, aupdate, avar, paren_aexpr)),
         whitespace,
     )
         .parse_next(s)
@@ -120,6 +132,10 @@ fn aminus(s: &mut &str) -> PResult<SExpr<VarName>> {
 
 fn paren_aexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited('(', aexpr, ')').parse_next(s)
+}
+
+fn paren_bin_aexpr(s: &mut &str) -> PResult<(SExpr<VarName>, SExpr<VarName>)> {
+    delimited('(', separated_pair(aexpr, ',', aexpr), ')').parse_next(s)
 }
 
 fn btrue(s: &mut &str) -> PResult<BExpr<VarName>> {
