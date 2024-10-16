@@ -257,7 +257,10 @@ pub fn eval(
                     println!("returning val from existing stream: {:?}", eval_res);
                     return match eval_res {
                         Some(eval_res) => Some((eval_res, (subcontext, x, Some((current, es))))),
-                        None => None,
+                        None => {
+                            // panic!("Eval stream ended unexpectedly");
+                            None
+                        }
                     };
                 }
             }

@@ -79,16 +79,28 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
             }
 
             let sender = sender.lock().unwrap();
-
+            let data_copy = data.clone();
             if let Some(max_queued) = max_queued {
                 if sender.len() < max_queued {
-                    sender.send(data);
+                    if let Err(e) = sender.send(data) {
+                        println!(
+                            "PUBLISH: Failed to send data {:?} due to no receivers (err = {:?})",
+                            data_copy, e
+                        );
+                    }
                     None
                 } else {
                     Some(data)
                 }
             } else {
-                sender.send(data);
+                // println!("ENDING PUBLISH");
+                if let Err(e) = sender.send(data) {
+                    println!(
+                        "PUBLISH: Failed to send data {:?} due to no receivers (err = {:?})",
+                        data_copy, e
+                    );
+                }
+                // sender.send(data);
                 None
             }
         }
@@ -212,7 +224,9 @@ impl<SS: StreamSystem> SubMonitor<SS> {
                 }
                 _ = clock.changed() => {
                     let clock_new = *clock.borrow_and_update();
-                    for _ in clock_old..=clock_new {
+                    // println!("Monitoring between {} and {}", clock_old, clock_new);
+                    for _ in clock_old+1..=clock_new {
+                        // println!("Monitoring {}", i);
                         select! {
                             biased;
                             _ = cancellation_token.cancelled() => {
@@ -220,11 +234,20 @@ impl<SS: StreamSystem> SubMonitor<SS> {
                             }
                             data = recv.recv() => {
                                 if let Some(data) = data {
+                                    let finished = data.is_none();
+
+                                    // println!("Distributing data {:?}", data);
                                     // let data_copy = data.clone();
                                     if let Err(_) = send.send(data) {
+                                        // println!("sent")
                                         // println!("Failed to send data {:?} due to no receivers (err = {:?})", data_copy, e);
                                     }
+                                    if finished {
+                                        // println!("Ending distribute");
+                                        return;
+                                    }
                                 } else {
+                                    // println!("Ending distribute");
                                     return;
                                 }
                             }
@@ -249,8 +272,11 @@ impl<SS: StreamSystem> SubMonitor<SS> {
                     return;
                 }
                 Ok(data) = recv.recv() => {
-                    let finished = data.is_none();
-                    send.send(data).await;
+                    let mut finished = data.is_none();
+                    // println!("Monitored data {:?}", data);
+                    if let Err(_) = send.send(data).await {
+                        finished = true;
+                    }
                     if finished {
                         return;
                     }

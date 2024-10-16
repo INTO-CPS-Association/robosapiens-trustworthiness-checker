@@ -51,6 +51,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
+    // Could use tokio-console for debugging
+    // console_subscriber::init();
     let cli = Cli::parse();
 
     // let model = std::fs::read_to_string(cli.model).expect("Model file could not be read");
