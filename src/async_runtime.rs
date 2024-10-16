@@ -82,12 +82,10 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
         // be checked within the same lock acquisition as sending the data
         // Return None if the data was not sent
 
-        let (typ, sender) = {
-            let binding = self.senders.read().unwrap();
-            binding.get(&var).unwrap().clone()
-        };
         match data {
             Some(inner_data) => {
+                let binding = self.senders.read().unwrap();
+                let (typ, sender) = binding.get(&var).unwrap();
                 assert_eq!(SS::TypeSystem::type_of_value(&inner_data), typ.clone());
                 let sender = sender.lock().unwrap();
                 let data_copy = inner_data.clone();
