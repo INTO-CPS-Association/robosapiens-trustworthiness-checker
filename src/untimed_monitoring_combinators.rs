@@ -251,14 +251,17 @@ pub fn eval(
             // existing stream
             if let Some((prev, mut es)) = last {
                 if prev == current {
-                    println!("prev == current == {:?}", current);
+                    // println!("prev == current == {:?}", current);
                     subcontext.advance();
                     let eval_res = es.next().await;
-                    println!("returning val from existing stream: {:?}", eval_res);
+                    // println!("returning val from existing stream: {:?}", eval_res);
                     return match eval_res {
-                        Some(eval_res) => Some((eval_res, (subcontext, x, Some((current, es))))),
+                        Some(eval_res) => {
+                            // println!("eval producing {:?}", eval_res);
+                            Some((eval_res, (subcontext, x, Some((current, es)))))
+                        },
                         None => {
-                            // panic!("Eval stream ended unexpectedly");
+                            println!("Eval stream ended");
                             None
                         }
                     };
@@ -273,8 +276,10 @@ pub fn eval(
                         Err(_) => unimplemented!("Invalid eval str"),
                     };
                     let mut es = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
+                    // println!("new eval stream");
                     subcontext.advance();
                     let eval_res = es.next().await?;
+                    // println!("eval producing {:?}", eval_res);
                     return Some((
                         eval_res,
                         (subcontext, x, Some((ConcreteStreamData::Str(s), es))),

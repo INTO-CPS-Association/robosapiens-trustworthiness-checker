@@ -6,7 +6,7 @@ use crate::untimed_monitoring_combinators as mc;
 pub struct UntimedLolaSemantics;
 
 impl MonitoringSemantics<SExpr<VarName>, OutputStream<ConcreteStreamData>>
-for UntimedLolaSemantics
+    for UntimedLolaSemantics
 {
     type StreamSystem = UntypedStreams;
 
@@ -49,7 +49,7 @@ for UntimedLolaSemantics
 }
 
 impl MonitoringSemantics<BExpr<VarName>, OutputStream<ConcreteStreamData>>
-for UntimedLolaSemantics
+    for UntimedLolaSemantics
 {
     type StreamSystem = UntypedStreams;
 

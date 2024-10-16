@@ -113,16 +113,20 @@ fn receiver_to_stream<SS: StreamSystem>(
 ) -> SS::TypedStream {
     SS::to_typed_stream(
         typ,
-        Box::pin(
-            stream::unfold(recv, |mut recv| async move {
-                if let Ok(res) = recv.recv().await {
-                    Some((res?, recv))
-                } else {
-                    None
+        Box::pin(stream::unfold(recv, |mut recv| async move {
+            if let Ok(res) = recv.recv().await {
+                match res {
+                    Some(data) => Some((data, recv)),
+                    None => {
+                        // println!("Stream ended");
+                        None
+                    }
                 }
-            })
-            .fuse(),
-        ) as OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>,
+            } else {
+                // println!("Channel closed");
+                None
+            }
+        })) as OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>,
     )
 }
 
@@ -130,7 +134,7 @@ impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
     fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
         let (typ, sender) = self.senders.get(var)?;
         let receiver = sender.lock().unwrap().subscribe();
-        println!("Subscribed to {}", var);
+        // println!("Subscribed to {}", var);
         Some(receiver_to_stream::<SS>(typ.clone(), receiver))
     }
 
@@ -222,7 +226,11 @@ impl<SS: StreamSystem> SubMonitor<SS> {
                 _ = cancellation_token.cancelled() => {
                     return;
                 }
-                _ = clock.changed() => {
+                clock_upd = clock.changed() => {
+                    if clock_upd.is_err() {
+                        // println!("Clock channel closed");
+                        return;
+                    }
                     let clock_new = *clock.borrow_and_update();
                     // println!("Monitoring between {} and {}", clock_old, clock_new);
                     for _ in clock_old+1..=clock_new {
@@ -253,6 +261,7 @@ impl<SS: StreamSystem> SubMonitor<SS> {
                             }
                             // TODO: should we have a release lock here for deadlock prevention?
                         }
+                        // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
                     clock_old = clock_new;
                 }
@@ -401,6 +410,7 @@ where
         Box::pin(stream::unfold(
             (output_streams, outputs),
             |(mut output_streams, outputs)| async move {
+                // println!("Monitoring outputs");
                 let mut futures = vec![];
                 for (_, stream) in output_streams.iter_mut() {
                     futures.push(stream.next());
@@ -463,7 +473,8 @@ where
                         let finished = data.is_none();
                         while let Some(unsent_data) = var_exchange.publish(&var, data, Some(80)) {
                             data = unsent_data;
-                            // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            // println!("Waiting to send input data");
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
                         if finished {
                             return;
@@ -494,6 +505,7 @@ where
                         let finished = data.is_none();
                         while let Some(unsent_data) = var_exchange.publish(&var, data, Some(10)) {
                             data = unsent_data;
+                            // println!("Waiting to send output data");
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
                         if finished {
