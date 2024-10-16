@@ -13,7 +13,7 @@ bench = false
 # console-subscriber = "0.4.0"
 winnow = "0.6.18"
 futures = "0.3.30"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "tracing"] }
 dyn-clone = "1.0.17"
 backtrace-on-stack-overflow = "0.3.0"
 tokio-util = "0.7.11"

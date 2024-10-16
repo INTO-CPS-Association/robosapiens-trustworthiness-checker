@@ -5,6 +5,7 @@ use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 
 use futures::future::join_all;
 use futures::stream;
@@ -30,12 +31,16 @@ use crate::core::TypeSystem;
 use crate::core::{OutputStream, StreamContext, VarName};
 
 struct AsyncVarExchange<SS: StreamSystem> {
-    senders: BTreeMap<
-        VarName,
-        (
-            <SS::TypeSystem as TypeSystem>::Type,
-            Arc<Mutex<broadcast::Sender<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>>>,
-        ),
+    senders: Arc<
+        RwLock<
+            BTreeMap<
+                VarName,
+                (
+                    <SS::TypeSystem as TypeSystem>::Type,
+                    Arc<Mutex<broadcast::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
+                ),
+            >,
+        >,
     >,
     cancellation_token: CancellationToken,
     #[allow(dead_code)]
@@ -53,9 +58,11 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
         let mut senders = BTreeMap::new();
 
         for (var, typ) in vars {
-            let (sender, _) = channel::<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>(100);
+            let (sender, _) = channel::<<SS::TypeSystem as TypeSystem>::TypedValue>(100);
             senders.insert(var, (typ, Arc::new(Mutex::new(sender))));
         }
+
+        let senders = Arc::new(RwLock::new(senders));
 
         AsyncVarExchange {
             senders,
@@ -69,41 +76,48 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
         var: &VarName,
         data: Option<<SS::TypeSystem as TypeSystem>::TypedValue>,
         max_queued: Option<usize>,
-    ) -> Option<Option<<SS::TypeSystem as TypeSystem>::TypedValue>> {
+    ) -> Option<<SS::TypeSystem as TypeSystem>::TypedValue> {
         // Don't send if maxed_queued limit is set and reached
         // This check is integrated into publish so that len can
         // be checked within the same lock acquisition as sending the data
         // Return None if the data was not sent
 
-        let (typ, sender) = self.senders.get(&var).unwrap();
-        {
-            if let Some(data) = &data {
-                assert_eq!(SS::TypeSystem::type_of_value(data), typ.clone())
-            }
-
-            let sender = sender.lock().unwrap();
-            let data_copy = data.clone();
-            if let Some(max_queued) = max_queued {
-                if sender.len() < max_queued {
-                    if let Err(e) = sender.send(data) {
+        let (typ, sender) = {
+            let binding = self.senders.read().unwrap();
+            binding.get(&var).unwrap().clone()
+        };
+        match data {
+            Some(inner_data) => {
+                assert_eq!(SS::TypeSystem::type_of_value(&inner_data), typ.clone());
+                let sender = sender.lock().unwrap();
+                let data_copy = inner_data.clone();
+                if let Some(max_queued) = max_queued {
+                    if sender.len() < max_queued {
+                        if let Err(e) = sender.send(inner_data) {
+                            println!(
+                                "PUBLISH: Failed to send data {:?} due to no receivers (err = {:?})",
+                                data_copy, e
+                            );
+                        }
+                        None
+                    } else {
+                        Some(inner_data)
+                    }
+                } else {
+                    // println!("ENDING PUBLISH");
+                    if let Err(e) = sender.send(inner_data) {
                         println!(
                             "PUBLISH: Failed to send data {:?} due to no receivers (err = {:?})",
                             data_copy, e
                         );
                     }
+                    // sender.send(data);
                     None
-                } else {
-                    Some(data)
                 }
-            } else {
-                // println!("ENDING PUBLISH");
-                if let Err(e) = sender.send(data) {
-                    println!(
-                        "PUBLISH: Failed to send data {:?} due to no receivers (err = {:?})",
-                        data_copy, e
-                    );
-                }
-                // sender.send(data);
+            }
+            None => {
+                self.senders.write().unwrap().remove(var);
+                // println!("ENDING PUBLISHING STREAM");
                 None
             }
         }
@@ -112,19 +126,13 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
 
 fn receiver_to_stream<SS: StreamSystem>(
     typ: <SS::TypeSystem as TypeSystem>::Type,
-    recv: broadcast::Receiver<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>,
+    recv: broadcast::Receiver<<SS::TypeSystem as TypeSystem>::TypedValue>,
 ) -> SS::TypedStream {
     SS::to_typed_stream(
         typ,
         Box::pin(stream::unfold(recv, |mut recv| async move {
             if let Ok(res) = recv.recv().await {
-                match res {
-                    Some(data) => Some((data, recv)),
-                    None => {
-                        // println!("Stream ended");
-                        None
-                    }
-                }
+                Some((res, recv))
             } else {
                 // println!("Channel closed");
                 None
@@ -135,7 +143,8 @@ fn receiver_to_stream<SS: StreamSystem>(
 
 impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
     fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
-        let (typ, sender) = self.senders.get(var)?;
+        let binding = self.senders.read().unwrap();
+        let (typ, sender) = binding.get(var)?;
         let receiver = sender.lock().unwrap().subscribe();
         // println!("Subscribed to {}", var);
         Some(receiver_to_stream::<SS>(typ.clone(), receiver))
@@ -156,7 +165,7 @@ struct SubMonitor<SS: StreamSystem> {
         VarName,
         (
             <SS::TypeSystem as TypeSystem>::Type,
-            broadcast::Sender<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>,
+            broadcast::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
         ),
     >,
     buffer_size: usize,
@@ -167,7 +176,7 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     fn new(parent: Arc<AsyncVarExchange<SS>>, buffer_size: usize) -> Self {
         let mut senders = BTreeMap::new();
 
-        for (var, (typ, _)) in parent.senders.iter() {
+        for (var, (typ, _)) in parent.senders.read().unwrap().iter() {
             // buffers.insert(
             //     var.clone(),
             //     Arc::new(Mutex::new(RingBuffer::new(buffer_size))),
@@ -187,11 +196,13 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     }
 
     fn start_monitors(self) -> Self {
-        for var in self.parent.senders.keys() {
+        for var in self.parent.senders.read().unwrap().keys() {
             let (send, recv) = mpsc::channel(self.buffer_size);
             let parent_receiver = self
                 .parent
                 .senders
+                .read()
+                .unwrap()
                 .get(var)
                 .unwrap()
                 .1
@@ -217,8 +228,8 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     }
 
     async fn distribute(
-        mut recv: mpsc::Receiver<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>,
-        send: broadcast::Sender<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>,
+        mut recv: mpsc::Receiver<<SS::TypeSystem as TypeSystem>::TypedValue>,
+        send: broadcast::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
         mut clock: watch::Receiver<usize>,
         cancellation_token: CancellationToken,
     ) {
@@ -245,17 +256,11 @@ impl<SS: StreamSystem> SubMonitor<SS> {
                             }
                             data = recv.recv() => {
                                 if let Some(data) = data {
-                                    let finished = data.is_none();
-
                                     // println!("Distributing data {:?}", data);
                                     // let data_copy = data.clone();
                                     if let Err(_) = send.send(data) {
                                         // println!("sent")
                                         // println!("Failed to send data {:?} due to no receivers (err = {:?})", data_copy, e);
-                                    }
-                                    if finished {
-                                        // println!("Ending distribute");
-                                        return;
                                     }
                                 } else {
                                     // println!("Ending distribute");
@@ -273,8 +278,8 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     }
 
     async fn monitor(
-        mut recv: broadcast::Receiver<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>,
-        send: mpsc::Sender<Option<<SS::TypeSystem as TypeSystem>::TypedValue>>,
+        mut recv: broadcast::Receiver<<SS::TypeSystem as TypeSystem>::TypedValue>,
+        send: mpsc::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
         cancellation_token: CancellationToken,
     ) {
         loop {
@@ -283,14 +288,17 @@ impl<SS: StreamSystem> SubMonitor<SS> {
                 _ = cancellation_token.cancelled() => {
                     return;
                 }
-                Ok(data) = recv.recv() => {
-                    let mut finished = data.is_none();
-                    // println!("Monitored data {:?}", data);
-                    if let Err(_) = send.send(data).await {
-                        finished = true;
-                    }
-                    if finished {
-                        return;
+                data = recv.recv() => {
+                    match data {
+                        Ok(data) => {
+                            // println!("Monitored data {:?}", data);
+                            if let Err(_) = send.send(data).await {
+                                return;
+                            }
+                        }
+                        Err(_) => {
+                            return;
+                        }
                     }
                 }
             }
@@ -477,9 +485,10 @@ where
                         // We try and receive upto 80/100 input messages
                         // to avoid monitoring from blocking the input streams
                         let finished = data.is_none();
+                        // Starting publish loop
                         while let Some(unsent_data) = var_exchange.publish(&var, data, Some(80)) {
-                            data = unsent_data;
-                            // println!("Waiting to send input data");
+                            data = Some(unsent_data);
+                            println!("Waiting to send input data");
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
                         if finished {
@@ -510,7 +519,7 @@ where
                         // Try and send the data until the exchange is able to accept it
                         let finished = data.is_none();
                         while let Some(unsent_data) = var_exchange.publish(&var, data, Some(10)) {
-                            data = unsent_data;
+                            data = Some(unsent_data);
                             // println!("Waiting to send output data");
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
