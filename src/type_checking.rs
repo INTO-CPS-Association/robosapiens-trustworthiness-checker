@@ -191,7 +191,7 @@ impl TypeCheckableSpecification<UntypedLOLA, LOLATypeSystem, TypedLOLASpecificat
 
 impl TypeAnnotated<LOLATypeSystem> for TypedLOLASpecification {
     fn type_of_var(&self, var: &VarName) -> Option<StreamType> {
-        println!("Type of var: {:?}", var);
+        // println!("Type of var: {:?}", var);
         self.type_annotations.get(var).cloned()
     }
 }

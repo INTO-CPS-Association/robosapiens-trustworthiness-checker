@@ -11,12 +11,26 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+  build_and_bench:
+    name: Bench
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: main
+      - name: measure benchmarks on main
+        uses: actions-rs/cargo@v1
+        with:
+          command: bench
+      - name: upload benchmark report
+        uses: actions/upload-artifact@v1
+        with:
+          name: Benchmark report
+          path: target/criterion/
