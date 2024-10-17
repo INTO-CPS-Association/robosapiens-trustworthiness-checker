@@ -22,7 +22,7 @@ jobs:
     name: Bench
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           ref: main
       - name: measure benchmarks on main
@@ -30,7 +30,7 @@ jobs:
         with:
           command: bench
       - name: upload benchmark report
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: Benchmark report
           path: target/criterion/
