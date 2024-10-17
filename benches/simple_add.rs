@@ -60,6 +60,21 @@ pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, LOLAStream> {
     input_streams
 }
 
+async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
+    let input_streams = input_streams_concrete(num_outputs);
+    let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
+    let mut async_monitor =
+        trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor::new(
+            spec,
+            input_streams,
+        );
+    let _outputs: Vec<BTreeMap<VarName, ConcreteStreamData>> = async_monitor
+        .monitor_outputs()
+        .take(num_outputs)
+        .collect()
+        .await;
+}
+
 async fn monitor_outputs_untyped_async(num_outputs: usize) {
     let input_streams = input_streams_concrete(num_outputs);
     let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
@@ -141,6 +156,14 @@ fn from_elem(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(30));
 
     for size in sizes {
+        group.bench_with_input(
+            BenchmarkId::new("simple_add_constraints", size),
+            &size,
+            |b, &size| {
+                b.to_async(&tokio_rt)
+                    .iter(|| monitor_outputs_untyped_constraints(size))
+            },
+        );
         group.bench_with_input(
             BenchmarkId::new("simple_add_untyped_async", size),
             &size,
