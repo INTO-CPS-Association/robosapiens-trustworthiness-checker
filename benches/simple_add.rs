@@ -9,14 +9,8 @@ use futures::{
     stream::{self, BoxStream},
     StreamExt,
 };
-use tokio::runtime::Runtime as Executor;
 use trustworthiness_checker::core::TypeCheckableSpecification;
-use trustworthiness_checker::{
-    core::StreamSystem,
-    lola_streams::{LOLAStream, TypedStreams},
-    lola_type_system::StreamType,
-    ConcreteStreamData, Monitor, VarName,
-};
+use trustworthiness_checker::{lola_streams::LOLAStream, ConcreteStreamData, Monitor, VarName};
 
 pub fn spec_simple_add_monitor() -> &'static str {
     "in x\n\
