@@ -1,21 +1,20 @@
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::mem;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::RwLock;
 
 use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
+use std::fmt::Debug;
 use tokio::select;
 use tokio::sync::broadcast;
-use tokio::sync::broadcast::channel;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 
@@ -26,22 +25,220 @@ use crate::core::MonitoringSemantics;
 use crate::core::Specification;
 use crate::core::StreamExpr;
 use crate::core::StreamSystem;
+use crate::core::StreamTransformationFn;
 use crate::core::TypeAnnotated;
 use crate::core::TypeSystem;
 use crate::core::{OutputStream, StreamContext, VarName};
 
+enum WaitingStream<S> {
+    Arrived(S),
+    Waiting(oneshot::Receiver<S>),
+}
+
+// Convert a receiver of a stream to a stream which waits for the stream to
+// arrive before supplying the first element
+fn oneshot_to_stream<T: 'static>(receiver: oneshot::Receiver<OutputStream<T>>) -> OutputStream<T> {
+    Box::pin(stream::unfold(
+        WaitingStream::Waiting(receiver),
+        |waiting_stream| async move {
+            match waiting_stream {
+                WaitingStream::Arrived(mut stream) => {
+                    Some((stream.next().await?, WaitingStream::Arrived(stream)))
+                }
+                WaitingStream::Waiting(receiver) => match receiver.await {
+                    Ok(mut stream) => Some((stream.next().await?, WaitingStream::Arrived(stream))),
+                    Err(_) => None,
+                },
+            }
+        },
+    ))
+}
+
+// Wrap a stream in a drop guard to ensure that the associated cancellation
+// token is not dropped before the stream has completed or been dropped
+fn drop_guard_stream<T: 'static>(
+    stream: OutputStream<T>,
+    drop_guard: Arc<DropGuard>,
+) -> OutputStream<T> {
+    Box::pin(stream::unfold(
+        (stream, drop_guard),
+        |(mut stream, drop_guard)| async move {
+            // let num_copies = Arc::strong_count(&drop_guard);
+            // println!("Currently have {} copies of drop guard", num_copies);
+            match stream.next().await {
+                Some(val) => Some((val, (stream, drop_guard))),
+                None => None,
+            }
+        },
+    ))
+}
+
+struct DropGuardStream {
+    drop_guard: Arc<DropGuard>,
+}
+
+impl StreamTransformationFn for DropGuardStream {
+    fn transform<T: 'static>(&self, stream: OutputStream<T>) -> OutputStream<T> {
+        drop_guard_stream(stream, self.drop_guard.clone())
+    }
+}
+
+// An actor which manages a single variable by providing channels to get
+// the output stream and publishing values to all subscribers
+async fn manage_var<V: Clone + Debug + Send + 'static>(
+    var: VarName,
+    mut input_stream: OutputStream<V>,
+    mut channel_request_rx: mpsc::Receiver<oneshot::Sender<OutputStream<V>>>,
+    mut ready: watch::Receiver<bool>,
+    cancel: CancellationToken,
+) {
+    let mut senders: Vec<mpsc::Sender<V>> = vec![];
+    // Gathering senders
+    loop {
+        select! {
+            biased;
+            _ = cancel.cancelled() => {
+                // println!("Ending manage_var for {} due to cancellation", var);
+                return;
+            }
+            channel_sender = channel_request_rx.recv() => {
+                if let Some(channel_sender) = channel_sender {
+                    let (tx, rx) = mpsc::channel(10);
+                    senders.push(tx);
+                    let stream = ReceiverStream::new(rx);
+                    // let typed_stream = SS::to_typed_stream(typ, Box::pin(stream));
+                    if let Err(_) = channel_sender.send(Box::pin(stream)) {
+                        panic!("Failed to send stream for {var} to requester");
+                    }
+                }
+                // We don't care if we stop receiving requests
+            }
+            _ = ready.changed() => {
+                // println!("Moving to stage 2");
+                break;
+            }
+        }
+    }
+
+    // Distributing data
+    loop {
+        select! {
+            biased;
+            _ = cancel.cancelled() => {
+                // println!("Ending manage_var for {} due to cancellation", var);
+                return;
+            }
+            // Bad things will happen if this is called before everyone has subscribed
+            data = input_stream.next() => {
+                if let Some(data) = data {
+                    assert!(!senders.is_empty());
+                    let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
+                    for res in join_all(send_futs).await {
+                        if let Err(_) = res {
+                            println!("Failed to send data {:?} for {} due to no receivers", data, var);
+                        }
+                    }
+                } else {
+                    // println!("Ending manage_var for {} as out of input data", var);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// Task for moving data from a channel to an broadcast channel
+// with a clock used to control the rate of data distribution
+async fn distribute<V: Clone + Debug + Send + 'static>(
+    mut input_stream: OutputStream<V>,
+    send: broadcast::Sender<V>,
+    mut clock: watch::Receiver<usize>,
+    cancellation_token: CancellationToken,
+) {
+    let mut clock_old = 0;
+    loop {
+        select! {
+            biased;
+            _ = cancellation_token.cancelled() => {
+                return;
+            }
+            clock_upd = clock.changed() => {
+                if clock_upd.is_err() {
+                    // println!("Clock channel closed");
+                    return;
+                }
+                let clock_new = *clock.borrow_and_update();
+                // println!("Monitoring between {} and {}", clock_old, clock_new);
+                for _ in clock_old+1..=clock_new {
+                    // println!("Monitoring {}", i);
+                    select! {
+                        biased;
+                        _ = cancellation_token.cancelled() => {
+                            return;
+                        }
+                        data = input_stream.next() => {
+                            if let Some(data) = data {
+                                // println!("Distributing data {:?}", data);
+                                // let data_copy = data.clone();
+                                if let Err(_) = send.send(data) {
+                                    // println!("sent")
+                                    // println!("Failed to send data {:?} due to no receivers (err = {:?})", data_copy, e);
+                                }
+                            } else {
+                                // println!("Ending distribute");
+                                return;
+                            }
+                        }
+                        // TODO: should we have a release lock here for deadlock prevention?
+                    }
+                    // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+                clock_old = clock_new;
+            }
+        }
+    }
+}
+
+// Task for moving data from an input stream to an output channel
+async fn monitor<V: Clone + Debug + Send + 'static>(
+    mut input_stream: OutputStream<V>,
+    send: mpsc::Sender<V>,
+    cancellation_token: CancellationToken,
+) {
+    loop {
+        select! {
+            biased;
+            _ = cancellation_token.cancelled() => {
+                return;
+            }
+            data = input_stream.next() => {
+                match data {
+                    Some(data) => {
+                        // println!("Monitored data {:?}", data);
+                        if let Err(_) = send.send(data).await {
+                            return;
+                        }
+                    }
+                    None => {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct VarData<SS: StreamSystem> {
+    typ: <SS::TypeSystem as TypeSystem>::Type,
+    // sender: mpsc::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
+    requester:
+        mpsc::Sender<oneshot::Sender<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
+}
+
+// A struct representing the top-level stream context for an async monitor
 struct AsyncVarExchange<SS: StreamSystem> {
-    senders: Arc<
-        RwLock<
-            BTreeMap<
-                VarName,
-                (
-                    <SS::TypeSystem as TypeSystem>::Type,
-                    Arc<Mutex<broadcast::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
-                ),
-            >,
-        >,
-    >,
+    var_data: BTreeMap<VarName, VarData<SS>>,
     cancellation_token: CancellationToken,
     #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
@@ -51,101 +248,41 @@ struct AsyncVarExchange<SS: StreamSystem> {
 
 impl<SS: StreamSystem> AsyncVarExchange<SS> {
     fn new(
-        vars: Vec<(VarName, <SS::TypeSystem as TypeSystem>::Type)>,
+        var_data: BTreeMap<VarName, VarData<SS>>,
         cancellation_token: CancellationToken,
         drop_guard: Arc<DropGuard>,
     ) -> Self {
-        let mut senders = BTreeMap::new();
-
-        for (var, typ) in vars {
-            let (sender, _) = channel::<<SS::TypeSystem as TypeSystem>::TypedValue>(100);
-            senders.insert(var, (typ, Arc::new(Mutex::new(sender))));
-        }
-
-        let senders = Arc::new(RwLock::new(senders));
-
         AsyncVarExchange {
-            senders,
+            var_data,
             cancellation_token,
             drop_guard,
         }
     }
-
-    fn publish(
-        &self,
-        var: &VarName,
-        data: Option<<SS::TypeSystem as TypeSystem>::TypedValue>,
-        max_queued: Option<usize>,
-    ) -> Option<<SS::TypeSystem as TypeSystem>::TypedValue> {
-        // Don't send if maxed_queued limit is set and reached
-        // This check is integrated into publish so that len can
-        // be checked within the same lock acquisition as sending the data
-        // Return None if the data was not sent
-
-        match data {
-            Some(inner_data) => {
-                let binding = self.senders.read().unwrap();
-                let (typ, sender) = binding.get(&var).unwrap();
-                assert_eq!(SS::TypeSystem::type_of_value(&inner_data), typ.clone());
-                let sender = sender.lock().unwrap();
-                let data_copy = inner_data.clone();
-                if let Some(max_queued) = max_queued {
-                    if sender.len() < max_queued {
-                        if let Err(e) = sender.send(inner_data) {
-                            println!(
-                                "PUBLISH: Failed to send data {:?} due to no receivers (err = {:?})",
-                                data_copy, e
-                            );
-                        }
-                        None
-                    } else {
-                        Some(inner_data)
-                    }
-                } else {
-                    // println!("ENDING PUBLISH");
-                    if let Err(e) = sender.send(inner_data) {
-                        println!(
-                            "PUBLISH: Failed to send data {:?} due to no receivers (err = {:?})",
-                            data_copy, e
-                        );
-                    }
-                    // sender.send(data);
-                    None
-                }
-            }
-            None => {
-                self.senders.write().unwrap().remove(var);
-                // println!("ENDING PUBLISHING STREAM");
-                None
-            }
-        }
-    }
-}
-
-fn receiver_to_stream<SS: StreamSystem>(
-    typ: <SS::TypeSystem as TypeSystem>::Type,
-    recv: broadcast::Receiver<<SS::TypeSystem as TypeSystem>::TypedValue>,
-) -> SS::TypedStream {
-    SS::to_typed_stream(
-        typ,
-        Box::pin(stream::unfold(recv, |mut recv| async move {
-            if let Ok(res) = recv.recv().await {
-                Some((res, recv))
-            } else {
-                // println!("Channel closed");
-                None
-            }
-        })) as OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>,
-    )
 }
 
 impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
     fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
-        let binding = self.senders.read().unwrap();
-        let (typ, sender) = binding.get(var)?;
-        let receiver = sender.lock().unwrap().subscribe();
-        // println!("Subscribed to {}", var);
-        Some(receiver_to_stream::<SS>(typ.clone(), receiver))
+        // Retrieve the channel used to request the stream
+        let var_data = self.var_data.get(var)?;
+        let requester = var_data.requester.clone();
+
+        // Request the stream
+        let (tx, rx) = oneshot::channel();
+        let var = var.clone();
+        tokio::spawn(async move {
+            if let Err(e) = requester.send(tx).await {
+                println!(
+                    "Failed to request stream for {} due to no receivers (err = {:?})",
+                    var, e
+                );
+            }
+        });
+
+        // Create a lazy typed stream from the request
+        let stream = oneshot_to_stream(rx);
+        // let stream = drop_guard_stream(stream, self.drop_guard.clone());
+        let typed_stream = SS::to_typed_stream(var_data.typ.clone(), stream);
+        Some(typed_stream)
     }
 
     fn advance(&self) {
@@ -157,6 +294,8 @@ impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
     }
 }
 
+// A subcontext which consumes data for a subset of the variables and makes
+// it available when evaluating a deferred expression
 struct SubMonitor<SS: StreamSystem> {
     parent: Arc<AsyncVarExchange<SS>>,
     senders: BTreeMap<
@@ -174,12 +313,11 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     fn new(parent: Arc<AsyncVarExchange<SS>>, buffer_size: usize) -> Self {
         let mut senders = BTreeMap::new();
 
-        for (var, (typ, _)) in parent.senders.read().unwrap().iter() {
-            // buffers.insert(
-            //     var.clone(),
-            //     Arc::new(Mutex::new(RingBuffer::new(buffer_size))),
-            // );
-            senders.insert(var.clone(), (typ.clone(), broadcast::Sender::new(100)));
+        for (var, var_data) in parent.var_data.iter() {
+            senders.insert(
+                var.clone(),
+                (var_data.typ.clone(), broadcast::Sender::new(100)),
+            );
         }
 
         let progress_sender = watch::channel(0).0;
@@ -194,29 +332,19 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     }
 
     fn start_monitors(self) -> Self {
-        for var in self.parent.senders.read().unwrap().keys() {
+        for var in self.parent.var_data.keys() {
             let (send, recv) = mpsc::channel(self.buffer_size);
-            let parent_receiver = self
-                .parent
-                .senders
-                .read()
-                .unwrap()
-                .get(var)
-                .unwrap()
-                .1
-                .lock()
-                .unwrap()
-                .subscribe();
+            let input_stream = self.parent.var(var).unwrap();
             let (_, child_sender) = self.senders.get(var).unwrap().clone();
             let clock = self.progress_sender.subscribe();
-            tokio::spawn(Self::distribute(
-                recv,
+            tokio::spawn(distribute(
+                Box::pin(ReceiverStream::new(recv)),
                 child_sender,
                 clock,
                 self.parent.cancellation_token.clone(),
             ));
-            tokio::spawn(Self::monitor(
-                parent_receiver,
+            tokio::spawn(monitor(
+                Box::pin(input_stream),
                 send.clone(),
                 self.parent.cancellation_token.clone(),
             ));
@@ -224,101 +352,19 @@ impl<SS: StreamSystem> SubMonitor<SS> {
 
         self
     }
-
-    async fn distribute(
-        mut recv: mpsc::Receiver<<SS::TypeSystem as TypeSystem>::TypedValue>,
-        send: broadcast::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
-        mut clock: watch::Receiver<usize>,
-        cancellation_token: CancellationToken,
-    ) {
-        let mut clock_old = 0;
-        loop {
-            select! {
-                biased;
-                _ = cancellation_token.cancelled() => {
-                    return;
-                }
-                clock_upd = clock.changed() => {
-                    if clock_upd.is_err() {
-                        // println!("Clock channel closed");
-                        return;
-                    }
-                    let clock_new = *clock.borrow_and_update();
-                    // println!("Monitoring between {} and {}", clock_old, clock_new);
-                    for _ in clock_old+1..=clock_new {
-                        // println!("Monitoring {}", i);
-                        select! {
-                            biased;
-                            _ = cancellation_token.cancelled() => {
-                                return;
-                            }
-                            data = recv.recv() => {
-                                if let Some(data) = data {
-                                    // println!("Distributing data {:?}", data);
-                                    // let data_copy = data.clone();
-                                    if let Err(_) = send.send(data) {
-                                        // println!("sent")
-                                        // println!("Failed to send data {:?} due to no receivers (err = {:?})", data_copy, e);
-                                    }
-                                } else {
-                                    // println!("Ending distribute");
-                                    return;
-                                }
-                            }
-                            // TODO: should we have a release lock here for deadlock prevention?
-                        }
-                        // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
-                    clock_old = clock_new;
-                }
-            }
-        }
-    }
-
-    async fn monitor(
-        mut recv: broadcast::Receiver<<SS::TypeSystem as TypeSystem>::TypedValue>,
-        send: mpsc::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
-        cancellation_token: CancellationToken,
-    ) {
-        loop {
-            select! {
-                biased;
-                _ = cancellation_token.cancelled() => {
-                    return;
-                }
-                data = recv.recv() => {
-                    match data {
-                        Ok(data) => {
-                            // println!("Monitored data {:?}", data);
-                            if let Err(_) = send.send(data).await {
-                                return;
-                            }
-                        }
-                        Err(_) => {
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 impl<SS: StreamSystem> StreamContext<SS> for SubMonitor<SS> {
     fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
-        // let buffer = mem::replace(
-        // self.buffers.get(var)?.lock().unwrap().deref_mut(),
-        // RingBuffer::new(self.buffer_size),
-        // );
-        // Don't clear the buffer since the evaled statement might be changed
-        // in < history_length time steps, meaning that we need some of the
-        // buffered data to evaluate the new statement
-
         let (typ, sender) = self.senders.get(var).unwrap();
 
-        let recv = sender.subscribe();
+        let recv: broadcast::Receiver<
+            <<SS as StreamSystem>::TypeSystem as TypeSystem>::TypedValue,
+        > = sender.subscribe();
+        let stream: OutputStream<<<SS as StreamSystem>::TypeSystem as TypeSystem>::TypedValue> =
+            Box::pin(BroadcastStream::new(recv).map(|x| x.unwrap()));
 
-        Some(receiver_to_stream::<SS>(typ.clone(), recv))
+        Some(SS::to_typed_stream(typ.clone(), stream))
     }
 
     fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>> {
@@ -342,19 +388,14 @@ where
     S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
     M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
 {
-    input_streams: Arc<Mutex<BTreeMap<VarName, SS::TypedStream>>>,
     model: M,
-    var_exchange: Arc<AsyncVarExchange<SS>>,
-    // tasks: Option<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>,
     output_streams: BTreeMap<VarName, SS::TypedStream>,
-    cancellation_token: CancellationToken,
-    #[allow(dead_code)]
+   #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
     // exchange is dropped
     cancellation_guard: Arc<DropGuard>,
     semantics_t: PhantomData<S>,
     expression_typing_t: PhantomData<ET>,
-    // expr_t: PhantomData<E>,
 }
 
 impl<
@@ -367,45 +408,98 @@ where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
     fn new(model: M, mut input_streams: impl InputProvider<SS>) -> Self {
-        let var_names = model
-            .input_vars()
-            .into_iter()
-            .chain(model.output_vars().into_iter())
-            .map(|var| (var.clone(), model.type_of_var(&var).unwrap()))
-            .collect();
-
-        let input_streams = model
-            .input_vars()
-            .iter()
-            .map(|var| {
-                let stream = (&mut input_streams).input_stream(var);
-                (var.clone(), stream.unwrap())
-            })
-            .collect::<BTreeMap<_, _>>();
-        let input_streams = Arc::new(Mutex::new(input_streams));
-
-        let output_streams = BTreeMap::new();
-
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
 
+        let mut var_data = BTreeMap::new();
+        let mut to_launch_in = vec![];
+        let (var_exchange_ready, watch_rx) = watch::channel(false);
+
+        // Launch monitors for each input variable
+        for var in model.input_vars().iter() {
+            let typ = model.type_of_var(var).unwrap();
+            let (tx1, rx1) = mpsc::channel(100000);
+            let input_stream = input_streams.input_stream(var).unwrap();
+            var_data.insert(
+                var.clone(),
+                VarData {
+                    typ,
+                    requester: tx1,
+                },
+            );
+            to_launch_in.push((var.clone(), input_stream, rx1));
+        }
+
+        let mut to_launch_out = vec![];
+
+        // Create tasks for each output variable
+        for var in model.output_vars().iter() {
+            let typ = model.type_of_var(var).unwrap();
+            let (tx1, rx1) = mpsc::channel(100000);
+            to_launch_out.push((var.clone(), rx1));
+            var_data.insert(
+                var.clone(),
+                VarData {
+                    typ,
+                    requester: tx1,
+                },
+            );
+        }
+
         let var_exchange = Arc::new(AsyncVarExchange::new(
-            var_names,
+            var_data,
             cancellation_token.clone(),
             cancellation_guard.clone(),
         ));
 
+        // Launch monitors for each output variable as returned by the monitor
+        let output_streams = model
+            .output_vars()
+            .iter()
+            .map(|var| (var.clone(), var_exchange.var(var).unwrap()))
+            .collect();
+        let mut async_streams = vec![];
+        for (var, _) in to_launch_out.iter() {
+            let expr = model.var_expr(&var).unwrap();
+            let stream = S::to_async_stream(expr, &var_exchange);
+            let stream = SS::transform_stream(
+                DropGuardStream {
+                    drop_guard: cancellation_guard.clone(),
+                },
+                stream,
+            );
+            async_streams.push(stream);
+        }
+
+        for ((var, rx1), stream) in to_launch_out.into_iter().zip(async_streams) {
+            tokio::spawn(manage_var(
+                var,
+                Box::pin(stream),
+                rx1,
+                watch_rx.clone(),
+                cancellation_token.clone(),
+            ));
+        }
+        for (var, input_stream, rx1) in to_launch_in {
+            tokio::spawn(manage_var(
+                var,
+                Box::pin(input_stream),
+                rx1,
+                watch_rx.clone(),
+                cancellation_token.clone(),
+            ));
+        }
+
+        var_exchange_ready.send(true).unwrap();
+
         Self {
             model,
-            input_streams,
-            var_exchange,
+            // var_exchange,
             output_streams,
             semantics_t: PhantomData,
             expression_typing_t: PhantomData,
-            cancellation_token,
             cancellation_guard,
         }
-        .spawn_tasks()
     }
 
     fn spec(&self) -> &M {
@@ -444,116 +538,5 @@ where
             },
         ))
             as BoxStream<'static, BTreeMap<VarName, <ET::TypeSystem as TypeSystem>::TypedValue>>
-    }
-}
-
-impl<
-        ET: ExpressionTyping,
-        SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-        S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-        M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
-    > AsyncMonitorRunner<ET, SS, S, M>
-where
-    ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
-{
-    fn spawn_tasks(mut self) -> Self {
-        let tasks = self.monitoring_tasks();
-
-        for task in tasks.into_iter() {
-            tokio::spawn(task);
-        }
-
-        self
-    }
-
-    fn monitor_input(&self, var: VarName) -> impl Future<Output = ()> + Send + 'static {
-        let var_exchange = self.var_exchange.clone();
-        let mut input = self.input_streams.lock().unwrap().remove(&var).unwrap();
-        let cancellation_token = self.cancellation_token.clone();
-
-        async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = cancellation_token.cancelled() => {
-                        return;
-                    }
-                    mut data = input.next() => {
-                        // Try and send the data until the exchange is able to accept it
-                        // We try and receive upto 80/100 input messages
-                        // to avoid monitoring from blocking the input streams
-                        let finished = data.is_none();
-                        // Starting publish loop
-                        while let Some(unsent_data) = var_exchange.publish(&var, data, Some(80)) {
-                            data = Some(unsent_data);
-                            println!("Waiting to send input data");
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        }
-                        if finished {
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn monitor_output(&self, var: VarName) -> impl Future<Output = ()> + Send + 'static {
-        let var_exchange = self.var_exchange.clone();
-
-        let sexpr = self.model.var_expr(&var).unwrap();
-        let mut output = S::to_async_stream(sexpr, &var_exchange);
-
-        let cancellation_token = self.cancellation_token.clone();
-
-        async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = cancellation_token.cancelled() => {
-                        return;
-                    }
-                    mut data = output.next() => {
-                        // Try and send the data until the exchange is able to accept it
-                        let finished = data.is_none();
-                        while let Some(unsent_data) = var_exchange.publish(&var, data, Some(10)) {
-                            data = Some(unsent_data);
-                            // println!("Waiting to send output data");
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        }
-                        if finished {
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Define futures which monitors each of the input and output variables
-    // as well as output streams which can be used to subscribe to the output
-    // Note that the numbers of subscribers to each broadcast channel is
-    // determined when this function is run
-    fn monitoring_tasks(&mut self) -> Vec<Pin<Box<dyn Future<Output = ()> + Send>>> {
-        let mut tasks: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = vec![];
-
-        for var in self.model.input_vars().iter() {
-            tasks.push(Box::pin(self.monitor_input(var.clone())));
-
-            // Add output steams that just echo the inputs
-            // self.output_streams
-            // .insert(var.clone(), mc::var(&self.var_exchange, var.clone()));
-        }
-
-        for var in self.model.output_vars().iter() {
-            tasks.push(Box::pin(self.monitor_output(var.clone())));
-
-            // Add output steams that subscribe to the inputs
-            let var_expr = ET::TypedExpr::var(self.spec().type_of_var(var).unwrap(), var);
-            let var_output_stream = S::to_async_stream(var_expr, &self.var_exchange);
-            self.output_streams.insert(var.clone(), var_output_stream);
-        }
-
-        tasks
     }
 }
