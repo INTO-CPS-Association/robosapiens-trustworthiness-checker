@@ -390,7 +390,7 @@ where
 {
     model: M,
     output_streams: BTreeMap<VarName, SS::TypedStream>,
-   #[allow(dead_code)]
+    #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
     // exchange is dropped
     cancellation_guard: Arc<DropGuard>,
