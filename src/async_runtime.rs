@@ -244,6 +244,7 @@ struct AsyncVarExchange<SS: StreamSystem> {
     // This is used for RAII to cancel background tasks when the async var
     // exchange is dropped
     drop_guard: Arc<DropGuard>,
+    vars_requested: (watch::Sender<usize>, watch::Receiver<usize>),
 }
 
 impl<SS: StreamSystem> AsyncVarExchange<SS> {
@@ -252,10 +253,12 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
         cancellation_token: CancellationToken,
         drop_guard: Arc<DropGuard>,
     ) -> Self {
+        let vars_requested = watch::channel(0);
         AsyncVarExchange {
             var_data,
             cancellation_token,
             drop_guard,
+            vars_requested,
         }
     }
 }
@@ -269,6 +272,10 @@ impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
         // Request the stream
         let (tx, rx) = oneshot::channel();
         let var = var.clone();
+
+        self.vars_requested.0.send_modify(|x| *x += 1);
+        let var_sender = self.vars_requested.0.clone();
+
         tokio::spawn(async move {
             if let Err(e) = requester.send(tx).await {
                 println!(
@@ -276,6 +283,8 @@ impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
                     var, e
                 );
             }
+            var_sender.send_modify(|x| *x -= 1);
+            // tx2.send(()).unwrap();
         });
 
         // Create a lazy typed stream from the request
@@ -490,7 +499,14 @@ where
             ));
         }
 
-        var_exchange_ready.send(true).unwrap();
+        // Don't start producing until we have requested all subscriptions
+        let mut num_requested = var_exchange.vars_requested.1.clone();
+        tokio::spawn(async move {
+            if let Err(e) = num_requested.wait_for(|x| *x == 0).await {
+                panic!("Failed to wait for all vars to be requested: {:?}", e);
+            }
+            var_exchange_ready.send(true).unwrap();
+        });
 
         Self {
             model,
