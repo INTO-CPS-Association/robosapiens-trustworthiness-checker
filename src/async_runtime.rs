@@ -93,6 +93,7 @@ async fn manage_var<V: Clone + Debug + Send + 'static>(
     cancel: CancellationToken,
 ) {
     let mut senders: Vec<mpsc::Sender<V>> = vec![];
+    let mut send_requests = vec![];
     // Gathering senders
     loop {
         select! {
@@ -103,19 +104,34 @@ async fn manage_var<V: Clone + Debug + Send + 'static>(
             }
             channel_sender = channel_request_rx.recv() => {
                 if let Some(channel_sender) = channel_sender {
-                    let (tx, rx) = mpsc::channel(10);
-                    senders.push(tx);
-                    let stream = ReceiverStream::new(rx);
-                    // let typed_stream = SS::to_typed_stream(typ, Box::pin(stream));
-                    if let Err(_) = channel_sender.send(Box::pin(stream)) {
-                        panic!("Failed to send stream for {var} to requester");
-                    }
+                    send_requests.push(channel_sender);
                 }
                 // We don't care if we stop receiving requests
             }
             _ = ready.changed() => {
                 // println!("Moving to stage 2");
                 break;
+            }
+        }
+    }
+
+    // Sending subscriptions
+    if send_requests.len() == 1 {
+        // Special case handling for a single request; just send the input stream
+        let channel_sender = send_requests.pop().unwrap();
+        if let Err(_) = channel_sender.send(input_stream) {
+            panic!("Failed to send stream for {var} to requester");
+        }
+        // We directly re-forwarded the input stream, so we are done
+        return;
+    } else {
+        for channel_sender in send_requests {
+            let (tx, rx) = mpsc::channel(10);
+            senders.push(tx);
+            let stream = ReceiverStream::new(rx);
+            // let typed_stream = SS::to_typed_stream(typ, Box::pin(stream));
+            if let Err(_) = channel_sender.send(Box::pin(stream)) {
+                panic!("Failed to send stream for {var} to requester");
             }
         }
     }
