@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+#![deny(warnings)]
+
 pub mod core;
 pub use core::{
     ConcreteStreamData, InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification,

@@ -10,7 +10,6 @@ use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
 };
-use winnow::stream::Accumulate;
 
 pub struct UntypedLOLA;
 // pub trait TypedStreamData<T: Type<TS>, TS: TypeSystem>: StreamData<TS> {}

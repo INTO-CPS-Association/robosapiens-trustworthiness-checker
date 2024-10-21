@@ -1,3 +1,4 @@
+#![deny(warnings)]
 use futures::StreamExt;
 use trustworthiness_checker::{self as tc, core::TypeCheckableSpecification, parse_file, Monitor};
 
