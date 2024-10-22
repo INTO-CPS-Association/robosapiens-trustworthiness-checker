@@ -709,4 +709,30 @@ mod tests {
         let exp: Vec<ConcreteStreamData> = vec![Unknown, Unknown, Unknown, Unknown];
         assert_eq!(res, exp)
     }
+
+    #[tokio::test]
+    async fn test_update_first_x_then_y_value_sync() {
+        let x: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
+            ConcreteStreamData::Unknown,
+            "x0".into(),
+            "x1".into(),
+            "x2".into(),
+            "x3".into(),
+        ]));
+        let y: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
+            ConcreteStreamData::Unknown,
+            "y1".into(),
+            ConcreteStreamData::Unknown,
+            "y3".into(),
+        ]));
+        let res: Vec<ConcreteStreamData> = update(x, y).collect().await;
+        let exp: Vec<ConcreteStreamData> = vec![
+            ConcreteStreamData::Unknown,
+            "x0".into(),
+            "y1".into(),
+            ConcreteStreamData::Unknown,
+            "y3".into(),
+        ];
+        assert_eq!(res, exp)
+    }
 }
