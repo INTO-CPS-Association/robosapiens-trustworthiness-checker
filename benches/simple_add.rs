@@ -10,6 +10,8 @@ use futures::{
     StreamExt,
 };
 use trustworthiness_checker::core::TypeCheckableSpecification;
+use trustworthiness_checker::lola_type_system::LOLATypedValue;
+use trustworthiness_checker::OutputStream;
 use trustworthiness_checker::{lola_streams::LOLAStream, ConcreteStreamData, Monitor, VarName};
 
 pub fn spec_simple_add_monitor() -> &'static str {
@@ -46,16 +48,19 @@ pub fn input_streams_concrete(
     input_streams
 }
 
-pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, LOLAStream> {
+pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, OutputStream<LOLATypedValue>> {
     let mut input_streams = BTreeMap::new();
     let size = size as i64;
     input_streams.insert(
         VarName("x".into()),
-        LOLAStream::Int(Box::pin(stream::iter((0..size).map(|x| (2 * x))))),
+        Box::pin(stream::iter((0..size).map(|x| LOLATypedValue::Int(2 * x))))
+            as OutputStream<LOLATypedValue>,
     );
     input_streams.insert(
         VarName("y".into()),
-        LOLAStream::Int(Box::pin(stream::iter((0..size).map(|y| 2 * y + 1)))),
+        Box::pin(stream::iter(
+            (0..size).map(|y| LOLATypedValue::Int(2 * y + 1)),
+        )),
     );
     input_streams
 }

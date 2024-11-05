@@ -25,7 +25,7 @@ use crate::core::MonitoringSemantics;
 use crate::core::Specification;
 use crate::core::StreamExpr;
 use crate::core::StreamSystem;
-use crate::core::StreamTransformationFn;
+// use crate::core::StreamTransformationFn;
 use crate::core::TypeAnnotated;
 use crate::core::TypeSystem;
 use crate::core::{OutputStream, StreamContext, VarName};
@@ -73,15 +73,15 @@ fn drop_guard_stream<T: 'static>(
     ))
 }
 
-struct DropGuardStream {
-    drop_guard: Arc<DropGuard>,
-}
+// struct DropGuardStream {
+//     drop_guard: Arc<DropGuard>,
+// }
 
-impl StreamTransformationFn for DropGuardStream {
-    fn transform<T: 'static>(&self, stream: OutputStream<T>) -> OutputStream<T> {
-        drop_guard_stream(stream, self.drop_guard.clone())
-    }
-}
+// impl StreamTransformationFn for DropGuardStream {
+//     fn transform<T: 'static>(&self, stream: OutputStream<T>) -> OutputStream<T> {
+//         drop_guard_stream(stream, self.drop_guard.clone())
+//     }
+// }
 
 // An actor which manages a single variable by providing channels to get
 // the output stream and publishing values to all subscribers
@@ -94,23 +94,27 @@ async fn manage_var<V: Clone + Debug + Send + 'static>(
 ) {
     let mut senders: Vec<mpsc::Sender<V>> = vec![];
     let mut send_requests = vec![];
+    println!("Starting manage_var for {}", var);
     // Gathering senders
     loop {
+        println!("check stage 1");
+        println!("Ready: {:?}", *ready.borrow());
         select! {
             biased;
             _ = cancel.cancelled() => {
-                // println!("Ending manage_var for {} due to cancellation", var);
+                println!("Ending manage_var for {} due to cancellation", var);
                 return;
+            }
+            _ = ready.wait_for(|x| *x) => {
+                println!("Moving to stage 2");
+                break;
             }
             channel_sender = channel_request_rx.recv() => {
                 if let Some(channel_sender) = channel_sender {
+                    println!("Received request for {}", var);
                     send_requests.push(channel_sender);
                 }
                 // We don't care if we stop receiving requests
-            }
-            _ = ready.changed() => {
-                // println!("Moving to stage 2");
-                break;
             }
         }
     }
@@ -123,6 +127,7 @@ async fn manage_var<V: Clone + Debug + Send + 'static>(
             panic!("Failed to send stream for {var} to requester");
         }
         // We directly re-forwarded the input stream, so we are done
+        println!("Direct reforward for {}", var);
         return;
     } else {
         for channel_sender in send_requests {
@@ -147,6 +152,7 @@ async fn manage_var<V: Clone + Debug + Send + 'static>(
             // Bad things will happen if this is called before everyone has subscribed
             data = input_stream.next() => {
                 if let Some(data) = data {
+                    println!("sending data {:?}", data);
                     assert!(!senders.is_empty());
                     let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
                     for res in join_all(send_futs).await {
@@ -155,7 +161,7 @@ async fn manage_var<V: Clone + Debug + Send + 'static>(
                         }
                     }
                 } else {
-                    // println!("Ending manage_var for {} as out of input data", var);
+                    println!("Ending manage_var for {} as out of input data", var);
                     return;
                 }
             }
@@ -194,7 +200,7 @@ async fn distribute<V: Clone + Debug + Send + 'static>(
                         }
                         data = input_stream.next() => {
                             if let Some(data) = data {
-                                // println!("Distributing data {:?}", data);
+                                println!("Distributing data {:?}", data);
                                 // let data_copy = data.clone();
                                 if let Err(_) = send.send(data) {
                                     // println!("sent")
@@ -230,7 +236,7 @@ async fn monitor<V: Clone + Debug + Send + 'static>(
             data = input_stream.next() => {
                 match data {
                     Some(data) => {
-                        // println!("Monitored data {:?}", data);
+                        println!("Monitored data {:?}", data);
                         if let Err(_) = send.send(data).await {
                             return;
                         }
@@ -280,7 +286,10 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
 }
 
 impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
-    fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
+    fn var(
+        &self,
+        var: &VarName,
+    ) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>> {
         // Retrieve the channel used to request the stream
         let var_data = self.var_data.get(var)?;
         let requester = var_data.requester.clone();
@@ -306,8 +315,7 @@ impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
         // Create a lazy typed stream from the request
         let stream = oneshot_to_stream(rx);
         // let stream = drop_guard_stream(stream, self.drop_guard.clone());
-        let typed_stream = SS::to_typed_stream(var_data.typ.clone(), stream);
-        Some(typed_stream)
+        Some(stream)
     }
 
     fn advance(&self) {
@@ -380,8 +388,11 @@ impl<SS: StreamSystem> SubMonitor<SS> {
 }
 
 impl<SS: StreamSystem> StreamContext<SS> for SubMonitor<SS> {
-    fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
-        let (typ, sender) = self.senders.get(var).unwrap();
+    fn var(
+        &self,
+        var: &VarName,
+    ) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>> {
+        let (_, sender) = self.senders.get(var).unwrap();
 
         let recv: broadcast::Receiver<
             <<SS as StreamSystem>::TypeSystem as TypeSystem>::TypedValue,
@@ -389,7 +400,7 @@ impl<SS: StreamSystem> StreamContext<SS> for SubMonitor<SS> {
         let stream: OutputStream<<<SS as StreamSystem>::TypeSystem as TypeSystem>::TypedValue> =
             Box::pin(BroadcastStream::new(recv).map(|x| x.unwrap()));
 
-        Some(SS::to_typed_stream(typ.clone(), stream))
+        Some(stream)
     }
 
     fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>> {
@@ -414,7 +425,7 @@ where
     M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
 {
     model: M,
-    output_streams: BTreeMap<VarName, SS::TypedStream>,
+    output_streams: BTreeMap<VarName, OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>,
     #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
     // exchange is dropped
@@ -428,11 +439,15 @@ impl<
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
         S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
         M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
-    > Monitor<ET, SS, S, M> for AsyncMonitorRunner<ET, SS, S, M>
+    > Monitor<M, <SS::TypeSystem as TypeSystem>::TypedValue> for AsyncMonitorRunner<ET, SS, S, M>
 where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
-    fn new(model: M, mut input_streams: impl InputProvider<SS>) -> Self {
+    fn new(
+        model: M,
+        mut input_streams: impl InputProvider<<SS::TypeSystem as TypeSystem>::TypedValue>,
+    ) -> Self {
+        println!("Creating new async monitor runner");
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
 
@@ -454,6 +469,7 @@ where
             );
             to_launch_in.push((var.clone(), input_stream, rx1));
         }
+        println!("Launched monitors for input variables");
 
         let mut to_launch_out = vec![];
 
@@ -486,13 +502,14 @@ where
         let mut async_streams = vec![];
         for (var, _) in to_launch_out.iter() {
             let expr = model.var_expr(&var).unwrap();
-            let stream = S::to_async_stream(expr, &var_exchange);
-            let stream = SS::transform_stream(
-                DropGuardStream {
-                    drop_guard: cancellation_guard.clone(),
-                },
-                stream,
-            );
+            let stream = Box::pin(S::to_async_stream(expr, &var_exchange));
+            // let stream = SS::transform_stream(
+            //     DropGuardStream {
+            //         drop_guard: cancellation_guard.clone(),
+            //     },
+            //     stream,
+            // );
+            let stream = drop_guard_stream(stream, cancellation_guard.clone());
             async_streams.push(stream);
         }
 
@@ -521,6 +538,7 @@ where
             if let Err(e) = num_requested.wait_for(|x| *x == 0).await {
                 panic!("Failed to wait for all vars to be requested: {:?}", e);
             }
+            println!("Var exchange ready!");
             var_exchange_ready.send(true).unwrap();
         });
 
@@ -548,7 +566,7 @@ where
         Box::pin(stream::unfold(
             (output_streams, outputs),
             |(mut output_streams, outputs)| async move {
-                // println!("Monitoring outputs");
+                println!("Monitoring outputs");
                 let mut futures = vec![];
                 for (_, stream) in output_streams.iter_mut() {
                     futures.push(stream.next());

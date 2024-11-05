@@ -6,10 +6,7 @@ use std::collections::BTreeMap;
 use std::iter::zip;
 use std::mem;
 
-use crate::ast::FixedSemantics;
 use crate::ast::LOLASpecification;
-use crate::ast::UntypedLOLA;
-use crate::ast::UntypedStreams;
 use crate::constraint_solver::*;
 use crate::core::ConcreteStreamData;
 use crate::core::IndexedVarName;
@@ -79,10 +76,8 @@ pub struct ConstraintBasedMonitor {
     model: LOLASpecification,
 }
 
-impl Monitor<UntypedLOLA, UntypedStreams, FixedSemantics, LOLASpecification>
-    for ConstraintBasedMonitor
-{
-    fn new(model: LOLASpecification, mut input: impl InputProvider<UntypedStreams>) -> Self {
+impl Monitor<LOLASpecification, ConcreteStreamData> for ConstraintBasedMonitor {
+    fn new(model: LOLASpecification, mut input: impl InputProvider<ConcreteStreamData>) -> Self {
         let input_streams = model
             .input_vars()
             .iter()

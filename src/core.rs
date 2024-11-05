@@ -47,7 +47,7 @@ pub trait TypeSystem: Sync + Send + 'static {
     // e.g. an enum or an ID type
     // Inner type allows for the type annotation to tag a specific object
     type Type: Clone + Send + Sync + Ord + PartialEq + Eq + Debug + 'static;
-    type TypedValue: Clone + Send + Sync + Debug + Display + 'static;
+    type TypedValue: Clone + Send + Sync + Debug + Display + StreamData + 'static;
     // Idea:
     // - types are in Identifier<()>
     // - typed version of S are in Identifier<S>
@@ -181,20 +181,20 @@ pub struct IndexedVarName(pub Box<str>, pub usize);
 
 pub type OutputStream<T> = BoxStream<'static, T>;
 
-pub trait InputProvider<SS: StreamSystem> {
-    fn input_stream(&mut self, var: &VarName) -> Option<SS::TypedStream>;
+pub trait InputProvider<V> {
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<V>>;
 }
 
-impl<SS: StreamSystem> InputProvider<SS> for BTreeMap<VarName, SS::TypedStream> {
+impl<V> InputProvider<V> for BTreeMap<VarName, OutputStream<V>> {
     // We are consuming the input stream from the map when
     // we return it to ensure single ownership and static lifetime
-    fn input_stream(&mut self, var: &VarName) -> Option<SS::TypedStream> {
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<V>> {
         self.remove(var)
     }
 }
 
 pub trait StreamContext<SS: StreamSystem>: Send + 'static {
-    fn var(&self, x: &VarName) -> Option<SS::TypedStream>;
+    fn var(&self, x: &VarName) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>;
 
     fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>>;
 
@@ -254,19 +254,14 @@ pub trait TypeAnnotated<TS: TypeSystem> {
     fn type_of_var(&self, var: &VarName) -> Option<TS::Type>;
 }
 
-pub trait Monitor<ET, SS, S, M>
-where
-    ET: ExpressionTyping,
-    ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
-    SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-    S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-    M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
-{
-    fn new(model: M, input: impl InputProvider<SS>) -> Self;
+/*
+ * A runtime monitor for a model/specification of type M over streams with
+ * values of type V.
+ */
+pub trait Monitor<M, V> {
+    fn new(model: M, input: impl InputProvider<V>) -> Self;
 
     fn spec(&self) -> &M;
 
-    fn monitor_outputs(
-        &mut self,
-    ) -> BoxStream<'static, BTreeMap<VarName, <ET::TypeSystem as TypeSystem>::TypedValue>>;
+    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, V>>;
 }

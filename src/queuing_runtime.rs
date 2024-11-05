@@ -15,8 +15,8 @@ use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::Specification;
+use crate::core::StreamData;
 use crate::core::StreamSystem;
-use crate::core::StreamTransformationFn;
 use crate::core::TypeAnnotated;
 use crate::core::TypeSystem;
 use crate::core::{OutputStream, StreamContext, VarName};
@@ -30,16 +30,24 @@ struct QueuingVarContext<SS: StreamSystem> {
             Arc<Mutex<Vec<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
         ),
     >,
-    input_streams: BTreeMap<VarName, Arc<Mutex<SS::TypedStream>>>,
-    output_streams: BTreeMap<VarName, WaitingStream<SS::TypedStream>>,
+    input_streams:
+        BTreeMap<VarName, Arc<Mutex<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>>>,
+    output_streams:
+        BTreeMap<VarName, WaitingStream<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
     production_locks: BTreeMap<VarName, Arc<Mutex<()>>>,
 }
 
 impl<SS: StreamSystem> QueuingVarContext<SS> {
     fn new(
         vars: Vec<(VarName, <SS::TypeSystem as TypeSystem>::Type)>,
-        input_streams: BTreeMap<VarName, Arc<Mutex<SS::TypedStream>>>,
-        output_streams: BTreeMap<VarName, WaitingStream<SS::TypedStream>>,
+        input_streams: BTreeMap<
+            VarName,
+            Arc<Mutex<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
+        >,
+        output_streams: BTreeMap<
+            VarName,
+            WaitingStream<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>,
+        >,
     ) -> Self {
         let mut queues = BTreeMap::new();
         let mut production_locks = BTreeMap::new();
@@ -93,64 +101,62 @@ impl<S> WaitingStream<S> {
     }
 }
 
-fn queue_buffered_stream<SS: StreamSystem>(
-    typ: <SS::TypeSystem as TypeSystem>::Type,
-    xs: Arc<Mutex<Vec<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
-    waiting_stream: WaitingStream<SS::TypedStream>,
+fn queue_buffered_stream<V: StreamData>(
+    xs: Arc<Mutex<Vec<V>>>,
+    waiting_stream: WaitingStream<OutputStream<V>>,
     lock: Arc<Mutex<()>>,
-) -> SS::TypedStream {
-    SS::to_typed_stream(
-        typ,
-        Box::pin(stream::unfold(
-            (0, xs, waiting_stream, lock),
-            |(i, xs, mut ws, lock)| async move {
-                loop {
-                    // We have these three cases to ensure deadlock freedom
-                    // println!("producing value for i: {}", i);
-                    // println!("locking xs");
-                    // let mut xs_lock = xs.lock().await;
-                    if i == xs.lock().await.len() {
-                        // Compute the next value, potentially using the previous one
-                        let _ = lock.lock().await;
-                        if i != xs.lock().await.len() {
-                            continue;
-                        }
-                        let stream = ws.get_stream().await;
-                        // We are guaranteed that this will not need to lock
-                        // the production lock and hence should not deadlock
-                        let mut stream_lock = stream.lock().await;
-                        let x_next = stream_lock.next().await;
-                        xs.lock().await.push(x_next?);
-                    } else if i < xs.lock().await.len() {
-                        // We already have the value buffered, so return it
-                        return Some((xs.lock().await[i].clone(), (i + 1, xs.clone(), ws, lock)));
-                    } else {
-                        // Cause more previous values to be produced
-                        let stream = ws.get_stream().await;
-                        let mut stream_lock = stream.lock().await;
-                        let _ = stream_lock.next().await;
+) -> OutputStream<V> {
+    Box::pin(stream::unfold(
+        (0, xs, waiting_stream, lock),
+        |(i, xs, mut ws, lock)| async move {
+            loop {
+                // We have these three cases to ensure deadlock freedom
+                // println!("producing value for i: {}", i);
+                // println!("locking xs");
+                // let mut xs_lock = xs.lock().await;
+                if i == xs.lock().await.len() {
+                    // Compute the next value, potentially using the previous one
+                    let _ = lock.lock().await;
+                    if i != xs.lock().await.len() {
+                        continue;
                     }
+
+                    let stream = ws.get_stream().await;
+                    // We are guaranteed that this will not need to lock
+                    // the production lock and hence should not deadlock
+                    let mut stream_lock = stream.lock().await;
+                    let x_next = stream_lock.next().await;
+                    xs.lock().await.push(x_next?);
+                } else if i < xs.lock().await.len() {
+                    // We already have the value buffered, so return it
+                    return Some((xs.lock().await[i].clone(), (i + 1, xs.clone(), ws, lock)));
+                } else {
+                    // Cause more previous values to be produced
+                    let stream = ws.get_stream().await;
+                    let mut stream_lock = stream.lock().await;
+                    let _ = stream_lock.next().await;
                 }
-            },
-        )) as OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>,
-    )
+            }
+        },
+    ))
 }
 
 impl<SS: StreamSystem> StreamContext<SS> for Arc<QueuingVarContext<SS>> {
-    fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
-        let (typ, queue) = self.queues.get(var)?;
+    fn var(
+        &self,
+        var: &VarName,
+    ) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>> {
+        let (_, queue) = self.queues.get(var)?;
         let production_lock = self.production_locks.get(var)?.clone();
         if let Some(stream) = self.input_streams.get(var).cloned() {
-            return Some(queue_buffered_stream::<SS>(
-                typ.clone(),
+            return Some(queue_buffered_stream(
                 queue.clone(),
                 WaitingStream::Arrived(stream),
                 production_lock,
             ));
         } else {
             let waiting_stream = self.output_streams.get(var)?.clone();
-            return Some(queue_buffered_stream::<SS>(
-                typ.clone(),
+            return Some(queue_buffered_stream(
                 queue.clone(),
                 waiting_stream,
                 production_lock,
@@ -186,20 +192,16 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     }
 }
 
-struct StreamSkip(usize);
-impl StreamTransformationFn for StreamSkip {
-    fn transform<T: 'static>(&self, stream: OutputStream<T>) -> OutputStream<T> {
-        Box::pin(stream.skip(self.0))
-    }
-}
-
 impl<SS: StreamSystem> StreamContext<SS> for SubMonitor<SS> {
-    fn var(&self, var: &VarName) -> Option<SS::TypedStream> {
-        let parent_stream: SS::TypedStream = self.parent.var(var)?;
-        let transformation = StreamSkip(*self.index.lock().unwrap());
-        let substream: SS::TypedStream = SS::transform_stream(transformation, parent_stream);
+    fn var(
+        &self,
+        var: &VarName,
+    ) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>> {
+        let parent_stream = self.parent.var(var)?;
+        let index = *self.index.lock().unwrap();
+        let substream = parent_stream.skip(index);
 
-        Some(substream)
+        Some(Box::pin(substream))
     }
 
     fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>> {
@@ -235,11 +237,14 @@ impl<
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
         S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
         M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
-    > Monitor<ET, SS, S, M> for QueuingMonitorRunner<ET, SS, S, M>
+    > Monitor<M, <SS::TypeSystem as TypeSystem>::TypedValue> for QueuingMonitorRunner<ET, SS, S, M>
 where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
-    fn new(model: M, mut input_streams: impl InputProvider<SS>) -> Self {
+    fn new(
+        model: M,
+        mut input_streams: impl InputProvider<<SS::TypeSystem as TypeSystem>::TypedValue>,
+    ) -> Self {
         let var_names: Vec<(VarName, <SS::TypeSystem as TypeSystem>::Type)> = model
             .input_vars()
             .into_iter()
@@ -265,7 +270,7 @@ where
             output_stream_waiting.insert(var.clone(), WaitingStream::Waiting(rx));
         }
 
-        let var_exchange = Arc::new(QueuingVarContext::new(
+        let var_exchange = Arc::new(QueuingVarContext::<SS>::new(
             var_names,
             input_streams.clone(),
             output_stream_waiting,
@@ -273,11 +278,11 @@ where
 
         for var in model.output_vars() {
             let stream = S::to_async_stream(model.var_expr(&var).unwrap(), &var_exchange);
-            let stream = Arc::new(Mutex::new(stream));
+            let stream: OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue> = Box::pin(stream);
             output_stream_senders
                 .get(&var)
                 .unwrap()
-                .send(Some(stream))
+                .send(Some(Arc::new(Mutex::new(stream))))
                 .unwrap();
         }
 
@@ -347,7 +352,7 @@ impl<
 where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
-    fn output_stream(&self, var: VarName) -> SS::TypedStream {
+    fn output_stream(&self, var: VarName) -> OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue> {
         self.var_exchange.var(&var).unwrap()
     }
 }

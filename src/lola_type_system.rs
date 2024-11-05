@@ -11,6 +11,7 @@ pub enum LOLATypedValue {
     Bool(bool),
     Unit,
 }
+impl StreamData for LOLATypedValue {}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StreamType {

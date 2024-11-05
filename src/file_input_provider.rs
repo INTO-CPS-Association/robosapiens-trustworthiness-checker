@@ -2,11 +2,10 @@ use core::panic;
 
 use futures::{stream, StreamExt};
 
-use crate::ast::{InputFileData, UntypedStreams};
+use crate::ast::InputFileData;
 use crate::core::TypeSystem;
-use crate::core::{InputProvider, OutputStream, StreamSystem, TypeAnnotated, Value, VarName};
-use crate::lola_streams::{LOLAStream, TypedStreams};
-use crate::lola_type_system::LOLATypeSystem;
+use crate::core::{InputProvider, OutputStream, TypeAnnotated, Value, VarName};
+use crate::lola_type_system::{LOLATypeSystem, LOLATypedValue};
 use crate::ConcreteStreamData;
 
 fn input_file_data_iter(
@@ -24,7 +23,7 @@ fn input_file_data_iter(
     })
 }
 
-impl InputProvider<UntypedStreams> for InputFileData {
+impl InputProvider<ConcreteStreamData> for InputFileData {
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
         Some(Box::pin(stream::iter(input_file_data_iter(
             self.clone(),
@@ -33,12 +32,11 @@ impl InputProvider<UntypedStreams> for InputFileData {
     }
 }
 
-impl<T: TypeAnnotated<LOLATypeSystem>> InputProvider<TypedStreams> for (InputFileData, T) {
-    fn input_stream(&mut self, var: &VarName) -> Option<LOLAStream> {
+impl<T: TypeAnnotated<LOLATypeSystem>> InputProvider<LOLATypedValue> for (InputFileData, T) {
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<LOLATypedValue>> {
         let (data, ta) = self;
         let base_stream = data.input_stream(var)?;
         let var_type = ta.type_of_var(var)?;
-        let var_type_clone = var_type.clone();
         let converting_stream = Box::pin(base_stream.map(move |data| match data {
             ConcreteStreamData::Int(i) => {
                 let value = i.to_typed_value();
@@ -64,10 +62,7 @@ impl<T: TypeAnnotated<LOLATypeSystem>> InputProvider<TypedStreams> for (InputFil
                 panic!("Unknown data type in input stream")
             }
         }));
-        Some(TypedStreams::to_typed_stream(
-            var_type_clone,
-            converting_stream,
-        ))
+        Some(converting_stream)
     }
 }
 
