@@ -223,7 +223,7 @@ where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
     SS: StreamSystem<TypeSystem = ET::TypeSystem>,
     S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-    M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
+    M: Specification<ET::TypedExpr> + TypeAnnotated<ET::TypeSystem>,
 {
     model: M,
     var_exchange: Arc<QueuingVarContext<SS>>,
@@ -236,7 +236,7 @@ impl<
         ET: ExpressionTyping,
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
         S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-        M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
+        M: Specification<ET::TypedExpr> + TypeAnnotated<ET::TypeSystem>,
     > Monitor<M, <SS::TypeSystem as TypeSystem>::TypedValue> for QueuingMonitorRunner<ET, SS, S, M>
 where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
@@ -347,12 +347,15 @@ impl<
         ET: ExpressionTyping,
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
         S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-        M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
+        M: Specification<ET::TypedExpr> + TypeAnnotated<ET::TypeSystem>,
     > QueuingMonitorRunner<ET, SS, S, M>
 where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
 {
-    fn output_stream(&self, var: VarName) -> OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue> {
+    fn output_stream(
+        &self,
+        var: VarName,
+    ) -> OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue> {
         self.var_exchange.var(&var).unwrap()
     }
 }

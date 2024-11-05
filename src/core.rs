@@ -146,8 +146,8 @@ impl<ET: ExpressionTyping, R: TypeCheckableHelper<ET>> TypeCheckable<ET> for R {
 pub trait TypeCheckableSpecification<
     InputET: ExpressionTyping,
     OutputET: ExpressionTyping,
-    OutputSpec: Specification<OutputET>,
->: Specification<InputET>
+    OutputSpec: Specification<OutputET::TypedExpr>,
+>: Specification<InputET::TypedExpr>
 {
     fn type_check(&self) -> SemanticResult<OutputSpec>;
 }
@@ -241,12 +241,12 @@ pub trait MonitoringSemantics<Expr, StreamType>: Clone + Send + 'static {
     fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<Self::StreamSystem>) -> StreamType;
 }
 
-pub trait Specification<ET: ExpressionTyping> {
+pub trait Specification<Expr> {
     fn input_vars(&self) -> Vec<VarName>;
 
     fn output_vars(&self) -> Vec<VarName>;
 
-    fn var_expr(&self, var: &VarName) -> Option<ET::TypedExpr>;
+    fn var_expr(&self, var: &VarName) -> Option<Expr>;
 }
 
 // Annotations on the types of variables in a specification

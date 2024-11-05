@@ -1,6 +1,9 @@
 #![deny(warnings)]
 use futures::StreamExt;
-use trustworthiness_checker::{self as tc, core::TypeCheckableSpecification, parse_file, Monitor};
+use trustworthiness_checker::{
+    self as tc, ast::UntypedLOLA, core::TypeCheckableSpecification,
+    lola_type_system::LOLATypeSystem, parse_file, Monitor,
+};
 
 use clap::{Parser, ValueEnum};
 
@@ -69,10 +72,11 @@ async fn main() {
 
     match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
-            let mut runner = tc::AsyncMonitorRunner::<_, _, tc::UntimedLolaSemantics, _>::new(
-                model,
-                input_streams,
-            );
+            let mut runner =
+                tc::AsyncMonitorRunner::<UntypedLOLA, _, tc::UntimedLolaSemantics, _>::new(
+                    model,
+                    input_streams,
+                );
             let mut enumerated_outputs = runner.monitor_outputs().enumerate();
             while let Some((i, output)) = enumerated_outputs.next().await {
                 for (var, data) in output {
@@ -82,7 +86,7 @@ async fn main() {
         }
         (Runtime::Queuing, Semantics::Untimed) => {
             let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
-                _,
+                UntypedLOLA,
                 _,
                 tc::UntimedLolaSemantics,
                 _,
@@ -99,10 +103,11 @@ async fn main() {
             // let typed_input_streams = d
             let input_streams = (input_streams, typed_model.clone());
 
-            let mut runner = tc::AsyncMonitorRunner::<_, _, tc::TypedUntimedLolaSemantics, _>::new(
-                typed_model,
-                input_streams,
-            );
+            let mut runner =
+                tc::AsyncMonitorRunner::<LOLATypeSystem, _, tc::TypedUntimedLolaSemantics, _>::new(
+                    typed_model,
+                    input_streams,
+                );
             let mut enumerated_outputs = runner.monitor_outputs().enumerate();
             while let Some((i, output)) = enumerated_outputs.next().await {
                 for (var, data) in output {
@@ -117,7 +122,7 @@ async fn main() {
             let input_streams = (input_streams, typed_model.clone());
 
             let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
-                _,
+                LOLATypeSystem,
                 _,
                 tc::TypedUntimedLolaSemantics,
                 _,

@@ -1,9 +1,8 @@
 use futures::stream;
 use futures::stream::BoxStream;
-use std::{collections::BTreeMap, pin::Pin, process::Output};
+use std::{collections::BTreeMap, pin::Pin};
 use trustworthiness_checker::{
-    lola_streams::LOLAStream, lola_type_system::LOLATypedValue, ConcreteStreamData, OutputStream,
-    VarName,
+    lola_type_system::LOLATypedValue, ConcreteStreamData, OutputStream, VarName,
 };
 
 // Dead code is allowed in this file since cargo does not correctly

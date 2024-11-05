@@ -147,7 +147,7 @@ pub struct TypedLOLASpecification {
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
-impl Specification<LOLATypeSystem> for TypedLOLASpecification {
+impl Specification<SExprTE> for TypedLOLASpecification {
     fn input_vars(&self) -> Vec<VarName> {
         self.input_vars.clone()
     }
@@ -461,7 +461,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
             SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
             SExpr::Defer(_) => todo!("Implement support for Defer"),
-            SExpr::Update(_,_) => todo!("Implement support for Update"),
+            SExpr::Update(_, _) => todo!("Implement support for Update"),
         }
     }
 }

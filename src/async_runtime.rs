@@ -422,7 +422,7 @@ where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
     SS: StreamSystem<TypeSystem = ET::TypeSystem>,
     S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-    M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
+    M: Specification<ET::TypedExpr> + TypeAnnotated<ET::TypeSystem>,
 {
     model: M,
     output_streams: BTreeMap<VarName, OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>,
@@ -438,7 +438,7 @@ impl<
         ET: ExpressionTyping,
         SS: StreamSystem<TypeSystem = ET::TypeSystem>,
         S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-        M: Specification<ET> + TypeAnnotated<ET::TypeSystem>,
+        M: Specification<ET::TypedExpr> + TypeAnnotated<ET::TypeSystem>,
     > Monitor<M, <SS::TypeSystem as TypeSystem>::TypedValue> for AsyncMonitorRunner<ET, SS, S, M>
 where
     ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
