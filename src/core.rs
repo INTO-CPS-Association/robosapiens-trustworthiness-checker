@@ -93,45 +93,6 @@ impl Display for ConcreteStreamData {
     }
 }
 
-pub trait TypeSystem: Sync + Send + 'static {
-    // Type identifying the type of an object within the type system
-    // e.g. an enum or an ID type
-    // Inner type allows for the type annotation to tag a specific object
-    type Type: Clone + Send + Sync + Ord + PartialEq + Eq + Debug + 'static;
-    type TypedValue: Clone + Send + Sync + Debug + Display + StreamData + 'static;
-    // Idea:
-    // - types are in Identifier<()>
-    // - typed version of S are in Identifier<S>
-
-    // self param?
-
-    fn type_of_value(value: &Self::TypedValue) -> Self::Type;
-}
-
-pub trait ExpressionTyping: Sync + Send + 'static {
-    type TypeSystem: TypeSystem;
-    type TypedExpr;
-
-    fn type_of_expr(value: &Self::TypedExpr) -> <Self::TypeSystem as TypeSystem>::Type;
-}
-
-pub trait StreamTransformationFn {
-    fn transform<T: 'static>(&self, stream: OutputStream<T>) -> OutputStream<T>;
-}
-
-pub trait Value<TS: TypeSystem>: Clone + Debug + PartialEq + Eq + StreamData {
-    fn type_of(&self) -> TS::Type;
-
-    fn to_typed_value(&self) -> TS::TypedValue;
-
-    fn from_typed_value(value: TS::TypedValue) -> Option<Self>;
-}
-
-// struct TypedValue<TS: TypeSystem, Val> {
-//     typ: TS::Identifier<()>,
-//     value: Val<Type>,
-// }
-
 pub trait StreamData: Clone + Send + Sync + Debug + 'static {}
 
 // Trait defining the allowed types for expression values
