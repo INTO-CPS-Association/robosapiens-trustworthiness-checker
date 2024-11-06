@@ -1,8 +1,8 @@
 use futures::{stream::BoxStream, StreamExt};
 
 use crate::{
-    core::{StreamSystem, StreamTransformationFn, TypeSystem},
-    lola_type_system::{LOLATypeSystem, LOLATypedValue, StreamType},
+    core::{ConcreteStreamData, StreamSystem, StreamTransformationFn, TypeSystem},
+    lola_type_system::{LOLATypeSystem, StreamType},
     OutputStream,
 };
 
@@ -34,19 +34,19 @@ impl StreamSystem for TypedStreams {
     ) -> Self::TypedStream {
         match typ {
             StreamType::Int => LOLAStream::Int(Box::pin(stream.map(|v| match v {
-                LOLATypedValue::Int(i) => i,
+                ConcreteStreamData::Int(i) => i,
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
             StreamType::Str => LOLAStream::Str(Box::pin(stream.map(|v| match v {
-                LOLATypedValue::Str(s) => s,
+                ConcreteStreamData::Str(s) => s,
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
             StreamType::Bool => LOLAStream::Bool(Box::pin(stream.map(|v| match v {
-                LOLATypedValue::Bool(b) => b,
+                ConcreteStreamData::Bool(b) => b,
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
             StreamType::Unit => LOLAStream::Unit(Box::pin(stream.map(|v| match v {
-                LOLATypedValue::Unit => (),
+                ConcreteStreamData::Unit => (),
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
         }
@@ -70,7 +70,7 @@ pub enum LOLAStream {
 }
 
 impl futures::Stream for LOLAStream {
-    type Item = LOLATypedValue;
+    type Item = ConcreteStreamData;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -79,37 +79,37 @@ impl futures::Stream for LOLAStream {
         match self.get_mut() {
             LOLAStream::Int(pin) => pin
                 .poll_next_unpin(cx)
-                .map(|opt| opt.map(|v| LOLATypedValue::Int(v))),
+                .map(|opt| opt.map(|v| ConcreteStreamData::Int(v))),
             LOLAStream::Str(pin) => pin
                 .poll_next_unpin(cx)
-                .map(|opt| opt.map(|v| LOLATypedValue::Str(v))),
+                .map(|opt| opt.map(|v| ConcreteStreamData::Str(v))),
             LOLAStream::Bool(pin) => pin
                 .poll_next_unpin(cx)
-                .map(|opt| opt.map(|v| LOLATypedValue::Bool(v))),
+                .map(|opt| opt.map(|v| ConcreteStreamData::Bool(v))),
             LOLAStream::Unit(pin) => pin
                 .poll_next_unpin(cx)
-                .map(|opt| opt.map(|_| LOLATypedValue::Unit)),
+                .map(|opt| opt.map(|_| ConcreteStreamData::Unit)),
         }
     }
 }
 
-impl From<(StreamType, OutputStream<LOLATypedValue>)> for LOLAStream {
-    fn from((typ, x): (StreamType, OutputStream<LOLATypedValue>)) -> Self {
+impl From<(StreamType, OutputStream<ConcreteStreamData>)> for LOLAStream {
+    fn from((typ, x): (StreamType, OutputStream<ConcreteStreamData>)) -> Self {
         match typ {
             StreamType::Int => LOLAStream::Int(Box::pin(x.map(|v| match v {
-                LOLATypedValue::Int(i) => i,
+                ConcreteStreamData::Int(i) => i,
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
             StreamType::Str => LOLAStream::Str(Box::pin(x.map(|v| match v {
-                LOLATypedValue::Str(s) => s,
+                ConcreteStreamData::Str(s) => s,
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
             StreamType::Bool => LOLAStream::Bool(Box::pin(x.map(|v| match v {
-                LOLATypedValue::Bool(b) => b,
+                ConcreteStreamData::Bool(b) => b,
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
             StreamType::Unit => LOLAStream::Unit(Box::pin(x.map(|v| match v {
-                LOLATypedValue::Unit => (),
+                ConcreteStreamData::Unit => (),
                 _ => panic!("Invalid stream type specialization in runtime"),
             }))),
         }

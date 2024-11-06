@@ -1,10 +1,11 @@
+use crate::core::ConcreteStreamData;
 use crate::{
     core::{
-        ConcreteStreamData, ExpressionTyping, IndexedVarName, Specification, StreamExpr,
-        StreamSystem, TypeAnnotated, TypeSystem, VarName,
+        ExpressionTyping, IndexedVarName, Specification, StreamExpr, StreamSystem, TypeAnnotated,
+        TypeSystem, VarName,
     },
     lola_type_system::{LOLATypeSystem, StreamType},
-    MonitoringSemantics, OutputStream, StreamContext,
+    OutputStream,
 };
 use std::{
     collections::BTreeMap,
@@ -137,22 +138,6 @@ impl TypeAnnotated<LOLATypeSystem> for LOLASpecification {
 impl TypeAnnotated<UntypedLOLA> for LOLASpecification {
     fn type_of_var(&self, _: &VarName) -> Option<()> {
         Some(())
-    }
-}
-
-// A dummy monitoring semantics for monitors which do not support pluggable
-// monitoring semantics
-#[derive(Clone)]
-pub struct FixedSemantics;
-
-impl<E> MonitoringSemantics<E, OutputStream<ConcreteStreamData>> for FixedSemantics {
-    type StreamSystem = UntypedStreams;
-
-    fn to_async_stream(
-        _: E,
-        _: &dyn StreamContext<UntypedStreams>,
-    ) -> OutputStream<ConcreteStreamData> {
-        unimplemented!("Dummy monitoring semantics; should not be called")
     }
 }
 

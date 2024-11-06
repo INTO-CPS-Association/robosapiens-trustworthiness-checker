@@ -1,17 +1,8 @@
-use std::fmt::Display;
+use core::panic;
 
-use crate::core::{StreamData, TypeSystem, Value};
+use crate::core::{ConcreteStreamData, StreamData, TypeSystem, Value};
 
 pub struct LOLATypeSystem;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LOLATypedValue {
-    Int(i64),
-    Str(String),
-    Bool(bool),
-    Unit,
-}
-impl StreamData for LOLATypedValue {}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StreamType {
@@ -19,17 +10,6 @@ pub enum StreamType {
     Str,
     Bool,
     Unit,
-}
-
-impl Display for LOLATypedValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LOLATypedValue::Int(i) => write!(f, "{}", i),
-            LOLATypedValue::Str(s) => write!(f, "{}", s),
-            LOLATypedValue::Bool(b) => write!(f, "{}", b),
-            LOLATypedValue::Unit => write!(f, "()"),
-        }
-    }
 }
 
 pub struct BoolTypeSystem;
@@ -42,6 +22,8 @@ impl TypeSystem for BoolTypeSystem {
     }
 }
 
+type LOLATypedValue = ConcreteStreamData;
+
 impl TypeSystem for LOLATypeSystem {
     type Type = StreamType;
     type TypedValue = LOLATypedValue;
@@ -52,6 +34,7 @@ impl TypeSystem for LOLATypeSystem {
             LOLATypedValue::Str(_) => StreamType::Str,
             LOLATypedValue::Bool(_) => StreamType::Bool,
             LOLATypedValue::Unit => StreamType::Unit,
+            LOLATypedValue::Unknown => panic!("Unknown type"),
         }
     }
 }

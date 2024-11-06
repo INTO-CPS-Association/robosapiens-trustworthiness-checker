@@ -18,17 +18,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 
-use crate::core::ExpressionTyping;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::Specification;
-use crate::core::StreamExpr;
-use crate::core::StreamSystem;
-// use crate::core::StreamTransformationFn;
-use crate::core::TypeAnnotated;
-use crate::core::TypeSystem;
-use crate::core::{OutputStream, StreamContext, VarName};
+use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 
 enum WaitingStream<S> {
     Arrived(S),
@@ -73,19 +67,9 @@ fn drop_guard_stream<T: 'static>(
     ))
 }
 
-// struct DropGuardStream {
-//     drop_guard: Arc<DropGuard>,
-// }
-
-// impl StreamTransformationFn for DropGuardStream {
-//     fn transform<T: 'static>(&self, stream: OutputStream<T>) -> OutputStream<T> {
-//         drop_guard_stream(stream, self.drop_guard.clone())
-//     }
-// }
-
 // An actor which manages a single variable by providing channels to get
 // the output stream and publishing values to all subscribers
-async fn manage_var<V: Clone + Debug + Send + 'static>(
+async fn manage_var<V: StreamData>(
     var: VarName,
     mut input_stream: OutputStream<V>,
     mut channel_request_rx: mpsc::Receiver<oneshot::Sender<OutputStream<V>>>,
@@ -222,7 +206,7 @@ async fn distribute<V: Clone + Debug + Send + 'static>(
 }
 
 // Task for moving data from an input stream to an output channel
-async fn monitor<V: Clone + Debug + Send + 'static>(
+async fn monitor<V: StreamData>(
     mut input_stream: OutputStream<V>,
     send: mpsc::Sender<V>,
     cancellation_token: CancellationToken,
@@ -251,16 +235,13 @@ async fn monitor<V: Clone + Debug + Send + 'static>(
 }
 
 #[derive(Clone)]
-struct VarData<SS: StreamSystem> {
-    typ: <SS::TypeSystem as TypeSystem>::Type,
-    // sender: mpsc::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
-    requester:
-        mpsc::Sender<oneshot::Sender<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>>,
+struct VarData<Val> {
+    requester: mpsc::Sender<oneshot::Sender<OutputStream<Val>>>,
 }
 
 // A struct representing the top-level stream context for an async monitor
-struct AsyncVarExchange<SS: StreamSystem> {
-    var_data: BTreeMap<VarName, VarData<SS>>,
+struct AsyncVarExchange<Val: StreamData> {
+    var_data: BTreeMap<VarName, VarData<Val>>,
     cancellation_token: CancellationToken,
     #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
@@ -269,9 +250,9 @@ struct AsyncVarExchange<SS: StreamSystem> {
     vars_requested: (watch::Sender<usize>, watch::Receiver<usize>),
 }
 
-impl<SS: StreamSystem> AsyncVarExchange<SS> {
+impl<Val: StreamData> AsyncVarExchange<Val> {
     fn new(
-        var_data: BTreeMap<VarName, VarData<SS>>,
+        var_data: BTreeMap<VarName, VarData<Val>>,
         cancellation_token: CancellationToken,
         drop_guard: Arc<DropGuard>,
     ) -> Self {
@@ -285,11 +266,8 @@ impl<SS: StreamSystem> AsyncVarExchange<SS> {
     }
 }
 
-impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
-    fn var(
-        &self,
-        var: &VarName,
-    ) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>> {
+impl<Val: StreamData> StreamContext<Val> for Arc<AsyncVarExchange<Val>> {
+    fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
         // Retrieve the channel used to request the stream
         let var_data = self.var_data.get(var)?;
         let requester = var_data.requester.clone();
@@ -322,35 +300,26 @@ impl<SS: StreamSystem> StreamContext<SS> for Arc<AsyncVarExchange<SS>> {
         // Do nothing
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Val>> {
         Box::new(SubMonitor::new(self.clone(), history_length))
     }
 }
 
 // A subcontext which consumes data for a subset of the variables and makes
 // it available when evaluating a deferred expression
-struct SubMonitor<SS: StreamSystem> {
-    parent: Arc<AsyncVarExchange<SS>>,
-    senders: BTreeMap<
-        VarName,
-        (
-            <SS::TypeSystem as TypeSystem>::Type,
-            broadcast::Sender<<SS::TypeSystem as TypeSystem>::TypedValue>,
-        ),
-    >,
+struct SubMonitor<Val: StreamData> {
+    parent: Arc<AsyncVarExchange<Val>>,
+    senders: BTreeMap<VarName, broadcast::Sender<Val>>,
     buffer_size: usize,
     progress_sender: watch::Sender<usize>,
 }
 
-impl<SS: StreamSystem> SubMonitor<SS> {
-    fn new(parent: Arc<AsyncVarExchange<SS>>, buffer_size: usize) -> Self {
+impl<Val: StreamData> SubMonitor<Val> {
+    fn new(parent: Arc<AsyncVarExchange<Val>>, buffer_size: usize) -> Self {
         let mut senders = BTreeMap::new();
 
-        for (var, var_data) in parent.var_data.iter() {
-            senders.insert(
-                var.clone(),
-                (var_data.typ.clone(), broadcast::Sender::new(100)),
-            );
+        for (var, _var_data) in parent.var_data.iter() {
+            senders.insert(var.clone(), broadcast::Sender::new(100));
         }
 
         let progress_sender = watch::channel(0).0;
@@ -368,7 +337,7 @@ impl<SS: StreamSystem> SubMonitor<SS> {
         for var in self.parent.var_data.keys() {
             let (send, recv) = mpsc::channel(self.buffer_size);
             let input_stream = self.parent.var(var).unwrap();
-            let (_, child_sender) = self.senders.get(var).unwrap().clone();
+            let child_sender = self.senders.get(var).unwrap().clone();
             let clock = self.progress_sender.subscribe();
             tokio::spawn(distribute(
                 Box::pin(ReceiverStream::new(recv)),
@@ -387,23 +356,17 @@ impl<SS: StreamSystem> SubMonitor<SS> {
     }
 }
 
-impl<SS: StreamSystem> StreamContext<SS> for SubMonitor<SS> {
-    fn var(
-        &self,
-        var: &VarName,
-    ) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>> {
-        let (_, sender) = self.senders.get(var).unwrap();
+impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
+    fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
+        let sender = self.senders.get(var).unwrap();
 
-        let recv: broadcast::Receiver<
-            <<SS as StreamSystem>::TypeSystem as TypeSystem>::TypedValue,
-        > = sender.subscribe();
-        let stream: OutputStream<<<SS as StreamSystem>::TypeSystem as TypeSystem>::TypedValue> =
-            Box::pin(BroadcastStream::new(recv).map(|x| x.unwrap()));
+        let recv: broadcast::Receiver<Val> = sender.subscribe();
+        let stream: OutputStream<Val> = Box::pin(BroadcastStream::new(recv).map(|x| x.unwrap()));
 
         Some(stream)
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Val>> {
         // TODO: consider if this is the right approach; creating a subcontext
         // is only used if eval is called within an eval, and it will require
         // careful thought to decide how much history should be passed down
@@ -416,37 +379,28 @@ impl<SS: StreamSystem> StreamContext<SS> for SubMonitor<SS> {
     }
 }
 
-pub struct AsyncMonitorRunner<ET, SS, S, M>
+pub struct AsyncMonitorRunner<Expr, Val, S, M>
 where
-    ET: ExpressionTyping,
-    ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
-    SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-    S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-    M: Specification<ET::TypedExpr> + TypeAnnotated<ET::TypeSystem>,
+    S: MonitoringSemantics<Expr, Val>,
+    M: Specification<Expr>,
 {
     model: M,
-    output_streams: BTreeMap<VarName, OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>,
+    output_streams: BTreeMap<VarName, OutputStream<Val>>,
     #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
     // exchange is dropped
     cancellation_guard: Arc<DropGuard>,
+    expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
-    expression_typing_t: PhantomData<ET>,
 }
 
-impl<
-        ET: ExpressionTyping,
-        SS: StreamSystem<TypeSystem = ET::TypeSystem>,
-        S: MonitoringSemantics<ET::TypedExpr, SS::TypedStream, StreamSystem = SS>,
-        M: Specification<ET::TypedExpr> + TypeAnnotated<ET::TypeSystem>,
-    > Monitor<M, <SS::TypeSystem as TypeSystem>::TypedValue> for AsyncMonitorRunner<ET, SS, S, M>
+impl<Expr, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M>
 where
-    ET::TypedExpr: StreamExpr<<ET::TypeSystem as TypeSystem>::Type>,
+    Val: StreamData,
+    S: MonitoringSemantics<Expr, Val>,
+    M: Specification<Expr>,
 {
-    fn new(
-        model: M,
-        mut input_streams: impl InputProvider<<SS::TypeSystem as TypeSystem>::TypedValue>,
-    ) -> Self {
+    fn new(model: M, mut input_streams: impl InputProvider<Val>) -> Self {
         println!("Creating new async monitor runner");
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
@@ -457,16 +411,10 @@ where
 
         // Launch monitors for each input variable
         for var in model.input_vars().iter() {
-            let typ = model.type_of_var(var).unwrap();
+            // let typ = model.type_of_var(var).unwrap();
             let (tx1, rx1) = mpsc::channel(100000);
             let input_stream = input_streams.input_stream(var).unwrap();
-            var_data.insert(
-                var.clone(),
-                VarData {
-                    typ,
-                    requester: tx1,
-                },
-            );
+            var_data.insert(var.clone(), VarData { requester: tx1 });
             to_launch_in.push((var.clone(), input_stream, rx1));
         }
         println!("Launched monitors for input variables");
@@ -475,16 +423,9 @@ where
 
         // Create tasks for each output variable
         for var in model.output_vars().iter() {
-            let typ = model.type_of_var(var).unwrap();
             let (tx1, rx1) = mpsc::channel(100000);
             to_launch_out.push((var.clone(), rx1));
-            var_data.insert(
-                var.clone(),
-                VarData {
-                    typ,
-                    requester: tx1,
-                },
-            );
+            var_data.insert(var.clone(), VarData { requester: tx1 });
         }
 
         let var_exchange = Arc::new(AsyncVarExchange::new(
@@ -547,8 +488,8 @@ where
             // var_exchange,
             output_streams,
             semantics_t: PhantomData,
-            expression_typing_t: PhantomData,
             cancellation_guard,
+            expr_t: PhantomData,
         }
     }
 
@@ -556,9 +497,7 @@ where
         &self.model
     }
 
-    fn monitor_outputs(
-        &mut self,
-    ) -> BoxStream<'static, BTreeMap<VarName, <ET::TypeSystem as TypeSystem>::TypedValue>> {
+    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, Val>> {
         let output_streams = mem::take(&mut self.output_streams);
         let mut outputs = self.model.output_vars();
         outputs.sort();
@@ -573,8 +512,7 @@ where
                 }
 
                 let next_vals = join_all(futures).await;
-                let mut res: BTreeMap<VarName, <ET::TypeSystem as TypeSystem>::TypedValue> =
-                    BTreeMap::new();
+                let mut res: BTreeMap<VarName, Val> = BTreeMap::new();
                 for (var, val) in outputs.clone().iter().zip(next_vals) {
                     res.insert(
                         var.clone(),
@@ -586,7 +524,6 @@ where
                 }
                 return Some((res, (output_streams, outputs)));
             },
-        ))
-            as BoxStream<'static, BTreeMap<VarName, <ET::TypeSystem as TypeSystem>::TypedValue>>
+        )) as BoxStream<'static, BTreeMap<VarName, Val>>
     }
 }

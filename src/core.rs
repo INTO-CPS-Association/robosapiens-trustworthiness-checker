@@ -5,7 +5,7 @@ use std::{
 
 use futures::{stream::BoxStream, Stream};
 
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConcreteStreamData {
     Int(i64),
     Str(String),
@@ -13,10 +13,51 @@ pub enum ConcreteStreamData {
     Unknown,
     Unit,
 }
+impl StreamData for ConcreteStreamData {}
 
-impl From<&str> for ConcreteStreamData {
-    fn from(value: &str) -> Self {
-        ConcreteStreamData::Str(value.to_string())
+impl TryFrom<ConcreteStreamData> for i64 {
+    type Error = ();
+
+    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+        match value {
+            ConcreteStreamData::Int(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<ConcreteStreamData> for String {
+    type Error = ();
+
+    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+        match value {
+            ConcreteStreamData::Str(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<ConcreteStreamData> for bool {
+    type Error = ();
+
+    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+        match value {
+            ConcreteStreamData::Bool(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<ConcreteStreamData> for () {
+    type Error = ();
+
+    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+        match value {
+            ConcreteStreamData::Unit => Ok(()),
+            _ => Err(()),
+        }
+    }
+}
+impl From<i64> for ConcreteStreamData {
+    fn from(value: i64) -> Self {
+        ConcreteStreamData::Int(value)
     }
 }
 impl From<String> for ConcreteStreamData {
@@ -24,10 +65,9 @@ impl From<String> for ConcreteStreamData {
         ConcreteStreamData::Str(value)
     }
 }
-
-impl From<i64> for ConcreteStreamData {
-    fn from(value: i64) -> Self {
-        ConcreteStreamData::Int(value)
+impl From<&str> for ConcreteStreamData {
+    fn from(value: &str) -> Self {
+        ConcreteStreamData::Str(value.to_string())
     }
 }
 impl From<bool> for ConcreteStreamData {
@@ -35,10 +75,21 @@ impl From<bool> for ConcreteStreamData {
         ConcreteStreamData::Bool(value)
     }
 }
-
 impl From<()> for ConcreteStreamData {
     fn from(_value: ()) -> Self {
         ConcreteStreamData::Unit
+    }
+}
+
+impl Display for ConcreteStreamData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConcreteStreamData::Int(i) => write!(f, "{}", i),
+            ConcreteStreamData::Str(s) => write!(f, "{}", s),
+            ConcreteStreamData::Bool(b) => write!(f, "{}", b),
+            ConcreteStreamData::Unknown => write!(f, "unknown"),
+            ConcreteStreamData::Unit => write!(f, "()"),
+        }
     }
 }
 
@@ -82,20 +133,6 @@ pub trait Value<TS: TypeSystem>: Clone + Debug + PartialEq + Eq + StreamData {
 // }
 
 pub trait StreamData: Clone + Send + Sync + Debug + 'static {}
-
-impl StreamData for ConcreteStreamData {}
-
-impl Display for ConcreteStreamData {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            ConcreteStreamData::Int(n) => write!(f, "{}", n),
-            ConcreteStreamData::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
-            ConcreteStreamData::Str(s) => write!(f, "\"{}\"", s),
-            ConcreteStreamData::Unknown => write!(f, "unknown"),
-            ConcreteStreamData::Unit => write!(f, "unit"),
-        }
-    }
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemanticError {
@@ -193,10 +230,10 @@ impl<V> InputProvider<V> for BTreeMap<VarName, OutputStream<V>> {
     }
 }
 
-pub trait StreamContext<SS: StreamSystem>: Send + 'static {
-    fn var(&self, x: &VarName) -> Option<OutputStream<<SS::TypeSystem as TypeSystem>::TypedValue>>;
+pub trait StreamContext<Val: StreamData>: Send + 'static {
+    fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<SS>>;
+    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Val>>;
 
     fn advance(&self);
 }
@@ -234,11 +271,10 @@ pub trait StreamSystem: Send + 'static {
 // expression language.
 // We require copy because we want to be able to
 // manage the lifetime of the semantics object
-pub trait MonitoringSemantics<Expr, StreamType>: Clone + Send + 'static {
+pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Send + 'static {
     // type ExpressionTyping: ExpressionTyping<TypeSystem = <Self::StreamSystem as StreamSystem>::TypeSystem>;
-    type StreamSystem: StreamSystem;
 
-    fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<Self::StreamSystem>) -> StreamType;
+    fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
 }
 
 pub trait Specification<Expr> {

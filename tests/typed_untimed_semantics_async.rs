@@ -3,12 +3,12 @@
 use futures::stream::StreamExt;
 use std::collections::BTreeMap;
 use trustworthiness_checker::core::TypeCheckableSpecification;
-use trustworthiness_checker::lola_type_system::{LOLATypeSystem, LOLATypedValue};
+use trustworthiness_checker::lola_type_system::LOLATypeSystem;
 use trustworthiness_checker::queuing_runtime::QueuingMonitorRunner;
-use trustworthiness_checker::TypedUntimedLolaSemantics;
 use trustworthiness_checker::{
     async_runtime::AsyncMonitorRunner, lola_specification, Monitor, VarName,
 };
+use trustworthiness_checker::{ConcreteStreamData, TypedUntimedLolaSemantics};
 mod lola_fixtures;
 use lola_fixtures::*;
 
@@ -18,24 +18,21 @@ async fn test_simple_add_monitor() {
     let spec = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
     let spec = spec.type_check().expect("Type check failed");
     let mut async_monitor =
-        AsyncMonitorRunner::<LOLATypeSystem, _, TypedUntimedLolaSemantics, _>::new(
-            spec,
-            input_streams,
-        );
-    let outputs: Vec<(usize, BTreeMap<VarName, LOLATypedValue>)> =
+        AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, input_streams);
+    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
         async_monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), LOLATypedValue::Int(3))]
+                vec![(VarName("z".into()), ConcreteStreamData::Int(3))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), LOLATypedValue::Int(7))]
+                vec![(VarName("z".into()), ConcreteStreamData::Int(7))]
                     .into_iter()
                     .collect(),
             ),
@@ -51,24 +48,21 @@ async fn test_concat_monitor() {
     // let mut async_monitor =
     // AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, input_streams);
     let mut async_monitor =
-        QueuingMonitorRunner::<LOLATypeSystem, _, TypedUntimedLolaSemantics, _>::new(
-            spec,
-            input_streams,
-        );
-    let outputs: Vec<(usize, BTreeMap<VarName, LOLATypedValue>)> =
+        QueuingMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, input_streams);
+    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
         async_monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), LOLATypedValue::Str("ab".into()))]
+                vec![(VarName("z".into()), ConcreteStreamData::Str("ab".into()))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), LOLATypedValue::Str("cd".into()))]
+                vec![(VarName("z".into()), ConcreteStreamData::Str("cd".into()))]
                     .into_iter()
                     .collect(),
             ),

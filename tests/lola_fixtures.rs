@@ -1,9 +1,7 @@
 use futures::stream;
 use futures::stream::BoxStream;
 use std::{collections::BTreeMap, pin::Pin};
-use trustworthiness_checker::{
-    lola_type_system::LOLATypedValue, ConcreteStreamData, OutputStream, VarName,
-};
+use trustworthiness_checker::{ConcreteStreamData, OutputStream, VarName};
 
 // Dead code is allowed in this file since cargo does not correctly
 // track when functions are used in tests.
@@ -55,42 +53,42 @@ pub fn input_streams2() -> BTreeMap<VarName, BoxStream<'static, ConcreteStreamDa
 }
 
 #[allow(dead_code)]
-pub fn input_streams3() -> BTreeMap<VarName, OutputStream<LOLATypedValue>> {
+pub fn input_streams3() -> BTreeMap<VarName, OutputStream<ConcreteStreamData>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(
-            vec![LOLATypedValue::Int(1), LOLATypedValue::Int(3)].into_iter(),
-        )) as OutputStream<LOLATypedValue>,
+            vec![ConcreteStreamData::Int(1), ConcreteStreamData::Int(3)].into_iter(),
+        )) as OutputStream<ConcreteStreamData>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(
-            vec![LOLATypedValue::Int(2), LOLATypedValue::Int(4)].into_iter(),
+            vec![ConcreteStreamData::Int(2), ConcreteStreamData::Int(4)].into_iter(),
         )),
     );
     input_streams
 }
 
 #[allow(dead_code)]
-pub fn input_streams4() -> BTreeMap<VarName, OutputStream<LOLATypedValue>> {
+pub fn input_streams4() -> BTreeMap<VarName, OutputStream<ConcreteStreamData>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(
             vec![
-                LOLATypedValue::Str("a".to_string()),
-                LOLATypedValue::Str("c".to_string()),
+                ConcreteStreamData::Str("a".to_string()),
+                ConcreteStreamData::Str("c".to_string()),
             ]
             .into_iter(),
-        )) as OutputStream<LOLATypedValue>,
+        )) as OutputStream<ConcreteStreamData>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(
             vec![
-                LOLATypedValue::Str("b".to_string()),
-                LOLATypedValue::Str("d".to_string()),
+                ConcreteStreamData::Str("b".to_string()),
+                ConcreteStreamData::Str("d".to_string()),
             ]
             .into_iter(),
         )),

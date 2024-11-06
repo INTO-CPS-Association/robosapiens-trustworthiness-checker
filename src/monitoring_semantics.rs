@@ -1,18 +1,15 @@
-use crate::ast::{BExpr, SBinOp, SExpr, UntypedStreams};
-use crate::core::{ConcreteStreamData, MonitoringSemantics, OutputStream, StreamContext, VarName};
+use crate::ast::{BExpr, SBinOp, SExpr};
+use crate::core::ConcreteStreamData;
+use crate::core::{MonitoringSemantics, OutputStream, StreamContext, VarName};
 use crate::untimed_monitoring_combinators as mc;
 
 #[derive(Clone)]
 pub struct UntimedLolaSemantics;
 
-impl MonitoringSemantics<SExpr<VarName>, OutputStream<ConcreteStreamData>>
-    for UntimedLolaSemantics
-{
-    type StreamSystem = UntypedStreams;
-
+impl MonitoringSemantics<SExpr<VarName>, ConcreteStreamData> for UntimedLolaSemantics {
     fn to_async_stream(
         expr: SExpr<VarName>,
-        ctx: &dyn StreamContext<UntypedStreams>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
     ) -> OutputStream<ConcreteStreamData> {
         match expr {
             SExpr::Val(v) => mc::val(v),
@@ -53,14 +50,10 @@ impl MonitoringSemantics<SExpr<VarName>, OutputStream<ConcreteStreamData>>
     }
 }
 
-impl MonitoringSemantics<BExpr<VarName>, OutputStream<ConcreteStreamData>>
-    for UntimedLolaSemantics
-{
-    type StreamSystem = UntypedStreams;
-
+impl MonitoringSemantics<BExpr<VarName>, ConcreteStreamData> for UntimedLolaSemantics {
     fn to_async_stream(
         expr: BExpr<VarName>,
-        ctx: &dyn StreamContext<UntypedStreams>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
     ) -> OutputStream<ConcreteStreamData> {
         match expr {
             BExpr::Val(b) => mc::val(ConcreteStreamData::Bool(b)),

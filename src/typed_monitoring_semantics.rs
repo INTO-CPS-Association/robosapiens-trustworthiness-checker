@@ -1,34 +1,49 @@
+use std::fmt::Debug;
+
 use futures::StreamExt;
 
 use crate::ast::SBinOp;
-use crate::core::{MonitoringSemantics, OutputStream, StreamContext, Value};
-use crate::lola_streams::{LOLAStream, TypedStreams};
-use crate::lola_type_system::{LOLATypeSystem, LOLATypedValue};
+use crate::core::ConcreteStreamData;
+use crate::core::{MonitoringSemantics, OutputStream, StreamContext, StreamData, Value};
+use crate::lola_type_system::LOLATypeSystem;
 use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprT, SExprTE};
 use crate::typed_monitoring_combinators as mc;
 
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;
 
-impl MonitoringSemantics<SExprTE, LOLAStream> for TypedUntimedLolaSemantics {
-    type StreamSystem = TypedStreams;
+fn to_typed_stream<T: TryFrom<ConcreteStreamData, Error = ()> + Debug>(
+    stream: OutputStream<ConcreteStreamData>,
+) -> OutputStream<T> {
+    Box::pin(stream.map(|x| x.try_into().expect("Type error")))
+}
 
-    fn to_async_stream(expr: SExprTE, ctx: &dyn StreamContext<Self::StreamSystem>) -> LOLAStream {
+fn from_typed_stream<T: Into<ConcreteStreamData> + StreamData>(
+    stream: OutputStream<T>,
+) -> OutputStream<ConcreteStreamData> {
+    Box::pin(stream.map(|x| x.into()))
+}
+
+impl MonitoringSemantics<SExprTE, ConcreteStreamData, ConcreteStreamData>
+    for TypedUntimedLolaSemantics
+{
+    fn to_async_stream(
+        expr: SExprTE,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
+    ) -> OutputStream<ConcreteStreamData> {
         match expr {
-            SExprTE::Int(e) => LOLAStream::Int(Self::to_async_stream(e, ctx)),
-            SExprTE::Str(e) => LOLAStream::Str(Self::to_async_stream(e, ctx)),
-            SExprTE::Bool(e) => LOLAStream::Bool(Self::to_async_stream(e, ctx)),
-            SExprTE::Unit(e) => LOLAStream::Unit(Self::to_async_stream(e, ctx)),
+            SExprTE::Int(e) => from_typed_stream::<i64>(Self::to_async_stream(e, ctx)),
+            SExprTE::Str(e) => from_typed_stream::<String>(Self::to_async_stream(e, ctx)),
+            SExprTE::Bool(e) => from_typed_stream::<bool>(Self::to_async_stream(e, ctx)),
+            SExprTE::Unit(e) => from_typed_stream::<()>(Self::to_async_stream(e, ctx)),
         }
     }
 }
 
-impl MonitoringSemantics<SExprInt, OutputStream<i64>> for TypedUntimedLolaSemantics {
-    type StreamSystem = TypedStreams;
-
+impl MonitoringSemantics<SExprInt, i64, ConcreteStreamData> for TypedUntimedLolaSemantics {
     fn to_async_stream(
         expr: SExprInt,
-        ctx: &dyn StreamContext<Self::StreamSystem>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
     ) -> OutputStream<i64> {
         match expr {
             SExprInt::Val(v) => mc::val(v),
@@ -41,10 +56,7 @@ impl MonitoringSemantics<SExprInt, OutputStream<i64>> for TypedUntimedLolaSemant
                     SBinOp::Mult => mc::mult(e1, e2),
                 }
             }
-            SExprInt::Var(v) => Box::pin(mc::var(ctx, v).map(|x| match x {
-                LOLATypedValue::Int(i) => i,
-                _ => panic!("Type error"),
-            })),
+            SExprInt::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprInt::Index(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::index(e, i, c)
@@ -59,19 +71,14 @@ impl MonitoringSemantics<SExprInt, OutputStream<i64>> for TypedUntimedLolaSemant
     }
 }
 
-impl MonitoringSemantics<SExprStr, OutputStream<String>> for TypedUntimedLolaSemantics {
-    type StreamSystem = TypedStreams;
-
+impl MonitoringSemantics<SExprStr, String, ConcreteStreamData> for TypedUntimedLolaSemantics {
     fn to_async_stream(
         expr: SExprStr,
-        ctx: &dyn StreamContext<Self::StreamSystem>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
     ) -> OutputStream<String> {
         match expr {
             SExprStr::Val(v) => mc::val(v),
-            SExprStr::Var(v) => Box::pin(mc::var(ctx, v).map(|x| match x {
-                LOLATypedValue::Str(s) => s,
-                _ => panic!("Type error"),
-            })),
+            SExprStr::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprStr::Index(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::index(e, i, c)
@@ -94,21 +101,16 @@ impl MonitoringSemantics<SExprStr, OutputStream<String>> for TypedUntimedLolaSem
     }
 }
 
-impl<V: Value<LOLATypeSystem>> MonitoringSemantics<SExprT<V>, OutputStream<V>>
-    for TypedUntimedLolaSemantics
+impl<V: Value<LOLATypeSystem> + TryFrom<ConcreteStreamData, Error = ()>>
+    MonitoringSemantics<SExprT<V>, V, ConcreteStreamData> for TypedUntimedLolaSemantics
 {
-    type StreamSystem = TypedStreams;
-
     fn to_async_stream(
         expr: SExprT<V>,
-        ctx: &dyn StreamContext<Self::StreamSystem>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
     ) -> OutputStream<V> {
         match expr {
             SExprT::Val(v) => mc::val(v),
-            SExprT::Var(v) => Box::pin(mc::var(ctx, v).map(|x| match V::from_typed_value(x) {
-                Some(v) => v,
-                None => panic!("Type error"),
-            })),
+            SExprT::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprT::Index(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::index(e, i, c)
@@ -123,17 +125,15 @@ impl<V: Value<LOLATypeSystem>> MonitoringSemantics<SExprT<V>, OutputStream<V>>
     }
 }
 
-impl MonitoringSemantics<SExprBool, OutputStream<bool>> for TypedUntimedLolaSemantics {
-    type StreamSystem = TypedStreams;
-
+impl MonitoringSemantics<SExprBool, bool, ConcreteStreamData> for TypedUntimedLolaSemantics {
     fn to_async_stream(
         expr: SExprBool,
-        ctx: &dyn StreamContext<Self::StreamSystem>,
+        ctx: &dyn StreamContext<ConcreteStreamData>,
     ) -> OutputStream<bool> {
         match expr {
             SExprBool::Val(b) => mc::val(b),
             SExprBool::EqInt(e1, e2) => {
-                let e1 = Self::to_async_stream(e1, ctx);
+                let e1: OutputStream<i64> = Self::to_async_stream(e1, ctx);
                 let e2 = Self::to_async_stream(e2, ctx);
                 mc::eq(e1, e2)
             }

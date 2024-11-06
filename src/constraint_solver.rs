@@ -3,7 +3,8 @@ use std::{fmt::Debug, fmt::Display, mem};
 use winnow::Parser;
 
 use crate::ast::*;
-use crate::core::{ConcreteStreamData, IndexedVarName, VarName};
+use crate::core::ConcreteStreamData;
+use crate::core::{IndexedVarName, VarName};
 
 pub type SExprConstraint<VarT> = (VarT, SExpr<VarT>);
 pub type SExprConstraintSolved<VarT> = (VarT, ConcreteStreamData);

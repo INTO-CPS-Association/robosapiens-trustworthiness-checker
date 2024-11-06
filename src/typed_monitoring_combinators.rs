@@ -1,8 +1,5 @@
 use crate::core::StreamData;
-use crate::lola_streams::TypedStreams;
-use crate::lola_type_system::LOLATypedValue;
-use crate::{OutputStream, StreamContext, VarName};
-use core::panic;
+use crate::OutputStream;
 use futures::{
     stream::{self, BoxStream},
     StreamExt,
@@ -115,7 +112,7 @@ pub fn index<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream<
 }
 
 pub fn plus(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
-    lift2(|x, y| { println!("eval of {x} + {y}"); x + y }, x, y)
+    lift2(|x, y| x + y, x, y)
 }
 
 pub fn concat(x: OutputStream<String>, y: OutputStream<String>) -> OutputStream<String> {
@@ -191,18 +188,7 @@ pub fn mult(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
 //             }
 //         },
 //     )) as OutputStream<ConcreteStreamData>
-// }
-
-pub fn var(ctx: &dyn StreamContext<TypedStreams>, x: VarName) -> OutputStream<LOLATypedValue> {
-    match ctx.var(&x) {
-        Some(x) => x,
-        None => {
-            let VarName(x) = x;
-            panic!("Variable {} not found", x)
-        }
-    }
-}
-
+//
 // Defer for an UntimedLolaExpression using the lola_expression parser
 // pub fn defer(
 //     ctx: &dyn StreamContext<UntypedStreams>,

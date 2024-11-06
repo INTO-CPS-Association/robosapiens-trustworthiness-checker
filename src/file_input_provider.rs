@@ -3,10 +3,10 @@ use core::panic;
 use futures::{stream, StreamExt};
 
 use crate::ast::InputFileData;
+use crate::core::ConcreteStreamData;
 use crate::core::TypeSystem;
 use crate::core::{InputProvider, OutputStream, TypeAnnotated, Value, VarName};
-use crate::lola_type_system::{LOLATypeSystem, LOLATypedValue};
-use crate::ConcreteStreamData;
+use crate::lola_type_system::LOLATypeSystem;
 
 fn input_file_data_iter(
     data: InputFileData,
@@ -32,8 +32,8 @@ impl InputProvider<ConcreteStreamData> for InputFileData {
     }
 }
 
-impl<T: TypeAnnotated<LOLATypeSystem>> InputProvider<LOLATypedValue> for (InputFileData, T) {
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<LOLATypedValue>> {
+impl<T: TypeAnnotated<LOLATypeSystem>> InputProvider<ConcreteStreamData> for (InputFileData, T) {
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
         let (data, ta) = self;
         let base_stream = data.input_stream(var)?;
         let var_type = ta.type_of_var(var)?;

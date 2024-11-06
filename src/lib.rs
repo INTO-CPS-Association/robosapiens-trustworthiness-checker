@@ -2,9 +2,10 @@
 #![deny(warnings)]
 
 pub mod core;
+pub use crate::core::ConcreteStreamData;
 pub use core::{
-    ConcreteStreamData, InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification,
-    StreamContext, StreamExpr, VarName,
+    InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext,
+    StreamExpr, VarName,
 };
 pub mod ast;
 pub use ast::{LOLASpecification, SExpr};

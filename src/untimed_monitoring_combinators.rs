@@ -1,5 +1,5 @@
+use crate::core::ConcreteStreamData;
 use crate::core::StreamData;
-use crate::ConcreteStreamData;
 use crate::{
     lola_expression, MonitoringSemantics, OutputStream, StreamContext, UntimedLolaSemantics,
     VarName,
@@ -12,8 +12,6 @@ use futures::{
 use std::ops::Deref;
 use tokio::join;
 use winnow::Parser;
-
-use crate::ast::UntypedStreams;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>:
     Fn(T) -> S + Clone + Sync + Send + 'static
@@ -230,7 +228,7 @@ pub fn mult(
 }
 
 pub fn eval(
-    ctx: &dyn StreamContext<UntypedStreams>,
+    ctx: &dyn StreamContext<ConcreteStreamData>,
     x: OutputStream<ConcreteStreamData>,
     history_length: usize,
 ) -> OutputStream<ConcreteStreamData> {
@@ -294,7 +292,7 @@ pub fn eval(
 }
 
 pub fn var(
-    ctx: &dyn StreamContext<UntypedStreams>,
+    ctx: &dyn StreamContext<ConcreteStreamData>,
     x: VarName,
 ) -> OutputStream<ConcreteStreamData> {
     match ctx.var(&x) {
@@ -308,7 +306,7 @@ pub fn var(
 
 // Defer for an UntimedLolaExpression using the lola_expression parser
 pub fn defer(
-    ctx: &dyn StreamContext<UntypedStreams>,
+    ctx: &dyn StreamContext<ConcreteStreamData>,
     prop_stream: OutputStream<ConcreteStreamData>,
     history_length: usize,
 ) -> OutputStream<ConcreteStreamData> {
@@ -478,7 +476,7 @@ mod tests {
         }
     }
 
-    impl StreamContext<UntypedStreams> for MockContext {
+    impl StreamContext<ConcreteStreamData> for MockContext {
         fn var(&self, x: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
             let mutex = self.xs.get(x)?;
             if let Ok(vec) = mutex.lock() {
@@ -487,7 +485,7 @@ mod tests {
                 std::panic!("Mutex was poisoned");
             }
         }
-        fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<UntypedStreams>> {
+        fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<ConcreteStreamData>> {
             // Create new xs with only the `history_length` latest values for the Vec
             let new_xs = self
                 .xs
