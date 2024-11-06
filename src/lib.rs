@@ -21,7 +21,6 @@ pub use parser::{lola_expression, lola_input_file, lola_specification};
 pub mod file_handling;
 pub mod file_input_provider;
 pub mod queuing_runtime;
-pub mod ring_buffer;
 pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use file_handling::parse_file;
