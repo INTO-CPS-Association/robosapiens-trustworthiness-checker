@@ -78,24 +78,24 @@ async fn manage_var<V: StreamData>(
 ) {
     let mut senders: Vec<mpsc::Sender<V>> = vec![];
     let mut send_requests = vec![];
-    println!("Starting manage_var for {}", var);
+    // println!("Starting manage_var for {}", var);
     // Gathering senders
     loop {
-        println!("check stage 1");
-        println!("Ready: {:?}", *ready.borrow());
+        // println!("check stage 1");
+        // println!("Ready: {:?}", *ready.borrow());
         select! {
             biased;
             _ = cancel.cancelled() => {
-                println!("Ending manage_var for {} due to cancellation", var);
+                // println!("Ending manage_var for {} due to cancellation", var);
                 return;
             }
             _ = ready.wait_for(|x| *x) => {
-                println!("Moving to stage 2");
+                // println!("Moving to stage 2");
                 break;
             }
             channel_sender = channel_request_rx.recv() => {
                 if let Some(channel_sender) = channel_sender {
-                    println!("Received request for {}", var);
+                    // println!("Received request for {}", var);
                     send_requests.push(channel_sender);
                 }
                 // We don't care if we stop receiving requests
@@ -111,7 +111,7 @@ async fn manage_var<V: StreamData>(
             panic!("Failed to send stream for {var} to requester");
         }
         // We directly re-forwarded the input stream, so we are done
-        println!("Direct reforward for {}", var);
+        // println!("Direct reforward for {}", var);
         return;
     } else {
         for channel_sender in send_requests {
@@ -120,7 +120,7 @@ async fn manage_var<V: StreamData>(
             let stream = ReceiverStream::new(rx);
             // let typed_stream = SS::to_typed_stream(typ, Box::pin(stream));
             if let Err(_) = channel_sender.send(Box::pin(stream)) {
-                panic!("Failed to send stream for {var} to requester");
+                // panic!("Failed to send stream for {var} to requester");
             }
         }
     }
@@ -136,16 +136,16 @@ async fn manage_var<V: StreamData>(
             // Bad things will happen if this is called before everyone has subscribed
             data = input_stream.next() => {
                 if let Some(data) = data {
-                    println!("sending data {:?}", data);
+                    // println!("sending data {:?}", data);
                     assert!(!senders.is_empty());
                     let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
                     for res in join_all(send_futs).await {
                         if let Err(_) = res {
-                            println!("Failed to send data {:?} for {} due to no receivers", data, var);
+                            // println!("Failed to send data {:?} for {} due to no receivers", data, var);
                         }
                     }
                 } else {
-                    println!("Ending manage_var for {} as out of input data", var);
+                    // println!("Ending manage_var for {} as out of input data", var);
                     return;
                 }
             }
@@ -184,7 +184,7 @@ async fn distribute<V: Clone + Debug + Send + 'static>(
                         }
                         data = input_stream.next() => {
                             if let Some(data) = data {
-                                println!("Distributing data {:?}", data);
+                                // println!("Distributing data {:?}", data);
                                 // let data_copy = data.clone();
                                 if let Err(_) = send.send(data) {
                                     // println!("sent")
@@ -220,7 +220,7 @@ async fn monitor<V: StreamData>(
             data = input_stream.next() => {
                 match data {
                     Some(data) => {
-                        println!("Monitored data {:?}", data);
+                        // println!("Monitored data {:?}", data);
                         if let Err(_) = send.send(data).await {
                             return;
                         }
@@ -401,7 +401,6 @@ where
     M: Specification<Expr>,
 {
     fn new(model: M, mut input_streams: impl InputProvider<Val>) -> Self {
-        println!("Creating new async monitor runner");
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
 
@@ -417,7 +416,6 @@ where
             var_data.insert(var.clone(), VarData { requester: tx1 });
             to_launch_in.push((var.clone(), input_stream, rx1));
         }
-        println!("Launched monitors for input variables");
 
         let mut to_launch_out = vec![];
 
@@ -479,7 +477,7 @@ where
             if let Err(e) = num_requested.wait_for(|x| *x == 0).await {
                 panic!("Failed to wait for all vars to be requested: {:?}", e);
             }
-            println!("Var exchange ready!");
+            // println!("Var exchange ready!");
             var_exchange_ready.send(true).unwrap();
         });
 
@@ -505,7 +503,6 @@ where
         Box::pin(stream::unfold(
             (output_streams, outputs),
             |(mut output_streams, outputs)| async move {
-                println!("Monitoring outputs");
                 let mut futures = vec![];
                 for (_, stream) in output_streams.iter_mut() {
                     futures.push(stream.next());
