@@ -1,12 +1,6 @@
-use crate::ast::UntypedLOLA;
-use crate::core::{
-    ExpressionTyping, SemanticErrors, SemanticResult, TypeAnnotated, TypeCheckableSpecification,
-    TypeContext,
-};
-use crate::lola_type_system::{BoolTypeSystem, LOLATypeSystem, StreamType};
+use crate::core::StreamType;
 use crate::{
     ast::{BExpr, SBinOp, SExpr},
-    core::{SemanticError, TypeCheckableHelper, TypeSystem, Value},
     ConcreteStreamData, VarName,
 };
 use crate::{LOLASpecification, Specification, StreamExpr};
@@ -14,13 +8,42 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 
-impl ExpressionTyping for BoolTypeSystem {
-    type TypeSystem = BoolTypeSystem;
-    type TypedExpr = SExprBool;
+#[derive(Debug, PartialEq, Eq)]
+pub enum SemanticError {
+    TypeError(String),
+    UnknownError(String),
+    UndeclaredVariable(String),
+}
 
-    fn type_of_expr(_: &Self::TypedExpr) -> <BoolTypeSystem as TypeSystem>::Type {
-        StreamType::Bool
+pub type SemanticErrors = Vec<SemanticError>;
+pub type TypeContext = BTreeMap<VarName, StreamType>;
+
+pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
+
+pub trait TypeCheckableHelper<TypedExpr> {
+    fn type_check_raw(
+        &self,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
+    ) -> Result<TypedExpr, ()>;
+}
+impl<TypedExpr, R: TypeCheckableHelper<TypedExpr>> TypeCheckable<TypedExpr> for R {
+    fn type_check(&self, context: &mut TypeContext) -> SemanticResult<TypedExpr> {
+        let mut errors = Vec::new();
+        let res = self.type_check_raw(context, &mut errors);
+        match res {
+            Ok(se) => Ok(se),
+            Err(()) => Err(errors),
+        }
     }
+}
+pub trait TypeCheckable<TypedExpr> {
+    fn type_check_with_default(&self) -> SemanticResult<TypedExpr> {
+        let mut context = TypeContext::new();
+        self.type_check(&mut context)
+    }
+
+    fn type_check(&self, context: &mut TypeContext) -> SemanticResult<TypedExpr>;
 }
 
 impl StreamExpr<StreamType> for SExprTE {
@@ -34,23 +57,9 @@ impl StreamExpr<StreamType> for SExprTE {
     }
 }
 
-impl ExpressionTyping for LOLATypeSystem {
-    type TypeSystem = LOLATypeSystem;
-    type TypedExpr = SExprTE;
-
-    fn type_of_expr(expr: &Self::TypedExpr) -> <LOLATypeSystem as TypeSystem>::Type {
-        match expr {
-            SExprTE::Int(_) => StreamType::Int,
-            SExprTE::Str(_) => StreamType::Str,
-            SExprTE::Bool(_) => StreamType::Bool,
-            SExprTE::Unit(_) => StreamType::Unit,
-        }
-    }
-}
-
 // Stream expressions - now with types
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SExprT<ValT: Value<LOLATypeSystem>> {
+pub enum SExprT<ValT> {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
     // Stream indexing
@@ -161,46 +170,35 @@ impl Specification<SExprTE> for TypedLOLASpecification {
     }
 }
 
-impl TypeCheckableSpecification<UntypedLOLA, LOLATypeSystem, TypedLOLASpecification>
-    for LOLASpecification
-{
-    fn type_check(&self) -> SemanticResult<TypedLOLASpecification> {
-        let type_context = self.type_annotations.clone();
-        let mut typed_exprs = BTreeMap::new();
-        let mut errors = vec![];
-        for (var, expr) in self.exprs.iter() {
-            let mut ctx = type_context.clone();
-            let typed_expr = expr.type_check_raw(&mut ctx, &mut errors);
-            typed_exprs.insert(var, typed_expr);
-        }
-        if errors.is_empty() {
-            Ok(TypedLOLASpecification {
-                input_vars: self.input_vars.clone(),
-                output_vars: self.output_vars.clone(),
-                exprs: typed_exprs
-                    .into_iter()
-                    .map(|(k, v)| (k.clone(), v.unwrap()))
-                    .collect(),
-                type_annotations: self.type_annotations.clone(),
-            })
-        } else {
-            Err(errors)
-        }
+pub fn type_check(spec: LOLASpecification) -> SemanticResult<TypedLOLASpecification> {
+    let type_context = spec.type_annotations.clone();
+    let mut typed_exprs = BTreeMap::new();
+    let mut errors = vec![];
+    for (var, expr) in spec.exprs.iter() {
+        let mut ctx = type_context.clone();
+        let typed_expr = expr.type_check_raw(&mut ctx, &mut errors);
+        typed_exprs.insert(var, typed_expr);
+    }
+    if errors.is_empty() {
+        Ok(TypedLOLASpecification {
+            input_vars: spec.input_vars.clone(),
+            output_vars: spec.output_vars.clone(),
+            exprs: typed_exprs
+                .into_iter()
+                .map(|(k, v)| (k.clone(), v.unwrap()))
+                .collect(),
+            type_annotations: spec.type_annotations.clone(),
+        })
+    } else {
+        Err(errors)
     }
 }
 
-impl TypeAnnotated<LOLATypeSystem> for TypedLOLASpecification {
-    fn type_of_var(&self, var: &VarName) -> Option<StreamType> {
-        // println!("Type of var: {:?}", var);
-        self.type_annotations.get(var).cloned()
-    }
-}
-
-impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
+impl TypeCheckableHelper<SExprTE> for ConcreteStreamData {
     fn type_check_raw(
         &self,
-        _: &mut crate::core::TypeContext<LOLATypeSystem>,
-        errs: &mut crate::core::SemanticErrors,
+        _: &mut TypeContext,
+        errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         match self {
             ConcreteStreamData::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
@@ -208,7 +206,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
             ConcreteStreamData::Bool(v) => Ok(SExprTE::Bool(SExprT::Val(*v))),
             ConcreteStreamData::Unit => Ok(SExprTE::Unit(SExprT::Val(()))),
             ConcreteStreamData::Unknown => {
-                errs.push(crate::core::SemanticError::UnknownError(
+                errs.push(SemanticError::UnknownError(
                     format!(
                         "Stream expression {:?} not assigned a type before semantic analysis",
                         self
@@ -222,11 +220,11 @@ impl TypeCheckableHelper<LOLATypeSystem> for ConcreteStreamData {
 }
 
 // Type check a binary operation
-impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>) {
+impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>) {
     fn type_check_raw(
         &self,
-        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-        errs: &mut crate::core::SemanticErrors,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         let (op, se1, se2) = *self;
         let se1_check = se1.type_check_raw(ctx, errs);
@@ -260,11 +258,11 @@ impl TypeCheckableHelper<LOLATypeSystem> for (SBinOp, &SExpr<VarName>, &SExpr<Va
 }
 
 // Type check an if expression
-impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<VarName>) {
+impl TypeCheckableHelper<SExprTE> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<VarName>) {
     fn type_check_raw(
         &self,
-        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-        errs: &mut crate::core::SemanticErrors,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         let (b, se1, se2) = *self;
         let b_check = b.type_check_raw(ctx, errs);
@@ -314,11 +312,11 @@ impl TypeCheckableHelper<LOLATypeSystem> for (&BExpr<VarName>, &SExpr<VarName>, 
 }
 
 // Type check an index expression
-impl TypeCheckableHelper<LOLATypeSystem> for (&SExpr<VarName>, isize, &ConcreteStreamData) {
+impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &ConcreteStreamData) {
     fn type_check_raw(
         &self,
-        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-        errs: &mut crate::core::SemanticErrors,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         let (inner, idx, default) = *self;
         let inner_check = inner.type_check_raw(ctx, errs);
@@ -355,11 +353,11 @@ impl TypeCheckableHelper<LOLATypeSystem> for (&SExpr<VarName>, isize, &ConcreteS
 }
 
 // Type check a variable
-impl TypeCheckableHelper<LOLATypeSystem> for VarName {
+impl TypeCheckableHelper<SExprTE> for VarName {
     fn type_check_raw(
         &self,
-        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-        errs: &mut crate::core::SemanticErrors,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         let type_opt = ctx.get(self);
         match type_opt {
@@ -380,11 +378,11 @@ impl TypeCheckableHelper<LOLATypeSystem> for VarName {
 }
 
 // Type check a boolean expression
-impl TypeCheckableHelper<BoolTypeSystem> for BExpr<VarName> {
+impl TypeCheckableHelper<SExprBool> for BExpr<VarName> {
     fn type_check_raw(
         &self,
-        ctx: &mut crate::core::TypeContext<LOLATypeSystem>,
-        errs: &mut crate::core::SemanticErrors,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
     ) -> Result<SExprBool, ()> {
         match self {
             BExpr::Val(b) => Ok(SExprBool::Val(*b)),
@@ -441,10 +439,10 @@ impl TypeCheckableHelper<BoolTypeSystem> for BExpr<VarName> {
 }
 
 // Type check an expression
-impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
+impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
     fn type_check_raw(
         &self,
-        ctx: &mut TypeContext<LOLATypeSystem>,
+        ctx: &mut TypeContext,
         errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         match self {
@@ -470,7 +468,7 @@ impl TypeCheckableHelper<LOLATypeSystem> for SExpr<VarName> {
 mod tests {
     use std::{iter::zip, mem::discriminant};
 
-    use crate::core::{SemanticResult, TypeCheckable, TypeContext};
+    use super::{SemanticResult, TypeCheckable, TypeContext};
 
     use super::*;
 
@@ -620,9 +618,7 @@ mod tests {
             SExprV::Val(ConcreteStreamData::Bool(true)),
             SExprV::Val(ConcreteStreamData::Unit),
         ];
-        let results = vals
-            .iter()
-            .map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
+        let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprInt::Val(1))),
             Ok(SExprTE::Str(SExprStr::Val("".into()))),
@@ -763,9 +759,7 @@ mod tests {
         let sbinops = all_sbinop_variants();
         let vals: Vec<SExpr<VarName>> =
             generate_binop_combinations(&int_val, &int_val, sbinops.clone());
-        let results = vals
-            .iter()
-            .map(TypeCheckable::<LOLATypeSystem>::type_check_with_default);
+        let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
         let int_t_val = vec![SExprInt::Val(0)];
 
@@ -900,7 +894,7 @@ mod tests {
             .map(|n| SExprV::Var(VarName(n.into())));
 
         // Fake context/environment that simulates type-checking context
-        let mut ctx = TypeContext::<LOLATypeSystem>::new();
+        let mut ctx = TypeContext::new();
         for (n, t) in variant_names.into_iter().zip(variant_types.into_iter()) {
             ctx.insert(VarName(n.into()), t);
         }

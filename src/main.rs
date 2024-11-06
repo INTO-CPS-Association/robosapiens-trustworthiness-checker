@@ -1,6 +1,6 @@
 #![deny(warnings)]
 use futures::StreamExt;
-use trustworthiness_checker::{self as tc, core::TypeCheckableSpecification, parse_file, Monitor};
+use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
 
 use clap::{Parser, ValueEnum};
 
@@ -95,9 +95,8 @@ async fn main() {
             }
         }
         (Runtime::Async, Semantics::TypedUntimed) => {
-            let typed_model = model.type_check().expect("Model failed to type check");
+            let typed_model = type_check(model).expect("Model failed to type check");
             // let typed_input_streams = d
-            let input_streams = (input_streams, typed_model.clone());
 
             let mut runner = tc::AsyncMonitorRunner::<_, _, tc::TypedUntimedLolaSemantics, _>::new(
                 typed_model,
@@ -111,10 +110,8 @@ async fn main() {
             }
         }
         (Runtime::Queuing, Semantics::TypedUntimed) => {
-            let typed_model = model.type_check().expect("Model failed to type check");
+            let typed_model = type_check(model).expect("Model failed to type check");
 
-            // let typed_input_streams = d
-            let input_streams = (input_streams, typed_model.clone());
 
             let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
                 _,

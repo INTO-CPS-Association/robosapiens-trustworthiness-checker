@@ -3,7 +3,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
-use futures::{stream::BoxStream, Stream};
+use futures::stream::BoxStream;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConcreteStreamData {
@@ -134,59 +134,18 @@ pub trait Value<TS: TypeSystem>: Clone + Debug + PartialEq + Eq + StreamData {
 
 pub trait StreamData: Clone + Send + Sync + Debug + 'static {}
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum SemanticError {
-    TypeError(String),
-    UnknownError(String),
-    UndeclaredVariable(String),
-}
+// Trait defining the allowed types for expression values
+impl StreamData for i64 {}
+impl StreamData for String {}
+impl StreamData for bool {}
+impl StreamData for () {}
 
-pub type SemanticErrors = Vec<SemanticError>;
-pub type TypeContext<TS> = BTreeMap<VarName, <TS as TypeSystem>::Type>;
-
-pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
-
-pub trait TypeCheckableHelper<ET: ExpressionTyping> {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext<ET::TypeSystem>,
-        errs: &mut SemanticErrors,
-    ) -> Result<ET::TypedExpr, ()>;
-}
-
-pub trait TypeCheckable<ET: ExpressionTyping> {
-    fn type_check_with_default(&self) -> SemanticResult<ET::TypedExpr> {
-        let mut context = TypeContext::<ET::TypeSystem>::new();
-        self.type_check(&mut context)
-    }
-
-    fn type_check(
-        &self,
-        context: &mut TypeContext<ET::TypeSystem>,
-    ) -> SemanticResult<ET::TypedExpr>;
-}
-
-impl<ET: ExpressionTyping, R: TypeCheckableHelper<ET>> TypeCheckable<ET> for R {
-    fn type_check(
-        &self,
-        context: &mut TypeContext<ET::TypeSystem>,
-    ) -> SemanticResult<ET::TypedExpr> {
-        let mut errors = Vec::new();
-        let res = self.type_check_raw(context, &mut errors);
-        match res {
-            Ok(se) => Ok(se),
-            Err(()) => Err(errors),
-        }
-    }
-}
-
-pub trait TypeCheckableSpecification<
-    InputET: ExpressionTyping,
-    OutputET: ExpressionTyping,
-    OutputSpec: Specification<OutputET::TypedExpr>,
->: Specification<InputET::TypedExpr>
-{
-    fn type_check(&self) -> SemanticResult<OutputSpec>;
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StreamType {
+    Int,
+    Str,
+    Bool,
+    Unit,
 }
 
 // Could also do this with async steams
@@ -242,29 +201,6 @@ pub trait StreamExpr<Type> {
     fn var(typ: Type, var: &VarName) -> Self;
 }
 
-pub trait StreamSystem: Send + 'static {
-    type TypeSystem: TypeSystem;
-    type TypedStream: Stream<Item = <Self::TypeSystem as TypeSystem>::TypedValue>
-        + Unpin
-        + Send
-        + 'static;
-    // It would be nice to have a type alias for the type of the stream
-    // but such type aliases are currently unstable
-    // type TypedValueStream = OutputStream<<Self::TypeSystem as TypeSystem>::TypedValue>;
-
-    fn to_typed_stream(
-        typ: <Self::TypeSystem as TypeSystem>::Type,
-        stream: OutputStream<<Self::TypeSystem as TypeSystem>::TypedValue>,
-    ) -> Self::TypedStream;
-
-    fn type_of_stream(value: &Self::TypedStream) -> <Self::TypeSystem as TypeSystem>::Type;
-
-    fn transform_stream(
-        transformation: impl StreamTransformationFn,
-        stream: Self::TypedStream,
-    ) -> Self::TypedStream;
-}
-
 // We do not restrict E to StreamExpr or TS::TypedExpr because we want to allow
 // for the monitoring semantics to be defined for fragments of the
 // stream expression language as well as the top-level stream
@@ -283,11 +219,6 @@ pub trait Specification<Expr> {
     fn output_vars(&self) -> Vec<VarName>;
 
     fn var_expr(&self, var: &VarName) -> Option<Expr>;
-}
-
-// Annotations on the types of variables in a specification
-pub trait TypeAnnotated<TS: TypeSystem> {
-    fn type_of_var(&self, var: &VarName) -> Option<TS::Type>;
 }
 
 /*

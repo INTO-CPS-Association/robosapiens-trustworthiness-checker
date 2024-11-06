@@ -2,9 +2,8 @@
 
 use futures::stream::StreamExt;
 use std::collections::BTreeMap;
-use trustworthiness_checker::core::TypeCheckableSpecification;
-use trustworthiness_checker::lola_type_system::LOLATypeSystem;
 use trustworthiness_checker::queuing_runtime::QueuingMonitorRunner;
+use trustworthiness_checker::type_checking::type_check;
 use trustworthiness_checker::{
     async_runtime::AsyncMonitorRunner, lola_specification, Monitor, VarName,
 };
@@ -16,7 +15,7 @@ use lola_fixtures::*;
 async fn test_simple_add_monitor() {
     let input_streams = input_streams3();
     let spec = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-    let spec = spec.type_check().expect("Type check failed");
+    let spec = type_check(spec).expect("Type check failed");
     let mut async_monitor =
         AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
@@ -44,7 +43,7 @@ async fn test_simple_add_monitor() {
 async fn test_concat_monitor() {
     let input_streams = input_streams4();
     let spec = lola_specification(&mut spec_typed_string_concat()).unwrap();
-    let spec = spec.type_check().expect("Type check failed");
+    let spec = type_check(spec).expect("Type check failed");
     // let mut async_monitor =
     // AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, input_streams);
     let mut async_monitor =

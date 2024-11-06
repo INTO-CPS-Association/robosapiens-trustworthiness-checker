@@ -1,12 +1,8 @@
-use core::panic;
-
-use futures::{stream, StreamExt};
+use futures::stream;
 
 use crate::ast::InputFileData;
 use crate::core::ConcreteStreamData;
-use crate::core::TypeSystem;
-use crate::core::{InputProvider, OutputStream, TypeAnnotated, Value, VarName};
-use crate::lola_type_system::LOLATypeSystem;
+use crate::core::{InputProvider, OutputStream, VarName};
 
 fn input_file_data_iter(
     data: InputFileData,
@@ -29,40 +25,6 @@ impl InputProvider<ConcreteStreamData> for InputFileData {
             self.clone(),
             var.clone(),
         ))))
-    }
-}
-
-impl<T: TypeAnnotated<LOLATypeSystem>> InputProvider<ConcreteStreamData> for (InputFileData, T) {
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
-        let (data, ta) = self;
-        let base_stream = data.input_stream(var)?;
-        let var_type = ta.type_of_var(var)?;
-        let converting_stream = Box::pin(base_stream.map(move |data| match data {
-            ConcreteStreamData::Int(i) => {
-                let value = i.to_typed_value();
-                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
-                value
-            }
-            ConcreteStreamData::Str(s) => {
-                let value = s.to_typed_value();
-                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
-                value
-            }
-            ConcreteStreamData::Bool(b) => {
-                let value = b.to_typed_value();
-                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
-                value
-            }
-            ConcreteStreamData::Unit => {
-                let value = ().to_typed_value();
-                assert_eq!(LOLATypeSystem::type_of_value(&value), var_type);
-                value
-            }
-            ConcreteStreamData::Unknown => {
-                panic!("Unknown data type in input stream")
-            }
-        }));
-        Some(converting_stream)
     }
 }
 

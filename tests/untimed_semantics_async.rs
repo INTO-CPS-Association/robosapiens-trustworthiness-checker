@@ -2,7 +2,6 @@
 
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
-use trustworthiness_checker::ast::UntypedLOLA;
 use trustworthiness_checker::UntimedLolaSemantics;
 use trustworthiness_checker::{
     async_runtime::AsyncMonitorRunner, lola_specification, ConcreteStreamData, Monitor, VarName,

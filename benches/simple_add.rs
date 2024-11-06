@@ -9,10 +9,9 @@ use futures::{
     stream::{self, BoxStream},
     StreamExt,
 };
-use trustworthiness_checker::core::TypeCheckableSpecification;
-use trustworthiness_checker::lola_type_system::LOLATypedValue;
+use trustworthiness_checker::type_checking::type_check;
 use trustworthiness_checker::OutputStream;
-use trustworthiness_checker::{lola_streams::LOLAStream, ConcreteStreamData, Monitor, VarName};
+use trustworthiness_checker::{ConcreteStreamData, Monitor, VarName};
 
 pub fn spec_simple_add_monitor() -> &'static str {
     "in x\n\
@@ -48,18 +47,19 @@ pub fn input_streams_concrete(
     input_streams
 }
 
-pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, OutputStream<LOLATypedValue>> {
+pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, OutputStream<ConcreteStreamData>> {
     let mut input_streams = BTreeMap::new();
     let size = size as i64;
     input_streams.insert(
         VarName("x".into()),
-        Box::pin(stream::iter((0..size).map(|x| LOLATypedValue::Int(2 * x))))
-            as OutputStream<LOLATypedValue>,
+        Box::pin(stream::iter(
+            (0..size).map(|x| ConcreteStreamData::Int(2 * x)),
+        )) as OutputStream<ConcreteStreamData>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(
-            (0..size).map(|y| LOLATypedValue::Int(2 * y + 1)),
+            (0..size).map(|y| ConcreteStreamData::Int(2 * y + 1)),
         )),
     );
     input_streams
@@ -100,7 +100,7 @@ async fn monitor_outputs_typed_async(num_outputs: usize) {
     let input_streams = input_streams_typed(num_outputs);
     let spec =
         trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-    let spec = spec.type_check().expect("Type check failed");
+    let spec = type_check(spec).expect("Type check failed");
     let mut async_monitor = trustworthiness_checker::async_runtime::AsyncMonitorRunner::<
         _,
         _,
@@ -134,7 +134,7 @@ async fn monitor_outputs_typed_queuing(num_outputs: usize) {
     let input_streams = input_streams_typed(num_outputs);
     let spec =
         trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-    let spec = spec.type_check().expect("Type check failed");
+    let spec = type_check(spec).expect("Type check failed");
     let mut async_monitor = trustworthiness_checker::queuing_runtime::QueuingMonitorRunner::<
         _,
         _,

@@ -4,8 +4,7 @@ use futures::StreamExt;
 
 use crate::ast::SBinOp;
 use crate::core::ConcreteStreamData;
-use crate::core::{MonitoringSemantics, OutputStream, StreamContext, StreamData, Value};
-use crate::lola_type_system::LOLATypeSystem;
+use crate::core::{MonitoringSemantics, OutputStream, StreamContext, StreamData};
 use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprT, SExprTE};
 use crate::typed_monitoring_combinators as mc;
 
@@ -101,7 +100,7 @@ impl MonitoringSemantics<SExprStr, String, ConcreteStreamData> for TypedUntimedL
     }
 }
 
-impl<V: Value<LOLATypeSystem> + TryFrom<ConcreteStreamData, Error = ()>>
+impl<V: TryFrom<ConcreteStreamData, Error = ()> + StreamData>
     MonitoringSemantics<SExprT<V>, V, ConcreteStreamData> for TypedUntimedLolaSemantics
 {
     fn to_async_stream(

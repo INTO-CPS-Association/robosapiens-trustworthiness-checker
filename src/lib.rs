@@ -25,7 +25,5 @@ pub mod ring_buffer;
 pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use file_handling::parse_file;
-pub mod lola_streams;
-pub mod lola_type_system;
 pub mod typed_monitoring_combinators;
 pub mod typed_monitoring_semantics;

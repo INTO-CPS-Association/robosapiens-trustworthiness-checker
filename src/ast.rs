@@ -1,59 +1,9 @@
-use crate::core::ConcreteStreamData;
-use crate::{
-    core::{
-        ExpressionTyping, IndexedVarName, Specification, StreamExpr, StreamSystem, TypeAnnotated,
-        TypeSystem, VarName,
-    },
-    lola_type_system::{LOLATypeSystem, StreamType},
-    OutputStream,
-};
+use crate::core::{ConcreteStreamData, StreamType};
+use crate::core::{IndexedVarName, Specification, StreamExpr, VarName};
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
 };
-
-pub struct UntypedLOLA;
-// pub trait TypedStreamData<T: Type<TS>, TS: TypeSystem>: StreamData<TS> {}
-
-impl ExpressionTyping for UntypedLOLA {
-    type TypeSystem = UntypedLOLA;
-    type TypedExpr = SExpr<VarName>;
-
-    fn type_of_expr(_: &Self::TypedExpr) -> () {
-        ()
-    }
-}
-
-pub struct UntypedStreams;
-impl StreamSystem for UntypedStreams {
-    type TypedStream = OutputStream<ConcreteStreamData>;
-    type TypeSystem = UntypedLOLA;
-
-    fn type_of_stream(_: &Self::TypedStream) -> () {
-        ()
-    }
-
-    fn transform_stream(
-        transformation: impl crate::core::StreamTransformationFn,
-        stream: Self::TypedStream,
-    ) -> Self::TypedStream {
-        transformation.transform(stream)
-    }
-
-    fn to_typed_stream(_: (), stream: OutputStream<ConcreteStreamData>) -> Self::TypedStream {
-        stream
-    }
-}
-
-impl TypeSystem for UntypedLOLA {
-    type Type = ();
-    type TypedValue = ConcreteStreamData;
-    // type TypedValue = ConcreteStreamData;
-
-    fn type_of_value(_: &Self::TypedValue) -> Self::Type {
-        ()
-    }
-}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BExpr<VarT: Debug> {
@@ -126,18 +76,6 @@ impl Specification<SExpr<VarName>> for LOLASpecification {
 
     fn var_expr(&self, var: &VarName) -> Option<SExpr<VarName>> {
         Some(self.exprs.get(var)?.clone())
-    }
-}
-
-impl TypeAnnotated<LOLATypeSystem> for LOLASpecification {
-    fn type_of_var(&self, var: &VarName) -> Option<StreamType> {
-        self.type_annotations.get(var).cloned()
-    }
-}
-
-impl TypeAnnotated<UntypedLOLA> for LOLASpecification {
-    fn type_of_var(&self, _: &VarName) -> Option<()> {
-        Some(())
     }
 }
 

@@ -12,8 +12,8 @@ use winnow::ascii::space0 as whitespace;
 
 use crate::ast::*;
 use crate::core::ConcreteStreamData;
+use crate::core::StreamType;
 use crate::core::VarName;
-use crate::lola_type_system::StreamType;
 
 // This is the top-level parser for LOLA expressions
 pub fn lola_expression(s: &mut &str) -> PResult<SExpr<VarName>> {
