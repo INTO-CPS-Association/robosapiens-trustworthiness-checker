@@ -197,16 +197,6 @@ pub trait StreamContext<Val: StreamData>: Send + 'static {
     fn advance(&self);
 }
 
-pub trait StreamExpr<Type> {
-    fn var(typ: Type, var: &VarName) -> Self;
-}
-
-// We do not restrict E to StreamExpr or TS::TypedExpr because we want to allow
-// for the monitoring semantics to be defined for fragments of the
-// stream expression language as well as the top-level stream
-// expression language.
-// We require copy because we want to be able to
-// manage the lifetime of the semantics object
 pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Send + 'static {
     // type ExpressionTyping: ExpressionTyping<TypeSystem = <Self::StreamSystem as StreamSystem>::TypeSystem>;
 

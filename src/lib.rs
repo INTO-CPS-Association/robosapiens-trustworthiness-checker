@@ -5,7 +5,7 @@ pub mod core;
 pub use crate::core::ConcreteStreamData;
 pub use core::{
     InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext,
-    StreamExpr, VarName,
+    VarName,
 };
 pub mod ast;
 pub use ast::{LOLASpecification, SExpr};

@@ -1,5 +1,5 @@
 use crate::core::{ConcreteStreamData, StreamType};
-use crate::core::{IndexedVarName, Specification, StreamExpr, VarName};
+use crate::core::{IndexedVarName, Specification, VarName};
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
@@ -49,12 +49,6 @@ pub enum SExpr<VarT: Debug> {
     Eval(Box<Self>),
     Defer(Box<Self>),
     Update(Box<Self>, Box<Self>),
-}
-
-impl StreamExpr<()> for SExpr<VarName> {
-    fn var(_: (), var: &VarName) -> Self {
-        SExpr::Var(var.clone())
-    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

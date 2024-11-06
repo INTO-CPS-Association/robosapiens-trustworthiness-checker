@@ -3,7 +3,7 @@ use crate::{
     ast::{BExpr, SBinOp, SExpr},
     ConcreteStreamData, VarName,
 };
-use crate::{LOLASpecification, Specification, StreamExpr};
+use crate::{LOLASpecification, Specification};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -44,17 +44,6 @@ pub trait TypeCheckable<TypedExpr> {
     }
 
     fn type_check(&self, context: &mut TypeContext) -> SemanticResult<TypedExpr>;
-}
-
-impl StreamExpr<StreamType> for SExprTE {
-    fn var(typ: StreamType, var: &VarName) -> Self {
-        match typ {
-            StreamType::Int => SExprTE::Int(SExprInt::Var(var.clone())),
-            StreamType::Str => SExprTE::Str(SExprStr::Var(var.clone())),
-            StreamType::Bool => SExprTE::Bool(SExprT::Var(var.clone())),
-            StreamType::Unit => SExprTE::Unit(SExprT::Var(var.clone())),
-        }
-    }
 }
 
 // Stream expressions - now with types
