@@ -4,67 +4,7 @@ use futures::{
     stream::{self, BoxStream},
     StreamExt,
 };
-
-pub trait CloneFn1<T: StreamData, S: StreamData>:
-    Fn(T) -> S + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where
-    T: Fn(S) -> R + Sync + Send + Clone + 'static
-{
-}
-
-pub fn lift1<S: StreamData, R: StreamData>(
-    f: impl CloneFn1<S, R>,
-    x_mon: OutputStream<S>,
-) -> OutputStream<R> {
-    let f = f.clone();
-
-    Box::pin(x_mon.map(move |x| f(x)))
-}
-
-pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
-    Fn(S, R) -> U + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T where
-    T: Fn(S, R) -> U + Clone + Sync + Send + 'static
-{
-}
-
-pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
-    f: impl CloneFn2<S, R, U>,
-    x_mon: OutputStream<S>,
-    y_mon: OutputStream<R>,
-) -> OutputStream<U> {
-    let f = f.clone();
-    Box::pin(x_mon.zip(y_mon).map(move |(x, y)| f(x, y)))
-}
-
-pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
-    Fn(S, R, U) -> V + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T where
-    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static
-{
-}
-
-pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
-    f: impl CloneFn3<S, R, V, U>,
-    x_mon: OutputStream<S>,
-    y_mon: OutputStream<R>,
-    z_mon: OutputStream<V>,
-) -> OutputStream<U> {
-    let f = f.clone();
-
-    Box::pin(
-        x_mon
-            .zip(y_mon)
-            .zip(z_mon)
-            .map(move |((x, y), z)| f(x, y, z)),
-    ) as BoxStream<'static, U>
-}
+use crate::untimed_monitoring_combinators::{lift1, lift2, lift3};
 
 pub fn and(x: OutputStream<bool>, y: OutputStream<bool>) -> OutputStream<bool> {
     lift2(|x, y| x && y, x, y)
