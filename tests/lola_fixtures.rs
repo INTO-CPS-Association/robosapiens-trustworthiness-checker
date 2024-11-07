@@ -121,6 +121,23 @@ pub fn spec_typed_string_concat() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_typed_count_monitor() -> &'static str {
+    "out x: Int\n\
+     x = 1 + (x)[-1, 0]"
+}
+
+#[allow(dead_code)]
+pub fn spec_typed_eval_monitor() -> &'static str {
+    "in x: Int\n\
+    in y: Int\n\
+    in s: Str\n\
+    out z: Int\n\
+    out w: Int\n\
+    z = x + y\n\
+    w = eval(s)"
+}
+
+#[allow(dead_code)]
 pub fn spec_count_monitor() -> &'static str {
     "out x\n\
      x = 1 + (x)[-1, 0]"

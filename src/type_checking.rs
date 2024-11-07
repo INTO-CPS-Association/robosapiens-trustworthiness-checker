@@ -446,7 +446,18 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
                 (inner.deref(), *idx, default).type_check_raw(ctx, errs)
             }
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
-            SExpr::Eval(_) => todo!("Implement support for Eval (to be renamed)"),
+            SExpr::Eval(e) => {
+                let e_check = e.type_check_raw(ctx, errs)?;
+                match e_check {
+                    SExprTE::Str(e_str) => Ok(SExprTE::Str(SExprStr::Eval(Box::new(e_str)))),
+                    _ => {
+                        errs.push(SemanticError::TypeError(
+                            "Eval can only be applied to string expressions".into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
             SExpr::Defer(_) => todo!("Implement support for Defer"),
             SExpr::Update(_, _) => todo!("Implement support for Update"),
         }

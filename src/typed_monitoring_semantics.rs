@@ -1,27 +1,12 @@
-use std::fmt::Debug;
-
-use futures::StreamExt;
-
 use crate::ast::SBinOp;
 use crate::core::ConcreteStreamData;
 use crate::core::{MonitoringSemantics, OutputStream, StreamContext, StreamData};
 use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprT, SExprTE};
 use crate::typed_monitoring_combinators as mc;
+use crate::typed_monitoring_combinators::{from_typed_stream, to_typed_stream};
 
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;
-
-fn to_typed_stream<T: TryFrom<ConcreteStreamData, Error = ()> + Debug>(
-    stream: OutputStream<ConcreteStreamData>,
-) -> OutputStream<T> {
-    Box::pin(stream.map(|x| x.try_into().expect("Type error")))
-}
-
-fn from_typed_stream<T: Into<ConcreteStreamData> + StreamData>(
-    stream: OutputStream<T>,
-) -> OutputStream<ConcreteStreamData> {
-    Box::pin(stream.map(|x| x.into()))
-}
 
 impl MonitoringSemantics<SExprTE, ConcreteStreamData, ConcreteStreamData>
     for TypedUntimedLolaSemantics
@@ -88,10 +73,7 @@ impl MonitoringSemantics<SExprStr, String, ConcreteStreamData> for TypedUntimedL
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
-            SExprStr::Eval(e) => {
-                let _ = Self::to_async_stream(*e, ctx);
-                unimplemented!("Eval not implemented")
-            }
+            SExprStr::Eval(e) => mc::eval(ctx, Self::to_async_stream(*e, ctx), 10),
             SExprStr::Concat(x, y) => mc::concat(
                 Self::to_async_stream(*x, ctx),
                 Self::to_async_stream(*y, ctx),

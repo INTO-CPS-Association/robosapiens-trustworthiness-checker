@@ -5,11 +5,11 @@ use crate::{
     VarName,
 };
 use core::panic;
+use std::ops::Deref;
 use futures::{
     stream::{self, BoxStream},
     StreamExt,
 };
-use std::ops::Deref;
 use tokio::join;
 use winnow::Parser;
 
