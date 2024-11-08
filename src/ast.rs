@@ -5,6 +5,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
+// TODO: Make BExpr part of SExpr 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BExpr<VarT: Debug> {
     Val(bool),
@@ -15,6 +16,7 @@ pub enum BExpr<VarT: Debug> {
     Or(Box<BExpr<VarT>>, Box<BExpr<VarT>>),
 }
 
+// TODO: Refactor SBinOp to use impl below
 // Stream BinOp
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SBinOp {
@@ -23,6 +25,37 @@ pub enum SBinOp {
     Mult,
 }
 
+// // Integer Binary Operations
+// #[derive(Clone, Debug, PartialEq)]
+// pub enum IntBinOp {
+//     Add,
+//     Sub,
+//     Mul,
+//     Div,
+// }
+// 
+// // Bool Binary Operations
+// #[derive(Clone, Debug, PartialEq)]
+// pub enum BoolBinOp {
+//     Or,
+//     And,
+// }
+// 
+// // Str Binary Operations
+// #[derive(Clone, Debug, PartialEq)]
+// pub enum StrBinOp {
+//     Concat,
+// }
+// 
+// // Stream BinOp
+// #[derive(Clone, Debug, PartialEq)]
+// pub enum SBinOp {
+//     IOp(IntBinOp),
+//     BOp(BoolBinOp),
+//     SOp(StrBinOp),
+// }
+
+// TODO: Remove generic VarT
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else
@@ -117,6 +150,7 @@ impl<VarT: Display + Debug> Display for BExpr<VarT> {
 }
 
 // Trait for indexing a variable producing a new SExpr
+// TODO: Move to Constraint file
 pub trait IndexableVar: Debug {
     fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<Self>
     where
