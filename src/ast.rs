@@ -149,36 +149,9 @@ impl<VarT: Display + Debug> Display for BExpr<VarT> {
     }
 }
 
-// Trait for indexing a variable producing a new SExpr
-// TODO: Move to Constraint file
-pub trait IndexableVar: Debug {
-    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<Self>
-    where
-        Self: Sized;
-}
+<<<<<<< Updated upstream
 
-impl IndexableVar for VarName {
-    // For unindexed variables, indexing just produces the same expression
-    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<VarName> {
-        SExpr::Index(Box::new(SExpr::Var(self.clone())), i, c.clone())
-    }
-}
 
-impl IndexableVar for IndexedVarName {
-    // For indexed variables, we can actually attempt to change the index on the underlying variable
-    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<IndexedVarName> {
-        use SExpr::*;
-        match self {
-            // If the shifted index is positive, we can just shift the index
-            // attached to the variable
-            IndexedVarName(name, j) if i.wrapping_add_unsigned(*j) >= 0 => Var(IndexedVarName(
-                name.clone(),
-                i.wrapping_add_unsigned(*j) as usize,
-            )),
-            // If not the indexed variable is replaced with the default value
-            IndexedVarName(_, _) => Val(c.clone()),
-        }
-    }
-}
-
+=======
+>>>>>>> Stashed changes
 pub type InputFileData = BTreeMap<usize, BTreeMap<VarName, ConcreteStreamData>>;
