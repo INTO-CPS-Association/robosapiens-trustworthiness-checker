@@ -5,7 +5,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
-// TODO: Make BExpr part of SExpr 
+// TODO: Make BExpr part of SExpr
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BExpr<VarT: Debug> {
     Val(bool),
@@ -33,20 +33,20 @@ pub enum SBinOp {
 //     Mul,
 //     Div,
 // }
-// 
+//
 // // Bool Binary Operations
 // #[derive(Clone, Debug, PartialEq)]
 // pub enum BoolBinOp {
 //     Or,
 //     And,
 // }
-// 
+//
 // // Str Binary Operations
 // #[derive(Clone, Debug, PartialEq)]
 // pub enum StrBinOp {
 //     Concat,
 // }
-// 
+//
 // // Stream BinOp
 // #[derive(Clone, Debug, PartialEq)]
 // pub enum SBinOp {
@@ -149,9 +149,4 @@ impl<VarT: Display + Debug> Display for BExpr<VarT> {
     }
 }
 
-<<<<<<< Updated upstream
-
-
-=======
->>>>>>> Stashed changes
 pub type InputFileData = BTreeMap<usize, BTreeMap<VarName, ConcreteStreamData>>;
