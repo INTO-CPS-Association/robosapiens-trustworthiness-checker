@@ -69,8 +69,8 @@ impl<Val: StreamData> QueuingVarContext<Val> {
     }
 }
 
-// A stream that is either already arrived (the Arrived state) or is waiting to
-// be lazily supplied via a watch channel (the Waiting state).
+// A WaitingStream allows us to refer to streams which do not exist yet.
+// Arrived means that the stream exists. Waiting means that we are waiting for the stream to arrive.
 //
 // The get_stream function is used to wait until the stream is available and
 // then return it.
@@ -90,21 +90,15 @@ impl<S> Clone for WaitingStream<S> {
 
 impl<S> WaitingStream<S> {
     async fn get_stream(&mut self) -> Arc<Mutex<S>> {
-        let ret_stream: Arc<Mutex<S>>;
-        match self {
+        let ret_stream = match self {
             WaitingStream::Arrived(stream) => return stream.clone(),
             WaitingStream::Waiting(receiver) => {
-                let stream_lock = receiver.wait_for(|x| x.is_some()).await.unwrap();
-                let stream = stream_lock.as_ref().unwrap().clone();
-                ret_stream = stream
+                let stream = receiver.wait_for(|x| x.is_some()).await.unwrap();
+                stream.as_ref().unwrap().clone()
             }
-        }
-        *self = WaitingStream::Arrived(ret_stream);
-        if let WaitingStream::Arrived(stream) = self {
-            return stream.clone();
-        } else {
-            panic!("Stream should be arrived")
-        }
+        };
+        *self = WaitingStream::Arrived(ret_stream.clone());
+        ret_stream
     }
 }
 
@@ -123,12 +117,16 @@ fn queue_buffered_stream<V: StreamData>(
 ) -> OutputStream<V> {
     Box::pin(stream::unfold(
         (0, xs, waiting_stream, lock),
+        // `i` is the latest index we have outputted.
+        // `xs` is a vector of things we have already taken from `ws`.
+        // `ws` is the waiting stream we are outputting from.
+        // `lock` is required when two instances try to compute the same position of output channels
         |(i, xs, mut ws, lock)| async move {
             loop {
                 // We have these three cases to ensure deadlock freedom
-                // println!("producing value for i: {}", i);
-                // println!("locking xs");
-                // let mut xs_lock = xs.lock().await;
+
+                // The scenario where xs contains one fewer element than the index we are currently at
+                // so we must take the next value from the waiting stream
                 if i == xs.lock().await.len() {
                     // Compute the next value, potentially using the previous one
                     let _ = lock.lock().await;
@@ -142,10 +140,15 @@ fn queue_buffered_stream<V: StreamData>(
                     let mut stream_lock = stream.lock().await;
                     let x_next = stream_lock.next().await;
                     xs.lock().await.push(x_next?);
-                } else if i < xs.lock().await.len() {
+                }
+                // If the index we are looking for is already inside `xs` then return it
+                else if i < xs.lock().await.len() {
                     // We already have the value buffered, so return it
                     return Some((xs.lock().await[i].clone(), (i + 1, xs.clone(), ws, lock)));
-                } else {
+                }
+                // i > xs.len(). We can't compute the current value before previous values are computed
+                // so we await the stream and ignore the result, causing us to repeat the loop
+                else {
                     // Cause more previous values to be produced
                     let stream = ws.get_stream().await;
                     let mut stream_lock = stream.lock().await;
@@ -163,24 +166,17 @@ impl<Val: StreamData> StreamContext<Val> for Arc<QueuingVarContext<Val>> {
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
         let queue = self.queues.get(var)?;
         let production_lock = self.production_locks.get(var)?.clone();
-        if let Some(stream) = self.input_streams.get(var).cloned() {
-            return Some(queue_buffered_stream(
-                queue.clone(),
-                WaitingStream::Arrived(stream),
-                production_lock,
-            ));
-        } else {
-            let waiting_stream = self.output_streams.get(var)?.clone();
-            return Some(queue_buffered_stream(
-                queue.clone(),
-                waiting_stream,
-                production_lock,
-            ));
-        }
+        // Check if it is an input stream. In that case it has exists (has arrived).
+        // Otherwise, it must be an output stream that either already exists (has arrived) or is waiting.
+        let stream = self.input_streams.get(var)
+            .cloned()
+            .map(WaitingStream::Arrived)
+            .or_else(|| self.output_streams.get(var).cloned())?;
+        Some(queue_buffered_stream(queue.clone(), stream, production_lock))
     }
 
     fn advance(&self) {
-        // Do nothing
+        // We don't implement advance for the QueuingContext as it doesn't implement cleanup
     }
 
     fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Val>> {
@@ -195,7 +191,8 @@ impl<Val: StreamData> StreamContext<Val> for Arc<QueuingVarContext<Val>> {
 struct SubMonitor<Val: StreamData> {
     parent: Arc<QueuingVarContext<Val>>,
     #[allow(dead_code)]
-    buffer_size: usize,
+    // Note that buffer_size is not used in this runtime -- it is unrestricted
+    buffer_size: usize, 
     index: Arc<StdMutex<usize>>,
 }
 
@@ -257,7 +254,7 @@ where
 }
 
 impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
-    Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
+Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn new(model: M, mut input_streams: impl InputProvider<Val>) -> Self {
         let var_names: Vec<VarName> = model
@@ -339,16 +336,16 @@ impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<
                 }
                 Some((res, (output_streams, outputs)))
                     as Option<(
-                        BTreeMap<VarName, Val>,
-                        (Vec<OutputStream<Val>>, Vec<VarName>),
-                    )>
+                    BTreeMap<VarName, Val>,
+                    (Vec<OutputStream<Val>>, Vec<VarName>),
+                )>
             },
-        )) as BoxStream<'static, BTreeMap<VarName, Val>>
+        ))
     }
 }
 
 impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
-    QueuingMonitorRunner<Expr, Val, S, M>
+QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn output_stream(&self, var: VarName) -> OutputStream<Val> {
         self.var_exchange.var(&var).unwrap()

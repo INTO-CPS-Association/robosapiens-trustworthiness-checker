@@ -5,22 +5,21 @@ use crate::{
     VarName,
 };
 use core::panic;
-use std::ops::Deref;
 use futures::{
     stream::{self, BoxStream},
     StreamExt,
 };
+use std::ops::Deref;
 use tokio::join;
 use winnow::Parser;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>:
-    Fn(T) -> S + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where
-    T: Fn(S) -> R + Sync + Send + Clone + 'static
-{
-}
+Fn(T) -> S + Clone + Sync + Send + 'static
+{}
+impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T
+where
+    T: Fn(S) -> R + Sync + Send + Clone + 'static,
+{}
 
 pub fn lift1<S: StreamData, R: StreamData>(
     f: impl CloneFn1<S, R>,
@@ -32,13 +31,12 @@ pub fn lift1<S: StreamData, R: StreamData>(
 }
 
 pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
-    Fn(S, R) -> U + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T where
-    T: Fn(S, R) -> U + Clone + Sync + Send + 'static
-{
-}
+Fn(S, R) -> U + Clone + Sync + Send + 'static
+{}
+impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T
+where
+    T: Fn(S, R) -> U + Clone + Sync + Send + 'static,
+{}
 
 pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
     f: impl CloneFn2<S, R, U>,
@@ -50,13 +48,12 @@ pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
 }
 
 pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
-    Fn(S, R, U) -> V + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T where
-    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static
-{
-}
+Fn(S, R, U) -> V + Clone + Sync + Send + 'static
+{}
+impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T
+where
+    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static,
+{}
 
 pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
     f: impl CloneFn3<S, R, V, U>,
@@ -166,11 +163,11 @@ pub fn index(
 ) -> OutputStream<ConcreteStreamData> {
     let c = c.clone();
     if i < 0 {
-        let n: usize = (-i).try_into().unwrap();
+        let n = i.abs() as usize;
         let cs = stream::repeat(c).take(n);
         Box::pin(cs.chain(x)) as BoxStream<'static, ConcreteStreamData>
     } else {
-        let n: usize = i.try_into().unwrap();
+        let n = i as usize;
         Box::pin(x.skip(n)) as BoxStream<'static, ConcreteStreamData>
     }
 }
@@ -467,7 +464,7 @@ mod tests {
     }
 
     impl FromIterator<(VarName, Vec<ConcreteStreamData>)> for VarMap {
-        fn from_iter<I: IntoIterator<Item = (VarName, Vec<ConcreteStreamData>)>>(iter: I) -> Self {
+        fn from_iter<I: IntoIterator<Item=(VarName, Vec<ConcreteStreamData>)>>(iter: I) -> Self {
             let mut map = VarMap(BTreeMap::new());
             for (key, vec) in iter {
                 map.insert(key, Mutex::new(vec));
