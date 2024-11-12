@@ -1,6 +1,7 @@
+use crate::ast::{BoolBinOp, IntBinOp, StrBinOp};
 use crate::core::StreamType;
 use crate::{
-    ast::{BExpr, SBinOp, SExpr},
+    ast::{SBinOp, SExpr},
     ConcreteStreamData, VarName,
 };
 use crate::{LOLASpecification, Specification};
@@ -46,9 +47,16 @@ pub trait TypeCheckable<TypedExpr> {
     fn type_check(&self, context: &mut TypeContext) -> SemanticResult<TypedExpr>;
 }
 
-// Stream expressions - now with types
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SExprT<ValT> {
+pub enum SExprBool {
+    Val(bool),
+    EqInt(SExprInt, SExprInt),
+    EqStr(SExprStr, SExprStr),
+    EqBool(Box<Self>, Box<Self>),
+    EqUnit(SExprUnit, SExprUnit),
+    LeInt(SExprInt, SExprInt),
+    BinOp(Box<Self>, Box<Self>, BoolBinOp),
+    Not(Box<Self>),
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
     // Stream indexing
@@ -58,27 +66,10 @@ pub enum SExprT<ValT> {
         // Index i
         isize,
         // Default c
-        ValT,
+        bool,
     ),
 
-    // Arithmetic Stream expression
-    Val(ValT),
-
     Var(VarName),
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-
-pub enum SExprBool {
-    Val(bool),
-    EqInt(SExprInt, SExprInt),
-    EqStr(SExprStr, SExprStr),
-    EqBool(SExprT<bool>, SExprT<bool>),
-    EqUnit(SExprT<()>, SExprT<()>),
-    LeInt(SExprInt, SExprInt),
-    Not(Box<Self>),
-    And(Box<Self>, Box<Self>),
-    Or(Box<Self>, Box<Self>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -98,7 +89,28 @@ pub enum SExprInt {
     // Arithmetic Stream expression
     Val(i64),
 
-    BinOp(Box<Self>, Box<Self>, SBinOp),
+    BinOp(Box<Self>, Box<Self>, IntBinOp),
+
+    Var(VarName),
+}
+
+// Stream expressions - now with types
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SExprUnit {
+    If(Box<SExprBool>, Box<Self>, Box<Self>),
+
+    // Stream indexing
+    Index(
+        // Inner SExpr e
+        Box<Self>,
+        // Index i
+        isize,
+        // Default c
+        (),
+    ),
+
+    // Arithmetic Stream expression
+    Val(()),
 
     Var(VarName),
 }
@@ -117,7 +129,7 @@ pub enum SExprStr {
         String,
     ),
 
-    Concat(Box<Self>, Box<Self>),
+    BinOp(Box<Self>, Box<Self>, StrBinOp),
 
     // Arithmetic Stream expression
     Val(String),
@@ -133,8 +145,8 @@ pub enum SExprStr {
 pub enum SExprTE {
     Int(SExprInt),
     Str(SExprStr),
-    Bool(SExprT<bool>),
-    Unit(SExprT<()>),
+    Bool(SExprBool),
+    Unit(SExprUnit),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -192,8 +204,8 @@ impl TypeCheckableHelper<SExprTE> for ConcreteStreamData {
         match self {
             ConcreteStreamData::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
             ConcreteStreamData::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.clone()))),
-            ConcreteStreamData::Bool(v) => Ok(SExprTE::Bool(SExprT::Val(*v))),
-            ConcreteStreamData::Unit => Ok(SExprTE::Unit(SExprT::Val(()))),
+            ConcreteStreamData::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(*v))),
+            ConcreteStreamData::Unit => Ok(SExprTE::Unit(SExprUnit::Val(()))),
             ConcreteStreamData::Unknown => {
                 errs.push(SemanticError::UnknownError(
                     format!(
@@ -215,19 +227,22 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>)
         ctx: &mut TypeContext,
         errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
-        let (op, se1, se2) = *self;
+        let (op, se1, se2) = self;
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
 
         match (op, se1_check, se2_check) {
-            (_, Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => Ok(SExprTE::Int(SExprInt::BinOp(
-                Box::new(se1.clone()),
-                Box::new(se2.clone()),
-                op,
-            ))),
-            // String concatenation
-            (SBinOp::Plus, Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => Ok(SExprTE::Str(
-                SExprStr::Concat(Box::new(se1.clone()), Box::new(se2.clone())),
+            // Integer operations
+            (SBinOp::IOp(op), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => Ok(SExprTE::Int(
+                SExprInt::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
+            )),
+            // Boolean operations
+            (SBinOp::BOp(op), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(SExprTE::Bool(
+                SExprBool::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
+            )),
+            // String operations
+            (SBinOp::SOp(op), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => Ok(SExprTE::Str(
+                SExprStr::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
             // Any other case where sub-expressions are Ok, but `op` is not supported
             (_, Ok(ste1), Ok(ste2)) => {
@@ -247,7 +262,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>)
 }
 
 // Type check an if expression
-impl TypeCheckableHelper<SExprTE> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<VarName>) {
+impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, &SExpr<VarName>, &SExpr<VarName>) {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,
@@ -259,7 +274,7 @@ impl TypeCheckableHelper<SExprTE> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<
         let se2_check = se2.type_check_raw(ctx, errs);
 
         match (b_check, se1_check, se2_check) {
-            (Ok(b), Ok(ste1), Ok(ste2)) => {
+            (Ok(SExprTE::Bool(b)), Ok(ste1), Ok(ste2)) => {
                 // Matching on type-checked expressions. If same then Ok, else error.
                 match (ste1, ste2) {
                     (SExprTE::Int(se1), SExprTE::Int(se2)) => Ok(SExprTE::Int(SExprInt::If(
@@ -272,12 +287,12 @@ impl TypeCheckableHelper<SExprTE> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<
                         Box::new(se1.clone()),
                         Box::new(se2.clone()),
                     ))),
-                    (SExprTE::Bool(se1), SExprTE::Bool(se2)) => Ok(SExprTE::Bool(SExprT::If(
+                    (SExprTE::Bool(se1), SExprTE::Bool(se2)) => Ok(SExprTE::Bool(SExprBool::If(
                         Box::new(b.clone()),
                         Box::new(se1.clone()),
                         Box::new(se2.clone()),
                     ))),
-                    (SExprTE::Unit(se1), SExprTE::Unit(se2)) => Ok(SExprTE::Unit(SExprT::If(
+                    (SExprTE::Unit(se1), SExprTE::Unit(se2)) => Ok(SExprTE::Unit(SExprUnit::If(
                         Box::new(b.clone()),
                         Box::new(se1.clone()),
                         Box::new(se2.clone()),
@@ -293,6 +308,12 @@ impl TypeCheckableHelper<SExprTE> for (&BExpr<VarName>, &SExpr<VarName>, &SExpr<
                         Err(())
                     }
                 }
+            }
+            (Ok(_), Ok(_), Ok(_)) => {
+                errs.push(SemanticError::TypeError(
+                    "If expression condition must be a boolean".into(),
+                ));
+                Err(())
             }
             // If there's already an error in any branch, propagate the error
             _ => Err(()),
@@ -319,11 +340,11 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &ConcreteStreamDa
                     SExprStr::Index(Box::new(se.clone()), idx, def.clone()),
                 )),
                 (SExprTE::Bool(se), ConcreteStreamData::Bool(def)) => Ok(SExprTE::Bool(
-                    SExprT::Index(Box::new(se.clone()), idx, *def),
+                    SExprBool::Index(Box::new(se.clone()), idx, *def),
                 )),
-                (SExprTE::Unit(se), ConcreteStreamData::Unit) => {
-                    Ok(SExprTE::Unit(SExprT::Index(Box::new(se.clone()), idx, ())))
-                }
+                (SExprTE::Unit(se), ConcreteStreamData::Unit) => Ok(SExprTE::Unit(
+                    SExprUnit::Index(Box::new(se.clone()), idx, ()),
+                )),
                 (se, def) => {
                     errs.push(SemanticError::TypeError(
                         format!(
@@ -353,75 +374,14 @@ impl TypeCheckableHelper<SExprTE> for VarName {
             Some(t) => match t {
                 StreamType::Int => Ok(SExprTE::Int(SExprInt::Var(self.clone()))),
                 StreamType::Str => Ok(SExprTE::Str(SExprStr::Var(self.clone()))),
-                StreamType::Bool => Ok(SExprTE::Bool(SExprT::Var(self.clone()))),
-                StreamType::Unit => Ok(SExprTE::Unit(SExprT::Var(self.clone()))),
+                StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Var(self.clone()))),
+                StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Var(self.clone()))),
             },
             None => {
                 errs.push(SemanticError::UndeclaredVariable(
                     format!("Usage of undeclared variable: {:?}", self).into(),
                 ));
                 Err(())
-            }
-        }
-    }
-}
-
-// Type check a boolean expression
-impl TypeCheckableHelper<SExprBool> for BExpr<VarName> {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprBool, ()> {
-        match self {
-            BExpr::Val(b) => Ok(SExprBool::Val(*b)),
-            BExpr::Eq(se1, se2) => {
-                let se1_check = se1.type_check_raw(ctx, errs)?;
-                let se2_check = se2.type_check_raw(ctx, errs)?;
-                match (se1_check, se2_check) {
-                    (SExprTE::Int(se1), SExprTE::Int(se2)) => Ok(SExprBool::EqInt(se1, se2)),
-                    (SExprTE::Str(se1), SExprTE::Str(se2)) => Ok(SExprBool::EqStr(se1, se2)),
-                    (SExprTE::Bool(se1), SExprTE::Bool(se2)) => Ok(SExprBool::EqBool(se1, se2)),
-                    (SExprTE::Unit(se1), SExprTE::Unit(se2)) => Ok(SExprBool::EqUnit(se1, se2)),
-                    (se1, se2) => {
-                        errs.push(SemanticError::TypeError(
-                            format!(
-                                "Cannot compare expressions of different types: {:?} and {:?}",
-                                se1, se2
-                            )
-                            .into(),
-                        ));
-                        Err(())
-                    }
-                }
-            }
-            BExpr::Le(se1, se2) => {
-                let se1_check = se1.type_check_raw(ctx, errs)?;
-                let se2_check = se2.type_check_raw(ctx, errs)?;
-                match (se1_check, se2_check) {
-                    (SExprTE::Int(se1), SExprTE::Int(se2)) => Ok(SExprBool::LeInt(se1, se2)),
-                    (se1, se2) => {
-                        errs.push(SemanticError::TypeError(
-                            format!(
-                                "Cannot compare expressions of different types: {:?} and {:?}",
-                                se1, se2
-                            )
-                            .into(),
-                        ));
-                        Err(())
-                    }
-                }
-            }
-            BExpr::Not(b) => b.type_check_raw(ctx, errs),
-            BExpr::And(b1, b2) => {
-                let b1_check = b1.type_check_raw(ctx, errs)?;
-                let b2_check = b2.type_check_raw(ctx, errs)?;
-                Ok(SExprBool::And(Box::new(b1_check), Box::new(b2_check)))
-            }
-            BExpr::Or(b1, b2) => {
-                let b1_check = b1.type_check_raw(ctx, errs)?;
-                let b2_check = b2.type_check_raw(ctx, errs)?;
-                Ok(SExprBool::Or(Box::new(b1_check), Box::new(b2_check)))
             }
         }
     }
@@ -460,6 +420,65 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
             }
             SExpr::Defer(_) => todo!("Implement support for Defer"),
             SExpr::Update(_, _) => todo!("Implement support for Update"),
+            SExpr::Eq(sexpr1, sexpr2) => {
+                let sexpr1_check = sexpr1.type_check_raw(ctx, errs);
+                let sexpr2_check = sexpr2.type_check_raw(ctx, errs);
+                match (sexpr1_check?, sexpr2_check?) {
+                    (SExprTE::Int(se1), SExprTE::Int(se2)) => {
+                        Ok(SExprTE::Bool(SExprBool::EqInt(se1, se2)))
+                    }
+                    (SExprTE::Str(se1), SExprTE::Str(se2)) => {
+                        Ok(SExprTE::Bool(SExprBool::EqStr(se1, se2)))
+                    }
+                    (SExprTE::Bool(se1), SExprTE::Bool(se2)) => Ok(SExprTE::Bool(
+                        SExprBool::EqBool(Box::new(se1), Box::new(se2)),
+                    )),
+                    (SExprTE::Unit(se1), SExprTE::Unit(se2)) => {
+                        Ok(SExprTE::Bool(SExprBool::EqUnit(se1, se2)))
+                    }
+                    (se1, se2) => {
+                        errs.push(SemanticError::TypeError(
+                            format!(
+                                "Cannot compare expressions of different types: {:?} and {:?}",
+                                se1, se2
+                            )
+                            .into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::Le(sexpr1, sexpr2) => {
+                let sexpr1_check = sexpr1.type_check_raw(ctx, errs);
+                let sexpr2_check = sexpr2.type_check_raw(ctx, errs);
+                match (sexpr1_check?, sexpr2_check?) {
+                    (SExprTE::Int(se1), SExprTE::Int(se2)) => {
+                        Ok(SExprTE::Bool(SExprBool::LeInt(se1, se2)))
+                    }
+                    (se1, se2) => {
+                        errs.push(SemanticError::TypeError(
+                            format!(
+                                "Cannot compare expressions of different types: {:?} and {:?}",
+                                se1, se2
+                            )
+                            .into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::Not(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                match sexpr_check {
+                    SExprTE::Bool(se) => Ok(SExprTE::Bool(SExprBool::Not(Box::new(se)))),
+                    _ => {
+                        errs.push(SemanticError::TypeError(
+                            "Not can only be applied to boolean expressions".into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
         }
     }
 }
@@ -474,31 +493,39 @@ mod tests {
 
     type SExprV = SExpr<VarName>;
     type SemantResultStr = SemanticResult<SExprTE>;
-    type BExprStr = BExpr<VarName>;
 
-    trait AsExpr<Expr, BoolExpr> {
-        fn if_expr(b: BoolExpr, texpr: Expr, fexpr: Expr) -> Self;
-    }
-
-    trait AsIntExpr<Expr> {
+    trait BinOpExpr<Expr> {
         fn binop_expr(lhs: Expr, rhs: Expr, op: SBinOp) -> Self;
     }
 
-    impl AsIntExpr<Box<SExprInt>> for SExprInt {
+    trait IfExpr<Expr, BoolExpr> {
+        fn if_expr(b: BoolExpr, t: Expr, f: Expr) -> Self;
+    }
+
+    impl BinOpExpr<Box<SExpr<VarName>>> for SExpr<VarName> {
+        fn binop_expr(lhs: Box<SExpr<VarName>>, rhs: Box<SExpr<VarName>>, op: SBinOp) -> Self {
+            SExpr::BinOp(lhs, rhs, op)
+        }
+    }
+
+    impl BinOpExpr<Box<SExprInt>> for SExprInt {
         fn binop_expr(lhs: Box<SExprInt>, rhs: Box<SExprInt>, op: SBinOp) -> Self {
-            SExprInt::BinOp(lhs, rhs, op)
+            match op {
+                SBinOp::IOp(op) => SExprInt::BinOp(lhs, rhs, op),
+                _ => panic!("Invalid operation for SExprInt: {:?}", op),
+            }
         }
     }
 
-    impl AsIntExpr<Box<SExprV>> for SExprV {
-        fn binop_expr(lhs: Box<SExprV>, rhs: Box<SExprV>, op: SBinOp) -> Self {
-            SExprV::BinOp(lhs, rhs, op)
+    impl IfExpr<Box<SExpr<VarName>>, Box<SExpr<VarName>>> for SExpr<VarName> {
+        fn if_expr(b: Box<SExpr<VarName>>, t: Box<SExpr<VarName>>, f: Box<SExpr<VarName>>) -> Self {
+            SExpr::If(b, t, f)
         }
     }
 
-    impl AsExpr<Box<SExprV>, Box<BExprStr>> for SExprV {
-        fn if_expr(b: Box<BExprStr>, texpr: Box<SExprV>, fexpr: Box<SExprV>) -> Self {
-            SExprV::If(b, texpr, fexpr)
+    impl IfExpr<Box<SExprInt>, Box<SExprBool>> for SExprInt {
+        fn if_expr(b: Box<SExprBool>, t: Box<SExprInt>, f: Box<SExprInt>) -> Self {
+            SExprInt::If(b, t, f)
         }
     }
 
@@ -539,7 +566,12 @@ mod tests {
     // // Helper function that returns all the sbinop variants at the time of writing these tests
     // // (Not guaranteed to be maintained)
     fn all_sbinop_variants() -> Vec<SBinOp> {
-        vec![SBinOp::Plus, SBinOp::Minus, SBinOp::Mult]
+        vec![
+            SBinOp::IOp(IntBinOp::Add),
+            SBinOp::IOp(IntBinOp::Sub),
+            SBinOp::IOp(IntBinOp::Mul),
+            SBinOp::IOp(IntBinOp::Div),
+        ]
     }
 
     // Function to generate combinations to use in tests, e.g., for binops
@@ -571,14 +603,14 @@ mod tests {
         sbinops: Vec<SBinOp>,
     ) -> Vec<T>
     where
-        T: AsIntExpr<Box<Expr>>,
+        T: BinOpExpr<Box<Expr>>,
         Expr: Clone,
     {
         let mut vals = Vec::new();
 
         for op in sbinops {
             vals.extend(generate_combinations(variants_a, variants_b, |lhs, rhs| {
-                T::binop_expr(lhs, rhs, op)
+                T::binop_expr(lhs, rhs, op.clone())
             }));
         }
 
@@ -590,7 +622,7 @@ mod tests {
         variants_b: &[SExprStr],
     ) -> Vec<SExprStr> {
         generate_combinations(variants_a, variants_b, |lhs, rhs| {
-            SExprStr::Concat(Box::new(*lhs), Box::new(*rhs))
+            SExprStr::BinOp(Box::new(*lhs), Box::new(*rhs), StrBinOp::Concat)
         })
     }
 
@@ -601,7 +633,7 @@ mod tests {
         b_expr: Box<BoolExpr>,
     ) -> Vec<T>
     where
-        T: AsExpr<Box<Expr>, Box<BoolExpr>>,
+        T: IfExpr<Box<Expr>, Box<BoolExpr>>,
         Expr: Clone,
     {
         generate_combinations(variants_a, variants_b, |lhs, rhs| {
@@ -622,8 +654,8 @@ mod tests {
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprInt::Val(1))),
             Ok(SExprTE::Str(SExprStr::Val("".into()))),
-            Ok(SExprTE::Bool(SExprT::Val(true))),
-            Ok(SExprTE::Unit(SExprT::Val(()))),
+            Ok(SExprTE::Bool(SExprBool::Val(true))),
+            Ok(SExprTE::Unit(SExprUnit::Val(()))),
         ];
 
         assert!(results.eq(expected.into_iter()));
@@ -645,12 +677,12 @@ mod tests {
             SExprV::BinOp(
                 Box::new(SExprV::Val(ConcreteStreamData::Bool(false))),
                 Box::new(SExprV::Val(ConcreteStreamData::Bool(false))),
-                SBinOp::Plus,
+                SBinOp::IOp(IntBinOp::Add),
             ),
             SExprV::BinOp(
                 Box::new(SExprV::Val(ConcreteStreamData::Unit)),
                 Box::new(SExprV::Val(ConcreteStreamData::Unit)),
-                SBinOp::Plus,
+                SBinOp::IOp(IntBinOp::Add),
             ),
         ];
         let results = vals
@@ -711,17 +743,17 @@ mod tests {
             SExprV::BinOp(
                 Box::new(SExprV::Val(ConcreteStreamData::Int(0))),
                 Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
-                SBinOp::Plus,
+                SBinOp::IOp(IntBinOp::Add),
             ),
             SExprV::BinOp(
                 Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
                 Box::new(SExprV::Val(ConcreteStreamData::Int(0))),
-                SBinOp::Plus,
+                SBinOp::IOp(IntBinOp::Add),
             ),
             SExprV::BinOp(
                 Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
                 Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
-                SBinOp::Plus,
+                SBinOp::IOp(IntBinOp::Add),
             ),
         ];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
@@ -775,7 +807,7 @@ mod tests {
     fn test_str_plus_ok() {
         // Checks that if we add two Strings together it results in typed AST after semantic analysis
         let str_val = vec![SExprV::Val(ConcreteStreamData::Str("".into()))];
-        let sbinops = vec![SBinOp::Plus];
+        let sbinops = vec![SBinOp::SOp(StrBinOp::Concat)];
         let vals: Vec<SExpr<VarName>> =
             generate_binop_combinations(&str_val, &str_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
@@ -801,7 +833,7 @@ mod tests {
         ];
 
         // Create a vector of all SBinOp variants
-        let bexpr = Box::new(BExprStr::Val(true));
+        let bexpr = Box::new(SExpr::Val(true.into()));
         let bexpr_checked = Box::new(SExprBool::Val(true));
 
         let vals_tmp = generate_if_combinations(&val_variants, &val_variants, bexpr.clone());
@@ -826,15 +858,15 @@ mod tests {
                 Box::new(SExprStr::Val("".into())),
                 Box::new(SExprStr::Val("".into())),
             ))),
-            Ok(SExprTE::Bool(SExprT::If(
+            Ok(SExprTE::Bool(SExprBool::If(
                 bexpr_checked.clone(),
-                Box::new(SExprT::Val(true)),
-                Box::new(SExprT::Val(true)),
+                Box::new(SExprBool::Val(true)),
+                Box::new(SExprBool::Val(true)),
             ))),
-            Ok(SExprTE::Unit(SExprT::If(
+            Ok(SExprTE::Unit(SExprUnit::If(
                 bexpr_checked.clone(),
-                Box::new(SExprT::Val(())),
-                Box::new(SExprT::Val(())),
+                Box::new(SExprUnit::Val(())),
+                Box::new(SExprUnit::Val(())),
             ))),
         ];
 
@@ -853,7 +885,7 @@ mod tests {
             SExprV::Val(ConcreteStreamData::Unit),
         ];
 
-        let bexpr = Box::new(BExprStr::Val(true));
+        let bexpr = Box::new(SExpr::Val(true.into()));
 
         let vals_tmp = generate_if_combinations(&variants, &variants, bexpr.clone());
         let vals = vals_tmp.into_iter().filter(|bin_op| {
@@ -904,8 +936,8 @@ mod tests {
         let expected = vec![
             Ok(SExprTE::Int(SExprInt::Var(VarName("int".into())))),
             Ok(SExprTE::Str(SExprStr::Var(VarName("str".into())))),
-            Ok(SExprTE::Bool(SExprT::Var(VarName("bool".into())))),
-            Ok(SExprTE::Unit(SExprT::Var(VarName("unit".into())))),
+            Ok(SExprTE::Bool(SExprBool::Var(VarName("bool".into())))),
+            Ok(SExprTE::Unit(SExprUnit::Var(VarName("unit".into())))),
         ];
 
         assert!(results.eq(expected));
@@ -924,12 +956,12 @@ mod tests {
 
     #[test]
     fn test_dodgy_if() {
-        let dodgy_bexpr = BExpr::Eq(
+        let dodgy_bexpr = SExpr::Eq(
             Box::new(SExprV::Val(ConcreteStreamData::Int(0))),
             Box::new(SExprV::BinOp(
                 Box::new(SExprV::Val(ConcreteStreamData::Int(3))),
                 Box::new(SExprV::Val(ConcreteStreamData::Str("Banana".into()))),
-                SBinOp::Plus,
+                SBinOp::IOp(IntBinOp::Add),
             )),
         );
         let sexpr = SExprV::If(

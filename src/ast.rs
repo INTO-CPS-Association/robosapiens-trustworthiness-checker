@@ -5,61 +5,41 @@ use std::{
     fmt::{Debug, Display},
 };
 
-// TODO: Make BExpr part of SExpr
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum BExpr<VarT: Debug> {
-    Val(bool),
-    Eq(Box<SExpr<VarT>>, Box<SExpr<VarT>>),
-    Le(Box<SExpr<VarT>>, Box<SExpr<VarT>>),
-    Not(Box<BExpr<VarT>>),
-    And(Box<BExpr<VarT>>, Box<BExpr<VarT>>),
-    Or(Box<BExpr<VarT>>, Box<BExpr<VarT>>),
+// Integer Binary Operations
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IntBinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
-// TODO: Refactor SBinOp to use impl below
+// Bool Binary Operations
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BoolBinOp {
+    Or,
+    And,
+}
+
+// Str Binary Operations
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StrBinOp {
+    Concat,
+}
+
 // Stream BinOp
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SBinOp {
-    Plus,
-    Minus,
-    Mult,
+    IOp(IntBinOp),
+    BOp(BoolBinOp),
+    SOp(StrBinOp),
 }
-
-// // Integer Binary Operations
-// #[derive(Clone, Debug, PartialEq)]
-// pub enum IntBinOp {
-//     Add,
-//     Sub,
-//     Mul,
-//     Div,
-// }
-//
-// // Bool Binary Operations
-// #[derive(Clone, Debug, PartialEq)]
-// pub enum BoolBinOp {
-//     Or,
-//     And,
-// }
-//
-// // Str Binary Operations
-// #[derive(Clone, Debug, PartialEq)]
-// pub enum StrBinOp {
-//     Concat,
-// }
-//
-// // Stream BinOp
-// #[derive(Clone, Debug, PartialEq)]
-// pub enum SBinOp {
-//     IOp(IntBinOp),
-//     BOp(BoolBinOp),
-//     SOp(StrBinOp),
-// }
 
 // TODO: Remove generic VarT
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else
-    If(Box<BExpr<VarT>>, Box<Self>, Box<Self>),
+    If(Box<Self>, Box<Self>, Box<Self>),
 
     // Stream indexing
     Index(
@@ -82,6 +62,11 @@ pub enum SExpr<VarT: Debug> {
     Eval(Box<Self>),
     Defer(Box<Self>),
     Update(Box<Self>, Box<Self>),
+
+    // Boolean expressions
+    Eq(Box<Self>, Box<Self>),
+    Le(Box<Self>, Box<Self>),
+    Not(Box<Self>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -121,30 +106,26 @@ impl Display for IndexedVarName {
 
 impl<VarT: Display + Debug> Display for SExpr<VarT> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use SBinOp::*;
+        use SExpr::*;
         match self {
-            SExpr::If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
-            SExpr::Index(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
-            SExpr::Val(n) => write!(f, "{}", n),
-            SExpr::BinOp(e1, e2, SBinOp::Plus) => write!(f, "({} + {})", e1, e2),
-            SExpr::BinOp(e1, e2, SBinOp::Minus) => write!(f, "({} - {})", e1, e2),
-            SExpr::BinOp(e1, e2, SBinOp::Mult) => write!(f, "({} * {})", e1, e2),
-            SExpr::Var(v) => write!(f, "{}", v),
-            SExpr::Eval(e) => write!(f, "eval({})", e),
-            SExpr::Defer(e) => write!(f, "defer({})", e),
-            SExpr::Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
-        }
-    }
-}
-
-impl<VarT: Display + Debug> Display for BExpr<VarT> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BExpr::Val(b) => write!(f, "{}", if *b { "true" } else { "false" }),
-            BExpr::Eq(e1, e2) => write!(f, "({} == {})", e1, e2),
-            BExpr::Le(e1, e2) => write!(f, "({} <= {})", e1, e2),
-            BExpr::Not(b) => write!(f, "!{}", b),
-            BExpr::And(b1, b2) => write!(f, "({} && {})", b1, b2),
-            BExpr::Or(b1, b2) => write!(f, "({} || {})", b1, b2),
+            If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
+            Index(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
+            Val(n) => write!(f, "{}", n),
+            BinOp(e1, e2, IOp(IntBinOp::Add)) => write!(f, "({} + {})", e1, e2),
+            BinOp(e1, e2, IOp(IntBinOp::Sub)) => write!(f, "({} - {})", e1, e2),
+            BinOp(e1, e2, IOp(IntBinOp::Mul)) => write!(f, "({} * {})", e1, e2),
+            BinOp(e1, e2, IOp(IntBinOp::Div)) => write!(f, "({} / {})", e1, e2),
+            BinOp(e1, e2, BOp(BoolBinOp::Or)) => write!(f, "({} || {})", e1, e2),
+            BinOp(e1, e2, BOp(BoolBinOp::And)) => write!(f, "({} && {})", e1, e2),
+            BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),
+            Eq(e1, e2) => write!(f, "({} == {})", e1, e2),
+            Le(e1, e2) => write!(f, "({} <= {})", e1, e2),
+            Not(b) => write!(f, "!{}", b),
+            Var(v) => write!(f, "{}", v),
+            Eval(e) => write!(f, "eval({})", e),
+            Defer(e) => write!(f, "defer({})", e),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
         }
     }
 }

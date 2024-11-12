@@ -117,7 +117,7 @@ pub fn spec_typed_string_concat() -> &'static str {
     "in x: Str\n\
      in y: Str\n\
      out z: Str\n\
-     z = x + y"
+     z = x ++ y"
 }
 
 #[allow(dead_code)]

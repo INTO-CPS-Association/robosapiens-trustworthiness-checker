@@ -3,7 +3,7 @@
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
 use trustworthiness_checker::queuing_runtime::QueuingMonitorRunner;
-use trustworthiness_checker::type_checking::{type_check, TypedLOLASpecification};
+use trustworthiness_checker::type_checking::type_check;
 use trustworthiness_checker::{
     async_runtime::AsyncMonitorRunner, lola_specification, Monitor, VarName,
 };
@@ -114,7 +114,7 @@ async fn test_count_monitor() {
 }
 
 #[tokio::test]
-#[ignore="Not currently working"]
+#[ignore = "Not currently working"]
 async fn test_eval_monitor() {
     let input_streams = input_streams2();
     let spec = lola_specification(&mut spec_typed_eval_monitor()).unwrap();

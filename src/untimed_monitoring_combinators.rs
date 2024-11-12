@@ -181,10 +181,6 @@ pub fn plus(
             (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
                 ConcreteStreamData::Int(x + y)
             }
-            (ConcreteStreamData::Str(x), ConcreteStreamData::Str(y)) => {
-                // ConcreteStreamData::Str(format!("{x}{y}").into());
-                ConcreteStreamData::Str(format!("{x}{y}"))
-            }
             (x, y) => panic!("Invalid addition with types: {:?}, {:?}", x, y),
         },
         x,
@@ -218,6 +214,39 @@ pub fn mult(
                 ConcreteStreamData::Int(x * y)
             }
             _ => panic!("Invalid multiplication"),
+        },
+        x,
+        y,
+    )
+}
+
+pub fn div(
+    x: OutputStream<ConcreteStreamData>,
+    y: OutputStream<ConcreteStreamData>,
+) -> OutputStream<ConcreteStreamData> {
+    lift2(
+        |x, y| match (x, y) {
+            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
+                ConcreteStreamData::Int(x / y)
+            }
+            _ => panic!("Invalid multiplication"),
+        },
+        x,
+        y,
+    )
+}
+
+pub fn concat(
+    x: OutputStream<ConcreteStreamData>,
+    y: OutputStream<ConcreteStreamData>,
+) -> OutputStream<ConcreteStreamData> {
+    lift2(
+        |x, y| match (x, y) {
+            (ConcreteStreamData::Str(x), ConcreteStreamData::Str(y)) => {
+                // ConcreteStreamData::Str(format!("{x}{y}").into());
+                ConcreteStreamData::Str(format!("{x}{y}"))
+            }
+            _ => panic!("Invalid concatenation"),
         },
         x,
         y,
@@ -531,13 +560,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_str_plus() {
+    async fn test_str_concat() {
         let x: OutputStream<ConcreteStreamData> =
             Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
         let y: OutputStream<ConcreteStreamData> =
             Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]));
         let exp = vec!["hello world".into(), "olleh dlrow".into()];
-        let res: Vec<ConcreteStreamData> = plus(x, y).collect().await;
+        let res: Vec<ConcreteStreamData> = concat(x, y).collect().await;
         assert_eq!(res, exp)
     }
 

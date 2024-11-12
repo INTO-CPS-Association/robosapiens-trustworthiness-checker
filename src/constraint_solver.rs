@@ -132,24 +132,6 @@ fn is_constraint_resolved<VarT: Debug>((_, s): &SExprConstraint<VarT>) -> bool {
     matches!(s, SExpr::Val(_))
 }
 
-fn to_indexed_bexpr(b: &BExpr<VarName>) -> BExpr<IndexedVarName> {
-    use BExpr::*;
-    match b {
-        Val(b) => Val(b.clone()),
-        Eq(a, c) => Eq(
-            Box::new(to_indexed_expr(a, 0)),
-            Box::new(to_indexed_expr(c, 0)),
-        ),
-        Le(a, c) => Le(
-            Box::new(to_indexed_expr(a, 0)),
-            Box::new(to_indexed_expr(c, 0)),
-        ),
-        Not(b) => Not(Box::new(to_indexed_bexpr(b))),
-        And(a, b) => And(Box::new(to_indexed_bexpr(a)), Box::new(to_indexed_bexpr(b))),
-        Or(a, b) => Or(Box::new(to_indexed_bexpr(a)), Box::new(to_indexed_bexpr(b))),
-    }
-}
-
 fn to_indexed_expr(s: &SExpr<VarName>, current_index: usize) -> SExpr<IndexedVarName> {
     use SExpr::*;
     match s {
@@ -157,12 +139,21 @@ fn to_indexed_expr(s: &SExpr<VarName>, current_index: usize) -> SExpr<IndexedVar
         BinOp(a, b, op) => BinOp(
             Box::new(to_indexed_expr(a, current_index)),
             Box::new(to_indexed_expr(b, current_index)),
-            *op,
+            op.clone(),
         ),
+        Eq(a, b) => Eq(
+            Box::new(to_indexed_expr(a, current_index)),
+            Box::new(to_indexed_expr(b, current_index)),
+        ),
+        Le(a, b) => Le(
+            Box::new(to_indexed_expr(a, current_index)),
+            Box::new(to_indexed_expr(b, current_index)),
+        ),
+        Not(b) => Not(Box::new(to_indexed_expr(b, current_index))),
         Var(VarName(v)) => Var(IndexedVarName(v.clone(), current_index)),
         Index(s, i, c) => Index(Box::new(to_indexed_expr(s, current_index)), *i, c.clone()),
         If(b, e1, e2) => If(
-            Box::new(to_indexed_bexpr(b)),
+            Box::new(to_indexed_expr(b, current_index)),
             Box::new(to_indexed_expr(e1, current_index)),
             Box::new(to_indexed_expr(e2, current_index)),
         ),
@@ -240,42 +231,101 @@ pub trait PartialEvaluable<VarT: Eq + Clone + IndexableVar> {
 impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
     fn partial_eval(&self, cs: &SExprConstraintStore<IndexedVarName>, time: usize) -> Self {
         use ConcreteStreamData::*;
+        use SBinOp::*;
         use SExpr::*;
         match self {
             Val(s) => Val(s.clone()),
-            BinOp(a, b, op) if *op == SBinOp::Plus || *op == SBinOp::Mult => {
+            BinOp(a, b, op) if *op == IOp(IntBinOp::Add) || *op == IOp(IntBinOp::Mul) => {
                 let a_s = a.partial_eval(cs, time);
                 let b_s = b.partial_eval(cs, time);
                 match (a_s, b_s) {
                     // TODO: Sort other datatypes after exprs
-                    (Val(Int(n1)), Val(Int(n2))) => Val(Int(n1 + n2)),
+                    (Val(Int(n1)), Val(Int(n2))) => Val(Int(if *op == IOp(IntBinOp::Add) {
+                        n1 + n2
+                    } else {
+                        n1 * n2
+                    })),
                     (Val(Int(n1)), b1) => {
-                        BinOp(Box::new(b1), Box::new(Val(Int(n1))), *op).partial_eval(cs, time)
+                        BinOp(Box::new(b1), Box::new(Val(Int(n1))), op.clone()).partial_eval(cs, time)
                     }
                     (BinOp(a1, b1, inner_op), c1) if inner_op == *op => {
-                        BinOp(a1, Box::new(BinOp(b1, Box::new(c1), *op)), inner_op)
+                        BinOp(a1, Box::new(BinOp(b1, Box::new(c1), op.clone())), inner_op)
                             .partial_eval(cs, time)
                     }
                     // Explicitly match the variables to avoid use after move
-                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), *op),
+                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), op.clone()),
                 }
             }
-            BinOp(a, b, op) if *op == SBinOp::Minus => {
+            BinOp(a, b, op) if *op == IOp(IntBinOp::Sub) => {
                 let a_s = a.partial_eval(cs, time);
                 let b_s = b.partial_eval(cs, time);
                 match (a_s, b_s) {
                     (Val(Int(n1)), Val(Int(n2))) => Val(Int(n1 - n2)),
-                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), *op),
+                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), op.clone()),
                 }
             }
+            BinOp(a, b, op) if *op == IOp(IntBinOp::Div) => {
+                let a_s = a.partial_eval(cs, time);
+                let b_s = b.partial_eval(cs, time);
+                match (a_s, b_s) {
+                    (Val(Int(n1)), Val(Int(n2))) => Val(Int(n1 / n2)),
+                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), op.clone()),
+                }
+            }
+            Eq(a, b) => {
+                let a_s = a.partial_eval(cs, time);
+                let b_s = b.partial_eval(cs, time);
+                match (a_s, b_s) {
+                    (SExpr::Val(x1), SExpr::Val(x2)) => Val((x1 == x2).into()),
+                    (a_ss, b_ss) => Eq(Box::new(a_ss), Box::new(b_ss)),
+                }
+            }
+            BinOp(a, b, op) if *op == BOp(BoolBinOp::And) || *op == BOp(BoolBinOp::Or) => {
+                let a_s = a.partial_eval(cs, time);
+                let b_s = b.partial_eval(cs, time);
+                match (a_s, b_s) {
+                    // TODO: Sort other datatypes after exprs
+                    (Val(Bool(n1)), Val(Bool(n2))) => Val((if *op == BOp(BoolBinOp::And) {
+                        n1 && n2
+                    } else {
+                        n1 || n2
+                    })
+                    .into()),
+                    (Val(Bool(n1)), b1) => {
+                        BinOp(Box::new(b1), Box::new(Val(Bool(n1))), op.clone()).partial_eval(cs, time)
+                    }
+                    (BinOp(a1, b1, inner_op), c1) if inner_op == *op => {
+                        BinOp(a1, Box::new(BinOp(b1, Box::new(c1), op.clone())), inner_op)
+                            .partial_eval(cs, time)
+                    }
+                    // Explicitly match the variables to avoid use after move
+                    (a_ss, b_ss) => BinOp(Box::new(a_ss), Box::new(b_ss), op.clone()),
+                }
+            }
+            Le(a, b) => {
+                let a_s = a.partial_eval(cs, time);
+                let b_s = b.partial_eval(cs, time);
+                match (a_s, b_s) {
+                    (SExpr::Val(Int(x1)), SExpr::Val(Int(x2))) => Val((x1 <= x2).into()),
+                    (a_ss, b_ss) => Le(Box::new(a_ss), Box::new(b_ss)),
+                }
+            }
+            Not(b) => {
+                let b_s = b.partial_eval(cs, time);
+                match b_s {
+                    Val(ConcreteStreamData::Bool(b1)) => Val((!b1).into()),
+                    _ => Not(Box::new(b_s)),
+                }
+            }
+
             BinOp(_, _, _) => unreachable!("Covered in other cases"),
             If(b, e1, e2) => {
                 let b_s = b.partial_eval(cs, time);
                 let e1_s = e1.partial_eval(cs, time);
                 let e2_s = e2.partial_eval(cs, time);
                 match b_s {
-                    BExpr::Val(true) => e1_s,
-                    BExpr::Val(false) => e2_s,
+                    SExpr::Val(ConcreteStreamData::Bool(true)) => e1_s,
+                    SExpr::Val(ConcreteStreamData::Bool(false)) => e2_s,
                     _ if e1_s == e2_s => e1_s,
                     _ => If(Box::new(b_s), Box::new(e1_s), Box::new(e2_s)),
                 }
@@ -312,63 +362,6 @@ impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
             },
             Update(_, _) => {
                 todo!("MHK: Not sure how to implement this")
-            }
-        }
-    }
-}
-
-impl PartialEvaluable<IndexedVarName> for BExpr<IndexedVarName> {
-    fn partial_eval(&self, cs: &SExprConstraintStore<IndexedVarName>, time: usize) -> Self {
-        use BExpr::*;
-        use ConcreteStreamData::*;
-        match self {
-            Val(bool) => Val(*bool),
-            Eq(a, b) => {
-                let a_s = a.partial_eval(cs, time);
-                let b_s = b.partial_eval(cs, time);
-                match (a_s, b_s) {
-                    (SExpr::Val(x1), SExpr::Val(x2)) => Val(x1 == x2),
-                    (a_ss, b_ss) => Eq(Box::new(a_ss), Box::new(b_ss)),
-                }
-            }
-            Le(a, b) => {
-                let a_s = a.partial_eval(cs, time);
-                let b_s = b.partial_eval(cs, time);
-                match (a_s, b_s) {
-                    (SExpr::Val(Int(x1)), SExpr::Val(Int(x2))) => Val(x1 <= x2),
-                    (a_ss, b_ss) => Le(Box::new(a_ss), Box::new(b_ss)),
-                }
-            }
-            Not(b) => {
-                let b_s = b.partial_eval(cs, time);
-                match b_s {
-                    Val(b1) => Val(!b1),
-                    _ => Not(Box::new(b_s)),
-                }
-            }
-            And(a, b) => {
-                let a_s = a.partial_eval(cs, time);
-                let b_s = b.partial_eval(cs, time);
-                match (a_s, b_s) {
-                    (Val(b1), Val(b2)) => Val(b1 && b2),
-                    (Val(a1), b1) => And(Box::new(b1), Box::new(Val(a1))).partial_eval(cs, time),
-                    (And(a1, b1), c1) => {
-                        And(a1, Box::new(And(b1, Box::new(c1)))).partial_eval(cs, time)
-                    }
-                    (a_ss, b_ss) => And(Box::new(a_ss), Box::new(b_ss)),
-                }
-            }
-            Or(a, b) => {
-                let a_s = a.partial_eval(cs, time);
-                let b_s = b.partial_eval(cs, time);
-                match (a_s, b_s) {
-                    (Val(b1), Val(b2)) => Val(b1 || b2),
-                    (Val(a1), b1) => Or(Box::new(b1), Box::new(Val(a1))).partial_eval(cs, time),
-                    (Or(a1, b1), c1) => {
-                        Or(a1, Box::new(Or(b1, Box::new(c1)))).partial_eval(cs, time)
-                    }
-                    (a_ss, b_ss) => Or(Box::new(a_ss), Box::new(b_ss)),
-                }
             }
         }
     }
@@ -420,7 +413,7 @@ mod tests {
                         -1,
                         ConcreteStreamData::Int(0),
                     )),
-                    SBinOp::Plus,
+                    SBinOp::IOp(IntBinOp::Add),
                 ),
             )],
         }
@@ -441,7 +434,7 @@ mod tests {
                             -1,
                             ConcreteStreamData::Int(0),
                         )),
-                        SBinOp::Plus
+                        SBinOp::IOp(IntBinOp::Add),
                     ),
                 )],
             }
@@ -459,7 +452,7 @@ mod tests {
                             -1,
                             ConcreteStreamData::Int(0),
                         ),),
-                        SBinOp::Plus,
+                        SBinOp::IOp(IntBinOp::Add),
                     ),
                 )],
             }

@@ -91,6 +91,10 @@ pub fn mult(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
     lift2(|x, y| x * y, x, y)
 }
 
+pub fn div(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
+    lift2(|x, y| x / y, x, y)
+}
+
 pub fn eval<T: TryFrom<ConcreteStreamData, Error = ()> + StreamData>(
     ctx: &dyn StreamContext<ConcreteStreamData>,
     x: OutputStream<String>,

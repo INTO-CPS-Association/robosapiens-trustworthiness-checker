@@ -1,7 +1,7 @@
-use crate::ast::SBinOp;
+use crate::ast::{BoolBinOp, IntBinOp, StrBinOp};
 use crate::core::ConcreteStreamData;
-use crate::core::{MonitoringSemantics, OutputStream, StreamContext, StreamData};
-use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprT, SExprTE};
+use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
+use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprTE, SExprUnit};
 use crate::typed_monitoring_combinators as mc;
 use crate::typed_monitoring_combinators::{from_typed_stream, to_typed_stream};
 
@@ -35,9 +35,10 @@ impl MonitoringSemantics<SExprInt, i64, ConcreteStreamData> for TypedUntimedLola
                 let e1 = Self::to_async_stream(*e1, ctx);
                 let e2 = Self::to_async_stream(*e2, ctx);
                 match op {
-                    SBinOp::Plus => mc::plus(e1, e2),
-                    SBinOp::Minus => mc::minus(e1, e2),
-                    SBinOp::Mult => mc::mult(e1, e2),
+                    IntBinOp::Add => mc::plus(e1, e2),
+                    IntBinOp::Sub => mc::minus(e1, e2),
+                    IntBinOp::Mul => mc::mult(e1, e2),
+                    IntBinOp::Div => mc::div(e1, e2),
                 }
             }
             SExprInt::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
@@ -74,7 +75,7 @@ impl MonitoringSemantics<SExprStr, String, ConcreteStreamData> for TypedUntimedL
                 mc::if_stm(b, e1, e2)
             }
             SExprStr::Eval(e) => mc::eval(ctx, Self::to_async_stream(*e, ctx), 10),
-            SExprStr::Concat(x, y) => mc::concat(
+            SExprStr::BinOp(x, y, StrBinOp::Concat) => mc::concat(
                 Self::to_async_stream(*x, ctx),
                 Self::to_async_stream(*y, ctx),
             ),
@@ -82,21 +83,19 @@ impl MonitoringSemantics<SExprStr, String, ConcreteStreamData> for TypedUntimedL
     }
 }
 
-impl<V: TryFrom<ConcreteStreamData, Error = ()> + StreamData>
-    MonitoringSemantics<SExprT<V>, V, ConcreteStreamData> for TypedUntimedLolaSemantics
-{
+impl MonitoringSemantics<SExprUnit, (), ConcreteStreamData> for TypedUntimedLolaSemantics {
     fn to_async_stream(
-        expr: SExprT<V>,
+        expr: SExprUnit,
         ctx: &dyn StreamContext<ConcreteStreamData>,
-    ) -> OutputStream<V> {
+    ) -> OutputStream<()> {
         match expr {
-            SExprT::Val(v) => mc::val(v),
-            SExprT::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprT::Index(e, i, c) => {
+            SExprUnit::Val(v) => mc::val(v),
+            SExprUnit::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
+            SExprUnit::Index(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::index(e, i, c)
             }
-            SExprT::If(b, e1, e2) => {
+            SExprUnit::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
                 let e1 = Self::to_async_stream(*e1, ctx);
                 let e2 = Self::to_async_stream(*e2, ctx);
@@ -129,8 +128,8 @@ impl MonitoringSemantics<SExprBool, bool, ConcreteStreamData> for TypedUntimedLo
                 mc::eq(e1, e2)
             }
             SExprBool::EqBool(e1, e2) => {
-                let e1 = Self::to_async_stream(e1, ctx);
-                let e2 = Self::to_async_stream(e2, ctx);
+                let e1 = Self::to_async_stream(*e1, ctx);
+                let e2 = Self::to_async_stream(*e2, ctx);
                 mc::eq(e1, e2)
             }
             SExprBool::LeInt(e1, e2) => {
@@ -142,15 +141,26 @@ impl MonitoringSemantics<SExprBool, bool, ConcreteStreamData> for TypedUntimedLo
                 let e = Self::to_async_stream(*e, ctx);
                 mc::not(e)
             }
-            SExprBool::And(e1, e2) => {
+            SExprBool::BinOp(e1, e2, BoolBinOp::And) => {
                 let e1 = Self::to_async_stream(*e1, ctx);
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::and(e1, e2)
             }
-            SExprBool::Or(e1, e2) => {
+            SExprBool::BinOp(e1, e2, BoolBinOp::Or) => {
                 let e1 = Self::to_async_stream(*e1, ctx);
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::or(e1, e2)
+            }
+            SExprBool::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
+            SExprBool::Index(e, i, c) => {
+                let e = Self::to_async_stream(*e, ctx);
+                mc::index(e, i, c)
+            }
+            SExprBool::If(b, e1, e2) => {
+                let b = Self::to_async_stream(*b, ctx);
+                let e1 = Self::to_async_stream(*e1, ctx);
+                let e2 = Self::to_async_stream(*e2, ctx);
+                mc::if_stm(b, e1, e2)
             }
         }
     }
