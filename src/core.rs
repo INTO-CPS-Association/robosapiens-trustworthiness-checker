@@ -6,6 +6,7 @@ use std::{
 use futures::stream::BoxStream;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+// TODO: Rename to Value
 pub enum ConcreteStreamData {
     Int(i64),
     Str(String),

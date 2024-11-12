@@ -25,21 +25,25 @@ use crate::core::MonitoringSemantics;
 use crate::core::Specification;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 
-/* This function takes a receiver of a stream and returns a new stream which
- * first waits for the stream to be received on the channel before the first
- * element is supplied. This is useful for providing code which depend on a
- * stream with this stream before it has been defined, and make it possible to
- * define multiple mutually recursive streams.
+/* Converts a `oneshot::Receiver` of an `OutputStream` into an `OutputStream`.
+ * Is done by first waiting for the oneshot to resolve to an OutputStream and then continously yielding
+ * the values from the stream.
  */
 fn oneshot_to_stream<T: StreamData>(
     receiver: oneshot::Receiver<OutputStream<T>>,
 ) -> OutputStream<T> {
-    let empty_stream = Box::pin(stream::empty());
-    Box::pin(
-        receiver
-            .map(|res| res.unwrap_or(empty_stream))
-            .flatten_stream()
-    )
+    Box::pin(async_stream::stream! {
+        match receiver.await {
+            Ok(mut s) => {
+                while let Some(val) = s.next().await {
+                    yield val;
+                }
+            }
+            Err(_) => {
+                return;
+            }
+        }
+    })
 }
 
 /* Wrap a stream in a drop guard to ensure that the associated cancellation
