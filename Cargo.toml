@@ -11,14 +11,12 @@ bench = false
 
 [dependencies]
 # console-subscriber = "0.4.0"
-winnow = "0.6.18"
-futures = "0.3.30"
-tokio = { version = "1", features = ["full", "tracing"] }
+winnow = "0.6.20"
+futures = "0.3.31"
+tokio = { version = "1.41.1", features = ["full", "tracing"] }
 tokio-stream = {version ="0.1.16", features=["full"] }
-dyn-clone = "1.0.17"
-backtrace-on-stack-overflow = "0.3.0"
-tokio-util = "0.7.11"
-clap = { version = "4.5.17", features = ["derive"] }
+tokio-util = "0.7.12"
+clap = { version = "4.5.20", features = ["derive"] }
 async-stream = "0.3.6"
 
 [dev-dependencies]
