@@ -67,18 +67,14 @@ async fn main() {
     // println!("Inputs: {:?}", model.input_vars);
     // println!("Model: {:?}", model);
 
-    match (runtime, semantics) {
+    // Get the outputs from the Monitor
+    let outputs = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
             let mut runner = tc::AsyncMonitorRunner::<_, _, tc::UntimedLolaSemantics, _>::new(
                 model,
                 input_streams,
             );
-            let mut enumerated_outputs = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enumerated_outputs.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs()
         }
         (Runtime::Queuing, Semantics::Untimed) => {
             let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
@@ -87,12 +83,7 @@ async fn main() {
                 tc::UntimedLolaSemantics,
                 _,
             >::new(model, input_streams);
-            let mut enumerated_outputs = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enumerated_outputs.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs()
         }
         (Runtime::Async, Semantics::TypedUntimed) => {
             let typed_model = type_check(model).expect("Model failed to type check");
@@ -102,16 +93,10 @@ async fn main() {
                 typed_model,
                 input_streams,
             );
-            let mut enumerated_outputs = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enumerated_outputs.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs()
         }
         (Runtime::Queuing, Semantics::TypedUntimed) => {
             let typed_model = type_check(model).expect("Model failed to type check");
-
 
             let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
                 _,
@@ -119,23 +104,21 @@ async fn main() {
                 tc::TypedUntimedLolaSemantics,
                 _,
             >::new(typed_model, input_streams);
-            let mut enumerated_outputs = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enumerated_outputs.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs()
         }
         (Runtime::Constraints, Semantics::Untimed) => {
             let mut runner =
                 tc::constraint_based_runtime::ConstraintBasedMonitor::new(model, input_streams);
-            let mut enumerated_outputs = runner.monitor_outputs().enumerate();
-            while let Some((i, output)) = enumerated_outputs.next().await {
-                for (var, data) in output {
-                    println!("{}[{}] = {:?}", var, i, data);
-                }
-            }
+            runner.monitor_outputs()
         }
         _ => unimplemented!(),
     };
+
+    // Print the outputs
+    let mut enumerated_outputs = outputs.enumerate();
+    while let Some((i, output)) = enumerated_outputs.next().await {
+        for (var, data) in output {
+            println!("{}[{}] = {:?}", var, i, data);
+        }
+    }
 }
