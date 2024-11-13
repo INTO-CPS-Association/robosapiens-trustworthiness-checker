@@ -9,7 +9,6 @@ use futures::stream;
 use futures::stream::BoxStream;
 use futures::FutureExt;
 use futures::StreamExt;
-use std::fmt::Debug;
 use tokio::select;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -184,7 +183,7 @@ async fn manage_var<V: StreamData>(
  * - cancellation_token: a cancellation token which is used to signal when to
  *   terminate the task
  */
-async fn distribute<V: Clone + Debug + Send + 'static>(
+async fn distribute<V: StreamData>(
     mut input_stream: OutputStream<V>,
     send: broadcast::Sender<V>,
     mut clock: watch::Receiver<usize>,
@@ -224,7 +223,6 @@ async fn distribute<V: Clone + Debug + Send + 'static>(
                                 return;
                             }
                         }
-                        // TODO: should we have a release lock here for deadlock prevention?
                     }
                     // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
