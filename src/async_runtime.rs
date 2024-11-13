@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 
+use async_stream::stream;
 use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
@@ -47,21 +48,19 @@ fn oneshot_to_stream<T: StreamData>(
  * token is not dropped before the stream has completed or been dropped.
  * This is used for automatic cleanup of background tasks when all consumers
  * of an output stream have gone away. */
-fn drop_guard_stream<T: 'static>(
+fn drop_guard_stream<T: StreamData>(
     stream: OutputStream<T>,
     drop_guard: Arc<DropGuard>,
 ) -> OutputStream<T> {
-    Box::pin(stream::unfold(
-        (stream, drop_guard),
-        |(mut stream, drop_guard)| async move {
-            // let num_copies = Arc::strong_count(&drop_guard);
-            // println!("Currently have {} copies of drop guard", num_copies);
-            match stream.next().await {
-                Some(val) => Some((val, (stream, drop_guard))),
-                None => None,
-            }
-        },
-    ))
+    Box::pin(stream! {
+        // Keep the shared reference to drop_guard alive until the stream
+        // is done
+        let _drop_guard = drop_guard.clone();
+        let mut stream = stream;
+        while let Some(val) = stream.next().await {
+            yield val;
+        }
+    })
 }
 
 /* An actor which manages access to a stream variable by tracking the
