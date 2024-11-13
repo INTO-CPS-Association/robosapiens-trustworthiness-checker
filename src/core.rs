@@ -93,6 +93,11 @@ impl Display for Value {
     }
 }
 
+/* Trait for the values being sent along streams. This could be just Value for
+ * untimed heterogeneous streams, more specific types for homogeneous (typed)
+ * streams, or time-stamped values for timed streams. This traits allows
+ * for the implementation of runtimes to be agnostic of the types of stream
+ * values used. */
 pub trait StreamData: Clone + Send + Sync + Debug + 'static {}
 
 // Trait defining the allowed types for expression values
@@ -159,8 +164,6 @@ pub trait StreamContext<Val: StreamData>: Send + 'static {
 }
 
 pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Send + 'static {
-    // type ExpressionTyping: ExpressionTyping<TypeSystem = <Self::StreamSystem as StreamSystem>::TypeSystem>;
-
     fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
 }
 
