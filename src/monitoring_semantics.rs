@@ -1,16 +1,16 @@
 use crate::ast::{BoolBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
-use crate::core::ConcreteStreamData;
+use crate::core::Value;
 use crate::core::{MonitoringSemantics, OutputStream, StreamContext, VarName};
 use crate::untimed_monitoring_combinators as mc;
 
 #[derive(Clone)]
 pub struct UntimedLolaSemantics;
 
-impl MonitoringSemantics<SExpr<VarName>, ConcreteStreamData> for UntimedLolaSemantics {
+impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
     fn to_async_stream(
         expr: SExpr<VarName>,
-        ctx: &dyn StreamContext<ConcreteStreamData>,
-    ) -> OutputStream<ConcreteStreamData> {
+        ctx: &dyn StreamContext<Value>,
+    ) -> OutputStream<Value> {
         match expr {
             SExpr::Val(v) => mc::val(v),
             SExpr::BinOp(e1, e2, op) => {

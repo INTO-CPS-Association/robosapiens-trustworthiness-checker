@@ -1,5 +1,5 @@
 use crate::ast::{BoolBinOp, IntBinOp, StrBinOp};
-use crate::core::ConcreteStreamData;
+use crate::core::Value;
 use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
 use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprTE, SExprUnit};
 use crate::typed_monitoring_combinators as mc;
@@ -8,13 +8,13 @@ use crate::typed_monitoring_combinators::{from_typed_stream, to_typed_stream};
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;
 
-impl MonitoringSemantics<SExprTE, ConcreteStreamData, ConcreteStreamData>
+impl MonitoringSemantics<SExprTE, Value, Value>
     for TypedUntimedLolaSemantics
 {
     fn to_async_stream(
         expr: SExprTE,
-        ctx: &dyn StreamContext<ConcreteStreamData>,
-    ) -> OutputStream<ConcreteStreamData> {
+        ctx: &dyn StreamContext<Value>,
+    ) -> OutputStream<Value> {
         match expr {
             SExprTE::Int(e) => from_typed_stream::<i64>(Self::to_async_stream(e, ctx)),
             SExprTE::Str(e) => from_typed_stream::<String>(Self::to_async_stream(e, ctx)),
@@ -24,10 +24,10 @@ impl MonitoringSemantics<SExprTE, ConcreteStreamData, ConcreteStreamData>
     }
 }
 
-impl MonitoringSemantics<SExprInt, i64, ConcreteStreamData> for TypedUntimedLolaSemantics {
+impl MonitoringSemantics<SExprInt, i64, Value> for TypedUntimedLolaSemantics {
     fn to_async_stream(
         expr: SExprInt,
-        ctx: &dyn StreamContext<ConcreteStreamData>,
+        ctx: &dyn StreamContext<Value>,
     ) -> OutputStream<i64> {
         match expr {
             SExprInt::Val(v) => mc::val(v),
@@ -56,10 +56,10 @@ impl MonitoringSemantics<SExprInt, i64, ConcreteStreamData> for TypedUntimedLola
     }
 }
 
-impl MonitoringSemantics<SExprStr, String, ConcreteStreamData> for TypedUntimedLolaSemantics {
+impl MonitoringSemantics<SExprStr, String, Value> for TypedUntimedLolaSemantics {
     fn to_async_stream(
         expr: SExprStr,
-        ctx: &dyn StreamContext<ConcreteStreamData>,
+        ctx: &dyn StreamContext<Value>,
     ) -> OutputStream<String> {
         match expr {
             SExprStr::Val(v) => mc::val(v),
@@ -83,10 +83,10 @@ impl MonitoringSemantics<SExprStr, String, ConcreteStreamData> for TypedUntimedL
     }
 }
 
-impl MonitoringSemantics<SExprUnit, (), ConcreteStreamData> for TypedUntimedLolaSemantics {
+impl MonitoringSemantics<SExprUnit, (), Value> for TypedUntimedLolaSemantics {
     fn to_async_stream(
         expr: SExprUnit,
-        ctx: &dyn StreamContext<ConcreteStreamData>,
+        ctx: &dyn StreamContext<Value>,
     ) -> OutputStream<()> {
         match expr {
             SExprUnit::Val(v) => mc::val(v),
@@ -105,10 +105,10 @@ impl MonitoringSemantics<SExprUnit, (), ConcreteStreamData> for TypedUntimedLola
     }
 }
 
-impl MonitoringSemantics<SExprBool, bool, ConcreteStreamData> for TypedUntimedLolaSemantics {
+impl MonitoringSemantics<SExprBool, bool, Value> for TypedUntimedLolaSemantics {
     fn to_async_stream(
         expr: SExprBool,
-        ctx: &dyn StreamContext<ConcreteStreamData>,
+        ctx: &dyn StreamContext<Value>,
     ) -> OutputStream<bool> {
         match expr {
             SExprBool::Val(b) => mc::val(b),

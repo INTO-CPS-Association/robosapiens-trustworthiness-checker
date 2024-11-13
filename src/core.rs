@@ -6,90 +6,89 @@ use std::{
 use futures::stream::BoxStream;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-// TODO: Rename to Value
-pub enum ConcreteStreamData {
+pub enum Value {
     Int(i64),
     Str(String),
     Bool(bool),
     Unknown,
     Unit,
 }
-impl StreamData for ConcreteStreamData {}
+impl StreamData for Value {}
 
-impl TryFrom<ConcreteStreamData> for i64 {
+impl TryFrom<Value> for i64 {
     type Error = ();
 
-    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            ConcreteStreamData::Int(i) => Ok(i),
+            Value::Int(i) => Ok(i),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<ConcreteStreamData> for String {
+impl TryFrom<Value> for String {
     type Error = ();
 
-    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            ConcreteStreamData::Str(i) => Ok(i),
+            Value::Str(i) => Ok(i),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<ConcreteStreamData> for bool {
+impl TryFrom<Value> for bool {
     type Error = ();
 
-    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            ConcreteStreamData::Bool(i) => Ok(i),
+            Value::Bool(i) => Ok(i),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<ConcreteStreamData> for () {
+impl TryFrom<Value> for () {
     type Error = ();
 
-    fn try_from(value: ConcreteStreamData) -> Result<Self, Self::Error> {
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            ConcreteStreamData::Unit => Ok(()),
+            Value::Unit => Ok(()),
             _ => Err(()),
         }
     }
 }
-impl From<i64> for ConcreteStreamData {
+impl From<i64> for Value {
     fn from(value: i64) -> Self {
-        ConcreteStreamData::Int(value)
+        Value::Int(value)
     }
 }
-impl From<String> for ConcreteStreamData {
+impl From<String> for Value {
     fn from(value: String) -> Self {
-        ConcreteStreamData::Str(value)
+        Value::Str(value)
     }
 }
-impl From<&str> for ConcreteStreamData {
+impl From<&str> for Value {
     fn from(value: &str) -> Self {
-        ConcreteStreamData::Str(value.to_string())
+        Value::Str(value.to_string())
     }
 }
-impl From<bool> for ConcreteStreamData {
+impl From<bool> for Value {
     fn from(value: bool) -> Self {
-        ConcreteStreamData::Bool(value)
+        Value::Bool(value)
     }
 }
-impl From<()> for ConcreteStreamData {
+impl From<()> for Value {
     fn from(_value: ()) -> Self {
-        ConcreteStreamData::Unit
+        Value::Unit
     }
 }
 
-impl Display for ConcreteStreamData {
+impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConcreteStreamData::Int(i) => write!(f, "{}", i),
-            ConcreteStreamData::Str(s) => write!(f, "{}", s),
-            ConcreteStreamData::Bool(b) => write!(f, "{}", b),
-            ConcreteStreamData::Unknown => write!(f, "unknown"),
-            ConcreteStreamData::Unit => write!(f, "()"),
+            Value::Int(i) => write!(f, "{}", i),
+            Value::Str(s) => write!(f, "{}", s),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Unknown => write!(f, "unknown"),
+            Value::Unit => write!(f, "()"),
         }
     }
 }

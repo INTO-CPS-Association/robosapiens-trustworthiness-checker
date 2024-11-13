@@ -2,7 +2,7 @@ use crate::ast::{BoolBinOp, IntBinOp, StrBinOp};
 use crate::core::StreamType;
 use crate::{
     ast::{SBinOp, SExpr},
-    ConcreteStreamData, VarName,
+    Value, VarName,
 };
 use crate::{LOLASpecification, Specification};
 use std::collections::BTreeMap;
@@ -195,18 +195,18 @@ pub fn type_check(spec: LOLASpecification) -> SemanticResult<TypedLOLASpecificat
     }
 }
 
-impl TypeCheckableHelper<SExprTE> for ConcreteStreamData {
+impl TypeCheckableHelper<SExprTE> for Value {
     fn type_check_raw(
         &self,
         _: &mut TypeContext,
         errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         match self {
-            ConcreteStreamData::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
-            ConcreteStreamData::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.clone()))),
-            ConcreteStreamData::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(*v))),
-            ConcreteStreamData::Unit => Ok(SExprTE::Unit(SExprUnit::Val(()))),
-            ConcreteStreamData::Unknown => {
+            Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
+            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.clone()))),
+            Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(*v))),
+            Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(()))),
+            Value::Unknown => {
                 errs.push(SemanticError::UnknownError(
                     format!(
                         "Stream expression {:?} not assigned a type before semantic analysis",
@@ -322,7 +322,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, &SExpr<VarName>, &SExpr<
 }
 
 // Type check an index expression
-impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &ConcreteStreamData) {
+impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &Value) {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,
@@ -333,18 +333,26 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &ConcreteStreamDa
 
         match inner_check {
             Ok(ste) => match (ste, default) {
-                (SExprTE::Int(se), ConcreteStreamData::Int(def)) => Ok(SExprTE::Int(
-                    SExprInt::Index(Box::new(se.clone()), idx, *def),
-                )),
-                (SExprTE::Str(se), ConcreteStreamData::Str(def)) => Ok(SExprTE::Str(
-                    SExprStr::Index(Box::new(se.clone()), idx, def.clone()),
-                )),
-                (SExprTE::Bool(se), ConcreteStreamData::Bool(def)) => Ok(SExprTE::Bool(
-                    SExprBool::Index(Box::new(se.clone()), idx, *def),
-                )),
-                (SExprTE::Unit(se), ConcreteStreamData::Unit) => Ok(SExprTE::Unit(
-                    SExprUnit::Index(Box::new(se.clone()), idx, ()),
-                )),
+                (SExprTE::Int(se), Value::Int(def)) => Ok(SExprTE::Int(SExprInt::Index(
+                    Box::new(se.clone()),
+                    idx,
+                    *def,
+                ))),
+                (SExprTE::Str(se), Value::Str(def)) => Ok(SExprTE::Str(SExprStr::Index(
+                    Box::new(se.clone()),
+                    idx,
+                    def.clone(),
+                ))),
+                (SExprTE::Bool(se), Value::Bool(def)) => Ok(SExprTE::Bool(SExprBool::Index(
+                    Box::new(se.clone()),
+                    idx,
+                    *def,
+                ))),
+                (SExprTE::Unit(se), Value::Unit) => Ok(SExprTE::Unit(SExprUnit::Index(
+                    Box::new(se.clone()),
+                    idx,
+                    (),
+                ))),
                 (se, def) => {
                     errs.push(SemanticError::TypeError(
                         format!(
@@ -645,10 +653,10 @@ mod tests {
     fn test_vals_ok() {
         // Checks that vals returns the expected typed AST after semantic analysis
         let vals = vec![
-            SExprV::Val(ConcreteStreamData::Int(1)),
-            SExprV::Val(ConcreteStreamData::Str("".into())),
-            SExprV::Val(ConcreteStreamData::Bool(true)),
-            SExprV::Val(ConcreteStreamData::Unit),
+            SExprV::Val(Value::Int(1)),
+            SExprV::Val(Value::Str("".into())),
+            SExprV::Val(Value::Bool(true)),
+            SExprV::Val(Value::Unit),
         ];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
@@ -664,7 +672,7 @@ mod tests {
     #[test]
     fn test_unknown_err() {
         // Checks that if a Val is unknown during semantic analysis it produces a UnknownError
-        let val = SExprV::Val(ConcreteStreamData::Unknown);
+        let val = SExprV::Val(Value::Unknown);
         let result = val.type_check_with_default();
         let expected: SemantResultStr = Err(vec![SemanticError::UnknownError("".into())]);
         check_correct_error_type(&result, &expected);
@@ -675,13 +683,13 @@ mod tests {
         // Checks that if we add two identical types together that are not addable,
         let vals = vec![
             SExprV::BinOp(
-                Box::new(SExprV::Val(ConcreteStreamData::Bool(false))),
-                Box::new(SExprV::Val(ConcreteStreamData::Bool(false))),
+                Box::new(SExprV::Val(Value::Bool(false))),
+                Box::new(SExprV::Val(Value::Bool(false))),
                 SBinOp::IOp(IntBinOp::Add),
             ),
             SExprV::BinOp(
-                Box::new(SExprV::Val(ConcreteStreamData::Unit)),
-                Box::new(SExprV::Val(ConcreteStreamData::Unit)),
+                Box::new(SExprV::Val(Value::Unit)),
+                Box::new(SExprV::Val(Value::Unit)),
                 SBinOp::IOp(IntBinOp::Add),
             ),
         ];
@@ -702,10 +710,10 @@ mod tests {
 
         // Create a vector of all ConcreteStreamData variants (except Unknown)
         let variants = vec![
-            SExprV::Val(ConcreteStreamData::Int(0)),
-            SExprV::Val(ConcreteStreamData::Str("".into())),
-            SExprV::Val(ConcreteStreamData::Bool(true)),
-            SExprV::Val(ConcreteStreamData::Unit),
+            SExprV::Val(Value::Int(0)),
+            SExprV::Val(Value::Str("".into())),
+            SExprV::Val(Value::Bool(true)),
+            SExprV::Val(Value::Unit),
         ];
 
         // Create a vector of all SBinOp variants
@@ -741,18 +749,18 @@ mod tests {
         // Checks that if either value is unknown then Plus does not generate further errors
         let vals = vec![
             SExprV::BinOp(
-                Box::new(SExprV::Val(ConcreteStreamData::Int(0))),
-                Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
+                Box::new(SExprV::Val(Value::Int(0))),
+                Box::new(SExprV::Val(Value::Unknown)),
                 SBinOp::IOp(IntBinOp::Add),
             ),
             SExprV::BinOp(
-                Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
-                Box::new(SExprV::Val(ConcreteStreamData::Int(0))),
+                Box::new(SExprV::Val(Value::Unknown)),
+                Box::new(SExprV::Val(Value::Int(0))),
                 SBinOp::IOp(IntBinOp::Add),
             ),
             SExprV::BinOp(
-                Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
-                Box::new(SExprV::Val(ConcreteStreamData::Unknown)),
+                Box::new(SExprV::Val(Value::Unknown)),
+                Box::new(SExprV::Val(Value::Unknown)),
                 SBinOp::IOp(IntBinOp::Add),
             ),
         ];
@@ -787,7 +795,7 @@ mod tests {
     #[test]
     fn test_int_binop_ok() {
         // Checks that if we BinOp two Ints together it results in typed AST after semantic analysis
-        let int_val = vec![SExprV::Val(ConcreteStreamData::Int(0))];
+        let int_val = vec![SExprV::Val(Value::Int(0))];
         let sbinops = all_sbinop_variants();
         let vals: Vec<SExpr<VarName>> =
             generate_binop_combinations(&int_val, &int_val, sbinops.clone());
@@ -806,7 +814,7 @@ mod tests {
     #[test]
     fn test_str_plus_ok() {
         // Checks that if we add two Strings together it results in typed AST after semantic analysis
-        let str_val = vec![SExprV::Val(ConcreteStreamData::Str("".into()))];
+        let str_val = vec![SExprV::Val(Value::Str("".into()))];
         let sbinops = vec![SBinOp::SOp(StrBinOp::Concat)];
         let vals: Vec<SExpr<VarName>> =
             generate_binop_combinations(&str_val, &str_val, sbinops.clone());
@@ -826,10 +834,10 @@ mod tests {
 
         // Create a vector of all ConcreteStreamData variants (except Unknown)
         let val_variants = vec![
-            SExprV::Val(ConcreteStreamData::Int(0)),
-            SExprV::Val(ConcreteStreamData::Str("".into())),
-            SExprV::Val(ConcreteStreamData::Bool(true)),
-            SExprV::Val(ConcreteStreamData::Unit),
+            SExprV::Val(Value::Int(0)),
+            SExprV::Val(Value::Str("".into())),
+            SExprV::Val(Value::Bool(true)),
+            SExprV::Val(Value::Unit),
         ];
 
         // Create a vector of all SBinOp variants
@@ -879,10 +887,10 @@ mod tests {
 
         // Create a vector of all ConcreteStreamData variants (except Unknown)
         let variants = vec![
-            SExprV::Val(ConcreteStreamData::Int(0)),
-            SExprV::Val(ConcreteStreamData::Str("".into())),
-            SExprV::Val(ConcreteStreamData::Bool(true)),
-            SExprV::Val(ConcreteStreamData::Unit),
+            SExprV::Val(Value::Int(0)),
+            SExprV::Val(Value::Str("".into())),
+            SExprV::Val(Value::Bool(true)),
+            SExprV::Val(Value::Unit),
         ];
 
         let bexpr = Box::new(SExpr::Val(true.into()));
@@ -957,17 +965,17 @@ mod tests {
     #[test]
     fn test_dodgy_if() {
         let dodgy_bexpr = SExpr::Eq(
-            Box::new(SExprV::Val(ConcreteStreamData::Int(0))),
+            Box::new(SExprV::Val(Value::Int(0))),
             Box::new(SExprV::BinOp(
-                Box::new(SExprV::Val(ConcreteStreamData::Int(3))),
-                Box::new(SExprV::Val(ConcreteStreamData::Str("Banana".into()))),
+                Box::new(SExprV::Val(Value::Int(3))),
+                Box::new(SExprV::Val(Value::Str("Banana".into()))),
                 SBinOp::IOp(IntBinOp::Add),
             )),
         );
         let sexpr = SExprV::If(
             Box::new(dodgy_bexpr),
-            Box::new(SExprV::Val(ConcreteStreamData::Int(1))),
-            Box::new(SExprV::Val(ConcreteStreamData::Int(2))),
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Val(Value::Int(2))),
         );
         if let Ok(_) = sexpr.type_check_with_default() {
             assert!(false, "Expected type error but got a successful result");

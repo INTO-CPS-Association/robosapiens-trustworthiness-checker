@@ -51,7 +51,7 @@ mod tests {
     use futures::StreamExt;
 
     use crate::core::VarName;
-    use crate::{ConcreteStreamData, InputProvider};
+    use crate::{Value, InputProvider};
 
     use super::*;
 
@@ -67,7 +67,7 @@ mod tests {
             .await;
         assert_eq!(
             x_vals,
-            vec![ConcreteStreamData::Int(1), ConcreteStreamData::Int(3)]
+            vec![Value::Int(1), Value::Int(3)]
         );
     }
 }

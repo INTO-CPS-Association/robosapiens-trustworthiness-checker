@@ -8,7 +8,7 @@ use std::mem;
 
 use crate::ast::LOLASpecification;
 use crate::constraint_solver::*;
-use crate::core::ConcreteStreamData;
+use crate::core::Value;
 use crate::core::IndexedVarName;
 use crate::core::InputProvider;
 use crate::core::Monitor;
@@ -17,10 +17,10 @@ use crate::core::VarName;
 use crate::OutputStream;
 
 #[derive(Default)]
-pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, ConcreteStreamData>>);
+pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);
 
 impl ValStreamCollection {
-    fn into_stream(self) -> BoxStream<'static, BTreeMap<VarName, ConcreteStreamData>> {
+    fn into_stream(self) -> BoxStream<'static, BTreeMap<VarName, Value>> {
         Box::pin(futures::stream::unfold(self, |mut streams| async move {
             let mut res = BTreeMap::new();
             let nexts = streams.0.values_mut().map(|s| s.next());
@@ -41,7 +41,7 @@ impl ValStreamCollection {
 }
 
 fn inputs_to_constraints<'a>(
-    inputs: BoxStream<'a, BTreeMap<VarName, ConcreteStreamData>>,
+    inputs: BoxStream<'a, BTreeMap<VarName, Value>>,
 ) -> BoxStream<'a, SExprConstraintStore<IndexedVarName>> {
     Box::pin(inputs.enumerate().map(|(i, input)| {
         SExprConstraintStore {
@@ -57,7 +57,7 @@ fn inputs_to_constraints<'a>(
 fn constraints_to_outputs<'a>(
     constraints: BoxStream<'a, SExprConstraintStore<IndexedVarName>>,
     output_vars: Vec<VarName>,
-) -> BoxStream<'a, BTreeMap<VarName, ConcreteStreamData>> {
+) -> BoxStream<'a, BTreeMap<VarName, Value>> {
     Box::pin(constraints.enumerate().map(move |(index, cs)| {
         let mut res = BTreeMap::new();
         for (k, v) in cs.resolved {
@@ -76,8 +76,8 @@ pub struct ConstraintBasedMonitor {
     model: LOLASpecification,
 }
 
-impl Monitor<LOLASpecification, ConcreteStreamData> for ConstraintBasedMonitor {
-    fn new(model: LOLASpecification, mut input: impl InputProvider<ConcreteStreamData>) -> Self {
+impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
+    fn new(model: LOLASpecification, mut input: impl InputProvider<Value>) -> Self {
         let input_streams = model
             .input_vars()
             .iter()
@@ -98,7 +98,7 @@ impl Monitor<LOLASpecification, ConcreteStreamData> for ConstraintBasedMonitor {
         &self.model
     }
 
-    fn monitor_outputs(&mut self) -> OutputStream<BTreeMap<VarName, ConcreteStreamData>> {
+    fn monitor_outputs(&mut self) -> OutputStream<BTreeMap<VarName, Value>> {
         constraints_to_outputs(
             self.stream_output_constraints(),
             self.model.output_vars.clone(),

@@ -12,7 +12,7 @@ use winnow::ascii::dec_int as integer;
 use winnow::ascii::space0 as whitespace;
 
 use crate::ast::*;
-use crate::core::ConcreteStreamData;
+use crate::core::Value;
 use crate::core::StreamType;
 use crate::core::VarName;
 
@@ -34,14 +34,14 @@ fn string<'a>(s: &mut &'a str) -> PResult<&'a str> {
     delimited('"', take_until(0.., "\""), '\"').parse_next(s)
 }
 
-fn val(s: &mut &str) -> PResult<ConcreteStreamData> {
+fn val(s: &mut &str) -> PResult<Value> {
     delimited(
         whitespace,
         alt((
-            integer.map(ConcreteStreamData::Int),
-            string.map(|s: &str| ConcreteStreamData::Str(s.into())),
-            literal("true").map(|_| ConcreteStreamData::Bool(true)),
-            literal("false").map(|_| ConcreteStreamData::Bool(false)),
+            integer.map(Value::Int),
+            string.map(|s: &str| Value::Str(s.into())),
+            literal("true").map(|_| Value::Bool(true)),
+            literal("false").map(|_| Value::Bool(false)),
         )),
         whitespace,
     )
@@ -318,7 +318,7 @@ pub fn lola_specification(s: &mut &str) -> PResult<LOLASpecification> {
     .parse_next(s)
 }
 
-fn value_assignment(s: &mut &str) -> PResult<(VarName, ConcreteStreamData)> {
+fn value_assignment(s: &mut &str) -> PResult<(VarName, Value)> {
     seq!((
         _: whitespace,
         ident,
@@ -332,7 +332,7 @@ fn value_assignment(s: &mut &str) -> PResult<(VarName, ConcreteStreamData)> {
     .parse_next(s)
 }
 
-fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, ConcreteStreamData>> {
+fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, Value>> {
     seq!((
         separated(0.., value_assignment, linebreak),
         _: alt((linebreak.void(), empty)),
@@ -343,7 +343,7 @@ fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, ConcreteStreamDa
 
 fn time_stamped_assignments(
     s: &mut &str,
-) -> PResult<(usize, BTreeMap<VarName, ConcreteStreamData>)> {
+) -> PResult<(usize, BTreeMap<VarName, Value>)> {
     seq!((
         _: whitespace,
         dec_uint,
@@ -374,23 +374,23 @@ mod tests {
     fn test_streamdata() {
         assert_eq!(
             val(&mut (*"42".to_string()).into()),
-            Ok(ConcreteStreamData::Int(42)),
+            Ok(Value::Int(42)),
         );
         assert_eq!(
             val(&mut (*"\"abc2d\"".to_string()).into()),
-            Ok(ConcreteStreamData::Str("abc2d".to_string())),
+            Ok(Value::Str("abc2d".to_string())),
         );
         assert_eq!(
             val(&mut (*"true".to_string()).into()),
-            Ok(ConcreteStreamData::Bool(true)),
+            Ok(Value::Bool(true)),
         );
         assert_eq!(
             val(&mut (*"false".to_string()).into()),
-            Ok(ConcreteStreamData::Bool(false)),
+            Ok(Value::Bool(false)),
         );
         assert_eq!(
             val(&mut (*"\"x+y\"".to_string()).into()),
-            Ok(ConcreteStreamData::Str("x+y".to_string())),
+            Ok(Value::Str("x+y".to_string())),
         );
     }
 
@@ -399,18 +399,18 @@ mod tests {
         assert_eq!(
             sexpr(&mut (*"1 + 2".to_string()).into())?,
             SExpr::BinOp(
-                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
-                Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
+                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Val(Value::Int(2))),
                 SBinOp::IOp(IntBinOp::Add),
             ),
         );
         assert_eq!(
             sexpr(&mut (*"1 + 2 * 3".to_string()).into())?,
             SExpr::BinOp(
-                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::BinOp(
-                    Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
-                    Box::new(SExpr::Val(ConcreteStreamData::Int(3))),
+                    Box::new(SExpr::Val(Value::Int(2))),
+                    Box::new(SExpr::Val(Value::Int(3))),
                     SBinOp::IOp(IntBinOp::Mul),
                 )),
                 SBinOp::IOp(IntBinOp::Add),
@@ -422,7 +422,7 @@ mod tests {
                 Box::new(SExpr::Var(VarName("x".into()))),
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var(VarName("y".into()))),
-                    Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
+                    Box::new(SExpr::Val(Value::Int(2))),
                     SBinOp::IOp(IntBinOp::Add),
                 )),
                 SBinOp::IOp(IntBinOp::Add),
@@ -432,8 +432,8 @@ mod tests {
             sexpr(&mut (*"if true then 1 else 2".to_string()).into())?,
             SExpr::If(
                 Box::new(SExpr::Val(true.into())),
-                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
-                Box::new(SExpr::Val(ConcreteStreamData::Int(2))),
+                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Val(Value::Int(2))),
             ),
         );
         assert_eq!(
@@ -441,7 +441,7 @@ mod tests {
             SExpr::Index(
                 Box::new(SExpr::Var(VarName("x".into()))),
                 -1,
-                ConcreteStreamData::Int(0),
+                Value::Int(0),
             ),
         );
         assert_eq!(
@@ -453,17 +453,17 @@ mod tests {
                     SBinOp::IOp(IntBinOp::Add),
                 )),
                 -3,
-                ConcreteStreamData::Int(2),
+                Value::Int(2),
             ),
         );
         assert_eq!(
             sexpr(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
             SExpr::BinOp(
-                Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::Index(
                     Box::new(SExpr::Var(VarName("x".into()))),
                     -1,
-                    ConcreteStreamData::Int(0),
+                    Value::Int(0),
                 ),),
                 SBinOp::IOp(IntBinOp::Add),
             )
@@ -540,11 +540,11 @@ mod tests {
             exprs: vec![(
                 VarName("x".into()),
                 SExpr::BinOp(
-                    Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                    Box::new(SExpr::Val(Value::Int(1))),
                     Box::new(SExpr::Index(
                         Box::new(SExpr::Var(VarName("x".into()))),
                         -1,
-                        ConcreteStreamData::Int(0),
+                        Value::Int(0),
                     )),
                     SBinOp::IOp(IntBinOp::Add),
                 ),
@@ -600,11 +600,11 @@ mod tests {
     fn test_value_assignment() -> Result<(), ErrMode<ContextError>> {
         assert_eq!(
             value_assignment(&mut (*"x = 42".to_string()).into())?,
-            (VarName("x".into()), ConcreteStreamData::Int(42)),
+            (VarName("x".into()), Value::Int(42)),
         );
         assert_eq!(
             value_assignment(&mut (*"y = 3".to_string()).into())?,
-            (VarName("y".into()), ConcreteStreamData::Int(3)),
+            (VarName("y".into()), Value::Int(3)),
         );
         Ok(())
     }
@@ -614,8 +614,8 @@ mod tests {
         assert_eq!(
             value_assignments(&mut (*"x = 42\ny = 3".to_string()).into())?,
             vec![
-                (VarName("x".into()), ConcreteStreamData::Int(42)),
-                (VarName("y".into()), ConcreteStreamData::Int(3)),
+                (VarName("x".into()), Value::Int(42)),
+                (VarName("y".into()), Value::Int(3)),
             ]
             .into_iter()
             .collect(),
@@ -633,7 +633,7 @@ mod tests {
             time_stamped_assignments(&mut (*"0: x = 42".to_string()).into())?,
             (
                 0,
-                vec![(VarName("x".into()), ConcreteStreamData::Int(42))]
+                vec![(VarName("x".into()), Value::Int(42))]
                     .into_iter()
                     .collect()
             ),
@@ -643,8 +643,8 @@ mod tests {
             (
                 1,
                 vec![
-                    (VarName("x".into()), ConcreteStreamData::Int(42)),
-                    (VarName("y".into()), ConcreteStreamData::Int(3))
+                    (VarName("x".into()), Value::Int(42)),
+                    (VarName("y".into()), Value::Int(3))
                 ]
                 .into_iter()
                 .collect()
@@ -655,8 +655,8 @@ mod tests {
             (
                 2,
                 vec![
-                    (VarName("x".into()), ConcreteStreamData::Int(42)),
-                    (VarName("y".into()), ConcreteStreamData::Int(3))
+                    (VarName("x".into()), Value::Int(42)),
+                    (VarName("y".into()), Value::Int(3))
                 ]
                 .into_iter()
                 .collect()

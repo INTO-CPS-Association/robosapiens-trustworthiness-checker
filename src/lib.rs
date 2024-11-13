@@ -2,7 +2,7 @@
 #![deny(warnings)]
 
 pub mod core;
-pub use crate::core::ConcreteStreamData;
+pub use crate::core::Value;
 pub use core::{
     InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext,
     VarName,

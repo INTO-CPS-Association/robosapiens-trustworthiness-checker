@@ -1,4 +1,4 @@
-use crate::core::ConcreteStreamData;
+use crate::core::Value;
 use crate::core::StreamData;
 use crate::{
     lola_expression, MonitoringSemantics, OutputStream, StreamContext, UntimedLolaSemantics,
@@ -72,13 +72,13 @@ pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
 }
 
 pub fn and(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| {
-            ConcreteStreamData::Bool(
-                x == ConcreteStreamData::Bool(true) && y == ConcreteStreamData::Bool(true),
+            Value::Bool(
+                x == Value::Bool(true) && y == Value::Bool(true),
             )
         },
         x,
@@ -87,13 +87,13 @@ pub fn and(
 }
 
 pub fn or(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| {
-            ConcreteStreamData::Bool(
-                x == ConcreteStreamData::Bool(true) || y == ConcreteStreamData::Bool(true),
+            Value::Bool(
+                x == Value::Bool(true) || y == Value::Bool(true),
             )
         },
         x,
@@ -101,31 +101,31 @@ pub fn or(
     )
 }
 
-pub fn not(x: OutputStream<ConcreteStreamData>) -> OutputStream<ConcreteStreamData> {
+pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
-        |x| ConcreteStreamData::Bool(x == ConcreteStreamData::Bool(true)),
+        |x| Value::Bool(x == Value::Bool(true)),
         x,
     )
 }
 
 pub fn eq(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
-    lift2(|x, y| ConcreteStreamData::Bool(x == y), x, y)
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
+    lift2(|x, y| Value::Bool(x == y), x, y)
 }
 
 pub fn le(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| match (x, y) {
-            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
-                ConcreteStreamData::Bool(x <= y)
+            (Value::Int(x), Value::Int(y)) => {
+                Value::Bool(x <= y)
             }
-            (ConcreteStreamData::Bool(a), ConcreteStreamData::Bool(b)) => {
-                ConcreteStreamData::Bool(a <= b)
+            (Value::Bool(a), Value::Bool(b)) => {
+                Value::Bool(a <= b)
             }
             _ => panic!("Invalid comparison"),
         },
@@ -134,20 +134,20 @@ pub fn le(
     )
 }
 
-pub fn val(x: ConcreteStreamData) -> OutputStream<ConcreteStreamData> {
+pub fn val(x: Value) -> OutputStream<Value> {
     Box::pin(stream::repeat(x.clone()))
 }
 
 // Should this return a dyn ConcreteStreamData?
 pub fn if_stm(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-    z: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+    z: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift3(
         |x, y, z| match x {
-            ConcreteStreamData::Bool(true) => y,
-            ConcreteStreamData::Bool(false) => z,
+            Value::Bool(true) => y,
+            Value::Bool(false) => z,
             _ => panic!("Invalid if condition"),
         },
         x,
@@ -157,29 +157,29 @@ pub fn if_stm(
 }
 
 pub fn index(
-    x: OutputStream<ConcreteStreamData>,
+    x: OutputStream<Value>,
     i: isize,
-    c: ConcreteStreamData,
-) -> OutputStream<ConcreteStreamData> {
+    c: Value,
+) -> OutputStream<Value> {
     let c = c.clone();
     if i < 0 {
         let n = i.abs() as usize;
         let cs = stream::repeat(c).take(n);
-        Box::pin(cs.chain(x)) as BoxStream<'static, ConcreteStreamData>
+        Box::pin(cs.chain(x)) as BoxStream<'static, Value>
     } else {
         let n = i as usize;
-        Box::pin(x.skip(n)) as BoxStream<'static, ConcreteStreamData>
+        Box::pin(x.skip(n)) as BoxStream<'static, Value>
     }
 }
 
 pub fn plus(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| match (x, y) {
-            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
-                ConcreteStreamData::Int(x + y)
+            (Value::Int(x), Value::Int(y)) => {
+                Value::Int(x + y)
             }
             (x, y) => panic!("Invalid addition with types: {:?}, {:?}", x, y),
         },
@@ -189,13 +189,13 @@ pub fn plus(
 }
 
 pub fn minus(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| match (x, y) {
-            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
-                ConcreteStreamData::Int(x - y)
+            (Value::Int(x), Value::Int(y)) => {
+                Value::Int(x - y)
             }
             _ => panic!("Invalid subtraction"),
         },
@@ -205,13 +205,13 @@ pub fn minus(
 }
 
 pub fn mult(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| match (x, y) {
-            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
-                ConcreteStreamData::Int(x * y)
+            (Value::Int(x), Value::Int(y)) => {
+                Value::Int(x * y)
             }
             _ => panic!("Invalid multiplication"),
         },
@@ -221,13 +221,13 @@ pub fn mult(
 }
 
 pub fn div(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| match (x, y) {
-            (ConcreteStreamData::Int(x), ConcreteStreamData::Int(y)) => {
-                ConcreteStreamData::Int(x / y)
+            (Value::Int(x), Value::Int(y)) => {
+                Value::Int(x / y)
             }
             _ => panic!("Invalid multiplication"),
         },
@@ -237,14 +237,14 @@ pub fn div(
 }
 
 pub fn concat(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     lift2(
         |x, y| match (x, y) {
-            (ConcreteStreamData::Str(x), ConcreteStreamData::Str(y)) => {
+            (Value::Str(x), Value::Str(y)) => {
                 // ConcreteStreamData::Str(format!("{x}{y}").into());
-                ConcreteStreamData::Str(format!("{x}{y}"))
+                Value::Str(format!("{x}{y}"))
             }
             _ => panic!("Invalid concatenation"),
         },
@@ -254,10 +254,10 @@ pub fn concat(
 }
 
 pub fn eval(
-    ctx: &dyn StreamContext<ConcreteStreamData>,
-    x: OutputStream<ConcreteStreamData>,
+    ctx: &dyn StreamContext<Value>,
+    x: OutputStream<Value>,
     history_length: usize,
-) -> OutputStream<ConcreteStreamData> {
+) -> OutputStream<Value> {
     // Create a subcontext with a history window length of 10
     let subcontext = ctx.subcontext(history_length);
     /*unfold() creates a Stream from a seed value.*/
@@ -265,7 +265,7 @@ pub fn eval(
         (
             subcontext,
             x,
-            None::<(ConcreteStreamData, OutputStream<ConcreteStreamData>)>,
+            None::<(Value, OutputStream<Value>)>,
         ),
         |(subcontext, mut x, last)| async move {
             /* x.next() returns None if we are done unfolding. Return in that case.*/
@@ -293,7 +293,7 @@ pub fn eval(
             }
 
             match current {
-                ConcreteStreamData::Str(s) => {
+                Value::Str(s) => {
                     let s_parse = &mut s.as_str();
                     let expr = match lola_expression.parse_next(s_parse) {
                         Ok(expr) => expr,
@@ -306,7 +306,7 @@ pub fn eval(
                     // println!("eval producing {:?}", eval_res);
                     return Some((
                         eval_res,
-                        (subcontext, x, Some((ConcreteStreamData::Str(s), es))),
+                        (subcontext, x, Some((Value::Str(s), es))),
                     ));
                 }
                 x => {
@@ -314,13 +314,13 @@ pub fn eval(
                 }
             }
         },
-    )) as OutputStream<ConcreteStreamData>
+    )) as OutputStream<Value>
 }
 
 pub fn var(
-    ctx: &dyn StreamContext<ConcreteStreamData>,
+    ctx: &dyn StreamContext<Value>,
     x: VarName,
-) -> OutputStream<ConcreteStreamData> {
+) -> OutputStream<Value> {
     match ctx.var(&x) {
         Some(x) => x,
         None => {
@@ -332,15 +332,15 @@ pub fn var(
 
 // Defer for an UntimedLolaExpression using the lola_expression parser
 pub fn defer(
-    ctx: &dyn StreamContext<ConcreteStreamData>,
-    prop_stream: OutputStream<ConcreteStreamData>,
+    ctx: &dyn StreamContext<Value>,
+    prop_stream: OutputStream<Value>,
     history_length: usize,
-) -> OutputStream<ConcreteStreamData> {
+) -> OutputStream<Value> {
     /* Subcontext with current values only*/
     let subcontext = ctx.subcontext(history_length);
     /*unfold() creates a Stream from a seed value.*/
     Box::pin(stream::unfold(
-        (subcontext, prop_stream, None::<ConcreteStreamData>),
+        (subcontext, prop_stream, None::<Value>),
         |(subcontext, mut x, saved)| async move {
             /* x.next() returns None if we are done unfolding. Return in that case.*/
             let current = x.next().await?;
@@ -348,7 +348,7 @@ pub fn defer(
             let defer_str = saved.unwrap_or_else(|| current);
 
             match defer_str {
-                ConcreteStreamData::Str(defer_s) => {
+                Value::Str(defer_s) => {
                     let defer_parse = &mut defer_s.as_str();
                     let expr = match lola_expression.parse_next(defer_parse) {
                         Ok(expr) => expr,
@@ -359,13 +359,13 @@ pub fn defer(
                     subcontext.advance();
                     return Some((
                         eval_res,
-                        (subcontext, x, Some(ConcreteStreamData::Str(defer_s))),
+                        (subcontext, x, Some(Value::Str(defer_s))),
                     ));
                 }
-                ConcreteStreamData::Unknown => {
+                Value::Unknown => {
                     // Consume a sample from the subcontext but return Unknown (aka. Waiting)
                     subcontext.advance();
-                    Some((ConcreteStreamData::Unknown, (subcontext, x, None)))
+                    Some((Value::Unknown, (subcontext, x, None)))
                 }
                 _ => panic!("We did not have memory and defer_str was not a Str"),
             }
@@ -376,9 +376,9 @@ pub fn defer(
 // Update for a synchronized language - in this case UntimedLolaSemantics.
 // We use Unknown for simulating no data on the stream
 pub fn update(
-    x: OutputStream<ConcreteStreamData>,
-    y: OutputStream<ConcreteStreamData>,
-) -> OutputStream<ConcreteStreamData> {
+    x: OutputStream<Value>,
+    y: OutputStream<Value>,
+) -> OutputStream<Value> {
     // Pre is x isn't ready yet
     enum Phase {
         Pre,
@@ -389,46 +389,46 @@ pub fn update(
     // Pre phase means that x is not ready yet
     // Note: Returns the three values uses by unfold below
     async fn handle_pre_phase(
-        mut x: OutputStream<ConcreteStreamData>,
-        mut y: OutputStream<ConcreteStreamData>,
+        mut x: OutputStream<Value>,
+        mut y: OutputStream<Value>,
     ) -> Option<(
-        ConcreteStreamData,
+        Value,
         (
-            OutputStream<ConcreteStreamData>,
-            OutputStream<ConcreteStreamData>,
+            OutputStream<Value>,
+            OutputStream<Value>,
             Phase,
         ),
     )> {
         match x.next().await {
-            Some(x_val) if x_val != ConcreteStreamData::Unknown => {
+            Some(x_val) if x_val != Value::Unknown => {
                 let y_val = y.next().await?;
                 match y_val {
                     // If y_val is unknown go into syncing phase
-                    ConcreteStreamData::Unknown => Some((x_val, (x, y, Sync))),
+                    Value::Unknown => Some((x_val, (x, y, Sync))),
                     // Otherwise go directly to post
                     y_val => Some((y_val, (x, y, Post))),
                 }
             }
-            Some(ConcreteStreamData::Unknown) => Some((ConcreteStreamData::Unknown, (x, y, Pre))),
+            Some(Value::Unknown) => Some((Value::Unknown, (x, y, Pre))),
             _ => None,
         }
     }
     // Sync phase is x is ready but y isn't
     async fn handle_sync_phase(
-        mut x: OutputStream<ConcreteStreamData>,
-        mut y: OutputStream<ConcreteStreamData>,
+        mut x: OutputStream<Value>,
+        mut y: OutputStream<Value>,
     ) -> Option<(
-        ConcreteStreamData,
+        Value,
         (
-            OutputStream<ConcreteStreamData>,
-            OutputStream<ConcreteStreamData>,
+            OutputStream<Value>,
+            OutputStream<Value>,
             Phase,
         ),
     )> {
         let (x_next, y_next) = join!(x.next(), y.next());
         match (x_next, y_next) {
             // y is still unknown - yield x:
-            (Some(x_val), Some(ConcreteStreamData::Unknown)) => Some((x_val, (x, y, Sync))),
+            (Some(x_val), Some(Value::Unknown)) => Some((x_val, (x, y, Sync))),
             // first time y is known - yield y:
             (_, Some(y_val)) => Some((y_val, (x, y, Post))),
             // End of stream
@@ -437,13 +437,13 @@ pub fn update(
     }
     // Post phase is y was ready - so care about x
     async fn handle_post_phase(
-        x: OutputStream<ConcreteStreamData>,
-        mut y: OutputStream<ConcreteStreamData>,
+        x: OutputStream<Value>,
+        mut y: OutputStream<Value>,
     ) -> Option<(
-        ConcreteStreamData,
+        Value,
         (
-            OutputStream<ConcreteStreamData>,
-            OutputStream<ConcreteStreamData>,
+            OutputStream<Value>,
+            OutputStream<Value>,
             Phase,
         ),
     )> {
@@ -465,16 +465,16 @@ pub fn update(
 
 mod tests {
     use super::*;
-    use crate::core::{ConcreteStreamData, VarName};
+    use crate::core::{Value, VarName};
     use futures::stream;
     use std::collections::BTreeMap;
     use std::iter::FromIterator;
     use std::ops::{Deref, DerefMut};
     use std::sync::Mutex;
 
-    pub struct VarMap(BTreeMap<VarName, Mutex<Vec<ConcreteStreamData>>>);
+    pub struct VarMap(BTreeMap<VarName, Mutex<Vec<Value>>>);
     impl Deref for VarMap {
-        type Target = BTreeMap<VarName, Mutex<Vec<ConcreteStreamData>>>;
+        type Target = BTreeMap<VarName, Mutex<Vec<Value>>>;
 
         fn deref(&self) -> &Self::Target {
             &self.0
@@ -492,8 +492,8 @@ mod tests {
         xs: VarMap,
     }
 
-    impl FromIterator<(VarName, Vec<ConcreteStreamData>)> for VarMap {
-        fn from_iter<I: IntoIterator<Item=(VarName, Vec<ConcreteStreamData>)>>(iter: I) -> Self {
+    impl FromIterator<(VarName, Vec<Value>)> for VarMap {
+        fn from_iter<I: IntoIterator<Item=(VarName, Vec<Value>)>>(iter: I) -> Self {
             let mut map = VarMap(BTreeMap::new());
             for (key, vec) in iter {
                 map.insert(key, Mutex::new(vec));
@@ -502,8 +502,8 @@ mod tests {
         }
     }
 
-    impl StreamContext<ConcreteStreamData> for MockContext {
-        fn var(&self, x: &VarName) -> Option<OutputStream<ConcreteStreamData>> {
+    impl StreamContext<Value> for MockContext {
+        fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {
             let mutex = self.xs.get(x)?;
             if let Ok(vec) = mutex.lock() {
                 Some(Box::pin(stream::iter(vec.clone())))
@@ -511,7 +511,7 @@ mod tests {
                 std::panic!("Mutex was poisoned");
             }
         }
-        fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<ConcreteStreamData>> {
+        fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Value>> {
             // Create new xs with only the `history_length` latest values for the Vec
             let new_xs = self
                 .xs
@@ -549,86 +549,86 @@ mod tests {
 
     #[tokio::test]
     async fn test_plus() {
-        let x: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(
-            vec![ConcreteStreamData::Int(1), 3.into()].into_iter(),
+        let x: OutputStream<Value> = Box::pin(stream::iter(
+            vec![Value::Int(1), 3.into()].into_iter(),
         ));
-        let y: OutputStream<ConcreteStreamData> =
+        let y: OutputStream<Value> =
             Box::pin(stream::iter(vec![2.into(), 4.into()].into_iter()));
-        let z: Vec<ConcreteStreamData> = vec![3.into(), 7.into()];
-        let res: Vec<ConcreteStreamData> = plus(x, y).collect().await;
+        let z: Vec<Value> = vec![3.into(), 7.into()];
+        let res: Vec<Value> = plus(x, y).collect().await;
         assert_eq!(res, z);
     }
 
     #[tokio::test]
     async fn test_str_concat() {
-        let x: OutputStream<ConcreteStreamData> =
+        let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
-        let y: OutputStream<ConcreteStreamData> =
+        let y: OutputStream<Value> =
             Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]));
         let exp = vec!["hello world".into(), "olleh dlrow".into()];
-        let res: Vec<ConcreteStreamData> = concat(x, y).collect().await;
+        let res: Vec<Value> = concat(x, y).collect().await;
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_eval() {
-        let e: OutputStream<ConcreteStreamData> =
+        let e: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
-        let res: Vec<ConcreteStreamData> = eval(&ctx, e, 10).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![2.into(), 4.into()];
+        let res: Vec<Value> = eval(&ctx, e, 10).collect().await;
+        let exp: Vec<Value> = vec![2.into(), 4.into()];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_eval_x_squared() {
         // This test is interesting since we use x twice in the eval strings
-        let e: OutputStream<ConcreteStreamData> =
+        let e: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
         let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
-        let res: Vec<ConcreteStreamData> = eval(&ctx, e, 10).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![4.into(), 9.into()];
+        let res: Vec<Value> = eval(&ctx, e, 10).collect().await;
+        let exp: Vec<Value> = vec![4.into(), 9.into()];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_defer() {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
-        let e: OutputStream<ConcreteStreamData> =
+        let e: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
-        let res: Vec<ConcreteStreamData> = defer(&ctx, e, 2).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![2.into(), 3.into()];
+        let res: Vec<Value> = defer(&ctx, e, 2).collect().await;
+        let exp: Vec<Value> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
     }
     #[tokio::test]
     async fn test_defer_x_squared() {
         // This test is interesting since we use x twice in the eval strings
-        let e: OutputStream<ConcreteStreamData> =
+        let e: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
         let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
-        let res: Vec<ConcreteStreamData> = defer(&ctx, e, 10).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![4.into(), 9.into()];
+        let res: Vec<Value> = defer(&ctx, e, 10).collect().await;
+        let exp: Vec<Value> = vec![4.into(), 9.into()];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_defer_unknown() {
         // Using unknown to represent no data on the stream
-        let e: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Unknown,
+        let e: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Unknown,
             "x + 1".into(),
         ]));
         let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
@@ -636,9 +636,9 @@ mod tests {
             .collect();
         let ctx = MockContext { xs: map };
         let res = defer(&ctx, e, 10)
-            .collect::<Vec<ConcreteStreamData>>()
+            .collect::<Vec<Value>>()
             .await;
-        let exp: Vec<ConcreteStreamData> = vec![ConcreteStreamData::Unknown, 4.into()];
+        let exp: Vec<Value> = vec![Value::Unknown, 4.into()];
         assert_eq!(res, exp)
     }
 
@@ -646,51 +646,51 @@ mod tests {
     async fn test_defer_unknown2() {
         // Unknown followed by property followed by unknown returns [U; val; val].
         let e = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Unknown,
+            Value::Unknown,
             "x + 1".into(),
-            ConcreteStreamData::Unknown,
-        ])) as OutputStream<ConcreteStreamData>;
+            Value::Unknown,
+        ])) as OutputStream<Value>;
         let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into(), 4.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
         let res = defer(&ctx, e, 10)
-            .collect::<Vec<ConcreteStreamData>>()
+            .collect::<Vec<Value>>()
             .await;
-        let exp: Vec<ConcreteStreamData> = vec![ConcreteStreamData::Unknown, 4.into(), 5.into()];
+        let exp: Vec<Value> = vec![Value::Unknown, 4.into(), 5.into()];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_update_both_init() {
-        let x: OutputStream<ConcreteStreamData> =
+        let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), "x1".into()]));
-        let y: OutputStream<ConcreteStreamData> =
+        let y: OutputStream<Value> =
             Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
-        let res: Vec<ConcreteStreamData> = update(x, y).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec!["y0".into(), "y1".into()];
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec!["y0".into(), "y1".into()];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_update_first_x_then_y() {
-        let x: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             "x0".into(),
             "x1".into(),
             "x2".into(),
             "x3".into(),
         ]));
-        let y: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Unknown,
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Unknown,
             "y1".into(),
-            ConcreteStreamData::Unknown,
+            Value::Unknown,
             "y3".into(),
         ]));
-        let res: Vec<ConcreteStreamData> = update(x, y).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec![
             "x0".into(),
             "y1".into(),
-            ConcreteStreamData::Unknown,
+            Value::Unknown,
             "y3".into(),
         ];
         assert_eq!(res, exp)
@@ -699,21 +699,21 @@ mod tests {
     #[tokio::test]
     async fn test_update_first_y_then_x() {
         // Notice that the length of res is longer than the input streams
-        let x: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Unknown,
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Unknown,
             "x1".into(),
-            ConcreteStreamData::Unknown,
+            Value::Unknown,
             "x3".into(),
         ]));
-        let y: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
             "y0".into(),
             "y1".into(),
             "y2".into(),
             "y3".into(),
         ]));
-        let res: Vec<ConcreteStreamData> = update(x, y).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![
-            ConcreteStreamData::Unknown,
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Unknown,
             "y0".into(),
             "y1".into(),
             "y2".into(),
@@ -724,37 +724,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_neither() {
-        use ConcreteStreamData::Unknown;
-        let x: OutputStream<ConcreteStreamData> =
+        use Value::Unknown;
+        let x: OutputStream<Value> =
             Box::pin(stream::iter(vec![Unknown, Unknown, Unknown, Unknown]));
-        let y: OutputStream<ConcreteStreamData> =
+        let y: OutputStream<Value> =
             Box::pin(stream::iter(vec![Unknown, Unknown, Unknown, Unknown]));
-        let res: Vec<ConcreteStreamData> = update(x, y).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![Unknown, Unknown, Unknown, Unknown];
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec![Unknown, Unknown, Unknown, Unknown];
         assert_eq!(res, exp)
     }
 
     #[tokio::test]
     async fn test_update_first_x_then_y_value_sync() {
-        let x: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Unknown,
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Unknown,
             "x0".into(),
             "x1".into(),
             "x2".into(),
             "x3".into(),
         ]));
-        let y: OutputStream<ConcreteStreamData> = Box::pin(stream::iter(vec![
-            ConcreteStreamData::Unknown,
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Unknown,
             "y1".into(),
-            ConcreteStreamData::Unknown,
+            Value::Unknown,
             "y3".into(),
         ]));
-        let res: Vec<ConcreteStreamData> = update(x, y).collect().await;
-        let exp: Vec<ConcreteStreamData> = vec![
-            ConcreteStreamData::Unknown,
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Unknown,
             "x0".into(),
             "y1".into(),
-            ConcreteStreamData::Unknown,
+            Value::Unknown,
             "y3".into(),
         ];
         assert_eq!(res, exp)

@@ -1,5 +1,5 @@
-use crate::core::{ConcreteStreamData, StreamType};
 use crate::core::{IndexedVarName, Specification, VarName};
+use crate::core::{StreamType, Value};
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
@@ -48,11 +48,11 @@ pub enum SExpr<VarT: Debug> {
         // Index i
         isize,
         // Default c
-        ConcreteStreamData,
+        Value,
     ),
 
     // Arithmetic Stream expression
-    Val(ConcreteStreamData),
+    Val(Value),
 
     BinOp(Box<Self>, Box<Self>, SBinOp),
 
@@ -130,4 +130,4 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
     }
 }
 
-pub type InputFileData = BTreeMap<usize, BTreeMap<VarName, ConcreteStreamData>>;
+pub type InputFileData = BTreeMap<usize, BTreeMap<VarName, Value>>;

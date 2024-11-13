@@ -4,7 +4,7 @@ use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
 use trustworthiness_checker::{lola_specification, UntimedLolaSemantics};
 use trustworthiness_checker::{
-    queuing_runtime::QueuingMonitorRunner, ConcreteStreamData, Monitor, VarName,
+    queuing_runtime::QueuingMonitorRunner, Value, Monitor, VarName,
 };
 mod lola_fixtures;
 use lola_fixtures::*;
@@ -15,20 +15,20 @@ async fn test_simple_add_monitor() {
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut async_monitor =
         QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(spec, input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
         async_monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), ConcreteStreamData::Int(3))]
+                vec![(VarName("z".into()), Value::Int(3))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), ConcreteStreamData::Int(7))]
+                vec![(VarName("z".into()), Value::Int(7))]
                     .into_iter()
                     .collect(),
             ),
@@ -38,11 +38,11 @@ async fn test_simple_add_monitor() {
 
 #[tokio::test]
 async fn test_count_monitor() {
-    let input_streams: BTreeMap<VarName, BoxStream<'static, ConcreteStreamData>> = BTreeMap::new();
+    let input_streams: BTreeMap<VarName, BoxStream<'static, Value>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();
     let mut async_monitor =
         QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(spec, input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> = async_monitor
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = async_monitor
         .monitor_outputs()
         .take(4)
         .enumerate()
@@ -53,25 +53,25 @@ async fn test_count_monitor() {
         vec![
             (
                 0,
-                vec![(VarName("x".into()), ConcreteStreamData::Int(1))]
+                vec![(VarName("x".into()), Value::Int(1))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("x".into()), ConcreteStreamData::Int(2))]
+                vec![(VarName("x".into()), Value::Int(2))]
                     .into_iter()
                     .collect(),
             ),
             (
                 2,
-                vec![(VarName("x".into()), ConcreteStreamData::Int(3))]
+                vec![(VarName("x".into()), Value::Int(3))]
                     .into_iter()
                     .collect(),
             ),
             (
                 3,
-                vec![(VarName("x".into()), ConcreteStreamData::Int(4))]
+                vec![(VarName("x".into()), Value::Int(4))]
                     .into_iter()
                     .collect(),
             ),
@@ -85,7 +85,7 @@ async fn test_eval_monitor() {
     let spec = lola_specification(&mut spec_eval_monitor()).unwrap();
     let mut async_monitor =
         QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(spec, input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, ConcreteStreamData>)> =
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
         async_monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
         outputs,
@@ -93,8 +93,8 @@ async fn test_eval_monitor() {
             (
                 0,
                 vec![
-                    (VarName("z".into()), ConcreteStreamData::Int(3)),
-                    (VarName("w".into()), ConcreteStreamData::Int(3))
+                    (VarName("z".into()), Value::Int(3)),
+                    (VarName("w".into()), Value::Int(3))
                 ]
                 .into_iter()
                 .collect(),
@@ -102,8 +102,8 @@ async fn test_eval_monitor() {
             (
                 1,
                 vec![
-                    (VarName("z".into()), ConcreteStreamData::Int(7)),
-                    (VarName("w".into()), ConcreteStreamData::Int(7))
+                    (VarName("z".into()), Value::Int(7)),
+                    (VarName("w".into()), Value::Int(7))
                 ]
                 .into_iter()
                 .collect(),

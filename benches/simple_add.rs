@@ -11,7 +11,7 @@ use futures::{
 };
 use trustworthiness_checker::type_checking::type_check;
 use trustworthiness_checker::OutputStream;
-use trustworthiness_checker::{ConcreteStreamData, Monitor, VarName};
+use trustworthiness_checker::{Value, Monitor, VarName};
 
 pub fn spec_simple_add_monitor() -> &'static str {
     "in x\n\
@@ -29,37 +29,37 @@ pub fn spec_simple_add_monitor_typed() -> &'static str {
 
 pub fn input_streams_concrete(
     size: usize,
-) -> BTreeMap<VarName, BoxStream<'static, ConcreteStreamData>> {
+) -> BTreeMap<VarName, BoxStream<'static, Value>> {
     let size = size as i64;
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(
-            (0..size).map(|x| ConcreteStreamData::Int(2 * x)),
-        )) as Pin<Box<dyn futures::Stream<Item = ConcreteStreamData> + std::marker::Send>>,
+            (0..size).map(|x| Value::Int(2 * x)),
+        )) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(
-            (0..size).map(|y| ConcreteStreamData::Int(2 * y + 1)),
-        )) as Pin<Box<dyn futures::Stream<Item = ConcreteStreamData> + std::marker::Send>>,
+            (0..size).map(|y| Value::Int(2 * y + 1)),
+        )) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
     );
     input_streams
 }
 
-pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, OutputStream<ConcreteStreamData>> {
+pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     let size = size as i64;
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(
-            (0..size).map(|x| ConcreteStreamData::Int(2 * x)),
-        )) as OutputStream<ConcreteStreamData>,
+            (0..size).map(|x| Value::Int(2 * x)),
+        )) as OutputStream<Value>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(
-            (0..size).map(|y| ConcreteStreamData::Int(2 * y + 1)),
+            (0..size).map(|y| Value::Int(2 * y + 1)),
         )),
     );
     input_streams
@@ -73,7 +73,7 @@ async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
             spec,
             input_streams,
         );
-    let _outputs: Vec<BTreeMap<VarName, ConcreteStreamData>> = async_monitor
+    let _outputs: Vec<BTreeMap<VarName, Value>> = async_monitor
         .monitor_outputs()
         .take(num_outputs)
         .collect()
@@ -89,7 +89,7 @@ async fn monitor_outputs_untyped_async(num_outputs: usize) {
         trustworthiness_checker::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
     >::new(spec, input_streams);
-    let _outputs: Vec<BTreeMap<VarName, ConcreteStreamData>> = async_monitor
+    let _outputs: Vec<BTreeMap<VarName, Value>> = async_monitor
         .monitor_outputs()
         .take(num_outputs)
         .collect()
@@ -123,7 +123,7 @@ async fn monitor_outputs_untyped_queuing(num_outputs: usize) {
         trustworthiness_checker::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
     >::new(spec, input_streams);
-    let _outputs: Vec<BTreeMap<VarName, ConcreteStreamData>> = async_monitor
+    let _outputs: Vec<BTreeMap<VarName, Value>> = async_monitor
         .monitor_outputs()
         .take(num_outputs)
         .collect()

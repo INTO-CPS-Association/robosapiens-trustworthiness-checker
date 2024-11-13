@@ -1,7 +1,7 @@
 use crate::core::{StreamContext, StreamData};
 use crate::untimed_monitoring_combinators::{lift1, lift2, lift3};
 use crate::{
-    lola_expression, ConcreteStreamData, MonitoringSemantics, OutputStream, UntimedLolaSemantics,
+    lola_expression, Value, MonitoringSemantics, OutputStream, UntimedLolaSemantics,
 };
 use futures::{
     stream::{self, BoxStream},
@@ -11,15 +11,15 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use winnow::Parser;
 
-pub fn to_typed_stream<T: TryFrom<ConcreteStreamData, Error = ()> + Debug>(
-    stream: OutputStream<ConcreteStreamData>,
+pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
+    stream: OutputStream<Value>,
 ) -> OutputStream<T> {
     Box::pin(stream.map(|x| x.try_into().expect("Type error")))
 }
 
-pub fn from_typed_stream<T: Into<ConcreteStreamData> + StreamData>(
+pub fn from_typed_stream<T: Into<Value> + StreamData>(
     stream: OutputStream<T>,
-) -> OutputStream<ConcreteStreamData> {
+) -> OutputStream<Value> {
     Box::pin(stream.map(|x| x.into()))
 }
 
@@ -95,8 +95,8 @@ pub fn div(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
     lift2(|x, y| x / y, x, y)
 }
 
-pub fn eval<T: TryFrom<ConcreteStreamData, Error = ()> + StreamData>(
-    ctx: &dyn StreamContext<ConcreteStreamData>,
+pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
+    ctx: &dyn StreamContext<Value>,
     x: OutputStream<String>,
     history_length: usize,
 ) -> OutputStream<T> {

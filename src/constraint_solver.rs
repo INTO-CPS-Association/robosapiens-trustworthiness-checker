@@ -3,11 +3,11 @@ use std::{fmt::Debug, fmt::Display, mem};
 use winnow::Parser;
 
 use crate::ast::*;
-use crate::core::ConcreteStreamData;
+use crate::core::Value;
 use crate::core::{IndexedVarName, VarName};
 
 pub type SExprConstraint<VarT> = (VarT, SExpr<VarT>);
-pub type SExprConstraintSolved<VarT> = (VarT, ConcreteStreamData);
+pub type SExprConstraintSolved<VarT> = (VarT, Value);
 
 #[derive(Debug)]
 pub struct SExprConstraintStore<VarT: Debug> {
@@ -195,21 +195,21 @@ pub fn to_indexed_constraints(
 
 // Trait for indexing a variable producing a new SExpr
 pub trait IndexableVar: Debug {
-    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<Self>
+    fn index(&self, i: isize, c: &Value) -> SExpr<Self>
     where
         Self: Sized;
 }
 
 impl IndexableVar for VarName {
     // For unindexed variables, indexing just produces the same expression
-    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<VarName> {
+    fn index(&self, i: isize, c: &Value) -> SExpr<VarName> {
         SExpr::Index(Box::new(SExpr::Var(self.clone())), i, c.clone())
     }
 }
 
 impl IndexableVar for IndexedVarName {
     // For indexed variables, we can actually attempt to change the index on the underlying variable
-    fn index(&self, i: isize, c: &ConcreteStreamData) -> SExpr<IndexedVarName> {
+    fn index(&self, i: isize, c: &Value) -> SExpr<IndexedVarName> {
         use SExpr::*;
         match self {
             // If the shifted index is positive, we can just shift the index
@@ -230,7 +230,7 @@ pub trait PartialEvaluable<VarT: Eq + Clone + IndexableVar> {
 
 impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
     fn partial_eval(&self, cs: &SExprConstraintStore<IndexedVarName>, time: usize) -> Self {
-        use ConcreteStreamData::*;
+        use Value::*;
         use SBinOp::*;
         use SExpr::*;
         match self {
@@ -313,7 +313,7 @@ impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
             Not(b) => {
                 let b_s = b.partial_eval(cs, time);
                 match b_s {
-                    Val(ConcreteStreamData::Bool(b1)) => Val((!b1).into()),
+                    Val(Value::Bool(b1)) => Val((!b1).into()),
                     _ => Not(Box::new(b_s)),
                 }
             }
@@ -324,8 +324,8 @@ impl PartialEvaluable<IndexedVarName> for SExpr<IndexedVarName> {
                 let e1_s = e1.partial_eval(cs, time);
                 let e2_s = e2.partial_eval(cs, time);
                 match b_s {
-                    SExpr::Val(ConcreteStreamData::Bool(true)) => e1_s,
-                    SExpr::Val(ConcreteStreamData::Bool(false)) => e2_s,
+                    SExpr::Val(Value::Bool(true)) => e1_s,
+                    SExpr::Val(Value::Bool(false)) => e2_s,
                     _ if e1_s == e2_s => e1_s,
                     _ => If(Box::new(b_s), Box::new(e1_s), Box::new(e2_s)),
                 }
@@ -407,11 +407,11 @@ mod tests {
             unresolved: vec![(
                 VarName("x".into()),
                 SExpr::BinOp(
-                    Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                    Box::new(SExpr::Val(Value::Int(1))),
                     Box::new(SExpr::Index(
                         Box::new(SExpr::Var(VarName("x".into()))),
                         -1,
-                        ConcreteStreamData::Int(0),
+                        Value::Int(0),
                     )),
                     SBinOp::IOp(IntBinOp::Add),
                 ),
@@ -428,11 +428,11 @@ mod tests {
                 unresolved: vec![(
                     IndexedVarName("x".into(), 0),
                     SExpr::BinOp(
-                        Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                        Box::new(SExpr::Val(Value::Int(1))),
                         Box::new(SExpr::Index(
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 0))),
                             -1,
-                            ConcreteStreamData::Int(0),
+                            Value::Int(0),
                         )),
                         SBinOp::IOp(IntBinOp::Add),
                     ),
@@ -446,11 +446,11 @@ mod tests {
                 unresolved: vec![(
                     IndexedVarName("x".into(), 4),
                     SExpr::BinOp(
-                        Box::new(SExpr::Val(ConcreteStreamData::Int(1))),
+                        Box::new(SExpr::Val(Value::Int(1))),
                         Box::new(SExpr::Index(
                             Box::new(SExpr::Var(IndexedVarName("x".into(), 4))),
                             -1,
-                            ConcreteStreamData::Int(0),
+                            Value::Int(0),
                         ),),
                         SBinOp::IOp(IntBinOp::Add),
                     ),
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 0), ConcreteStreamData::Int(1)),],
+                resolved: vec![(IndexedVarName("x".into(), 0), Value::Int(1)),],
                 unresolved: vec![],
             }
         );
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(
             constraints,
             SExprConstraintStore {
-                resolved: vec![(IndexedVarName("x".into(), 1), ConcreteStreamData::Int(0)),],
+                resolved: vec![(IndexedVarName("x".into(), 1), Value::Int(0)),],
                 unresolved: vec![],
             }
         )
