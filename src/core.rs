@@ -113,8 +113,7 @@ pub enum StreamType {
 // trait InputStream = Iterator<Item = StreamData>;
 
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
-// TODO: Use String instead of Box<str>
-pub struct VarName(pub Box<str>);
+pub struct VarName(pub String);
 
 impl From<&str> for VarName {
     fn from(s: &str) -> Self {
@@ -124,7 +123,7 @@ impl From<&str> for VarName {
 
 impl From<String> for VarName {
     fn from(s: String) -> Self {
-        VarName(s.into_boxed_str())
+        VarName(s)
     }
 }
 
@@ -135,8 +134,7 @@ impl Display for VarName {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
-// TODO: Use VarName instead of Box<str>
-pub struct IndexedVarName(pub Box<str>, pub usize);
+pub struct IndexedVarName(pub String, pub usize);
 
 pub type OutputStream<T> = BoxStream<'static, T>;
 
