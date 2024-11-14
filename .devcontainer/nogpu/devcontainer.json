@@ -1,0 +1,32 @@
+{
+	"name": "RoboSapiens Adaptive Platform (No GPU)",
+	"dockerComposeFile": "../../docker/docker-compose.yaml",
+	"service": "devnogpu",
+	// "runServices": [
+	// 	"rapdevnogpu",
+	// 	"rosmqttbridge"
+	// ],
+	"workspaceFolder": "/ws",
+	"shutdownAction": "stopCompose",
+	"mounts": [
+		"source=${localWorkspaceFolder}/,target=/ws,type=bind,consistency=cached"
+	],
+	// "postCreateCommand": "pip install -r requirements.txt",
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"terminal.integrated.defaultProfile.linux": "bash",
+				"terminal.integrated.profiles.linux": {
+					"bash": {
+						"path": "/bin/bash"
+					}
+				}
+			}
+			// "extensions": [
+			// 	"ms-toolsai.jupyter",
+			// 	"ms-toolsai.vscode-jupyter-powertoys",
+			// 	"ms-python.python"
+			// ]
+		}
+	}
+}

@@ -1,7 +1,8 @@
 #![deny(warnings)]
-use clap::Parser;
 use futures::StreamExt;
 use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
+
+use clap::Parser;
 
 use trustworthiness_checker::commandline_args::{Cli, Language, Runtime, Semantics};
 

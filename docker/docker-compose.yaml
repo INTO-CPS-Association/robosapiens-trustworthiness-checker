@@ -1,0 +1,52 @@
+services:
+  base:
+    image: trustworthiness-checker:base
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: base
+    # command: tmux
+    stdin_open: true
+    ipc: host
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority
+      - /dev/shm:/dev/shm
+    environment:
+      - DISPLAY=${DISPLAY}
+    network_mode: host
+  dev:
+    extends: base
+    image: trustworthiness-checker:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: dev
+      args:
+        - UID=${UID:-1000}
+        - GID=${UID:-1000}
+        - USERNAME=${USERNAME:-devuser}
+    user: ${USERNAME:-devuser}
+    command: sleep infinity
+    volumes:
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/home/${USERNAME:-devuser}/.Xauthority
+      - /dev/shm:/dev/shm
+  devnogpu:
+    extends: dev
+    environment:
+      - LIBGL_ALWAYS_SOFTWARE=1
+  devmesa:
+    extends: dev
+    volumes:
+      - /dev/dri:/dev/dri
+  devnvidia:
+    extends: dev
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=all

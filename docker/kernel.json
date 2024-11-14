@@ -1,0 +1,21 @@
+{
+    "argv": [
+        "/usr/bin/python3",
+        "-m",
+        "ipykernel_launcher",
+        "-f",
+        "{connection_file}"
+    ],
+    "display_name": "Python 3 ROS (ipykernel)",
+    "language": "python",
+    "metadata": {
+        "debugger": false
+    },
+    "env": {
+        "PYTHONPATH": "/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages",
+        "ROS_DISTRO": "humble",
+        "LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+        "ROS_VERSION": 2,
+        "ROS_PYTHON_VERSION": 3
+    }
+}
