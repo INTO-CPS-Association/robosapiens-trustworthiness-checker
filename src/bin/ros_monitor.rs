@@ -1,19 +1,18 @@
 #![deny(warnings)]
 use futures::StreamExt;
-use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
+use trustworthiness_checker::{
+    self as tc, parse_file, ros_input_provider, type_checking::type_check, Monitor,
+};
 
 use clap::Parser;
 
-use trustworthiness_checker::commandline_args::{Cli, Language, Runtime, Semantics};
+use trustworthiness_checker::commandline_args::{CliROS, Language, Runtime, Semantics};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     // Could use tokio-console for debugging
     // console_subscriber::init();
-    let cli = Cli::parse();
-
-    // let model = std::fs::read_to_string(cli.model).expect("Model file could not be read");
-    let input_file = cli.input_file;
+    let cli = CliROS::parse();
 
     let language = cli.language.unwrap_or(Language::Lola);
     let semantics = cli.semantics.unwrap_or(Semantics::Untimed);
@@ -22,12 +21,14 @@ async fn main() {
     let model_parser = match language {
         Language::Lola => tc::parser::lola_specification,
     };
-    let input_file_parser = match language {
-        Language::Lola => tc::parser::lola_input_file,
-    };
-    let input_streams = tc::parse_file(input_file_parser, &input_file)
-        .await
-        .expect("Input file could not be parsed");
+
+    let input_mapping_str = std::fs::read_to_string(&cli.ros_input_mapping_file)
+        .expect("Input mapping file could not be read");
+    let input_mapping = tc::ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
+        .expect("Input mapping file could not be parsed");
+
+    let input_streams = ros_input_provider::ROSInputProvider::new(input_mapping)
+        .expect("ROS input provider could not be created");
 
     let model = parse_file(model_parser, cli.model.as_str())
         .await

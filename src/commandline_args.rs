@@ -31,3 +31,16 @@ pub struct Cli {
     #[arg(long)]
     pub runtime: Option<Runtime>,
 }
+
+#[derive(Parser)]
+pub struct CliROS {
+    pub model: String,
+    pub ros_input_mapping_file: String,
+
+    #[arg(long)]
+    pub language: Option<Language>,
+    #[arg(long)]
+    pub semantics: Option<Semantics>,
+    #[arg(long)]
+    pub runtime: Option<Runtime>,
+}

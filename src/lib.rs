@@ -1,5 +1,5 @@
 #![recursion_limit = "256"]
-#![deny(warnings)]
+// #![deny(warnings)]
 
 pub mod core;
 pub use crate::core::Value;
@@ -25,5 +25,10 @@ pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use file_handling::parse_file;
 pub mod commandline_args;
+#[cfg(feature = "ros")]
+pub mod ros_input_provider;
+#[cfg(feature = "ros")]
+pub mod ros_topic_stream_mapping;
+pub mod stream_utils;
 pub mod typed_monitoring_combinators;
 pub mod typed_monitoring_semantics;

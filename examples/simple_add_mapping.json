@@ -1,0 +1,10 @@
+{
+    "x": {
+        "topic": "/x",
+        "msg_type": "Int32"
+    },
+    "y": {
+        "topic": "/y",
+        "msg_type": "Int32"
+    }
+}

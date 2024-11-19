@@ -20,6 +20,10 @@ tokio-util = "0.7.12"
 clap = { version = "4.5.20", features = ["derive"] }
 async-stream = "0.3.6"
 r2r = { version = "0.9.3", optional=true }
+thiserror = "2.0.3"
+justerror = "1.1.0"
+serde = "1.0.215"
+serde_json = "1.0.133"
 
 [features]
 ros = ["dep:r2r"]

@@ -20,13 +20,31 @@
 					"bash": {
 						"path": "/bin/bash"
 					}
+				},
+				"rust-analyzer.cargo.features": [
+					"ros"
+				],
+				"rust-analyzer.runnables.extraEnv": {
+					"ROS_VERSION": 2,
+					"ROS_PYTHON_VERSION": 3,
+					"ROS_DISTRO": "humble",
+					"LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+					"AMENT_PREFIX_PATH": "/opt/ros/humble",
+					"PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+				},
+				"rust-analyzer.server.extraEnv": {
+					"ROS_VERSION": 2,
+					"ROS_PYTHON_VERSION": 3,
+					"ROS_DISTRO": "humble",
+					"LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+					"AMENT_PREFIX_PATH": "/opt/ros/humble",
+					"PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 				}
-			}
-			// "extensions": [
-			// 	"ms-toolsai.jupyter",
-			// 	"ms-toolsai.vscode-jupyter-powertoys",
-			// 	"ms-python.python"
-			// ]
+			},
+			"extensions": [
+				"1YiB.rust-bundle",
+				"fill-labs.dependi"
+			]
 		}
 	}
 }

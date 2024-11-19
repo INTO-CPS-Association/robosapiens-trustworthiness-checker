@@ -3,11 +3,9 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 
-use async_stream::stream;
 use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
-use futures::FutureExt;
 use futures::StreamExt;
 use tokio::select;
 use tokio::sync::broadcast;
@@ -24,43 +22,7 @@ use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::Specification;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
-
-/* Converts a `oneshot::Receiver` of an `OutputStream` into an `OutputStream`.
- * Is done by first waiting for the oneshot to resolve to an OutputStream and
- * then continuously yielding the values from the stream. This is implemented
- * using the `flatten_stream` combinator from the `futures` crate, which
- * is essentially a general version of this function (except for handling the
- * case where the oneshot resolves to an error due to the sender going away).
- */
-fn oneshot_to_stream<T: StreamData>(
-    receiver: oneshot::Receiver<OutputStream<T>>,
-) -> OutputStream<T> {
-    let empty_stream = Box::pin(stream::empty());
-    Box::pin(
-        receiver
-            .map(|res| res.unwrap_or(empty_stream))
-            .flatten_stream(),
-    )
-}
-
-/* Wrap a stream in a drop guard to ensure that the associated cancellation
- * token is not dropped before the stream has completed or been dropped.
- * This is used for automatic cleanup of background tasks when all consumers
- * of an output stream have gone away. */
-fn drop_guard_stream<T: StreamData>(
-    stream: OutputStream<T>,
-    drop_guard: Arc<DropGuard>,
-) -> OutputStream<T> {
-    Box::pin(stream! {
-        // Keep the shared reference to drop_guard alive until the stream
-        // is done
-        let _drop_guard = drop_guard.clone();
-        let mut stream = stream;
-        while let Some(val) = stream.next().await {
-            yield val;
-        }
-    })
-}
+use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
 /* An actor which manages access to a stream variable by tracking the
  * subscribers to the variable and creating independent output streams to
