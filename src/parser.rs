@@ -12,8 +12,8 @@ use winnow::ascii::dec_int as integer;
 use winnow::ascii::space0 as whitespace;
 
 use crate::ast::*;
-use crate::core::Value;
 use crate::core::StreamType;
+use crate::core::Value;
 use crate::core::VarName;
 
 // This is the top-level parser for LOLA expressions
@@ -91,6 +91,38 @@ fn ifelse(s: &mut &str) -> PResult<SExpr<VarName>> {
     .parse_next(s)
 }
 
+fn defer(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: literal("defer"),
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ')',
+    ))
+    .map(|(e,)| SExpr::Defer(Box::new(e)))
+    .parse_next(s)
+}
+
+fn update(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: literal("update"),
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ',',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ')',
+    ))
+    .map(|(lhs, rhs)| SExpr::Update(Box::new(lhs), Box::new(rhs)))
+    .parse_next(s)
+}
+
 fn eval(s: &mut &str) -> PResult<SExpr<VarName>> {
     seq!((
         _: whitespace,
@@ -111,7 +143,7 @@ fn eval(s: &mut &str) -> PResult<SExpr<VarName>> {
 fn atom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
-        alt((time_index, eval, lit, ifelse, var, paren)),
+        alt((time_index, eval, lit, ifelse, defer, update, var, paren)),
         whitespace,
     )
     .parse_next(s)
@@ -341,9 +373,7 @@ fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, Value>> {
     .parse_next(s)
 }
 
-fn time_stamped_assignments(
-    s: &mut &str,
-) -> PResult<(usize, BTreeMap<VarName, Value>)> {
+fn time_stamped_assignments(s: &mut &str) -> PResult<(usize, BTreeMap<VarName, Value>)> {
     seq!((
         _: whitespace,
         dec_uint,
@@ -372,10 +402,7 @@ mod tests {
 
     #[test]
     fn test_streamdata() {
-        assert_eq!(
-            val(&mut (*"42".to_string()).into()),
-            Ok(Value::Int(42)),
-        );
+        assert_eq!(val(&mut (*"42".to_string()).into()), Ok(Value::Int(42)),);
         assert_eq!(
             val(&mut (*"\"abc2d\"".to_string()).into()),
             Ok(Value::Str("abc2d".to_string())),
@@ -438,11 +465,7 @@ mod tests {
         );
         assert_eq!(
             sexpr(&mut (*"(x)[-1, 0]".to_string()).into())?,
-            SExpr::Index(
-                Box::new(SExpr::Var(VarName("x".into()))),
-                -1,
-                Value::Int(0),
-            ),
+            SExpr::Index(Box::new(SExpr::Var(VarName("x".into()))), -1, Value::Int(0),),
         );
         assert_eq!(
             sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
@@ -897,5 +920,21 @@ mod tests {
             presult_to_string(&sexpr(&mut r#""a" ++ "b" ++ "c""#)),
             r#"Ok(BinOp(BinOp(Val(Str("a")), Val(Str("b")), SOp(Concat)), Val(Str("c")), SOp(Concat)))"#
         );
+    }
+
+    #[test]
+    fn parse_defer() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"defer(x)"#)),
+            r#"Ok(Defer(Var(VarName("x"))))"#
+        )
+    }
+
+    #[test]
+    fn parse_update() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"update(0, x)"#)),
+            r#"Ok(Update(Val(Int(0)), Var(VarName("x"))))"#
+        )
     }
 }
