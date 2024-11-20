@@ -33,10 +33,10 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
         .unwrap();
 
     async move {
-        // Cancellation token for managing the lifetime of the background thread
+        // Cancellation token for managing the lifetime of the background task
         let cancellation_token = CancellationToken::new();
 
-        // Create a drop guard to ensure the background thread is not dropped
+        // Create a drop guard to ensure the background task is not dropped
         // until we are done
         let _drop_guard = cancellation_token.clone().drop_guard();
 
