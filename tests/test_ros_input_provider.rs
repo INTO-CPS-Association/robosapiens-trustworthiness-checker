@@ -1,3 +1,5 @@
+#![cfg(not(feature = "ros"))]
+#![allow(warnings)]
 use std::future::Future;
 
 use futures::StreamExt;
