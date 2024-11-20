@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use r2r;
+use tokio::select;
 use tokio_util::sync::CancellationToken;
 
 use crate::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
@@ -66,8 +67,8 @@ impl ROSInputProvider {
         // Cancellation token to stop the subscriber node
         // if all consumers of the output streams have
         // gone away
-        let ct = CancellationToken::new();
-        let drop_guard = Arc::new(ct.clone().drop_guard());
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = Arc::new(cancellation_token.clone().drop_guard());
 
         // Provide streams for all input variables
         let mut var_map = BTreeMap::new();
@@ -89,12 +90,18 @@ impl ROSInputProvider {
             );
         }
 
-        // Launch the ROS subscriber node in background thread
-        tokio::task::spawn_blocking(move || {
-            // println!("Spinning InputProvider node");
-            while !ct.is_cancelled() {
-                node.spin_once(std::time::Duration::from_millis(100));
-                // std::thread::sleep(std::time::Duration::from_millis(100));
+        // Launch the ROS subscriber node in background async task
+        tokio::task::spawn(async move {
+            loop {
+                select! {
+                    biased;
+                    _ = cancellation_token.cancelled() => {
+                        return;
+                    },
+                    _ = tokio::task::yield_now() => {
+                        node.spin_once(std::time::Duration::from_millis(0));
+                    },
+                }
             }
         });
 

@@ -24,6 +24,8 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
     values: Vec<T>,
 ) -> impl Future<Output = ()> {
     // Create a ROS node and publisher
+
+    use tokio::select;
     let ctx = r2r::Context::create().unwrap();
     let mut node = r2r::Node::create(ctx, &*node_name, "").unwrap();
     let publisher = node
@@ -31,18 +33,26 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
         .unwrap();
 
     async move {
-        // Cancellation token for managing the lifetime of the bacground thread
+        // Cancellation token for managing the lifetime of the background thread
         let cancellation_token = CancellationToken::new();
 
         // Create a drop guard to ensure the background thread is not dropped
         // until we are done
         let _drop_guard = cancellation_token.clone().drop_guard();
 
-        // Spawn a background thread to run the ROS node
+        // Spawn a background async task to run the ROS node
         // and spin until cancelled
-        tokio::task::spawn_blocking(move || {
-            while !cancellation_token.is_cancelled() {
-                node.spin_once(std::time::Duration::from_millis(100));
+        tokio::task::spawn(async move {
+            loop {
+                select! {
+                    biased;
+                    _ = cancellation_token.cancelled() => {
+                        return;
+                    },
+                    _ = tokio::task::yield_now() => {
+                        node.spin_once(std::time::Duration::from_millis(0));
+                    },
+                }
             }
         });
 
