@@ -205,59 +205,61 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
 
 pub fn eval(
     ctx: &dyn StreamContext<Value>,
-    x: OutputStream<Value>,
+    mut x: OutputStream<Value>,
     history_length: usize,
 ) -> OutputStream<Value> {
     // Create a subcontext with a history window length of 10
     let subcontext = ctx.subcontext(history_length);
-    /*unfold() creates a Stream from a seed value.*/
-    Box::pin(stream::unfold(
-        (subcontext, x, None::<(Value, OutputStream<Value>)>),
-        |(subcontext, mut x, last)| async move {
-            /* x.next() returns None if we are done unfolding. Return in that case.*/
-            let current = x.next().await?;
 
-            // If the evaled statement has not stopped, continue using the
-            // existing stream
-            if let Some((prev, mut es)) = last {
-                if prev == current {
-                    // println!("prev == current == {:?}", current);
+    // Build an output stream for eval of x over the subcontext
+    Box::pin(stream! {
+        // Store the previous value of the stream we are evaluating so we can
+        // check when it changes
+        struct PrevData {
+            // The previous x value
+            x_val: Value,
+            // The output stream for eval
+            eval_output_stream: OutputStream<Value>
+        }
+        let mut prev_data: Option<PrevData> = None;
+        while let Some(current) = x.next().await {
+            // If we have a previous value and it is the same as the current
+            // value, we can continue using the existing stream as our output
+            if let Some(prev_data) = &mut prev_data {
+                if prev_data.x_val == current {
+                    // Advance the subcontext to make a new set of input values
+                    // available for the eval stream
                     subcontext.advance();
-                    let eval_res = es.next().await;
-                    // println!("returning val from existing stream: {:?}", eval_res);
-                    return match eval_res {
-                        Some(eval_res) => {
-                            // println!("eval producing {:?}", eval_res);
-                            Some((eval_res, (subcontext, x, Some((current, es)))))
-                        }
-                        None => {
-                            println!("Eval stream ended");
-                            None
-                        }
-                    };
+                    if let Some(eval_res) = prev_data.eval_output_stream.next().await {
+                        yield eval_res;
+                        continue;
+                    } else {
+                        return;
+                    }
                 }
             }
 
-            match current {
-                Value::Str(s) => {
-                    let s_parse = &mut s.as_str();
-                    let expr = match lola_expression.parse_next(s_parse) {
-                        Ok(expr) => expr,
-                        Err(_) => unimplemented!("Invalid eval str"),
-                    };
-                    let mut es = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
-                    // println!("new eval stream");
-                    subcontext.advance();
-                    let eval_res = es.next().await?;
-                    // println!("eval producing {:?}", eval_res);
-                    return Some((eval_res, (subcontext, x, Some((Value::Str(s), es)))));
+            if let Value::Str(s) = current {
+                let expr = lola_expression.parse_next(&mut s.as_str())
+                    .expect("Invalid eval str");
+                let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
+                // Advance the subcontext to make a new set of input values
+                // available for the eval stream
+                subcontext.advance();
+                if let Some(eval_res) = eval_output_stream.next().await {
+                    yield eval_res;
+                } else {
+                    return;
                 }
-                x => {
-                    unimplemented!("Invalid eval type {:?}", x)
-                }
+                prev_data = Some(PrevData{
+                    x_val: Value::Str(s),
+                    eval_output_stream
+                });
+            } else {
+                panic!("Invalid eval type {:?}", current)
             }
-        },
-    )) as OutputStream<Value>
+        }
+    })
 }
 
 pub fn var(ctx: &dyn StreamContext<Value>, x: VarName) -> OutputStream<Value> {
