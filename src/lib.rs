@@ -25,6 +25,7 @@ pub mod type_checking;
 pub mod untimed_monitoring_combinators;
 pub use file_handling::parse_file;
 pub mod commandline_args;
+pub mod mqtt_input_provider;
 #[cfg(feature = "ros")]
 pub mod ros_input_provider;
 #[cfg(feature = "ros")]

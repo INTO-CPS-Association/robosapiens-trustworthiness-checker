@@ -15,8 +15,21 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
     network_mode: host
+  emqx:
+    image: emqx:latest
+    restart: always
+    environment:
+      EMQX_NAME: emqx
+      EMQX_HOST: 127.0.0.1
+    volumes:
+      - vol-emqx-data:/opt/emqx/data
+      - vol-emqx-etc:/opt/emqx/etc
+      - vol-emqx-log:/opt/emqx/log
+    network_mode: host
   dev:
     extends: base
+    depends_on: [emqx]
+    network_mode: host
     image: trustworthiness-checker:dev
     build:
       context: ..
@@ -50,3 +63,10 @@ services:
               capabilities: [ gpu ]
     environment:
       - NVIDIA_DRIVER_CAPABILITIES=all
+volumes:
+  vol-emqx-data:
+    name: tc-emqx-data
+  vol-emqx-etc:
+    name: tc-emqx-etc
+  vol-emqx-log:
+    name: tc-emqx-log

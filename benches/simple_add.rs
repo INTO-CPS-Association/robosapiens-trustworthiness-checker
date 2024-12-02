@@ -66,12 +66,12 @@ pub fn input_streams_typed(size: usize) -> BTreeMap<VarName, OutputStream<Value>
 }
 
 async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
-    let input_streams = input_streams_concrete(num_outputs);
+    let mut input_streams = input_streams_concrete(num_outputs);
     let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut async_monitor =
         trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor::new(
             spec,
-            input_streams,
+            &mut input_streams,
         );
     let _outputs: Vec<BTreeMap<VarName, Value>> = async_monitor
         .monitor_outputs()
@@ -81,14 +81,14 @@ async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
 }
 
 async fn monitor_outputs_untyped_async(num_outputs: usize) {
-    let input_streams = input_streams_concrete(num_outputs);
+    let mut input_streams = input_streams_concrete(num_outputs);
     let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut async_monitor = trustworthiness_checker::async_runtime::AsyncMonitorRunner::<
         _,
         _,
         trustworthiness_checker::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
-    >::new(spec, input_streams);
+    >::new(spec, &mut input_streams);
     let _outputs: Vec<BTreeMap<VarName, Value>> = async_monitor
         .monitor_outputs()
         .take(num_outputs)
@@ -97,7 +97,7 @@ async fn monitor_outputs_untyped_async(num_outputs: usize) {
 }
 
 async fn monitor_outputs_typed_async(num_outputs: usize) {
-    let input_streams = input_streams_typed(num_outputs);
+    let mut input_streams = input_streams_typed(num_outputs);
     let spec =
         trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
     let spec = type_check(spec).expect("Type check failed");
@@ -106,7 +106,7 @@ async fn monitor_outputs_typed_async(num_outputs: usize) {
         _,
         trustworthiness_checker::TypedUntimedLolaSemantics,
         _,
-    >::new(spec, input_streams);
+    >::new(spec, &mut input_streams);
     let _outputs: Vec<BTreeMap<VarName, _>> = async_monitor
         .monitor_outputs()
         .take(num_outputs)
@@ -115,14 +115,14 @@ async fn monitor_outputs_typed_async(num_outputs: usize) {
 }
 
 async fn monitor_outputs_untyped_queuing(num_outputs: usize) {
-    let input_streams = input_streams_concrete(num_outputs);
+    let mut input_streams = input_streams_concrete(num_outputs);
     let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut async_monitor = trustworthiness_checker::queuing_runtime::QueuingMonitorRunner::<
         _,
         _,
         trustworthiness_checker::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
-    >::new(spec, input_streams);
+    >::new(spec, &mut input_streams);
     let _outputs: Vec<BTreeMap<VarName, Value>> = async_monitor
         .monitor_outputs()
         .take(num_outputs)
@@ -131,7 +131,7 @@ async fn monitor_outputs_untyped_queuing(num_outputs: usize) {
 }
 
 async fn monitor_outputs_typed_queuing(num_outputs: usize) {
-    let input_streams = input_streams_typed(num_outputs);
+    let mut input_streams = input_streams_typed(num_outputs);
     let spec =
         trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
     let spec = type_check(spec).expect("Type check failed");
@@ -140,7 +140,7 @@ async fn monitor_outputs_typed_queuing(num_outputs: usize) {
         _,
         trustworthiness_checker::TypedUntimedLolaSemantics,
         _,
-    >::new(spec, input_streams);
+    >::new(spec, &mut input_streams);
     let _outputs: Vec<BTreeMap<VarName, _>> = async_monitor
         .monitor_outputs()
         // .take(num_outputs)

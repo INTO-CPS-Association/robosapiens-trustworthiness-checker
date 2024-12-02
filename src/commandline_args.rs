@@ -1,4 +1,4 @@
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, ValueEnum};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Language {
@@ -19,10 +19,27 @@ pub enum Runtime {
     Constraints,
 }
 
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+pub struct InputMode {
+    #[clap(long)]
+    pub input_file: Option<String>,
+
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    pub input_mqtt_topics: Option<Vec<String>>,
+
+    // #[cfg(feature = "ros")]
+    #[clap(long)]
+    pub input_ros_topics: Option<String>,
+}
+
 #[derive(Parser)]
 pub struct Cli {
     pub model: String,
-    pub input_file: String,
+
+    // The mode of input to use
+    #[command(flatten)]
+    pub input_mode: InputMode,
 
     #[arg(long)]
     pub language: Option<Language>,

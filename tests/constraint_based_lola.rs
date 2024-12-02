@@ -4,17 +4,15 @@ use futures::stream::StreamExt;
 use std::collections::BTreeMap;
 use trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor;
 use trustworthiness_checker::lola_specification;
-use trustworthiness_checker::{
-    Value, Monitor, VarName,
-};
+use trustworthiness_checker::{Monitor, Value, VarName};
 mod lola_fixtures;
 use lola_fixtures::*;
 
 #[tokio::test]
 async fn test_simple_add_monitor() {
-    let input_streams = input_streams1();
+    let mut input_streams = input_streams1();
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
-    let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
+    let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
         monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
@@ -39,9 +37,9 @@ async fn test_simple_add_monitor() {
 #[ignore = "currently we can't handle recursive constraints in the solver as need a way to handle the inner indexes"]
 #[tokio::test]
 async fn test_count_monitor() {
-    let input_streams = input_streams1();
+    let mut input_streams = input_streams1();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();
-    let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
+    let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = monitor
         .monitor_outputs()
         .take(5)
@@ -88,14 +86,11 @@ async fn test_count_monitor() {
 #[ignore = "currently we can't handle recursive constraints in the solver as need a way to handle the inner indexes"]
 #[tokio::test]
 async fn test_eval_monitor() {
-    let input_streams = input_streams2();
+    let mut input_streams = input_streams2();
     let spec = lola_specification(&mut spec_eval_monitor()).unwrap();
-    let mut monitor = ConstraintBasedMonitor::new(spec, input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = monitor
-        .monitor_outputs()
-        .enumerate()
-        .collect()
-        .await;
+    let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+        monitor.monitor_outputs().enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![

@@ -4,8 +4,10 @@ use std::{
 };
 
 use futures::stream::BoxStream;
+use serde::{Deserialize, Serialize};
+// use serde_json::{Deserializer, Sserializer};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Value {
     Int(i64),
     Str(String),
@@ -178,9 +180,13 @@ pub trait Specification<Expr> {
 /*
  * A runtime monitor for a model/specification of type M over streams with
  * values of type V.
+ *
+ * The input provider is provided as an Arc<Mutex<dyn InputProvider<V>>> to allow a dynamic
+ * type of input provider to be provided and allows the output
+ * to borrow from the input provider without worrying about lifetimes.
  */
 pub trait Monitor<M, V> {
-    fn new(model: M, input: impl InputProvider<V>) -> Self;
+    fn new(model: M, input: &mut dyn InputProvider<V>) -> Self;
 
     fn spec(&self) -> &M;
 

@@ -8,11 +8,11 @@ use std::mem;
 
 use crate::ast::LOLASpecification;
 use crate::constraint_solver::*;
-use crate::core::Value;
 use crate::core::IndexedVarName;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::Specification;
+use crate::core::Value;
 use crate::core::VarName;
 use crate::OutputStream;
 
@@ -77,7 +77,7 @@ pub struct ConstraintBasedMonitor {
 }
 
 impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
-    fn new(model: LOLASpecification, mut input: impl InputProvider<Value>) -> Self {
+    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>) -> Self {
         let input_streams = model
             .input_vars()
             .iter()

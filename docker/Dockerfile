@@ -9,7 +9,7 @@ SHELL ["/bin/bash", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git libcanberra-gtk-module libcanberra-gtk3-module fuse3 libfuse2 libqt5svg5-dev \
     python3-pip python3-opencv python3-tk python3-pyqt5.qtwebengine mesa-utils \
-    tmux ros-dev-tools gdb gdbserver vim zsh clang curl
+    tmux ros-dev-tools gdb gdbserver vim zsh clang curl libssl-dev
 
 COPY docker/setup.bash /opt/setup.bash
 COPY docker/entrypoint.sh /opt/entrypoint.sh

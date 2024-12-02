@@ -437,7 +437,7 @@ where
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr>,
 {
-    fn new(model: M, mut input_streams: impl InputProvider<Val>) -> Self {
+    fn new(model: M, input_streams: &mut dyn InputProvider<Val>) -> Self {
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
 

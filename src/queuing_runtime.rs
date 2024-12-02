@@ -168,11 +168,17 @@ impl<Val: StreamData> StreamContext<Val> for Arc<QueuingVarContext<Val>> {
         let production_lock = self.production_locks.get(var)?.clone();
         // Check if it is an input stream. In that case it has exists (has arrived).
         // Otherwise, it must be an output stream that either already exists (has arrived) or is waiting.
-        let stream = self.input_streams.get(var)
+        let stream = self
+            .input_streams
+            .get(var)
             .cloned()
             .map(WaitingStream::Arrived)
             .or_else(|| self.output_streams.get(var).cloned())?;
-        Some(queue_buffered_stream(queue.clone(), stream, production_lock))
+        Some(queue_buffered_stream(
+            queue.clone(),
+            stream,
+            production_lock,
+        ))
     }
 
     fn advance(&self) {
@@ -192,7 +198,7 @@ struct SubMonitor<Val: StreamData> {
     parent: Arc<QueuingVarContext<Val>>,
     #[allow(dead_code)]
     // Note that buffer_size is not used in this runtime -- it is unrestricted
-    buffer_size: usize, 
+    buffer_size: usize,
     index: Arc<StdMutex<usize>>,
 }
 
@@ -230,11 +236,11 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
 
 /*
  * A Monitor instance implementing the Queuing Runtime.
- * 
+ *
  * This runtime uses a queue-based approach to track the history of each
  * variable (based on the QueuingVarContext var_exchange) and provide the
  * history as asynchronous streams to the monitoring semantics.
- * 
+ *
  * - The Expr type parameter is the type of the expressions in the model.
  * - The Val type parameter is the type of the values used in the channels.
  * - The S type parameter is the monitoring semantics used to evaluate the
@@ -254,9 +260,9 @@ where
 }
 
 impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
-Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
+    Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
 {
-    fn new(model: M, mut input_streams: impl InputProvider<Val>) -> Self {
+    fn new(model: M, input_streams: &mut dyn InputProvider<Val>) -> Self {
         let var_names: Vec<VarName> = model
             .input_vars()
             .into_iter()
@@ -267,7 +273,7 @@ Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
             .input_vars()
             .iter()
             .map(|var| {
-                let stream = (&mut input_streams).input_stream(var);
+                let stream = input_streams.input_stream(var);
                 (var.clone(), Arc::new(Mutex::new(stream.unwrap())))
             })
             .collect::<BTreeMap<_, _>>();
@@ -336,16 +342,16 @@ Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
                 }
                 Some((res, (output_streams, outputs)))
                     as Option<(
-                    BTreeMap<VarName, Val>,
-                    (Vec<OutputStream<Val>>, Vec<VarName>),
-                )>
+                        BTreeMap<VarName, Val>,
+                        (Vec<OutputStream<Val>>, Vec<VarName>),
+                    )>
             },
         ))
     }
 }
 
 impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
-QueuingMonitorRunner<Expr, Val, S, M>
+    QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn output_stream(&self, var: VarName) -> OutputStream<Val> {
         self.var_exchange.var(&var).unwrap()

@@ -22,8 +22,11 @@ async-stream = "0.3.6"
 r2r = { version = "0.9.3", optional=true }
 thiserror = "2.0.3"
 justerror = "1.1.0"
-serde = "1.0.215"
+serde = {version = "1.0.215", features = ["derive"]}
 serde_json = "1.0.133"
+# mqtt client
+# Disable the default dependency on SSL to avoid a build dependency on OpenSSL
+paho-mqtt = {version = "0.12.5", features=["bundled"]}
 
 [features]
 ros = ["dep:r2r"]
@@ -34,7 +37,3 @@ criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
 [[bench]]
 name = "simple_add"
 harness = false
-
-[[bin]]
-name = "ros_monitor"
-required-features=["ros"]
