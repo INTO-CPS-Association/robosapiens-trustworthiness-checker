@@ -33,6 +33,16 @@ pub fn model_constraints(model: LOLASpecification) -> SExprConstraintStore<VarNa
     constraints
 }
 
+pub fn model_constraints2(model: LOLASpecification) -> SExprConstraintStore<IndexedVarName> {
+    let mut constraints = SExprConstraintStore::default();
+    for (var, sexpr) in model.exprs.iter() {
+        constraints
+            .output_exprs
+            .insert(VarName(var.0.clone()), sexpr.clone());
+    }
+    constraints
+}
+
 impl<VarT: Debug> Default for SExprConstraintStore<VarT> {
     fn default() -> Self {
         SExprConstraintStore {
@@ -540,7 +550,7 @@ pub trait Simplifiable {
     fn simplify(
         &self,
         base_time: usize,
-        store: &SExprConstraintStore<VarName>,
+        store: &SExprConstraintStore<IndexedVarName>,
     ) -> SimplifyResult<Box<Self>>;
 }
 
@@ -549,7 +559,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
     fn simplify(
         &self,
         base_time: usize,
-        store: &SExprConstraintStore<VarName>,
+        store: &SExprConstraintStore<IndexedVarName>,
     ) -> SimplifyResult<Box<Self>> {
         match self {
             SExpr::Val(i) => Resolved(i.clone()),
@@ -608,7 +618,7 @@ impl Simplifiable for SExpr<VarName> {
     fn simplify(
         &self,
         base_time: usize,
-        store: &SExprConstraintStore<VarName>,
+        store: &SExprConstraintStore<IndexedVarName>,
     ) -> SimplifyResult<Box<Self>> {
         // Implement function
         match self {

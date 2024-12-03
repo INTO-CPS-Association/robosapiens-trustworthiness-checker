@@ -76,50 +76,30 @@ fn constraints_to_outputs<'a>(
         res
     }))
 }
+fn constraints_to_outputs2<'a>(
+    constraints: BoxStream<'a, SExprConstraintStore<IndexedVarName>>,
+    output_vars: Vec<VarName>,
+) -> BoxStream<'a, BTreeMap<VarName, Value>> {
+    Box::pin(constraints.enumerate().map(move |(index, cs)| {
+        let mut res = BTreeMap::new();
 
-pub struct ConstraintBasedMonitor {
-    store: SExprConstraintStore<VarName>,
-    time: usize,
-    input_streams: ValStreamCollection,
-    model: LOLASpecification,
-}
-
-impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
-    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>) -> Self {
-        let input_streams = model
-            .input_vars()
-            .iter()
-            .map(move |var| {
-                let stream = input.input_stream(var);
-                (var.clone(), stream.unwrap())
-            })
-            .collect::<BTreeMap<_, _>>();
-        let input_streams = ValStreamCollection(input_streams);
-        let store = SExprConstraintStore::default();
-        let time = 0;
-
-        ConstraintBasedMonitor {
-            store,
-            time,
-            input_streams,
-            model,
+        for var in &output_vars {
+            if let Some(val) = cs.get_from_outputs_resolved(&var, &index) {
+                res.insert(var.clone(), val.clone());
+            }
         }
-    }
-
-    fn spec(&self) -> &LOLASpecification {
-        &self.model
-    }
-
-    fn monitor_outputs(&mut self) -> OutputStream<BTreeMap<VarName, Value>> {
-        constraints_to_outputs(
-            self.stream_output_constraints(),
-            self.model.output_vars.clone(),
-        )
-    }
+        res
+    }))
 }
 
-impl ConstraintBasedMonitor {
-    fn receive_inputs(&mut self, inputs: &BTreeMap<VarName, Value>) {
+#[derive(Debug, Default)]
+pub struct ConstraintBasedRuntime {
+    store: SExprConstraintStore<IndexedVarName>,
+    time: usize,
+}
+
+impl ConstraintBasedRuntime {
+fn receive_inputs(&mut self, inputs: &BTreeMap<VarName, Value>) {
         // Add new input values
         for (name, val) in inputs {
             self.store
@@ -199,6 +179,67 @@ impl ConstraintBasedMonitor {
         self.receive_inputs(inputs);
         self.resolve_possible();
         self.time += 1;
+    }
+
+}
+
+pub struct ConstraintBasedMonitor {
+    input_streams: ValStreamCollection,
+    model: LOLASpecification,
+}
+
+impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
+    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>) -> Self {
+        let input_streams = model
+            .input_vars()
+            .iter()
+            .map(move |var| {
+                let stream = input.input_stream(var);
+                (var.clone(), stream.unwrap())
+            })
+            .collect::<BTreeMap<_, _>>();
+        let input_streams = ValStreamCollection(input_streams);
+
+        ConstraintBasedMonitor {
+            input_streams,
+            model,
+        }
+    }
+
+    fn spec(&self) -> &LOLASpecification {
+        &self.model
+    }
+
+    fn monitor_outputs(&mut self) -> OutputStream<BTreeMap<VarName, Value>> {
+        constraints_to_outputs2(
+            self.do_stuff(),
+            self.model.output_vars.clone(),
+        )
+    }
+}
+
+impl ConstraintBasedMonitor {
+    fn do_stuff(
+        &mut self,
+    ) -> BoxStream<'static, SExprConstraintStore<IndexedVarName>> {
+        let inputs_initial = self.inputs_into_constraints();
+        let mut runtime_initial = ConstraintBasedRuntime::default();
+        runtime_initial.store = model_constraints2(self.model.clone());
+        Box::pin(stream::unfold(
+            ( inputs_initial, runtime_initial),
+            |(mut inputs, mut runtime)| async move {
+                // Add the new contraints to the constraint store
+                let tmp_store = inputs.next().await?;
+                let new_inputs = tmp_store.resolved.iter().map(|(k, v)| {
+                    let name = VarName(k.0.clone());
+                    (name, v.clone())
+                }).collect::<BTreeMap<VarName, Value>>();
+                runtime.step(&new_inputs);
+
+                // Keep unfolding
+                Some((runtime.store.clone(), ( inputs, runtime)))
+            },
+        ))
     }
 
     fn inputs_into_constraints(
