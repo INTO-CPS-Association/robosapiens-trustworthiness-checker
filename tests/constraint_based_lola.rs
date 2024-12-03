@@ -1,13 +1,30 @@
 // Test untimed monitoring of LOLA specifications with the async runtime
 
 use futures::stream::StreamExt;
-use trustworthiness_checker::constraint_solver::ConstraintStore;
 use std::collections::BTreeMap;
 use trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor;
 use trustworthiness_checker::lola_specification;
 use trustworthiness_checker::{Monitor, Value, VarName};
 mod lola_fixtures;
 use lola_fixtures::*;
+use futures::stream;
+use futures::stream::BoxStream;
+use std::pin::Pin;
+
+pub fn input_streams1() -> BTreeMap<VarName, BoxStream<'static, Value>> {
+    let mut input_streams = BTreeMap::new();
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3), Value::Int(5)].into_iter()))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+    input_streams.insert(
+        VarName("y".into()),
+        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4), Value::Int(6)].into_iter()))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+    input_streams
+}
 
 #[tokio::test]
 async fn test_simple_add_monitor() {
@@ -31,21 +48,14 @@ async fn test_simple_add_monitor() {
                     .into_iter()
                     .collect(),
             ),
+            (
+                2,
+                vec![(VarName("z".into()), Value::Int(11))]
+                    .into_iter()
+                    .collect(),
+            ),
         ]
     );
-}
-
-fn env_len_assertions(env: &ConstraintStore, i_len: usize, r_len: usize, u_len: usize) {
-    fn nested_map_len<T1, T2>(map: &BTreeMap<T1, Vec<T2>>) -> usize {
-        let mut s = 0;
-        for (_, inner) in map {
-            s += inner.len();
-        }
-        s
-    }
-    assert_eq!(nested_map_len(&env.input_streams), i_len);
-    assert_eq!(nested_map_len(&env.outputs_resolved), r_len);
-    assert_eq!(nested_map_len(&env.outputs_unresolved), u_len);
 }
 
 #[ignore = "Cannot have empty spec or inputs"]
@@ -65,7 +75,7 @@ async fn test_var() {
     let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
     monitor.monitor_outputs().enumerate().collect().await;
-    assert!(outputs.len() == 2);
+    assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
@@ -78,6 +88,12 @@ async fn test_var() {
             (
                 1,
                 vec![(VarName("z".into()), Value::Int(3))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                2,
+                vec![(VarName("z".into()), Value::Int(5))]
                     .into_iter()
                     .collect(),
             ),
@@ -94,7 +110,7 @@ async fn test_literal_expression() {
     let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
     monitor.monitor_outputs().enumerate().collect().await;
-    assert!(outputs.len() == 2);
+    assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
@@ -106,6 +122,12 @@ async fn test_literal_expression() {
             ),
             (
                 1,
+                vec![(VarName("z".into()), Value::Int(42))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                2,
                 vec![(VarName("z".into()), Value::Int(42))]
                     .into_iter()
                     .collect(),
@@ -122,7 +144,7 @@ async fn test_addition() {
     let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
     monitor.monitor_outputs().enumerate().collect().await;
-    assert!(outputs.len() == 2);
+    assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
@@ -138,6 +160,12 @@ async fn test_addition() {
                     .into_iter()
                     .collect(),
             ),
+            (
+                2,
+                vec![(VarName("z".into()), Value::Int(6))]
+                    .into_iter()
+                    .collect(),
+            ),
         ]
     );
 }
@@ -150,7 +178,7 @@ async fn test_subtraction() {
     let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
     monitor.monitor_outputs().enumerate().collect().await;
-    assert!(outputs.len() == 2);
+    assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
@@ -166,6 +194,12 @@ async fn test_subtraction() {
                     .into_iter()
                     .collect(),
             ),
+            (
+                2,
+                vec![(VarName("z".into()), Value::Int(-5))]
+                    .into_iter()
+                    .collect(),
+            ),
         ]
     );
 }
@@ -178,7 +212,7 @@ async fn test_index_past() {
     let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
     monitor.monitor_outputs().enumerate().collect().await;
-    assert!(outputs.len() == 2);
+    assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
@@ -196,8 +230,36 @@ async fn test_index_past() {
                     .into_iter()
                     .collect(),
             ),
+            (
+                // Resolving to previous value on second step
+                2,
+                vec![(VarName("z".into()), Value::Int(3))]
+                    .into_iter()
+                    .collect(),
+            ),
         ]
     );
 }
 
 
+// #[tokio::test]
+// async fn test_index_future() {
+//     let mut input_streams = input_streams1();
+//     let mut spec = "in x\nout z\nz =x[1, 0]";
+//     let spec = lola_specification(&mut spec).unwrap();
+//     let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
+//     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+//     monitor.monitor_outputs().enumerate().collect().await;
+//     // assert!(outputs.len() == 1);
+//     assert_eq!(
+//         outputs,
+//         vec![
+//             (
+//                 0,
+//                 vec![(VarName("z".into()), Value::Int(1))]
+//                     .into_iter()
+//                     .collect(),
+//             ),
+//         ]
+//     );
+// }
