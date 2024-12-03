@@ -8,7 +8,6 @@ use std::mem;
 
 use crate::ast::LOLASpecification;
 use crate::constraint_solver::*;
-use crate::core::IndexedVarName;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::Specification;
@@ -42,31 +41,12 @@ impl ValStreamCollection {
     }
 }
 
-fn inputs_to_constraints<'a>(
-    inputs: BoxStream<'a, BTreeMap<VarName, Value>>,
-) -> BoxStream<'a, SExprConstraintStore<IndexedVarName>> {
-    Box::pin(inputs.enumerate().map(|(i, input)| {
-        SExprConstraintStore {
-            resolved: input
-                .iter()
-                .map(|(k, v)| (k.clone().to_indexed(i), (*v).clone()))
-                .collect(),
-            unresolved: Vec::new(),
-            input_streams: BTreeMap::new(),
-            output_exprs: BTreeMap::new(),
-            outputs_resolved: BTreeMap::new(),
-            outputs_unresolved: BTreeMap::new(),
-        }
-    }))
-}
-
 fn constraints_to_outputs<'a>(
-    constraints: BoxStream<'a, SExprConstraintStore<IndexedVarName>>,
+    constraints: BoxStream<'a, SExprConstraintStore>,
     output_vars: Vec<VarName>,
 ) -> BoxStream<'a, BTreeMap<VarName, Value>> {
     Box::pin(constraints.enumerate().map(move |(index, cs)| {
         let mut res = BTreeMap::new();
-
         for var in &output_vars {
             if let Some(val) = cs.get_from_outputs_resolved(&var, &index) {
                 res.insert(var.clone(), val.clone());
@@ -78,7 +58,7 @@ fn constraints_to_outputs<'a>(
 
 #[derive(Debug, Default)]
 pub struct SyncConstraintBasedRuntime {
-    store: SExprConstraintStore<IndexedVarName>,
+    store: SExprConstraintStore,
     time: usize,
 }
 
@@ -130,6 +110,7 @@ impl SyncConstraintBasedRuntime {
     }
 
     fn resolve_possible(&mut self) {
+        // Fixed point iteration to resolve as many expressions as possible
         let mut changed = true;
         while changed {
             changed = false;
@@ -205,19 +186,15 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 impl ConstraintBasedMonitor {
     fn stream_output_constraints(
         &mut self,
-    ) -> BoxStream<'static, SExprConstraintStore<IndexedVarName>> {
-        let inputs_initial = self.inputs_into_constraints();
+    ) -> BoxStream<'static, SExprConstraintStore> {
+        let inputs_initial = mem::take(&mut self.input_streams).into_stream();
         let mut runtime_initial = SyncConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
         Box::pin(stream::unfold(
             ( inputs_initial, runtime_initial),
             |(mut inputs, mut runtime)| async move {
                 // Add the new contraints to the constraint store
-                let tmp_store = inputs.next().await?;
-                let new_inputs = tmp_store.resolved.iter().map(|(k, v)| {
-                    let name = VarName(k.0.clone());
-                    (name, v.clone())
-                }).collect::<BTreeMap<VarName, Value>>();
+                let new_inputs= inputs.next().await?;
                 runtime.step(&new_inputs);
 
                 // Keep unfolding
@@ -225,12 +202,4 @@ impl ConstraintBasedMonitor {
             },
         ))
     }
-
-    fn inputs_into_constraints(
-        &mut self,
-    ) -> BoxStream<'static, SExprConstraintStore<IndexedVarName>> {
-        let input_streams = mem::take(&mut self.input_streams);
-        inputs_to_constraints(input_streams.into_stream())
-    }
-
 }

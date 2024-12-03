@@ -13,17 +13,16 @@ pub type Stream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
 pub type ValStream = Stream<Value>;
 pub type SExprStream = Stream<SExpr<IndexedVarName>>;
 
-#[derive(Debug)]
-pub struct SExprConstraintStore<VarT: Debug> {
+#[derive(Debug, Clone)]
+pub struct SExprConstraintStore {
     pub input_streams: ValStream,
     pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
-    pub resolved: Vec<SExprConstraintSolved<VarT>>,
-    pub unresolved: Vec<SExprConstraint<VarT>>,
+    pub resolved: Vec<SExprConstraintSolved<IndexedVarName>>,
 }
 
-pub fn model_constraints(model: LOLASpecification) -> SExprConstraintStore<IndexedVarName> {
+pub fn model_constraints(model: LOLASpecification) -> SExprConstraintStore {
     let mut constraints = SExprConstraintStore::default();
     for (var, sexpr) in model.exprs.iter() {
         constraints
@@ -33,7 +32,7 @@ pub fn model_constraints(model: LOLASpecification) -> SExprConstraintStore<Index
     constraints
 }
 
-impl<VarT: Debug> Default for SExprConstraintStore<VarT> {
+impl Default for SExprConstraintStore {
     fn default() -> Self {
         SExprConstraintStore {
             input_streams: BTreeMap::new(),
@@ -41,12 +40,11 @@ impl<VarT: Debug> Default for SExprConstraintStore<VarT> {
             outputs_resolved: BTreeMap::new(),
             outputs_unresolved: BTreeMap::new(),
             resolved: Vec::new(),
-            unresolved: Vec::new(),
         }
     }
 }
 
-impl<VarT: Debug> SExprConstraintStore<VarT> {
+impl SExprConstraintStore {
     // Looks up the variable name inside the map. Returns the value at the given index if the var and value exists.
     pub fn get_value_from_stream<'a, T: Clone>(
         name: &VarName,
@@ -78,7 +76,7 @@ impl<VarT: Debug> SExprConstraintStore<VarT> {
     }
 }
 
-impl<VarT: Eq + Debug> PartialEq for SExprConstraintStore<VarT> {
+impl PartialEq for SExprConstraintStore {
     fn eq(&self, other: &Self) -> bool {
         self.input_streams == other.input_streams
             && self.outputs_resolved == other.outputs_resolved
@@ -86,20 +84,7 @@ impl<VarT: Eq + Debug> PartialEq for SExprConstraintStore<VarT> {
             && self.output_exprs == other.output_exprs
     }
 }
-impl<VarT: Eq + Debug> Eq for SExprConstraintStore<VarT> {}
-
-impl<VarT: Clone + Debug> Clone for SExprConstraintStore<VarT> {
-    fn clone(&self) -> Self {
-        SExprConstraintStore {
-            resolved: self.resolved.clone(),
-            unresolved: self.unresolved.clone(),
-            input_streams: self.input_streams.clone(),
-            output_exprs: self.output_exprs.clone(),
-            outputs_resolved: self.outputs_resolved.clone(),
-            outputs_unresolved: self.outputs_unresolved.clone(),
-        }
-    }
-}
+impl Eq for SExprConstraintStore {}
 
 pub enum SimplifyResult<T> {
     Resolved(Value),
@@ -186,11 +171,8 @@ impl ConvertToAbsolute for SExpr<VarName> {
 }
 
 pub trait Simplifiable {
-    fn simplify(
-        &self,
-        base_time: usize,
-        store: &SExprConstraintStore<IndexedVarName>,
-    ) -> SimplifyResult<Box<Self>>;
+    fn simplify(&self, base_time: usize, store: &SExprConstraintStore)
+        -> SimplifyResult<Box<Self>>;
 }
 
 // SExprA
@@ -198,7 +180,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
     fn simplify(
         &self,
         base_time: usize,
-        store: &SExprConstraintStore<IndexedVarName>,
+        store: &SExprConstraintStore,
     ) -> SimplifyResult<Box<Self>> {
         match self {
             SExpr::Val(i) => Resolved(i.clone()),
@@ -257,7 +239,7 @@ impl Simplifiable for SExpr<VarName> {
     fn simplify(
         &self,
         base_time: usize,
-        store: &SExprConstraintStore<IndexedVarName>,
+        store: &SExprConstraintStore,
     ) -> SimplifyResult<Box<Self>> {
         // Implement function
         match self {
