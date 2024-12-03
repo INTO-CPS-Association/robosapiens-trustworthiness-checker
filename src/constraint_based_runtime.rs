@@ -14,7 +14,9 @@ use crate::core::Monitor;
 use crate::core::Specification;
 use crate::core::Value;
 use crate::core::VarName;
+use crate::ast::SExpr;
 use crate::OutputStream;
+use crate::is_enum_variant;
 
 #[derive(Default)]
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);
@@ -50,6 +52,10 @@ fn inputs_to_constraints<'a>(
                 .map(|(k, v)| (k.clone().to_indexed(i), (*v).clone()))
                 .collect(),
             unresolved: Vec::new(),
+            input_streams: BTreeMap::new(),
+            output_exprs: BTreeMap::new(),
+            outputs_resolved: BTreeMap::new(),
+            outputs_unresolved: BTreeMap::new(),
         }
     }))
 }
@@ -72,6 +78,8 @@ fn constraints_to_outputs<'a>(
 }
 
 pub struct ConstraintBasedMonitor {
+    store: SExprConstraintStore<VarName>,
+    time: usize,
     input_streams: ValStreamCollection,
     model: LOLASpecification,
 }
@@ -87,8 +95,12 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
             })
             .collect::<BTreeMap<_, _>>();
         let input_streams = ValStreamCollection(input_streams);
+        let store = SExprConstraintStore::default();
+        let time = 0;
 
         ConstraintBasedMonitor {
+            store,
+            time,
             input_streams,
             model,
         }
@@ -107,6 +119,88 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 }
 
 impl ConstraintBasedMonitor {
+    fn receive_inputs(&mut self, inputs: &BTreeMap<VarName, Value>) {
+        // Add new input values
+        for (name, val) in inputs {
+            self.store
+                .input_streams
+                .entry(name.clone())
+                .or_insert(Vec::new())
+                .push((self.time, val.clone()));
+        }
+
+        // Try to simplify the expressions in-place
+        // NOTE: This is a naive implementation that doesn't implement it 100 % correctly
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let mut new_exprs = BTreeMap::new();
+            // Note: Intentionally does not borrow outputs_exprs here as it is needed for expr.simplify
+            for (name, expr) in &self.store.output_exprs {
+                if is_enum_variant!(expr, SExpr::<VarName>::Val(_)) {
+                    new_exprs.insert(name.clone(), expr.clone());
+                    continue;
+                }
+
+                match expr.simplify(self.time, &self.store) {
+                    SimplifyResult::Resolved(v) => {
+                        changed = true;
+                        new_exprs.insert(name.clone(), SExpr::Val(v));
+                    }
+                    SimplifyResult::Unresolved(e) => {
+                        new_exprs.insert(name.clone(), *e);
+                    }
+                }
+            }
+            self.store.output_exprs = new_exprs;
+        }
+
+        // Add unresolved version with absolute time of each output_expr
+        for (name, expr) in &self.store.output_exprs {
+            self.store
+                .outputs_unresolved
+                .entry(name.clone())
+                .or_insert(Vec::new())
+                .push((self.time, expr.to_absolute(self.time)));
+        }
+    }
+
+    fn resolve_possible(&mut self) {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let mut new_unresolved: SExprStream = BTreeMap::new();
+            // Note: Intentionally does not borrow outputs_unresolved here as it is needed for expr.simplify
+            for (name, map) in &self.store.outputs_unresolved {
+                for (idx_time, expr) in map {
+                    match expr.simplify(self.time, &self.store) {
+                        SimplifyResult::Resolved(v) => {
+                            changed = true;
+                            self.store
+                                .outputs_resolved
+                                .entry(name.clone())
+                                .or_insert(Vec::new())
+                                .push((*idx_time, v.clone()));
+                        }
+                        SimplifyResult::Unresolved(e) => {
+                            new_unresolved
+                                .entry(name.clone())
+                                .or_insert(Vec::new())
+                                .push((*idx_time, *e));
+                        }
+                    }
+                }
+            }
+            self.store.outputs_unresolved = new_unresolved;
+        }
+    }
+
+    pub fn step(&mut self, inputs: &BTreeMap<VarName, Value>) {
+        self.receive_inputs(inputs);
+        self.resolve_possible();
+        self.time += 1;
+    }
+
     fn inputs_into_constraints(
         &mut self,
     ) -> BoxStream<'static, SExprConstraintStore<IndexedVarName>> {

@@ -33,3 +33,4 @@ pub mod ros_topic_stream_mapping;
 pub mod stream_utils;
 pub mod typed_monitoring_combinators;
 pub mod typed_monitoring_semantics;
+pub mod macros;
