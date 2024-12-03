@@ -5,25 +5,21 @@ use crate::ast::*;
 use crate::core::Value;
 use crate::core::{IndexedVarName, VarName};
 
-pub type SExprConstraint<VarT> = (VarT, SExpr<VarT>);
-pub type SExprConstraintSolved<VarT> = (VarT, Value);
-
-// TODO: Replace Stream with IndexedVarName
-pub type Stream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
-pub type ValStream = Stream<Value>;
-pub type SExprStream = Stream<SExpr<IndexedVarName>>;
+pub type SyncStream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
+pub type ValStream = SyncStream<Value>;
+pub type SExprStream = SyncStream<SExpr<IndexedVarName>>;
 
 #[derive(Debug, Clone)]
-pub struct SExprConstraintStore {
+// A ConstraintStore is the environment for the streams
+pub struct ConstraintStore {
     pub input_streams: ValStream,
     pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
-    pub resolved: Vec<SExprConstraintSolved<IndexedVarName>>,
 }
 
-pub fn model_constraints(model: LOLASpecification) -> SExprConstraintStore {
-    let mut constraints = SExprConstraintStore::default();
+pub fn model_constraints(model: LOLASpecification) -> ConstraintStore {
+    let mut constraints = ConstraintStore::default();
     for (var, sexpr) in model.exprs.iter() {
         constraints
             .output_exprs
@@ -32,19 +28,18 @@ pub fn model_constraints(model: LOLASpecification) -> SExprConstraintStore {
     constraints
 }
 
-impl Default for SExprConstraintStore {
+impl Default for ConstraintStore {
     fn default() -> Self {
-        SExprConstraintStore {
+        ConstraintStore {
             input_streams: BTreeMap::new(),
             output_exprs: BTreeMap::new(),
             outputs_resolved: BTreeMap::new(),
             outputs_unresolved: BTreeMap::new(),
-            resolved: Vec::new(),
         }
     }
 }
 
-impl SExprConstraintStore {
+impl ConstraintStore {
     // Looks up the variable name inside the map. Returns the value at the given index if the var and value exists.
     pub fn get_value_from_stream<'a, T: Clone>(
         name: &VarName,
@@ -76,7 +71,7 @@ impl SExprConstraintStore {
     }
 }
 
-impl PartialEq for SExprConstraintStore {
+impl PartialEq for ConstraintStore {
     fn eq(&self, other: &Self) -> bool {
         self.input_streams == other.input_streams
             && self.outputs_resolved == other.outputs_resolved
@@ -84,7 +79,7 @@ impl PartialEq for SExprConstraintStore {
             && self.output_exprs == other.output_exprs
     }
 }
-impl Eq for SExprConstraintStore {}
+impl Eq for ConstraintStore {}
 
 pub enum SimplifyResult<T> {
     Resolved(Value),
@@ -171,17 +166,12 @@ impl ConvertToAbsolute for SExpr<VarName> {
 }
 
 pub trait Simplifiable {
-    fn simplify(&self, base_time: usize, store: &SExprConstraintStore)
-        -> SimplifyResult<Box<Self>>;
+    fn simplify(&self, base_time: usize, store: &ConstraintStore) -> SimplifyResult<Box<Self>>;
 }
 
 // SExprA
 impl Simplifiable for SExpr<IndexedVarName> {
-    fn simplify(
-        &self,
-        base_time: usize,
-        store: &SExprConstraintStore,
-    ) -> SimplifyResult<Box<Self>> {
+    fn simplify(&self, base_time: usize, store: &ConstraintStore) -> SimplifyResult<Box<Self>> {
         match self {
             SExpr::Val(i) => Resolved(i.clone()),
             SExpr::BinOp(e1, e2, op) => {
@@ -236,11 +226,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
 }
 
 impl Simplifiable for SExpr<VarName> {
-    fn simplify(
-        &self,
-        base_time: usize,
-        store: &SExprConstraintStore,
-    ) -> SimplifyResult<Box<Self>> {
+    fn simplify(&self, base_time: usize, store: &ConstraintStore) -> SimplifyResult<Box<Self>> {
         // Implement function
         match self {
             SExpr::Val(i) => Resolved(i.clone()),

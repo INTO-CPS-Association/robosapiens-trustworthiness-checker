@@ -42,23 +42,25 @@ impl ValStreamCollection {
 }
 
 fn constraints_to_outputs<'a>(
-    constraints: BoxStream<'a, SExprConstraintStore>,
+    constraints: BoxStream<'a, ConstraintStore>,
     output_vars: Vec<VarName>,
 ) -> BoxStream<'a, BTreeMap<VarName, Value>> {
-    Box::pin(constraints.enumerate().map(move |(index, cs)| {
-        let mut res = BTreeMap::new();
-        for var in &output_vars {
-            if let Some(val) = cs.get_from_outputs_resolved(&var, &index) {
-                res.insert(var.clone(), val.clone());
+    Box::pin(
+        constraints.enumerate().map(move |(index, cs)| {
+            let mut res = BTreeMap::new();
+            for var in &output_vars {
+                if let Some(val) = cs.get_from_outputs_resolved(&var, &index) {
+                    res.insert(var.clone(), val.clone());
+                }
             }
-        }
-        res
-    }))
+            res
+        })
+    )
 }
 
 #[derive(Debug, Default)]
 pub struct SyncConstraintBasedRuntime {
-    store: SExprConstraintStore,
+    store: ConstraintStore,
     time: usize,
 }
 
@@ -73,8 +75,7 @@ impl SyncConstraintBasedRuntime {
                 .push((self.time, val.clone()));
         }
 
-        // Try to simplify the expressions in-place
-        // NOTE: This is a naive implementation that doesn't implement it 100 % correctly
+        // Try to simplify the expressions in-place with fixed-point iteration
         let mut changed = true;
         while changed {
             changed = false;
@@ -186,19 +187,19 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 impl ConstraintBasedMonitor {
     fn stream_output_constraints(
         &mut self,
-    ) -> BoxStream<'static, SExprConstraintStore> {
-        let inputs_initial = mem::take(&mut self.input_streams).into_stream();
+    ) -> BoxStream<'static, ConstraintStore> {
+        let inputs_stream = mem::take(&mut self.input_streams).into_stream();
         let mut runtime_initial = SyncConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
         Box::pin(stream::unfold(
-            ( inputs_initial, runtime_initial),
-            |(mut inputs, mut runtime)| async move {
+            (inputs_stream, runtime_initial),
+            |(mut inputs_stream, mut runtime)| async move {
                 // Add the new contraints to the constraint store
-                let new_inputs= inputs.next().await?;
+                let new_inputs= inputs_stream.next().await?;
                 runtime.step(&new_inputs);
 
                 // Keep unfolding
-                Some((runtime.store.clone(), ( inputs, runtime)))
+                Some((runtime.store.clone(), (inputs_stream, runtime)))
             },
         ))
     }
