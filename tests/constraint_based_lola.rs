@@ -103,13 +103,12 @@ async fn test_var() {
 
 #[tokio::test]
 async fn test_literal_expression() {
-    // NOTE: This test makes less sense with async RV
     let mut input_streams = input_streams1();
-    let mut spec = "in x\nout z\nz =42+x-x";
+    let mut spec = "out z\nz =42";
     let spec = lola_specification(&mut spec).unwrap();
     let mut monitor = ConstraintBasedMonitor::new(spec, &mut input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-    monitor.monitor_outputs().enumerate().collect().await;
+    let outputs : Vec<(usize, BTreeMap<VarName, Value>)>
+        = monitor.monitor_outputs().take(3).enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
