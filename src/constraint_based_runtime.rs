@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
@@ -7,14 +8,14 @@ use std::iter::zip;
 use std::mem;
 
 use crate::ast::LOLASpecification;
+use crate::ast::SExpr;
 use crate::constraint_solver::*;
 use crate::core::InputProvider;
 use crate::core::Monitor;
+use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::Value;
 use crate::core::VarName;
-use crate::ast::SExpr;
-use crate::OutputStream;
 use crate::is_enum_variant;
 
 #[derive(Default)]
@@ -41,21 +42,19 @@ impl ValStreamCollection {
     }
 }
 
-fn constraints_to_outputs<'a>(
+/* Get a stream of the values of a variable from a constraint store over time */
+fn var_output_stream<'a>(
+    var_name: VarName,
     constraints: BoxStream<'a, ConstraintStore>,
-    output_vars: Vec<VarName>,
-) -> BoxStream<'a, BTreeMap<VarName, Value>> {
-    Box::pin(
-        constraints.enumerate().map(move |(index, cs)| {
-            let mut res = BTreeMap::new();
-            for var in &output_vars {
-                if let Some(val) = cs.get_from_outputs_resolved(&var, &index) {
-                    res.insert(var.clone(), val.clone());
-                }
-            }
-            res
-        })
-    )
+) -> BoxStream<'a, Value> {
+    Box::pin(constraints.enumerate().map(move |(index, cs)| {
+        if let Some(val) = cs.get_from_outputs_resolved(&var_name, &index) {
+            // Return the value if it is resolved
+            val.clone()
+        } else {
+            Value::Unknown
+        }
+    }))
 }
 
 #[derive(Debug, Default)]
@@ -146,16 +145,17 @@ impl SyncConstraintBasedRuntime {
         self.resolve_possible();
         self.time += 1;
     }
-
 }
 
-pub struct ConstraintBasedMonitor {
+pub struct ConstraintBasedMonitor<H: OutputHandler<Value>> {
     input_streams: ValStreamCollection,
     model: LOLASpecification,
+    output_handler: H,
 }
 
-impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
-    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>) -> Self {
+#[async_trait]
+impl<H: OutputHandler<Value>> Monitor<LOLASpecification, Value, H> for ConstraintBasedMonitor<H> {
+    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>, output: H) -> Self {
         let input_streams = model
             .input_vars()
             .iter()
@@ -169,6 +169,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
         ConstraintBasedMonitor {
             input_streams,
             model,
+            output_handler: output,
         }
     }
 
@@ -176,31 +177,37 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
         &self.model
     }
 
-    fn monitor_outputs(&mut self) -> OutputStream<BTreeMap<VarName, Value>> {
-        constraints_to_outputs(
-            self.stream_output_constraints(),
-            self.model.output_vars.clone(),
-        )
+    async fn run(mut self) {
+        let outputs = self
+            .model
+            .output_vars()
+            .into_iter()
+            .map(|var| (var.clone(), self.output_stream(&var)))
+            .collect();
+        self.output_handler.provide_streams(outputs);
+        self.output_handler.run().await;
     }
 }
 
-impl ConstraintBasedMonitor {
-    fn stream_output_constraints(
-        &mut self,
-    ) -> BoxStream<'static, ConstraintStore> {
+impl<H: OutputHandler<Value>> ConstraintBasedMonitor<H> {
+    fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
         let inputs_stream = mem::take(&mut self.input_streams).into_stream();
         let mut runtime_initial = SyncConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
         Box::pin(stream::unfold(
             (inputs_stream, runtime_initial),
             |(mut inputs_stream, mut runtime)| async move {
-                // Add the new contraints to the constraint store
-                let new_inputs= inputs_stream.next().await?;
+                // Add the new constraints to the constraint store
+                let new_inputs = inputs_stream.next().await?;
                 runtime.step(&new_inputs);
 
                 // Keep unfolding
                 Some((runtime.store.clone(), (inputs_stream, runtime)))
             },
         ))
+    }
+
+    fn output_stream(&mut self, var: &VarName) -> BoxStream<'static, Value> {
+        var_output_stream(var.clone(), self.stream_output_constraints())
     }
 }

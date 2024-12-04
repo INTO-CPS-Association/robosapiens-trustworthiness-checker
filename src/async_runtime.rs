@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
-use std::mem;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use futures::future::join_all;
-use futures::stream;
-use futures::stream::BoxStream;
 use futures::StreamExt;
 use tokio::select;
 use tokio::sync::broadcast;
@@ -20,6 +18,7 @@ use tokio_util::sync::DropGuard;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
+use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
@@ -416,12 +415,16 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
  *   expressions as streams.
  * - The M type parameter is the model/specification being monitored.
  */
-pub struct AsyncMonitorRunner<Expr, Val, S, M>
+pub struct AsyncMonitorRunner<Expr, Val, S, M, H>
 where
+    Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr>,
+    H: OutputHandler<Val> + Send,
+    Expr: Sync + Send
 {
     model: M,
+    output_handler: H,
     output_streams: BTreeMap<VarName, OutputStream<Val>>,
     #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
@@ -431,13 +434,15 @@ where
     semantics_t: PhantomData<S>,
 }
 
-impl<Expr, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M>
+#[async_trait]
+impl<Expr: Sync + Send, Val, S, M, H> Monitor<M, Val, H> for AsyncMonitorRunner<Expr, Val, S, M, H>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr>,
+    H: OutputHandler<Val> + Send + Sync,
 {
-    fn new(model: M, input_streams: &mut dyn InputProvider<Val>) -> Self {
+    fn new(model: M, input_streams: &mut dyn InputProvider<Val>, output: H) -> Self {
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
 
@@ -525,39 +530,16 @@ where
             semantics_t: PhantomData,
             cancellation_guard,
             expr_t: PhantomData,
+            output_handler: output,
         }
     }
 
     fn spec(&self) -> &M {
         &self.model
     }
-
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, Val>> {
-        let output_streams = mem::take(&mut self.output_streams);
-        let mut outputs = self.model.output_vars();
-        outputs.sort();
-
-        Box::pin(stream::unfold(
-            (output_streams, outputs),
-            |(mut output_streams, outputs)| async move {
-                let mut futures = vec![];
-                for (_, stream) in output_streams.iter_mut() {
-                    futures.push(stream.next());
-                }
-
-                let next_vals = join_all(futures).await;
-                let mut res: BTreeMap<VarName, Val> = BTreeMap::new();
-                for (var, val) in outputs.clone().iter().zip(next_vals) {
-                    res.insert(
-                        var.clone(),
-                        match val {
-                            Some(val) => val,
-                            None => return None,
-                        },
-                    );
-                }
-                return Some((res, (output_streams, outputs)));
-            },
-        )) as BoxStream<'static, BTreeMap<VarName, Val>>
+    
+    async fn run(mut self) {
+        self.output_handler.provide_streams(self.output_streams);
+        self.output_handler.run().await;
     }
 }

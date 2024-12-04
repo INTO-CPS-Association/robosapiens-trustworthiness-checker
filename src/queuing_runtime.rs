@@ -2,17 +2,16 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::vec;
+use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use futures::future::join_all;
 use futures::stream;
-use futures::stream::BoxStream;
 use futures::StreamExt;
 
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
+use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::StreamData;
 use crate::core::{OutputStream, StreamContext, VarName};
@@ -247,22 +246,30 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
  *   expressions as streams.
  * - The M type parameter is the model/specification being monitored.
  */
-pub struct QueuingMonitorRunner<Expr, Val, S, M>
+pub struct QueuingMonitorRunner<Expr, Val, S, M, H>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr>,
+    H: OutputHandler<Val>,
 {
     model: M,
     var_exchange: Arc<QueuingVarContext<Val>>,
     semantics_t: PhantomData<S>,
     expr_t: PhantomData<Expr>,
+    output_handler: H,
 }
 
-impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
-    Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
+#[async_trait]
+impl<
+        Val: StreamData,
+        Expr: Send,
+        S: MonitoringSemantics<Expr, Val>,
+        M: Specification<Expr>,
+        H: OutputHandler<Val>,
+    > Monitor<M, Val, H> for QueuingMonitorRunner<Expr, Val, S, M, H>
 {
-    fn new(model: M, input_streams: &mut dyn InputProvider<Val>) -> Self {
+    fn new(model: M, input_streams: &mut dyn InputProvider<Val>, output: H) -> Self {
         let var_names: Vec<VarName> = model
             .input_vars()
             .into_iter()
@@ -307,6 +314,7 @@ impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<
             var_exchange,
             semantics_t: PhantomData,
             expr_t: PhantomData,
+            output_handler: output,
         }
     }
 
@@ -314,44 +322,25 @@ impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<
         &self.model
     }
 
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, Val>> {
-        let outputs = self.model.output_vars();
-        let mut output_streams: Vec<OutputStream<Val>> = vec![];
-        for output in outputs.iter().cloned() {
-            output_streams.push(Box::pin(self.output_stream(output)));
-        }
-
-        Box::pin(stream::unfold(
-            (output_streams, outputs),
-            |(mut output_streams, outputs)| async move {
-                let mut futures = vec![];
-                for output_stream in output_streams.iter_mut() {
-                    futures.push(output_stream.next());
-                }
-
-                let next_vals: Vec<Option<Val>> = join_all(futures).await;
-                let mut res: BTreeMap<VarName, Val> = BTreeMap::new();
-                for (var, val) in outputs.clone().iter().zip(next_vals) {
-                    res.insert(
-                        var.clone(),
-                        match val {
-                            Some(val) => val,
-                            None => return None,
-                        },
-                    );
-                }
-                Some((res, (output_streams, outputs)))
-                    as Option<(
-                        BTreeMap<VarName, Val>,
-                        (Vec<OutputStream<Val>>, Vec<VarName>),
-                    )>
-            },
-        ))
+    async fn run(mut self) {
+        let output_streams = self
+            .model
+            .output_vars()
+            .into_iter()
+            .map(|var| (var.clone(), self.output_stream(var)))
+            .collect();
+        self.output_handler.provide_streams(output_streams);
+        self.output_handler.run().await;
     }
 }
 
-impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
-    QueuingMonitorRunner<Expr, Val, S, M>
+impl<
+        Val: StreamData,
+        Expr,
+        S: MonitoringSemantics<Expr, Val>,
+        M: Specification<Expr>,
+        H: OutputHandler<Val>,
+    > QueuingMonitorRunner<Expr, Val, S, M, H>
 {
     fn output_stream(&self, var: VarName) -> OutputStream<Val> {
         self.var_exchange.var(&var).unwrap()

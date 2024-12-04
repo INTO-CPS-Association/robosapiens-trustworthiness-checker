@@ -2,6 +2,7 @@
 
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
+use trustworthiness_checker::manual_output_handler::ManualOutputHandler;
 use trustworthiness_checker::queuing_runtime::QueuingMonitorRunner;
 use trustworthiness_checker::type_checking::type_check;
 use trustworthiness_checker::{
@@ -16,10 +17,15 @@ async fn test_simple_add_monitor() {
     let mut input_streams = input_streams3();
     let spec = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
     let spec = type_check(spec).expect("Type check failed");
-    let mut async_monitor =
-        AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, &mut input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        async_monitor.monitor_outputs().enumerate().collect().await;
+    let mut output_handler = ManualOutputHandler::new(spec.output_vars.clone());
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _, _>::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
@@ -46,10 +52,15 @@ async fn test_concat_monitor() {
     let spec = type_check(spec).expect("Type check failed");
     // let mut async_monitor =
     // AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, input_streams);
-    let mut async_monitor =
-        QueuingMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, &mut input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        async_monitor.monitor_outputs().enumerate().collect().await;
+    let mut output_handler = ManualOutputHandler::new(spec.output_vars.clone());
+    let outputs = output_handler.get_output();
+    let async_monitor = QueuingMonitorRunner::<_, _, TypedUntimedLolaSemantics, _, _>::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
@@ -74,14 +85,16 @@ async fn test_count_monitor() {
     let mut input_streams: BTreeMap<VarName, BoxStream<'static, Value>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_typed_count_monitor()).unwrap();
     let spec = type_check(spec).expect("Type check failed");
-    let mut async_monitor =
-        AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, &mut input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = async_monitor
-        .monitor_outputs()
-        .take(4)
-        .enumerate()
-        .collect()
-        .await;
+    let mut output_handler = ManualOutputHandler::new(spec.output_vars.clone());
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _, _>::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+        outputs.take(4).enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
@@ -120,10 +133,15 @@ async fn test_eval_monitor() {
     let spec = lola_specification(&mut spec_typed_eval_monitor()).unwrap();
     let spec = type_check(spec).expect("Type check failed");
     println!("{:?}", spec);
-    let mut async_monitor =
-        AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(spec, &mut input_streams);
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        async_monitor.monitor_outputs().enumerate().collect().await;
+    let mut output_handler = ManualOutputHandler::new(spec.output_vars.clone());
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _, _>::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![

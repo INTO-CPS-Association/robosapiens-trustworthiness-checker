@@ -3,6 +3,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
+use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 // use serde_json::{Deserializer, Sserializer};
@@ -165,16 +166,34 @@ pub trait StreamContext<Val: StreamData>: Send + 'static {
     fn advance(&self);
 }
 
-pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Send + 'static {
+pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Sync + Send + 'static {
     fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
 }
 
-pub trait Specification<Expr> {
+pub trait Specification<Expr>: Sync + Send {
     fn input_vars(&self) -> Vec<VarName>;
 
     fn output_vars(&self) -> Vec<VarName>;
 
     fn var_expr(&self, var: &VarName) -> Option<Expr>;
+}
+
+// This could alternatively implement Sink
+// The constructor (which is not specified by the trait) should provide any
+// configuration details needed by the output handler (e.g. host, port,
+// output file name, etc.) whilst provide_streams is called by the runtime to
+// finish the setup of the output handler by providing the streams to be output,
+// and finally run is called to start the output handler.
+#[async_trait]
+pub trait OutputHandler<V: StreamData>: Send {
+    // async fn handle_output(&mut self, var: &VarName, value: V);
+    // This should only be called once by the runtime to provide the streams
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>);
+
+    // Essentially this is of type
+    // async fn run(&mut self);
+    async fn run(mut self);
+    //  -> Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
 }
 
 /*
@@ -185,10 +204,14 @@ pub trait Specification<Expr> {
  * type of input provider to be provided and allows the output
  * to borrow from the input provider without worrying about lifetimes.
  */
-pub trait Monitor<M, V> {
-    fn new(model: M, input: &mut dyn InputProvider<V>) -> Self;
+#[async_trait]
+pub trait Monitor<M, V: StreamData, H: OutputHandler<V>>: Send {
+    fn new(model: M, input: &mut dyn InputProvider<V>, output: H) -> Self;
 
     fn spec(&self) -> &M;
 
-    fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, V>>;
+    // Should usually wait on the output provider
+    async fn run(mut self);
+
+    // fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, V>>;
 }

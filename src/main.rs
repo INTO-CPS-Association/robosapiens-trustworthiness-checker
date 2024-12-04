@@ -2,13 +2,13 @@ use core::panic;
 
 // #![deny(warnings)]
 use clap::Parser;
-use futures::StreamExt;
 use trustworthiness_checker::InputProvider;
 use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
 
 use trustworthiness_checker::commandline_args::{Cli, Language, Runtime, Semantics};
 #[cfg(feature = "ros")]
 use trustworthiness_checker::ros_input_provider;
+use trustworthiness_checker::stdout_output_handler::StdoutOutputHandler;
 
 const MQTT_HOSTNAME: &str = "localhost";
 
@@ -40,10 +40,10 @@ async fn main() {
                     .await
                     .expect("Input file could not be parsed"),
             )
-        } else if let Some(input_ros_topics) = input_mode.input_ros_topics {
+        } else if let Some(_input_ros_topics) = input_mode.input_ros_topics {
             #[cfg(feature = "ros")]
             {
-                let input_mapping_str = std::fs::read_to_string(&input_ros_topics)
+                let input_mapping_str = std::fs::read_to_string(&_input_ros_topics)
                     .expect("Input mapping file could not be read");
                 let input_mapping =
                     tc::ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
@@ -76,64 +76,67 @@ async fn main() {
         .await
         .expect("Model file could not be parsed");
 
+    let output_handler = StdoutOutputHandler::<tc::Value>::new(model.output_vars.clone());
+
     // println!("Outputs: {:?}", model.output_vars);
     // println!("Inputs: {:?}", model.input_vars);
     // println!("Model: {:?}", model);
 
     // Get the outputs from the Monitor
-    let outputs = match (runtime, semantics) {
+    let task = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
-            let mut runner = tc::AsyncMonitorRunner::<_, _, tc::UntimedLolaSemantics, _>::new(
-                model,
-                &mut *input_streams,
+            let runner = Box::new(
+                tc::AsyncMonitorRunner::<_, _, tc::UntimedLolaSemantics, _, _>::new(
+                    model,
+                    &mut *input_streams,
+                    output_handler,
+                ),
             );
-            runner.monitor_outputs()
+            tokio::spawn(runner.run())
         }
         (Runtime::Queuing, Semantics::Untimed) => {
-            let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
+            let runner = tc::queuing_runtime::QueuingMonitorRunner::<
                 _,
                 _,
                 tc::UntimedLolaSemantics,
                 _,
-            >::new(model, &mut *input_streams);
-            runner.monitor_outputs()
+                _,
+            >::new(model, &mut *input_streams, output_handler);
+            tokio::spawn(runner.run())
         }
         (Runtime::Async, Semantics::TypedUntimed) => {
             let typed_model = type_check(model).expect("Model failed to type check");
             // let typed_input_streams = d
 
-            let mut runner = tc::AsyncMonitorRunner::<_, _, tc::TypedUntimedLolaSemantics, _>::new(
+            let runner = tc::AsyncMonitorRunner::<_, _, tc::TypedUntimedLolaSemantics, _, _>::new(
                 typed_model,
                 &mut *input_streams,
+                output_handler,
             );
-            runner.monitor_outputs()
+            tokio::spawn(runner.run())
         }
         (Runtime::Queuing, Semantics::TypedUntimed) => {
             let typed_model = type_check(model).expect("Model failed to type check");
 
-            let mut runner = tc::queuing_runtime::QueuingMonitorRunner::<
+            let runner = tc::queuing_runtime::QueuingMonitorRunner::<
                 _,
                 _,
                 tc::TypedUntimedLolaSemantics,
                 _,
-            >::new(typed_model, &mut *input_streams);
-            runner.monitor_outputs()
+                _,
+            >::new(typed_model, &mut *input_streams, output_handler);
+            tokio::spawn(runner.run())
         }
         (Runtime::Constraints, Semantics::Untimed) => {
-            let mut runner = tc::constraint_based_runtime::ConstraintBasedMonitor::new(
+            let runner = tc::constraint_based_runtime::ConstraintBasedMonitor::new(
                 model,
                 &mut *input_streams,
+                output_handler,
             );
-            runner.monitor_outputs()
+            tokio::spawn(runner.run())
         }
         _ => unimplemented!(),
     };
 
-    // Print the outputs
-    let mut enumerated_outputs = outputs.enumerate();
-    while let Some((i, output)) = enumerated_outputs.next().await {
-        for (var, data) in output {
-            println!("{}[{}] = {:?}", var, i, data);
-        }
-    }
+    task.await.expect("Monitor failed to run");
 }
