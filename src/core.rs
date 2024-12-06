@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    fmt::{Debug, Display},
+    fmt::{Debug, Display}, future::Future, pin::Pin,
 };
 
 use async_trait::async_trait;
@@ -192,7 +192,7 @@ pub trait OutputHandler<V: StreamData>: Send {
 
     // Essentially this is of type
     // async fn run(&mut self);
-    async fn run(mut self);
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
     //  -> Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
 }
 
@@ -205,8 +205,8 @@ pub trait OutputHandler<V: StreamData>: Send {
  * to borrow from the input provider without worrying about lifetimes.
  */
 #[async_trait]
-pub trait Monitor<M, V: StreamData, H: OutputHandler<V>>: Send {
-    fn new(model: M, input: &mut dyn InputProvider<V>, output: H) -> Self;
+pub trait Monitor<M, V: StreamData>: Send {
+    fn new(model: M, input: &mut dyn InputProvider<V>, output: Box<dyn OutputHandler<V>>) -> Self;
 
     fn spec(&self) -> &M;
 

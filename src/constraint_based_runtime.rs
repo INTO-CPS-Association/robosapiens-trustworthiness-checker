@@ -147,15 +147,15 @@ impl SyncConstraintBasedRuntime {
     }
 }
 
-pub struct ConstraintBasedMonitor<H: OutputHandler<Value>> {
+pub struct ConstraintBasedMonitor {
     input_streams: ValStreamCollection,
     model: LOLASpecification,
-    output_handler: H,
+    output_handler: Box<dyn OutputHandler<Value>>,
 }
 
 #[async_trait]
-impl<H: OutputHandler<Value>> Monitor<LOLASpecification, Value, H> for ConstraintBasedMonitor<H> {
-    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>, output: H) -> Self {
+impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
+    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>, output: Box<dyn OutputHandler<Value>>) -> Self {
         let input_streams = model
             .input_vars()
             .iter()
@@ -189,7 +189,7 @@ impl<H: OutputHandler<Value>> Monitor<LOLASpecification, Value, H> for Constrain
     }
 }
 
-impl<H: OutputHandler<Value>> ConstraintBasedMonitor<H> {
+impl ConstraintBasedMonitor {
     fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
         let inputs_stream = mem::take(&mut self.input_streams).into_stream();
         let mut runtime_initial = SyncConstraintBasedRuntime::default();

@@ -33,6 +33,21 @@ pub struct InputMode {
     pub input_ros_topics: Option<String>,
 }
 
+#[derive(Args)]
+#[group(required = false, multiple = false)]
+pub struct OutputMode {
+    #[clap(long)]
+    pub output_stdout: bool,
+
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    pub output_mqtt_topics: Option<Vec<String>>,
+
+    // #[cfg(feature = "ros")]
+    // TODO: Implement ROS output support
+    #[clap(long)]
+    pub output_ros_topics: Option<String>,
+}
+
 #[derive(Parser)]
 pub struct Cli {
     pub model: String,
@@ -40,6 +55,10 @@ pub struct Cli {
     // The mode of input to use
     #[command(flatten)]
     pub input_mode: InputMode,
+
+    // The mode of output to use
+    #[command(flatten)]
+    pub output_mode: OutputMode,
 
     #[arg(long)]
     pub language: Option<Language>,

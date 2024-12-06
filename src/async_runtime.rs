@@ -415,16 +415,15 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
  *   expressions as streams.
  * - The M type parameter is the model/specification being monitored.
  */
-pub struct AsyncMonitorRunner<Expr, Val, S, M, H>
+pub struct AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr>,
-    H: OutputHandler<Val> + Send,
-    Expr: Sync + Send
+    Expr: Sync + Send,
 {
     model: M,
-    output_handler: H,
+    output_handler: Box<dyn OutputHandler<Val>>,
     output_streams: BTreeMap<VarName, OutputStream<Val>>,
     #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
@@ -435,14 +434,17 @@ where
 }
 
 #[async_trait]
-impl<Expr: Sync + Send, Val, S, M, H> Monitor<M, Val, H> for AsyncMonitorRunner<Expr, Val, S, M, H>
+impl<Expr: Sync + Send, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr>,
-    H: OutputHandler<Val> + Send + Sync,
 {
-    fn new(model: M, input_streams: &mut dyn InputProvider<Val>, output: H) -> Self {
+    fn new(
+        model: M,
+        input_streams: &mut dyn InputProvider<Val>,
+        output: Box<dyn OutputHandler<Val>>,
+    ) -> Self {
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
 
@@ -537,7 +539,7 @@ where
     fn spec(&self) -> &M {
         &self.model
     }
-    
+
     async fn run(mut self) {
         self.output_handler.provide_streams(self.output_streams);
         self.output_handler.run().await;

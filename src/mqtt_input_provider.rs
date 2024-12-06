@@ -21,10 +21,6 @@ pub struct VarData {
     stream: Option<OutputStream<Value>>,
 }
 
-pub struct MQTTStreamMapping {
-    pub var_map: BTreeMap<VarName, VarData>,
-}
-
 // A map between channel names and the MQTT channels they
 // correspond to
 pub type InputChannelMap = BTreeMap<VarName, String>;

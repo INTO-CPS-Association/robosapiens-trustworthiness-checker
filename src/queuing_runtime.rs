@@ -246,18 +246,17 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
  *   expressions as streams.
  * - The M type parameter is the model/specification being monitored.
  */
-pub struct QueuingMonitorRunner<Expr, Val, S, M, H>
+pub struct QueuingMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr>,
-    H: OutputHandler<Val>,
 {
     model: M,
     var_exchange: Arc<QueuingVarContext<Val>>,
     semantics_t: PhantomData<S>,
     expr_t: PhantomData<Expr>,
-    output_handler: H,
+    output_handler: Box<dyn OutputHandler<Val>>,
 }
 
 #[async_trait]
@@ -266,10 +265,9 @@ impl<
         Expr: Send,
         S: MonitoringSemantics<Expr, Val>,
         M: Specification<Expr>,
-        H: OutputHandler<Val>,
-    > Monitor<M, Val, H> for QueuingMonitorRunner<Expr, Val, S, M, H>
+    > Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
 {
-    fn new(model: M, input_streams: &mut dyn InputProvider<Val>, output: H) -> Self {
+    fn new(model: M, input_streams: &mut dyn InputProvider<Val>, output: Box<dyn OutputHandler<Val>>) -> Self {
         let var_names: Vec<VarName> = model
             .input_vars()
             .into_iter()
@@ -339,8 +337,7 @@ impl<
         Expr,
         S: MonitoringSemantics<Expr, Val>,
         M: Specification<Expr>,
-        H: OutputHandler<Val>,
-    > QueuingMonitorRunner<Expr, Val, S, M, H>
+    > QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn output_stream(&self, var: VarName) -> OutputStream<Val> {
         self.var_exchange.var(&var).unwrap()

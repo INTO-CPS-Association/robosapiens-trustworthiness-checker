@@ -3,8 +3,8 @@
 use futures::stream::StreamExt;
 use std::collections::BTreeMap;
 use trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor;
-use trustworthiness_checker::{lola_specification, LOLASpecification};
 use trustworthiness_checker::manual_output_handler::ManualOutputHandler;
+use trustworthiness_checker::{lola_specification, LOLASpecification};
 use trustworthiness_checker::{Monitor, Value, VarName};
 mod lola_fixtures;
 use futures::stream;
@@ -29,7 +29,7 @@ pub fn input_streams1() -> BTreeMap<VarName, BoxStream<'static, Value>> {
     input_streams
 }
 
-fn output_handler(spec: LOLASpecification) -> ManualOutputHandler<Value>{
+fn output_handler(spec: LOLASpecification) -> ManualOutputHandler<Value> {
     ManualOutputHandler::new(spec.output_vars.clone())
 }
 
@@ -37,7 +37,7 @@ fn output_handler(spec: LOLASpecification) -> ManualOutputHandler<Value>{
 async fn test_simple_add_monitor() {
     let mut input_streams = input_streams1();
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
-    let mut output_handler = output_handler(spec.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
@@ -72,8 +72,8 @@ async fn test_simple_add_monitor() {
 async fn test_runtime_initialization() {
     let mut input_streams = input_empty();
     let spec = lola_specification(&mut spec_empty()).unwrap();
-    let mut output_handler = output_handler(spec.clone());
-    let outputs = output_handler.get_output();
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
+    let outputs = Box::new(output_handler.get_output());
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
     let outputs: Vec<BTreeMap<VarName, Value>> = outputs.collect().await;
@@ -85,7 +85,7 @@ async fn test_var() {
     let mut input_streams = input_streams1();
     let mut spec = "in x\nout z\nz =x";
     let spec = lola_specification(&mut spec).unwrap();
-    let mut output_handler = output_handler(spec.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
@@ -121,7 +121,7 @@ async fn test_literal_expression() {
     let mut input_streams = input_streams1();
     let mut spec = "out z\nz =42";
     let spec = lola_specification(&mut spec).unwrap();
-    let mut output_handler = output_handler(spec.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
@@ -158,7 +158,7 @@ async fn test_addition() {
     let mut input_streams = input_streams1();
     let mut spec = "in x\nout z\nz =x+1";
     let spec = lola_specification(&mut spec).unwrap();
-    let mut output_handler = output_handler(spec.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
@@ -194,12 +194,11 @@ async fn test_subtraction() {
     let mut input_streams = input_streams1();
     let mut spec = "in x\nout z\nz =x-10";
     let spec = lola_specification(&mut spec).unwrap();
-    let mut output_handler = output_handler(spec.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
@@ -231,12 +230,11 @@ async fn test_index_past() {
     let mut input_streams = input_streams1();
     let mut spec = "in x\nout z\nz =x[-1, 0]";
     let spec = lola_specification(&mut spec).unwrap();
-    let mut output_handler = output_handler(spec.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
@@ -274,21 +272,18 @@ async fn test_index_future() {
     let spec = lola_specification(&mut spec).unwrap();
     let mut output_handler = output_handler(spec.clone());
     let outputs = output_handler.get_output();
-    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, Box::new(output_handler));
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     // assert!(outputs.len() == 1);
     assert_eq!(
         outputs,
-        vec![
-            (
-                0,
-                vec![(VarName("z".into()), Value::Int(1))]
-                    .into_iter()
-                    .collect(),
-            ),
-        ]
+        vec![(
+            0,
+            vec![(VarName("z".into()), Value::Int(1))]
+                .into_iter()
+                .collect(),
+        ),]
     );
 }
 
@@ -299,10 +294,9 @@ async fn test_if_else_expression() {
     let spec = lola_specification(&mut spec).unwrap();
     let mut output_handler = output_handler(spec.clone());
     let outputs = output_handler.get_output();
-    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, Box::new(output_handler));
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
@@ -336,10 +330,9 @@ async fn test_string_append() {
     let spec = lola_specification(&mut spec).unwrap();
     let mut output_handler = output_handler(spec.clone());
     let outputs = output_handler.get_output();
-    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, Box::new(output_handler));
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 2);
     assert_eq!(
         outputs,

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, mem};
+use std::{collections::BTreeMap, future::Future, mem, pin::Pin};
 
 use async_trait::async_trait;
 use futures::future::join_all;
@@ -59,7 +59,7 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
         }
     }
 
-    async fn run(mut self) {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>> {
         let receivers = mem::take(&mut self.stream_receivers).expect("Stream receivers not found");
         let mut streams: Vec<_> = receivers
             .into_iter()
@@ -72,27 +72,31 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
         // let mut streams = streams;
         // let output_sender = output_sender;
 
-        loop {
-            let nexts = streams.iter_mut().map(|s| s.next());
+        Box::pin(async move {
+            loop {
+                let nexts = streams.iter_mut().map(|s| s.next());
 
-            // Stop outputting when any of the streams ends, otherwise collect
-            // all of the values
-            if let Some(vals) = join_all(nexts)
-                .await
-                .into_iter()
-                .collect::<Option<Vec<V>>>()
-            {
-                // Combine the values into a single map
-                let mut output = BTreeMap::new();
-                for (var_name, value) in var_names.iter().zip(vals) {
-                    output.insert(var_name.clone(), value);
+                // Stop outputting when any of the streams ends, otherwise collect
+                // all of the values
+                if let Some(vals) = join_all(nexts)
+                    .await
+                    .into_iter()
+                    .collect::<Option<Vec<V>>>()
+                {
+                    // Combine the values into a single map
+                    let mut output = BTreeMap::new();
+                    for (var_name, value) in var_names.iter().zip(vals) {
+                        output.insert(var_name.clone(), value);
+                    }
+                    // Output the combined data
+                    output_sender.send(output).await.unwrap();
+                } else {
+                    // One of the streams has ended, so we should stop
+                    println!("One of the streams has ended");
+                    break;
                 }
-                // Output the combined data
-                output_sender.send(output).await.unwrap();
-            } else {
-                break;
             }
-        }
+        })
     }
 }
 

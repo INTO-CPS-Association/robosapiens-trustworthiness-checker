@@ -12,9 +12,9 @@ use lola_fixtures::*;
 async fn test_simple_add_monitor() {
     let mut input_streams = input_streams1();
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
-    let mut output_handler = ManualOutputHandler::new(spec.output_vars.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
-    let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
         spec,
         &mut input_streams,
         output_handler,
@@ -44,9 +44,9 @@ async fn test_simple_add_monitor() {
 async fn test_count_monitor() {
     let mut input_streams: BTreeMap<VarName, BoxStream<'static, Value>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();
-    let mut output_handler = ManualOutputHandler::new(spec.output_vars.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
-    let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
         spec,
         &mut input_streams,
         output_handler,
@@ -89,9 +89,9 @@ async fn test_count_monitor() {
 async fn test_eval_monitor() {
     let mut input_streams = input_streams2();
     let spec = lola_specification(&mut spec_eval_monitor()).unwrap();
-    let mut output_handler = ManualOutputHandler::new(spec.output_vars.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
-    let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
         spec,
         &mut input_streams,
         output_handler,

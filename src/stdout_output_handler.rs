@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -32,18 +32,21 @@ impl<V: StreamData> OutputHandler<V> for StdoutOutputHandler<V> {
         self.manual_output_handler.provide_streams(streams);
     }
 
-    async fn run(mut self) {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>> {
         let output_stream = self.manual_output_handler.get_output();
         let mut enumerated_outputs = output_stream.enumerate();
         let task = tokio::spawn(self.manual_output_handler.run());
 
-        while let Some((i, output)) = enumerated_outputs.next().await {
-            for (var, data) in output {
-                println!("{}[{}] = {:?}", var, i, data);
+        Box::pin(async move {
+            while let Some((i, output)) = enumerated_outputs.next().await {
+                for (var, data) in output {
+                    println!("{}[{}] = {:?}", var, i, data);
+                }
             }
-        }
 
-        task.await.unwrap();
+            task.await.unwrap();
+            println!("StdoutOutputHandler finished");
+        })
     }
 }
 

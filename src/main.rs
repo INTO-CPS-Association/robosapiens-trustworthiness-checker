@@ -2,7 +2,9 @@ use core::panic;
 
 // #![deny(warnings)]
 use clap::Parser;
-use trustworthiness_checker::InputProvider;
+use trustworthiness_checker::core::OutputHandler;
+use trustworthiness_checker::mqtt_output_handler::MQTTOutputHandler;
+use trustworthiness_checker::{InputProvider, Value};
 use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
 
 use trustworthiness_checker::commandline_args::{Cli, Language, Runtime, Semantics};
@@ -76,7 +78,29 @@ async fn main() {
         .await
         .expect("Model file could not be parsed");
 
-    let output_handler = StdoutOutputHandler::<tc::Value>::new(model.output_vars.clone());
+    let output_handler: Box<dyn OutputHandler<Value>> = match cli.output_mode {
+        trustworthiness_checker::commandline_args::OutputMode {
+            output_stdout: true,
+            output_mqtt_topics: None,
+            output_ros_topics: None,
+        } => Box::new(StdoutOutputHandler::<tc::Value>::new(model.output_vars.clone())),
+        trustworthiness_checker::commandline_args::OutputMode {
+            output_stdout: false,
+            output_mqtt_topics: Some(topics),
+            output_ros_topics: None,
+        } => {
+            let topics = topics.into_iter().map(|topic| (tc::VarName(topic.clone()), topic)).collect();
+            Box::new(MQTTOutputHandler::new(MQTT_HOSTNAME, topics)
+            .expect("MQTT output handler could not be created"))
+        },
+        trustworthiness_checker::commandline_args::OutputMode {
+            output_stdout: false,
+            output_mqtt_topics: None,
+            output_ros_topics: Some(_),
+        } => unimplemented!("ROS output not implemented"),
+        // Default to stdout
+        _ => Box::new(StdoutOutputHandler::<tc::Value>::new(model.output_vars.clone())),
+    };    
 
     // println!("Outputs: {:?}", model.output_vars);
     // println!("Inputs: {:?}", model.input_vars);
@@ -86,7 +110,7 @@ async fn main() {
     let task = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
             let runner = Box::new(
-                tc::AsyncMonitorRunner::<_, _, tc::UntimedLolaSemantics, _, _>::new(
+                tc::AsyncMonitorRunner::<_, _, tc::UntimedLolaSemantics, _>::new(
                     model,
                     &mut *input_streams,
                     output_handler,
@@ -100,7 +124,6 @@ async fn main() {
                 _,
                 tc::UntimedLolaSemantics,
                 _,
-                _,
             >::new(model, &mut *input_streams, output_handler);
             tokio::spawn(runner.run())
         }
@@ -108,7 +131,7 @@ async fn main() {
             let typed_model = type_check(model).expect("Model failed to type check");
             // let typed_input_streams = d
 
-            let runner = tc::AsyncMonitorRunner::<_, _, tc::TypedUntimedLolaSemantics, _, _>::new(
+            let runner = tc::AsyncMonitorRunner::<_, _, tc::TypedUntimedLolaSemantics, _>::new(
                 typed_model,
                 &mut *input_streams,
                 output_handler,
@@ -122,7 +145,6 @@ async fn main() {
                 _,
                 _,
                 tc::TypedUntimedLolaSemantics,
-                _,
                 _,
             >::new(typed_model, &mut *input_streams, output_handler);
             tokio::spawn(runner.run())
