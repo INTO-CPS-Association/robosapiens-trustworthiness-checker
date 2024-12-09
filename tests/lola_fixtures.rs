@@ -85,6 +85,24 @@ pub fn input_streams4() -> BTreeMap<VarName, OutputStream<Value>> {
 }
 
 #[allow(dead_code)]
+pub fn input_streams5() -> BTreeMap<VarName, OutputStream<Value>> {
+    let mut input_streams = BTreeMap::new();
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(stream::iter(
+            vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)].into_iter(),
+        )) as OutputStream<Value>,
+    );
+    input_streams.insert(
+        VarName("y".into()),
+        Box::pin(stream::iter(
+            vec![Value::Bool(true), Value::Bool(true), Value::Bool(false)].into_iter(),
+        )),
+    );
+    input_streams
+}
+
+#[allow(dead_code)]
 pub fn spec_empty() -> &'static str {
     ""
 }

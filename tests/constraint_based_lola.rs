@@ -291,3 +291,71 @@ async fn test_index_future() {
         ]
     );
 }
+
+#[tokio::test]
+async fn test_if_else_expression() {
+    let mut input_streams = input_streams5();
+    let mut spec = "in x\nin y\nout z\nz =if(x) then y else false"; // And-gate
+    let spec = lola_specification(&mut spec).unwrap();
+    let mut output_handler = output_handler(spec.clone());
+    let outputs = output_handler.get_output();
+    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+    tokio::spawn(monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+        outputs.enumerate().collect().await;
+    assert!(outputs.len() == 3);
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                vec![(VarName("z".into()), Value::Bool(true))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                1,
+                vec![(VarName("z".into()), Value::Bool(false))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                2,
+                vec![(VarName("z".into()), Value::Bool(false))]
+                    .into_iter()
+                    .collect(),
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn test_string_append() {
+    let mut input_streams = input_streams4();
+    let mut spec = "in x\nin y\nout z\nz =x++y";
+    let spec = lola_specification(&mut spec).unwrap();
+    let mut output_handler = output_handler(spec.clone());
+    let outputs = output_handler.get_output();
+    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+    tokio::spawn(monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+        outputs.enumerate().collect().await;
+    assert!(outputs.len() == 2);
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                vec![(VarName("z".into()), Value::Str("ab".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                1,
+                vec![(VarName("z".into()), Value::Str("cd".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        ]
+    );
+}
