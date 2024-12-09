@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -12,6 +11,7 @@ use paho_mqtt::{self as mqtt};
 // use tokio_util::sync::CancellationToken;
 
 use crate::core::OutputHandler;
+use crate::mqtt_client::provide_mqtt_client;
 // use crate::stream_utils::drop_guard_stream;
 use crate::{core::VarName, InputProvider, OutputStream, Value};
 
@@ -30,8 +30,7 @@ pub type OutputChannelMap = BTreeMap<VarName, String>;
 pub struct MQTTOutputHandler {
     pub var_map: BTreeMap<VarName, VarData>,
     // node: Arc<Mutex<r2r::Node>>,
-    client: mqtt::AsyncClient,
-    connect_options: mqtt::ConnectOptions,
+    hostname: String,
 }
 
 async fn publish_stream(
@@ -42,7 +41,15 @@ async fn publish_stream(
     while let Some(data) = stream.next().await {
         let data = serde_json::to_string(&data).unwrap();
         let message = mqtt::Message::new(channel_name.clone(), data, 1);
-        client.publish(message).await.unwrap();
+        loop {
+            match client.publish(message.clone()).await {
+                Ok(_) => break,
+                Err(_e) => {
+                    println!("Lost connection. Attempting reconnect...");
+                    client.reconnect().await.unwrap();
+                }
+            }
+        }
     }
 }
 
@@ -56,7 +63,6 @@ impl OutputHandler<Value> for MQTTOutputHandler {
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>> {
-        let client = self.client.clone();
         let streams = self
             .var_map
             .iter_mut()
@@ -66,13 +72,10 @@ impl OutputHandler<Value> for MQTTOutputHandler {
                 (channel_name, stream)
             })
             .collect::<Vec<_>>();
-        let connect_options = self.connect_options.clone();
+        let hostname = self.hostname.clone();
 
         Box::pin(async move {
-            client
-                .connect(connect_options)
-                .await
-                .expect("Failed to establish MQTT connection");
+            let client = provide_mqtt_client(hostname).await.unwrap();
 
             futures::future::join_all(
                 streams
@@ -96,18 +99,7 @@ impl OutputHandler<Value> for MQTTOutputHandler {
 impl MQTTOutputHandler {
     // TODO: should we have dependency injection for the MQTT client?
     pub fn new(host: &str, var_topics: OutputChannelMap) -> Result<Self, mqtt::Error> {
-        // Client options
-        let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-            .server_uri(host)
-            .client_id("robosapiens_trustworthiness_checker")
-            .finalize();
-
-        let client = mqtt::AsyncClient::new(create_opts)?;
-
-        let connect_options = mqtt::ConnectOptionsBuilder::new_v3()
-            .keep_alive_interval(Duration::from_secs(30))
-            .clean_session(false)
-            .finalize();
+        let hostname = host.to_string();
 
         let var_map = var_topics
             .into_iter()
@@ -123,11 +115,7 @@ impl MQTTOutputHandler {
             })
             .collect();
 
-        Ok(MQTTOutputHandler {
-            var_map,
-            client,
-            connect_options,
-        })
+        Ok(MQTTOutputHandler { var_map, hostname })
     }
 }
 

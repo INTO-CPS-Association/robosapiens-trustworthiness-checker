@@ -43,8 +43,7 @@ impl<V: StreamData> OutputHandler<V> for StdoutOutputHandler<V> {
                     println!("{}[{}] = {:?}", var, i, data);
                 }
             }
-
-            task.await.unwrap();
+            // task.await.unwrap();
             println!("StdoutOutputHandler finished");
         })
     }

@@ -15,7 +15,7 @@ pub struct ManualOutputHandler<V: StreamData> {
     var_names: Vec<VarName>,
     stream_senders: Option<Vec<oneshot::Sender<OutputStream<V>>>>,
     stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
-    output_sender: mpsc::Sender<BTreeMap<VarName, V>>,
+    output_sender: Option<mpsc::Sender<BTreeMap<VarName, V>>>,
     output_receiver: Option<mpsc::Receiver<BTreeMap<VarName, V>>>,
 }
 
@@ -31,7 +31,7 @@ impl<V: StreamData> ManualOutputHandler<V> {
             stream_senders: Some(stream_senders),
             stream_receivers: Some(stream_receivers),
             output_receiver: Some(output_receiver),
-            output_sender,
+            output_sender: Some(output_sender),
         }
     }
 
@@ -65,7 +65,7 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
             .into_iter()
             .map(|mut r| r.try_recv().unwrap())
             .collect();
-        let output_sender = self.output_sender.clone();
+        let output_sender = mem::take(&mut self.output_sender).expect("Output sender not found");
         let var_names = self.var_names.clone();
 
         // let receivers = receivers;
@@ -74,6 +74,7 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
 
         Box::pin(async move {
             loop {
+                println!("ManualOutputHandler running");
                 let nexts = streams.iter_mut().map(|s| s.next());
 
                 // Stop outputting when any of the streams ends, otherwise collect
@@ -84,10 +85,8 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
                     .collect::<Option<Vec<V>>>()
                 {
                     // Combine the values into a single map
-                    let mut output = BTreeMap::new();
-                    for (var_name, value) in var_names.iter().zip(vals) {
-                        output.insert(var_name.clone(), value);
-                    }
+                    let output: BTreeMap<VarName, V> =
+                        var_names.iter().cloned().zip(vals.into_iter()).collect();
                     // Output the combined data
                     output_sender.send(output).await.unwrap();
                 } else {
@@ -96,6 +95,8 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
                     break;
                 }
             }
+
+            println!("ManualOutputHandler finished");
         })
     }
 }
@@ -141,11 +142,19 @@ mod tests {
         //
         let output_stream = handler.get_output();
 
+        println!("Starting handler");
+
         let task = tokio::spawn(handler.run());
+
+        println!("Starting output");
 
         let output: Vec<BTreeMap<VarName, Value>> = output_stream.collect().await;
 
+        println!("Output: {:?}", output);
+
         assert_eq!(output, xy_expected);
+
+        println!("Waiting for task to finish");
 
         task.await.unwrap();
     }

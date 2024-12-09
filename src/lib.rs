@@ -38,3 +38,4 @@ pub mod stream_utils;
 pub mod typed_monitoring_combinators;
 pub mod typed_monitoring_semantics;
 pub mod mqtt_output_handler;
+pub mod mqtt_client;

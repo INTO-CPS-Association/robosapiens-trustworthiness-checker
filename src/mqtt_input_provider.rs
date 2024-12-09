@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use std::time::Duration;
+use std::collections::BTreeMap;
 
 use futures::StreamExt;
 use paho_mqtt as mqtt;
@@ -10,7 +10,7 @@ use tokio_stream::wrappers::ReceiverStream;
 // use tokio_util::sync::CancellationToken;
 
 // use crate::stream_utils::drop_guard_stream;
-use crate::{core::VarName, InputProvider, OutputStream, Value};
+use crate::{core::VarName, mqtt_client::provide_mqtt_client, InputProvider, OutputStream, Value};
 // use async_stream::stream;
 
 const QOS: &[i32] = &[1, 1];
@@ -39,24 +39,12 @@ impl MQTTInputProvider {
     // TODO: should we have dependency injection for the MQTT client?
     pub fn new(host: &str, var_topics: InputChannelMap) -> Result<Self, mqtt::Error> {
         // Client options
-        let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-            .server_uri(host)
-            .client_id("robosapiens_trustworthiness_checker")
-            .finalize();
-
-        let mut client = mqtt::AsyncClient::new(create_opts)?;
-
-        let connect_options = mqtt::ConnectOptionsBuilder::new_v3()
-            .keep_alive_interval(Duration::from_secs(30))
-            .clean_session(false)
-            .finalize();
-
         let mut reconnection_attempts: usize = 0;
+        let host = host.to_string();
 
         // let (tx, rx) = tokio::sync::watch::channel(false);
         // let notify = Arc::new(Notify::new());
 
-        let mut stream = client.get_stream(10);
         // let cancellation_token = CancellationToken::new();
 
         // Create a pair of mpsc channels for each topic which is used to put
@@ -82,14 +70,31 @@ impl MQTTInputProvider {
 
             // println!("Spawning MQTT receiver task");
 
-            client.connect(connect_options).await.unwrap();
-            client.subscribe_many(&topics, QOS).await.unwrap();
+            // Create and connect to the MQTT client
+            let client = provide_mqtt_client(host.clone()).await.unwrap();
+            let mut stream = client.clone().get_stream(10);
+            // println!("Connected to MQTT broker");
+            loop {
+                match client.subscribe_many(&topics, QOS).await {
+                    Ok(_) => break,
+                    Err(e) => {
+                        println!(
+                            "Failed to subscribe to topics with error {:?}, retrying in 100ms",
+                            e
+                        );
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        println!("Reconnecting");
+                        let _e = client.reconnect().await;
+                    }
+                }
+            }
+            // println!("Connected to MQTT broker");
 
             while let Some(msg) = stream.next().await {
                 match msg {
                     Some(msg) => {
                         // Process the message
-                        // println!("Received message: {:?}", msg);
+                        // println!("Received message: {:?} on {:?}", msg, msg.topic());
                         let value = serde_json::from_str(&msg.payload_str()).expect(
                             format!(
                                 "Failed to parse value {:?} sent from MQTT",

@@ -67,8 +67,8 @@ async fn test_simple_add_monitor() {
     );
 }
 
-#[ignore = "Cannot have empty spec or inputs"]
 #[tokio::test]
+#[ignore = "Cannot have empty spec or inputs"]
 async fn test_runtime_initialization() {
     let mut input_streams = input_empty();
     let spec = lola_specification(&mut spec_empty()).unwrap();
