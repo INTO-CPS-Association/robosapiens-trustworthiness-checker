@@ -29,7 +29,7 @@ pub fn input_streams1() -> BTreeMap<VarName, BoxStream<'static, Value>> {
     input_streams
 }
 
-fn output_handler(spec: LOLASpecification) -> ManualOutputHandler<Value> {
+fn output_handler(spec: LOLASpecification) -> ManualOutputHandler<Option<Value>> {
     ManualOutputHandler::new(spec.output_vars.clone())
 }
 
@@ -41,25 +41,26 @@ async fn test_simple_add_monitor() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> =
+        outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Int(3))]
+                vec![(VarName("z".into()), Some(Value::Int(3)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Int(7))]
+                vec![(VarName("z".into()), Some(Value::Int(7)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 2,
-                vec![(VarName("z".into()), Value::Int(11))]
+                vec![(VarName("z".into()), Some(Value::Int(11)))]
                     .into_iter()
                     .collect(),
             ),
@@ -76,7 +77,7 @@ async fn test_runtime_initialization() {
     let outputs = Box::new(output_handler.get_output());
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<BTreeMap<VarName, Value>> = outputs.collect().await;
+    let outputs: Vec<BTreeMap<VarName, Option<Value>>> = outputs.collect().await;
     assert_eq!(outputs.len(), 0);
 }
 
@@ -89,26 +90,27 @@ async fn test_var() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> =
+        outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Int(1))]
+                vec![(VarName("z".into()), Some(Value::Int(1)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Int(3))]
+                vec![(VarName("z".into()), Some(Value::Int(3)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 2,
-                vec![(VarName("z".into()), Value::Int(5))]
+                vec![(VarName("z".into()), Some(Value::Int(5)))]
                     .into_iter()
                     .collect(),
             ),
@@ -125,7 +127,7 @@ async fn test_literal_expression() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> =
         outputs.take(3).enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
@@ -133,19 +135,19 @@ async fn test_literal_expression() {
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Int(42))]
+                vec![(VarName("z".into()), Some(Value::Int(42)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Int(42))]
+                vec![(VarName("z".into()), Some(Value::Int(42)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 2,
-                vec![(VarName("z".into()), Value::Int(42))]
+                vec![(VarName("z".into()), Some(Value::Int(42)))]
                     .into_iter()
                     .collect(),
             ),
@@ -162,26 +164,27 @@ async fn test_addition() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> =
+        outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Int(2))]
+                vec![(VarName("z".into()), Some(Value::Int(2)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Int(4))]
+                vec![(VarName("z".into()), Some(Value::Int(4)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 2,
-                vec![(VarName("z".into()), Value::Int(6))]
+                vec![(VarName("z".into()), Some(Value::Int(6)))]
                     .into_iter()
                     .collect(),
             ),
@@ -205,19 +208,19 @@ async fn test_subtraction() {
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Int(-9))]
+                vec![(VarName("z".into()), Some(Value::Int(-9)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Int(-7))]
+                vec![(VarName("z".into()), Some(Value::Int(-7)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 2,
-                vec![(VarName("z".into()), Value::Int(-5))]
+                vec![(VarName("z".into()), Some(Value::Int(-5)))]
                     .into_iter()
                     .collect(),
             ),
@@ -242,21 +245,21 @@ async fn test_index_past() {
             (
                 // Resolved to default on first step
                 0,
-                vec![(VarName("z".into()), Value::Int(0))]
+                vec![(VarName("z".into()), Some(Value::Int(0)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 // Resolving to previous value on second step
                 1,
-                vec![(VarName("z".into()), Value::Int(1))]
+                vec![(VarName("z".into()), Some(Value::Int(1)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 // Resolving to previous value on second step
                 2,
-                vec![(VarName("z".into()), Value::Int(3))]
+                vec![(VarName("z".into()), Some(Value::Int(3)))]
                     .into_iter()
                     .collect(),
             ),

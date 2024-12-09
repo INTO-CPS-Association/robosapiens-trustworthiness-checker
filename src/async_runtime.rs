@@ -434,7 +434,7 @@ where
 }
 
 #[async_trait]
-impl<Expr: Sync + Send, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M>
+impl<Expr: Sync + Send, Val, S, M> Monitor<M, Val, Val> for AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,

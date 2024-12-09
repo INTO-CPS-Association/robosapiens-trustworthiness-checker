@@ -1,6 +1,8 @@
 use std::{
     collections::BTreeMap,
-    fmt::{Debug, Display}, future::Future, pin::Pin,
+    fmt::{Debug, Display},
+    future::Future,
+    pin::Pin,
 };
 
 use async_trait::async_trait;
@@ -17,6 +19,7 @@ pub enum Value {
     Unit,
 }
 impl StreamData for Value {}
+impl StreamData for Option<Value> {}
 
 impl TryFrom<Value> for i64 {
     type Error = ();
@@ -205,7 +208,7 @@ pub trait OutputHandler<V: StreamData>: Send {
  * to borrow from the input provider without worrying about lifetimes.
  */
 #[async_trait]
-pub trait Monitor<M, V: StreamData>: Send {
+pub trait Monitor<M, Vi: StreamData, Vo: StreamData>: Send {
     fn new(model: M, input: &mut dyn InputProvider<V>, output: Box<dyn OutputHandler<V>>) -> Self;
 
     fn spec(&self) -> &M;

@@ -46,13 +46,13 @@ impl ValStreamCollection {
 fn var_output_stream<'a>(
     var_name: VarName,
     constraints: BoxStream<'a, ConstraintStore>,
-) -> BoxStream<'a, Value> {
+) -> BoxStream<'a, Option<Value>> {
     Box::pin(constraints.enumerate().map(move |(index, cs)| {
         if let Some(val) = cs.get_from_outputs_resolved(&var_name, &index) {
             // Return the value if it is resolved
-            val.clone()
+            Some(val.clone())
         } else {
-            Value::Unknown
+            None
         }
     }))
 }
@@ -150,12 +150,16 @@ impl SyncConstraintBasedRuntime {
 pub struct ConstraintBasedMonitor {
     input_streams: ValStreamCollection,
     model: LOLASpecification,
-    output_handler: Box<dyn OutputHandler<Value>>,
+    output_handler: Box<dyn OutputHandler<Option<Value>>>,
 }
 
 #[async_trait]
-impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
-    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>, output: Box<dyn OutputHandler<Value>>) -> Self {
+impl Monitor<LOLASpecification, Option<Value>> for ConstraintBasedMonitor {
+    fn new(
+        model: LOLASpecification,
+        input: &mut dyn InputProvider<Option<Value>>,
+        output: Box<dyn OutputHandler<Value>>,
+    ) -> Self {
         let input_streams = model
             .input_vars()
             .iter()
@@ -189,7 +193,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
     }
 }
 
-impl ConstraintBasedMonitor {
+impl<H: OutputHandler<Value>> ConstraintBasedMonitor<H> {
     fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
         let inputs_stream = mem::take(&mut self.input_streams).into_stream();
         let mut runtime_initial = SyncConstraintBasedRuntime::default();
@@ -207,7 +211,7 @@ impl ConstraintBasedMonitor {
         ))
     }
 
-    fn output_stream(&mut self, var: &VarName) -> BoxStream<'static, Value> {
+    fn output_stream(&mut self, var: &VarName) -> BoxStream<'static, Option<Value>> {
         var_output_stream(var.clone(), self.stream_output_constraints())
     }
 }
