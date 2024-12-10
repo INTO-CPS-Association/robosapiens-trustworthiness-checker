@@ -111,7 +111,7 @@ async fn main() {
         )),
     };
     let opt_output_handler =
-        StdoutOutputHandler::<Option<tc::Value>>::new(model.output_vars.clone());
+        Box::new(StdoutOutputHandler::<Option<tc::Value>>::new(model.output_vars.clone()));
 
     // println!("Outputs: {:?}", model.output_vars);
     // println!("Inputs: {:?}", model.input_vars);

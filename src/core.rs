@@ -209,7 +209,7 @@ pub trait OutputHandler<V: StreamData>: Send {
  */
 #[async_trait]
 pub trait Monitor<M, Vi: StreamData, Vo: StreamData>: Send {
-    fn new(model: M, input: &mut dyn InputProvider<V>, output: Box<dyn OutputHandler<V>>) -> Self;
+    fn new(model: M, input: &mut dyn InputProvider<Vi>, output: Box<dyn OutputHandler<Vo>>) -> Self;
 
     fn spec(&self) -> &M;
 

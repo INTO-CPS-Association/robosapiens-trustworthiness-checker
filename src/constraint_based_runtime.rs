@@ -154,11 +154,11 @@ pub struct ConstraintBasedMonitor {
 }
 
 #[async_trait]
-impl Monitor<LOLASpecification, Option<Value>> for ConstraintBasedMonitor {
+impl Monitor<LOLASpecification, Value, Option<Value>> for ConstraintBasedMonitor {
     fn new(
         model: LOLASpecification,
-        input: &mut dyn InputProvider<Option<Value>>,
-        output: Box<dyn OutputHandler<Value>>,
+        input: &mut dyn InputProvider<Value>,
+        output: Box<dyn OutputHandler<Option<Value>>>,
     ) -> Self {
         let input_streams = model
             .input_vars()
@@ -193,7 +193,7 @@ impl Monitor<LOLASpecification, Option<Value>> for ConstraintBasedMonitor {
     }
 }
 
-impl<H: OutputHandler<Value>> ConstraintBasedMonitor<H> {
+impl ConstraintBasedMonitor {
     fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
         let inputs_stream = mem::take(&mut self.input_streams).into_stream();
         let mut runtime_initial = SyncConstraintBasedRuntime::default();
