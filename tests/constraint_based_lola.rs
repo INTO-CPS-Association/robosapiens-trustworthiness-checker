@@ -201,7 +201,7 @@ async fn test_subtraction() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
@@ -237,7 +237,7 @@ async fn test_index_past() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
@@ -277,13 +277,13 @@ async fn test_index_future() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, Box::new(output_handler));
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> = outputs.enumerate().collect().await;
     // assert!(outputs.len() == 1);
     assert_eq!(
         outputs,
         vec![(
             0,
-            vec![(VarName("z".into()), Value::Int(1))]
+            vec![(VarName("z".into()), Some(Value::Int(1)))]
                 .into_iter()
                 .collect(),
         ),]
@@ -299,26 +299,26 @@ async fn test_if_else_expression() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, Box::new(output_handler));
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 3);
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Bool(true))]
+                vec![(VarName("z".into()), Some(Value::Bool(true)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Bool(false))]
+                vec![(VarName("z".into()), Some(Value::Bool(false)))]
                     .into_iter()
                     .collect(),
             ),
             (
                 2,
-                vec![(VarName("z".into()), Value::Bool(false))]
+                vec![(VarName("z".into()), Some(Value::Bool(false)))]
                     .into_iter()
                     .collect(),
             ),
@@ -335,20 +335,20 @@ async fn test_string_append() {
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, Box::new(output_handler));
     tokio::spawn(monitor.run());
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, BTreeMap<VarName, Option<Value>>)> = outputs.enumerate().collect().await;
     assert!(outputs.len() == 2);
     assert_eq!(
         outputs,
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Str("ab".to_string()))]
+                vec![(VarName("z".into()), Some(Value::Str("ab".to_string())))]
                     .into_iter()
                     .collect(),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Str("cd".to_string()))]
+                vec![(VarName("z".into()), Some(Value::Str("cd".to_string())))]
                     .into_iter()
                     .collect(),
             ),
