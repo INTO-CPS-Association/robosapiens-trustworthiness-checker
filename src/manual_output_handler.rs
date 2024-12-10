@@ -5,7 +5,10 @@ use futures::future::join_all;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
+use crate::{
+    core::{OutputHandler, OutputStream, StreamData, VarName},
+    Value,
+};
 
 /* Some members are defined as Option<T> as either they are provided after
  * construction by provide_streams or once they are used they are taken and
@@ -97,19 +100,105 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
     }
 }
 
+
+pub struct AsyncManualOutputHandler {
+    var_names: Vec<VarName>,
+    stream_senders: Option<Vec<oneshot::Sender<OutputStream<Value>>>>,
+    stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<Value>>>>,
+    output_sender: Option<mpsc::Sender<(VarName, Value)>>,
+    output_receiver: Option<mpsc::Receiver<(VarName, Value)>>,
+}
+
+async fn publish_stream(
+    name: VarName,
+    mut stream: OutputStream<Value>,
+    output_sender: mpsc::Sender<(VarName, Value)>,
+) {
+    while let Some(data) = stream.next().await {
+        let _ = output_sender.send((name.clone(), data)).await;
+    }
+}
+
+#[async_trait]
+impl OutputHandler<Value> for AsyncManualOutputHandler {
+    fn provide_streams(&mut self, mut streams: BTreeMap<VarName, OutputStream<Value>>) {
+        for (var_name, sender) in self
+            .var_names
+            .iter()
+            .zip(self.stream_senders.take().unwrap())
+        {
+            let stream = streams
+                .remove(var_name)
+                .expect(format!("Stream for {} not found", var_name).as_str());
+            assert!(sender.send(stream).is_ok());
+        }
+    }
+
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>> {
+        let receivers = mem::take(&mut self.stream_receivers).expect("Stream receivers not found");
+        let streams: Vec<_> = receivers
+            .into_iter()
+            .map(|mut r| r.try_recv().unwrap())
+            .collect();
+        let output_sender = mem::take(&mut self.output_sender).expect("Output sender not found");
+        let var_names = self.var_names.clone();
+
+        Box::pin(async move {
+            futures::future::join_all(
+                streams
+                    .into_iter()
+                    .zip(var_names)
+                    .map(|(stream, var_name)| {
+                        publish_stream(var_name, stream, output_sender.clone())
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await;
+        })
+    }
+}
+
+impl AsyncManualOutputHandler {
+    pub fn new(var_names: Vec<VarName>) -> Self {
+        let (stream_senders, stream_receivers): (
+            Vec<oneshot::Sender<OutputStream<Value>>>,
+            Vec<oneshot::Receiver<OutputStream<Value>>>,
+        ) = var_names.iter().map(|_| oneshot::channel()).unzip();
+        let (output_sender, output_receiver) = mpsc::channel(10);
+        Self {
+            var_names,
+            stream_senders: Some(stream_senders),
+            stream_receivers: Some(stream_receivers),
+            output_receiver: Some(output_receiver),
+            output_sender: Some(output_sender),
+        }
+    }
+
+    pub fn get_output(&mut self) -> OutputStream<(VarName, Value)> {
+        Box::pin(ReceiverStream::new(
+            self.output_receiver
+                .take()
+                .expect("Output receiver missing"),
+        ))
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use futures::StreamExt;
+    use std::time::Duration;
 
     // use tokio_stream as stream;
 
     use crate::{OutputStream, Value, VarName};
     use futures::stream;
+    use tokio::time::interval;
+    use tokio_stream::wrappers::IntervalStream;
 
     use super::*;
-
     #[tokio::test]
-    async fn test_combined_output() {
+    async fn sync_test_combined_output() {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
@@ -143,6 +232,51 @@ mod tests {
         let output: Vec<BTreeMap<VarName, Value>> = output_stream.collect().await;
 
         assert_eq!(output, xy_expected);
+
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn async_test_combined_output() {
+        // Helper to create a named stream with delay
+        fn create_stream(name: &str, multiplier: i64, offset: i64) -> (VarName, OutputStream<Value>) {
+            let var_name = VarName(name.to_string());
+            // Delay to force expected ordering of the streams
+            let interval = IntervalStream::new(interval(Duration::from_millis(1)));
+            let stream = Box::pin(
+                stream::iter(0..3).zip(interval).map(move |(x, _)| (multiplier * x + offset).into()),
+            );
+            (var_name, stream)
+        }
+
+        // Prepare input streams
+        let (x_name, x_stream) = create_stream("x", 2, 0);
+        let (y_name, y_stream) = create_stream("y", 2, 1);
+
+        // Prepare expected output
+        let expected_output: Vec<_> = (0..3)
+            .flat_map(|x| vec![
+                (x_name.clone(), (x * 2).into()),
+                (y_name.clone(), (x * 2 + 1).into()),
+            ])
+            .collect();
+
+        // Initialize the handler
+        let mut handler = AsyncManualOutputHandler::new(vec![x_name.clone(), y_name.clone()]);
+        handler.provide_streams(
+            vec![(x_name, x_stream), (y_name, y_stream)]
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+        );
+
+        // Run the handler and validate output
+        let mut output_stream = handler.get_output();
+        let task = tokio::spawn(handler.run());
+
+        for expected in &expected_output {
+            let value = output_stream.next().await.unwrap();
+            assert_eq!(value, *expected);
+        }
 
         task.await.unwrap();
     }
