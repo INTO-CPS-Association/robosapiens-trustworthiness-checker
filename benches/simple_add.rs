@@ -125,7 +125,9 @@ async fn monitor_outputs_typed_queuing(num_outputs: usize) {
 }
 
 fn from_elem(c: &mut Criterion) {
-    let sizes = vec![1, 10, 100, 500, 1000, 2000, 5000, 10000, 100000, 1000000];
+    let sizes = vec![
+        1, 10, 100, 500, 1000, 2000, 5000, 10000, 25000, 100000, 1000000,
+    ];
 
     let tokio_rt = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -137,7 +139,7 @@ fn from_elem(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(30));
 
     for size in sizes {
-        if size < 5000 {
+        if size <= 25000 {
             group.bench_with_input(
                 BenchmarkId::new("simple_add_constraints", size),
                 &size,
