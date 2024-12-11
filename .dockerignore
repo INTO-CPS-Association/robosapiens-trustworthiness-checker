@@ -1,0 +1,7 @@
+.devcontainer/*
+.github/*
+.idea/*
+.vscode/*
+docker/*
+.git/*
+target/*

@@ -74,7 +74,6 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
 
         Box::pin(async move {
             loop {
-                println!("ManualOutputHandler running");
                 let nexts = streams.iter_mut().map(|s| s.next());
 
                 // Stop outputting when any of the streams ends, otherwise collect
@@ -91,12 +90,9 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
                     output_sender.send(output).await.unwrap();
                 } else {
                     // One of the streams has ended, so we should stop
-                    println!("One of the streams has ended");
                     break;
                 }
             }
-
-            println!("ManualOutputHandler finished");
         })
     }
 }
@@ -142,19 +138,11 @@ mod tests {
         //
         let output_stream = handler.get_output();
 
-        println!("Starting handler");
-
         let task = tokio::spawn(handler.run());
-
-        println!("Starting output");
 
         let output: Vec<BTreeMap<VarName, Value>> = output_stream.collect().await;
 
-        println!("Output: {:?}", output);
-
         assert_eq!(output, xy_expected);
-
-        println!("Waiting for task to finish");
 
         task.await.unwrap();
     }

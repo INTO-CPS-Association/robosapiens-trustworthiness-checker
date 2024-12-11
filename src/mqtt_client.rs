@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use async_once_cell::OnceCell;
-use lazy_static::lazy_static;
 use paho_mqtt as mqtt;
 use tokio::sync::{mpsc, oneshot};
 

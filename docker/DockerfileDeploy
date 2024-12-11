@@ -1,0 +1,19 @@
+FROM rust:1.82-bookworm AS base
+SHELL ["/bin/bash", "-c"]
+
+FROM base AS build
+RUN apt-get update \
+    && apt-get install -y cmake build-essential openssl
+
+COPY . /opt/trustworthiness-checker
+
+WORKDIR /opt/trustworthiness-checker
+
+RUN cargo build --release
+RUN cargo test
+
+FROM build AS deploy
+
+COPY --from=build /opt/trustworthiness-checker/ /opt/trustworthiness-checker/
+
+ENTRYPOINT ["/bin/bash", "-c", "trap exit 0 INT; /opt/trustworthiness-checker/target/release/trustworthiness_checker \"$@\"", "--"]
