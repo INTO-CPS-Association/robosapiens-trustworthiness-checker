@@ -44,12 +44,12 @@ impl ValStreamCollection {
 }
 
 #[derive(Debug, Default)]
-pub struct SyncConstraintBasedRuntime {
+pub struct ConstraintBasedRuntime {
     store: ConstraintStore,
     time: usize,
 }
 
-impl SyncConstraintBasedRuntime {
+impl ConstraintBasedRuntime {
     fn receive_inputs(&mut self, inputs: &BTreeMap<VarName, Value>) {
         // Add new input values
         for (name, val) in inputs {
@@ -178,7 +178,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 impl ConstraintBasedMonitor {
     fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
         let inputs_stream = mem::take(&mut self.input_streams).into_stream();
-        let mut runtime_initial = SyncConstraintBasedRuntime::default();
+        let mut runtime_initial = ConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
         Box::pin(stream::unfold(
             (inputs_stream, runtime_initial),
