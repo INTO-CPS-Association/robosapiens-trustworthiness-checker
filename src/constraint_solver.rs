@@ -16,6 +16,7 @@ pub struct ConstraintStore {
     pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
+    pub resolved_this_step: ValStream,
 }
 
 pub fn model_constraints(model: LOLASpecification) -> ConstraintStore {
@@ -35,6 +36,7 @@ impl Default for ConstraintStore {
             output_exprs: BTreeMap::new(),
             outputs_resolved: BTreeMap::new(),
             outputs_unresolved: BTreeMap::new(),
+            resolved_this_step: BTreeMap::new(),
         }
     }
 }

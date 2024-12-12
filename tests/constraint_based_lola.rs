@@ -3,8 +3,7 @@
 use futures::stream::StreamExt;
 use std::collections::BTreeMap;
 use trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor;
-use trustworthiness_checker::manual_output_handler::ManualOutputHandler;
-use trustworthiness_checker::{lola_specification, LOLASpecification};
+use trustworthiness_checker::{lola_specification, manual_output_handler::ManualOutputHandler, LOLASpecification};
 use trustworthiness_checker::{Monitor, Value, VarName};
 mod lola_fixtures;
 use futures::stream;
@@ -264,26 +263,35 @@ async fn test_index_past() {
     );
 }
 
-#[ignore = "Future indexing doesn't work when data is handled async"]
 #[tokio::test]
 async fn test_index_future() {
     let mut input_streams = input_streams1();
     let mut spec = "in x\nout z\nz =x[1, 0]";
     let spec = lola_specification(&mut spec).unwrap();
-    let mut output_handler = output_handler(spec.clone());
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
     tokio::spawn(monitor.run());
+    // let outputs: Vec<(usize, (VarName, Value))> = outputs.enumerate().collect().await;
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
-    // assert!(outputs.len() == 1);
+    assert!(outputs.len() == 2);
     assert_eq!(
         outputs,
-        vec![(
-            0,
-            vec![(VarName("z".into()), Value::Int(1))]
-                .into_iter()
-                .collect(),
-        ),]
+        vec![
+            (
+                // Resolved to index 1 on first step
+                0,
+                vec![(VarName("z".into()), Value::Int(3))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                1,
+                vec![(VarName("z".into()), Value::Int(5))]
+                    .into_iter()
+                    .collect(),
+            ),
+        ]
     );
 }
 

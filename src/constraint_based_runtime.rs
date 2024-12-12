@@ -6,6 +6,7 @@ use futures::StreamExt;
 use std::collections::BTreeMap;
 use std::iter::zip;
 use std::mem;
+use async_stream::stream;
 
 use crate::ast::LOLASpecification;
 use crate::ast::SExpr;
@@ -40,21 +41,6 @@ impl ValStreamCollection {
             Some((res, streams))
         }))
     }
-}
-
-/* Get a stream of the values of a variable from a constraint store over time */
-fn var_output_stream<'a>(
-    var_name: VarName,
-    constraints: BoxStream<'a, ConstraintStore>,
-) -> BoxStream<'a, Value> {
-    Box::pin(constraints.enumerate().map(move |(index, cs)| {
-        if let Some(val) = cs.get_from_outputs_resolved(&var_name, &index) {
-            // Return the value if it is resolved
-            val.clone()
-        } else {
-            Value::Unknown
-        }
-    }))
 }
 
 #[derive(Debug, Default)]
@@ -208,6 +194,17 @@ impl ConstraintBasedMonitor {
     }
 
     fn output_stream(&mut self, var: &VarName) -> BoxStream<'static, Value> {
-        var_output_stream(var.clone(), self.stream_output_constraints())
+        let var_name = var.clone();
+        let mut constraints = self.stream_output_constraints();
+
+        Box::pin(stream! {
+            let mut index = 0;
+            while let Some(cs) = constraints.next().await {
+                if let Some(resolved) = cs.get_from_outputs_resolved(&var_name, &index).cloned(){
+                    index += 1;
+                    yield resolved;
+                }
+            }
+        })
     }
 }
