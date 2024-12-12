@@ -139,7 +139,7 @@ fn from_elem(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(30));
 
     for size in sizes {
-        if size <= 25000 {
+        if size <= 10000 {
             group.bench_with_input(
                 BenchmarkId::new("simple_add_constraints", size),
                 &size,
