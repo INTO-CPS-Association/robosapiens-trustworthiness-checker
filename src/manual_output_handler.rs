@@ -5,10 +5,7 @@ use futures::future::join_all;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use crate::{
-    core::{OutputHandler, OutputStream, StreamData, VarName},
-    Value,
-};
+use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
 
 /* Some members are defined as Option<T> as either they are provided after
  * construction by provide_streams or once they are used they are taken and
@@ -101,17 +98,17 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
 }
 
 
-pub struct AsyncManualOutputHandler {
+pub struct AsyncManualOutputHandler<V: StreamData>{
     var_names: Vec<VarName>,
-    stream_senders: Option<Vec<oneshot::Sender<OutputStream<Value>>>>,
-    stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<Value>>>>,
-    output_sender: Option<mpsc::Sender<(VarName, Value)>>,
-    output_receiver: Option<mpsc::Receiver<(VarName, Value)>>,
+    stream_senders: Option<Vec<oneshot::Sender<OutputStream<V>>>>,
+    stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
+    output_sender: Option<mpsc::Sender<(VarName, V)>>,
+    output_receiver: Option<mpsc::Receiver<(VarName, V)>>,
 }
 
 #[async_trait]
-impl OutputHandler<Value> for AsyncManualOutputHandler {
-    fn provide_streams(&mut self, mut streams: BTreeMap<VarName, OutputStream<Value>>) {
+impl<V: StreamData> OutputHandler<V> for AsyncManualOutputHandler<V> {
+    fn provide_streams(&mut self, mut streams: BTreeMap<VarName, OutputStream<V>>) {
         for (var_name, sender) in self
             .var_names
             .iter()
@@ -156,11 +153,11 @@ impl OutputHandler<Value> for AsyncManualOutputHandler {
     }
 }
 
-impl AsyncManualOutputHandler {
+impl<V: StreamData> AsyncManualOutputHandler<V> {
     pub fn new(var_names: Vec<VarName>) -> Self {
         let (stream_senders, stream_receivers): (
-            Vec<oneshot::Sender<OutputStream<Value>>>,
-            Vec<oneshot::Receiver<OutputStream<Value>>>,
+            Vec<oneshot::Sender<OutputStream<V>>>,
+            Vec<oneshot::Receiver<OutputStream<V>>>,
         ) = var_names.iter().map(|_| oneshot::channel()).unzip();
         let (output_sender, output_receiver) = mpsc::channel(10);
         Self {
@@ -172,7 +169,7 @@ impl AsyncManualOutputHandler {
         }
     }
 
-    pub fn get_output(&mut self) -> OutputStream<(VarName, Value)> {
+    pub fn get_output(&mut self) -> OutputStream<(VarName, V)> {
         Box::pin(ReceiverStream::new(
             self.output_receiver
                 .take()
