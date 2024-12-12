@@ -109,16 +109,6 @@ pub struct AsyncManualOutputHandler {
     output_receiver: Option<mpsc::Receiver<(VarName, Value)>>,
 }
 
-async fn publish_stream(
-    name: VarName,
-    mut stream: OutputStream<Value>,
-    output_sender: mpsc::Sender<(VarName, Value)>,
-) {
-    while let Some(data) = stream.next().await {
-        let _ = output_sender.send((name.clone(), data)).await;
-    }
-}
-
 #[async_trait]
 impl OutputHandler<Value> for AsyncManualOutputHandler {
     fn provide_streams(&mut self, mut streams: BTreeMap<VarName, OutputStream<Value>>) {
@@ -149,7 +139,15 @@ impl OutputHandler<Value> for AsyncManualOutputHandler {
                     .into_iter()
                     .zip(var_names)
                     .map(|(stream, var_name)| {
-                        publish_stream(var_name, stream, output_sender.clone())
+                        {
+                            let mut stream = stream;
+                            let output_sender = output_sender.clone();
+                            async move {
+                                while let Some(data) = stream.next().await {
+                                    let _ = output_sender.send((var_name.clone(), data)).await;
+                                }
+                            }
+                        }
                     })
                     .collect::<Vec<_>>(),
             )
@@ -242,9 +240,9 @@ mod tests {
         fn create_stream(name: &str, multiplier: i64, offset: i64) -> (VarName, OutputStream<Value>) {
             let var_name = VarName(name.to_string());
             // Delay to force expected ordering of the streams
-            let interval = IntervalStream::new(interval(Duration::from_millis(1)));
+            let interval = IntervalStream::new(interval(Duration::from_millis(5)));
             let stream = Box::pin(
-                stream::iter(0..3).zip(interval).map(move |(x, _)| (multiplier * x + offset).into()),
+                stream::iter(0..10).zip(interval).map(move |(x, _)| (multiplier * x + offset).into()),
             );
             (var_name, stream)
         }
@@ -254,7 +252,7 @@ mod tests {
         let (y_name, y_stream) = create_stream("y", 2, 1);
 
         // Prepare expected output
-        let expected_output: Vec<_> = (0..3)
+        let expected_output: Vec<_> = (0..10)
             .flat_map(|x| vec![
                 (x_name.clone(), (x * 2).into()),
                 (y_name.clone(), (x * 2 + 1).into()),
