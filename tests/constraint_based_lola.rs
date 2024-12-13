@@ -116,7 +116,6 @@ async fn test_var() {
 }
 
 #[tokio::test]
-#[ignore = "Tmp ignored"]
 async fn test_literal_expression() {
     let mut input_streams = input_streams1();
     let mut spec = "out z\nz =42";
