@@ -16,7 +16,6 @@ pub struct ConstraintStore {
     pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
-    pub resolved_this_step: ValStream,
 }
 
 pub fn model_constraints(model: LOLASpecification) -> ConstraintStore {
@@ -36,7 +35,6 @@ impl Default for ConstraintStore {
             output_exprs: BTreeMap::new(),
             outputs_resolved: BTreeMap::new(),
             outputs_unresolved: BTreeMap::new(),
-            resolved_this_step: BTreeMap::new(),
         }
     }
 }
@@ -197,7 +195,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
                 if let Some(expr) = store.get_from_outputs_unresolved(&name, &base_time) {
                     Unresolved(Box::new(expr.clone()))
                 } else {
-                    unreachable!("Var({:?}, {:?}) does not exist", name, base_time);
+                    unreachable!("Var({:?}, {:?}) does not exist. Store: {:?}", name, base_time, store);
                 }
             }
             SExpr::Index(expr, idx_time, default) => {

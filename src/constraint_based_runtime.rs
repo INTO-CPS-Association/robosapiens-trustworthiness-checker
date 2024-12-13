@@ -23,23 +23,23 @@ use crate::is_enum_variant;
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);
 
 impl ValStreamCollection {
-    fn into_stream(self) -> BoxStream<'static, BTreeMap<VarName, Value>> {
-        Box::pin(futures::stream::unfold(self, |mut streams| async move {
+    fn into_stream(mut self) -> BoxStream<'static, BTreeMap<VarName, Value>> {
+        Box::pin(stream!(
+        loop {
             let mut res = BTreeMap::new();
-            let nexts = streams.0.values_mut().map(|s| s.next());
-            let next_vals = join_all(nexts).await;
-            for (k, v) in zip(streams.0.keys(), next_vals) {
-                match v {
-                    Some(v) => {
-                        res.insert(k.clone(), v);
+            for (name, stream) in self.0.iter_mut() {
+                match stream.next().await {
+                    Some(val) => {
+                        res.insert(name.clone(), val);
                     }
                     None => {
-                        return None;
+                        return;
                     }
                 }
             }
-            Some((res, streams))
-        }))
+            yield res;
+        }
+    ))
     }
 }
 
@@ -180,16 +180,13 @@ impl ConstraintBasedMonitor {
         let inputs_stream = mem::take(&mut self.input_streams).into_stream();
         let mut runtime_initial = ConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
-        Box::pin(stream::unfold(
-            (inputs_stream, runtime_initial),
-            |(mut inputs_stream, mut runtime)| async move {
-                // Add the new constraints to the constraint store
-                let new_inputs = inputs_stream.next().await?;
-                runtime.step(&new_inputs);
-
-                // Keep unfolding
-                Some((runtime.store.clone(), (inputs_stream, runtime)))
-            },
+        Box::pin(stream!(
+            let mut inputs_stream = inputs_stream;
+            let mut runtime = runtime_initial;
+            while let Some(inputs) = inputs_stream.next().await {
+                runtime.step(&inputs);
+                yield runtime.store.clone();
+            }
         ))
     }
 
