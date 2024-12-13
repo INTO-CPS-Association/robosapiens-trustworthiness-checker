@@ -166,3 +166,46 @@ async fn test_eval_monitor() {
         ]
     );
 }
+
+
+#[tokio::test]
+async fn test_multiple_parameters() {
+    let mut input_streams = input_streams3();
+    let mut spec = "in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y";
+    let spec = lola_specification(&mut spec).unwrap();
+    let spec = type_check(spec).expect("Type check failed");
+    println!("{:?}", spec);
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                vec![
+                    (VarName("r1".into()), Value::Int(3)),
+                    (VarName("r2".into()), Value::Int(2)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            (
+                1,
+                vec![
+                    (VarName("r1".into()), Value::Int(7)),
+                    (VarName("r2".into()), Value::Int(12)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        ]
+    );
+}
