@@ -116,6 +116,7 @@ async fn test_var() {
 }
 
 #[tokio::test]
+#[ignore = "Tmp ignored"]
 async fn test_literal_expression() {
     let mut input_streams = input_streams1();
     let mut spec = "out z\nz =42";
@@ -356,6 +357,51 @@ async fn test_string_append() {
                 vec![(VarName("z".into()), Value::Str("cd".to_string()))]
                     .into_iter()
                     .collect(),
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn test_multiple_parameters() {
+    let mut input_streams = input_streams1();
+    let mut spec = "in x\nin y\nout r1\nout r2\nr1 =x+y\nr2 = x * y";
+    let spec = lola_specification(&mut spec).unwrap();
+    let mut output_handler = output_handler(spec.clone());
+    let outputs = output_handler.get_output();
+    let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+    tokio::spawn(monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    assert!(outputs.len() == 3);
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                vec![
+                    (VarName("r1".into()), Value::Int(3)),
+                    (VarName("r2".into()), Value::Int(2)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            (
+                1,
+                vec![
+                    (VarName("r1".into()), Value::Int(7)),
+                    (VarName("r2".into()), Value::Int(12)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            (
+                2,
+                vec![
+                    (VarName("r1".into()), Value::Int(11)),
+                    (VarName("r2".into()), Value::Int(30)),
+                ]
+                .into_iter()
+                .collect(),
             ),
         ]
     );

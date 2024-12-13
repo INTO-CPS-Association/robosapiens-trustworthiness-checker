@@ -3,6 +3,7 @@ use futures::future::join_all;
 use futures::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
+use tokio::sync::broadcast;
 use std::collections::BTreeMap;
 use std::iter::zip;
 use std::mem;
@@ -133,8 +134,39 @@ impl ConstraintBasedRuntime {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ProducerMessage<T>{
+    Data(T),
+    Done
+}
+
+struct InputProducer {
+    sender: broadcast::Sender<ProducerMessage<BTreeMap<VarName, Value>>>,
+}
+
+impl InputProducer {
+    pub fn new(stream_collection : ValStreamCollection) -> Self {
+        let (sender, _) = broadcast::channel(10);
+        let task_sender = sender.clone();
+        tokio::spawn(async move {
+            let mut inputs_stream = stream_collection.into_stream();
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            while let Some(inputs) = inputs_stream.next().await {
+                let data = ProducerMessage::Data(inputs);
+                task_sender.send(data).unwrap();
+            }
+            task_sender.send(ProducerMessage::Done).unwrap();
+        });
+        Self { sender }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ProducerMessage<BTreeMap<VarName, Value>>> {
+        self.sender.subscribe()
+    }
+}
+
 pub struct ConstraintBasedMonitor {
-    input_streams: ValStreamCollection,
+    input_producer: InputProducer,
     model: LOLASpecification,
     output_handler: Box<dyn OutputHandler<Value>>,
 }
@@ -150,10 +182,11 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
                 (var.clone(), stream.unwrap())
             })
             .collect::<BTreeMap<_, _>>();
-        let input_streams = ValStreamCollection(input_streams);
+        let stream_collection = ValStreamCollection(input_streams);
+        let input_producer = InputProducer::new(stream_collection);
 
         ConstraintBasedMonitor {
-            input_streams,
+            input_producer,
             model,
             output_handler: output,
         }
@@ -177,15 +210,22 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 
 impl ConstraintBasedMonitor {
     fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
-        let inputs_stream = mem::take(&mut self.input_streams).into_stream();
+        let input_receiver= self.input_producer.subscribe();
         let mut runtime_initial = ConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
         Box::pin(stream!(
-            let mut inputs_stream = inputs_stream;
+            let mut input_receiver = input_receiver;
             let mut runtime = runtime_initial;
-            while let Some(inputs) = inputs_stream.next().await {
-                runtime.step(&inputs);
-                yield runtime.store.clone();
+            while let Ok(inputs) = input_receiver.recv().await {
+                match inputs {
+                    ProducerMessage::Data(inputs) => {
+                        runtime.step(&inputs);
+                        yield runtime.store.clone();
+                    }
+                    ProducerMessage::Done => {
+                        break;
+                    }
+                }
             }
         ))
     }
