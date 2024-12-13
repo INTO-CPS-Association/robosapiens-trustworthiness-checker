@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use futures::stream;
@@ -260,14 +260,14 @@ where
 }
 
 #[async_trait]
-impl<
-        Val: StreamData,
-        Expr: Send,
-        S: MonitoringSemantics<Expr, Val>,
-        M: Specification<Expr>,
-    > Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
+impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
+    Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
 {
-    fn new(model: M, input_streams: &mut dyn InputProvider<Val>, output: Box<dyn OutputHandler<Val>>) -> Self {
+    fn new(
+        model: M,
+        input_streams: &mut dyn InputProvider<Val>,
+        output: Box<dyn OutputHandler<Val>>,
+    ) -> Self {
         let var_names: Vec<VarName> = model
             .input_vars()
             .into_iter()
@@ -332,12 +332,8 @@ impl<
     }
 }
 
-impl<
-        Val: StreamData,
-        Expr,
-        S: MonitoringSemantics<Expr, Val>,
-        M: Specification<Expr>,
-    > QueuingMonitorRunner<Expr, Val, S, M>
+impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
+    QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn output_stream(&self, var: VarName) -> OutputStream<Val> {
         self.var_exchange.var(&var).unwrap()

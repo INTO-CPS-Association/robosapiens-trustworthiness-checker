@@ -27,7 +27,9 @@ pub use file_handling::parse_file;
 pub mod commandline_args;
 pub mod macros;
 pub mod manual_output_handler;
+pub mod mqtt_client;
 pub mod mqtt_input_provider;
+pub mod mqtt_output_handler;
 pub mod null_output_handler;
 #[cfg(feature = "ros")]
 pub mod ros_input_provider;
@@ -37,5 +39,3 @@ pub mod stdout_output_handler;
 pub mod stream_utils;
 pub mod typed_monitoring_combinators;
 pub mod typed_monitoring_semantics;
-pub mod mqtt_output_handler;
-pub mod mqtt_client;

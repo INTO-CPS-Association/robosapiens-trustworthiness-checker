@@ -160,7 +160,6 @@ async fn test_eval_monitor() {
     );
 }
 
-
 #[tokio::test]
 async fn test_multiple_parameters() {
     let mut input_streams = input_streams1();
@@ -168,7 +167,11 @@ async fn test_multiple_parameters() {
     let spec = lola_specification(&mut spec).unwrap();
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(spec, &mut input_streams, output_handler);
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 2);

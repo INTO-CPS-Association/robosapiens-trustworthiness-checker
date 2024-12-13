@@ -1,8 +1,6 @@
 use crate::core::{StreamContext, StreamData};
 use crate::untimed_monitoring_combinators::{lift1, lift2, lift3};
-use crate::{
-    lola_expression, Value, MonitoringSemantics, OutputStream, UntimedLolaSemantics,
-};
+use crate::{lola_expression, MonitoringSemantics, OutputStream, UntimedLolaSemantics, Value};
 use futures::{
     stream::{self, BoxStream},
     StreamExt,

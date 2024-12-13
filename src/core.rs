@@ -1,6 +1,8 @@
 use std::{
     collections::BTreeMap,
-    fmt::{Debug, Display}, future::Future, pin::Pin,
+    fmt::{Debug, Display},
+    future::Future,
+    pin::Pin,
 };
 
 use async_trait::async_trait;

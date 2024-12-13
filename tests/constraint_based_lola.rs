@@ -3,7 +3,9 @@
 use futures::stream::StreamExt;
 use std::collections::BTreeMap;
 use trustworthiness_checker::constraint_based_runtime::ConstraintBasedMonitor;
-use trustworthiness_checker::{lola_specification, manual_output_handler::ManualOutputHandler, LOLASpecification};
+use trustworthiness_checker::{
+    lola_specification, manual_output_handler::ManualOutputHandler, LOLASpecification,
+};
 use trustworthiness_checker::{Monitor, Value, VarName};
 mod lola_fixtures;
 use futures::stream;

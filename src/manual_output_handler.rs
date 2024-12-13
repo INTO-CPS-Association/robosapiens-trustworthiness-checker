@@ -97,8 +97,7 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
     }
 }
 
-
-pub struct AsyncManualOutputHandler<V: StreamData>{
+pub struct AsyncManualOutputHandler<V: StreamData> {
     var_names: Vec<VarName>,
     stream_senders: Option<Vec<oneshot::Sender<OutputStream<V>>>>,
     stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
@@ -136,13 +135,11 @@ impl<V: StreamData> OutputHandler<V> for AsyncManualOutputHandler<V> {
                     .into_iter()
                     .zip(var_names)
                     .map(|(stream, var_name)| {
-                        {
-                            let mut stream = stream;
-                            let output_sender = output_sender.clone();
-                            async move {
-                                while let Some(data) = stream.next().await {
-                                    let _ = output_sender.send((var_name.clone(), data)).await;
-                                }
+                        let mut stream = stream;
+                        let output_sender = output_sender.clone();
+                        async move {
+                            while let Some(data) = stream.next().await {
+                                let _ = output_sender.send((var_name.clone(), data)).await;
                             }
                         }
                     })
@@ -177,7 +174,6 @@ impl<V: StreamData> AsyncManualOutputHandler<V> {
         ))
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -234,12 +230,18 @@ mod tests {
     #[tokio::test]
     async fn async_test_combined_output() {
         // Helper to create a named stream with delay
-        fn create_stream(name: &str, multiplier: i64, offset: i64) -> (VarName, OutputStream<Value>) {
+        fn create_stream(
+            name: &str,
+            multiplier: i64,
+            offset: i64,
+        ) -> (VarName, OutputStream<Value>) {
             let var_name = VarName(name.to_string());
             // Delay to force expected ordering of the streams
             let interval = IntervalStream::new(interval(Duration::from_millis(5)));
             let stream = Box::pin(
-                stream::iter(0..10).zip(interval).map(move |(x, _)| (multiplier * x + offset).into()),
+                stream::iter(0..10)
+                    .zip(interval)
+                    .map(move |(x, _)| (multiplier * x + offset).into()),
             );
             (var_name, stream)
         }
@@ -250,10 +252,12 @@ mod tests {
 
         // Prepare expected output
         let expected_output: Vec<_> = (0..10)
-            .flat_map(|x| vec![
-                (x_name.clone(), (x * 2).into()),
-                (y_name.clone(), (x * 2 + 1).into()),
-            ])
+            .flat_map(|x| {
+                vec![
+                    (x_name.clone(), (x * 2).into()),
+                    (y_name.clone(), (x * 2 + 1).into()),
+                ]
+            })
             .collect();
 
         // Initialize the handler

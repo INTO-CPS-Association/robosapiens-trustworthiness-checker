@@ -4,8 +4,8 @@ use core::panic;
 use clap::Parser;
 use trustworthiness_checker::core::OutputHandler;
 use trustworthiness_checker::mqtt_output_handler::MQTTOutputHandler;
-use trustworthiness_checker::{InputProvider, Value};
 use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
+use trustworthiness_checker::{InputProvider, Value};
 
 use trustworthiness_checker::commandline_args::{Cli, Language, Runtime, Semantics};
 #[cfg(feature = "ros")]
@@ -83,24 +83,33 @@ async fn main() {
             output_stdout: true,
             output_mqtt_topics: None,
             output_ros_topics: None,
-        } => Box::new(StdoutOutputHandler::<tc::Value>::new(model.output_vars.clone())),
+        } => Box::new(StdoutOutputHandler::<tc::Value>::new(
+            model.output_vars.clone(),
+        )),
         trustworthiness_checker::commandline_args::OutputMode {
             output_stdout: false,
             output_mqtt_topics: Some(topics),
             output_ros_topics: None,
         } => {
-            let topics = topics.into_iter().map(|topic| (tc::VarName(topic.clone()), topic)).collect();
-            Box::new(MQTTOutputHandler::new(MQTT_HOSTNAME, topics)
-            .expect("MQTT output handler could not be created"))
-        },
+            let topics = topics
+                .into_iter()
+                .map(|topic| (tc::VarName(topic.clone()), topic))
+                .collect();
+            Box::new(
+                MQTTOutputHandler::new(MQTT_HOSTNAME, topics)
+                    .expect("MQTT output handler could not be created"),
+            )
+        }
         trustworthiness_checker::commandline_args::OutputMode {
             output_stdout: false,
             output_mqtt_topics: None,
             output_ros_topics: Some(_),
         } => unimplemented!("ROS output not implemented"),
         // Default to stdout
-        _ => Box::new(StdoutOutputHandler::<tc::Value>::new(model.output_vars.clone())),
-    };    
+        _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
+            model.output_vars.clone(),
+        )),
+    };
 
     // println!("Outputs: {:?}", model.output_vars);
     // println!("Inputs: {:?}", model.input_vars);

@@ -58,14 +58,7 @@ mod tests {
 
         let iter = super::input_file_data_iter(data, VarName("x".into()));
         let vec: Vec<Value> = iter.collect();
-        assert_eq!(
-            vec,
-            vec![
-                Value::Int(1),
-                Value::Int(2),
-                Value::Int(3)
-            ]
-        );
+        assert_eq!(vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
     }
 
     #[tokio::test]
@@ -89,13 +82,6 @@ mod tests {
 
         let input_stream = data.input_stream(&VarName("x".into())).unwrap();
         let input_vec = input_stream.collect::<Vec<_>>().await;
-        assert_eq!(
-            input_vec,
-            vec![
-                Value::Int(1),
-                Value::Int(2),
-                Value::Int(3)
-            ]
-        );
+        assert_eq!(input_vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
     }
 }

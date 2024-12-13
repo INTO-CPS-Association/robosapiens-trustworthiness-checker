@@ -79,11 +79,13 @@ pub async fn provide_mqtt_client(hostname: Hostname) -> Result<mqtt::AsyncClient
     let (tx, rx) = oneshot::channel();
 
     // Get or initialize the background task and a sender to it
-    let req_sender = MQTT_CLIENT_REQ_SENDER.get_or_init(async {
-        let (tx, rx) = mpsc::channel(10);
-        tokio::spawn(mqtt_client_provider(rx));
-        tx
-    }).await;
+    let req_sender = MQTT_CLIENT_REQ_SENDER
+        .get_or_init(async {
+            let (tx, rx) = mpsc::channel(10);
+            tokio::spawn(mqtt_client_provider(rx));
+            tx
+        })
+        .await;
 
     // Send a request for the client to the background task
     req_sender.send((hostname, tx)).await.unwrap();

@@ -1,5 +1,5 @@
-use std::time::Duration;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use futures::StreamExt;
 use paho_mqtt as mqtt;

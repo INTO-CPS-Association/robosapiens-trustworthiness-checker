@@ -1,9 +1,9 @@
+use async_stream::stream;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use tokio::sync::broadcast;
 use std::collections::BTreeMap;
-use async_stream::stream;
+use tokio::sync::broadcast;
 
 use crate::ast::LOLASpecification;
 use crate::ast::SExpr;
@@ -21,8 +21,7 @@ pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>)
 
 impl ValStreamCollection {
     fn into_stream(mut self) -> BoxStream<'static, BTreeMap<VarName, Value>> {
-        Box::pin(stream!(
-        loop {
+        Box::pin(stream!(loop {
             let mut res = BTreeMap::new();
             for (name, stream) in self.0.iter_mut() {
                 match stream.next().await {
@@ -35,8 +34,7 @@ impl ValStreamCollection {
                 }
             }
             yield res;
-        }
-    ))
+        }))
     }
 }
 
@@ -131,9 +129,9 @@ impl ConstraintBasedRuntime {
 }
 
 #[derive(Debug, Clone)]
-pub enum ProducerMessage<T>{
+pub enum ProducerMessage<T> {
     Data(T),
-    Done
+    Done,
 }
 
 struct InputProducer {
@@ -145,7 +143,7 @@ impl InputProducer {
         let (sender, _) = broadcast::channel(10);
         Self { sender }
     }
-    pub fn run(&self, stream_collection : ValStreamCollection) {
+    pub fn run(&self, stream_collection: ValStreamCollection) {
         let task_sender = self.sender.clone();
         tokio::spawn(async move {
             let mut inputs_stream = stream_collection.into_stream();
@@ -172,7 +170,11 @@ pub struct ConstraintBasedMonitor {
 
 #[async_trait]
 impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
-    fn new(model: LOLASpecification, input: &mut dyn InputProvider<Value>, output: Box<dyn OutputHandler<Value>>) -> Self {
+    fn new(
+        model: LOLASpecification,
+        input: &mut dyn InputProvider<Value>,
+        output: Box<dyn OutputHandler<Value>>,
+    ) -> Self {
         let input_streams = model
             .input_vars()
             .iter()
@@ -215,33 +217,33 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 
 impl ConstraintBasedMonitor {
     fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
-        let input_receiver= self.input_producer.subscribe();
+        let input_receiver = self.input_producer.subscribe();
         let mut runtime_initial = ConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
         let has_inputs = self.has_inputs.clone();
         Box::pin(stream!(
-        let mut runtime = runtime_initial;
-        if has_inputs {
-            let mut input_receiver = input_receiver;
-            while let Ok(inputs) = input_receiver.recv().await {
-                match inputs {
-                    ProducerMessage::Data(inputs) => {
-                        runtime.step(&inputs);
-                        yield runtime.store.clone();
-                    }
-                    ProducerMessage::Done => {
-                        break;
+            let mut runtime = runtime_initial;
+            if has_inputs {
+                let mut input_receiver = input_receiver;
+                while let Ok(inputs) = input_receiver.recv().await {
+                    match inputs {
+                        ProducerMessage::Data(inputs) => {
+                            runtime.step(&inputs);
+                            yield runtime.store.clone();
+                        }
+                        ProducerMessage::Done => {
+                            break;
+                        }
                     }
                 }
             }
-        }
-        else {
-            loop {
-                runtime.step(&BTreeMap::new());
-                yield runtime.store.clone();
+            else {
+                loop {
+                    runtime.step(&BTreeMap::new());
+                    yield runtime.store.clone();
+                }
             }
-        }
-    ))
+        ))
     }
 
     fn output_stream(&mut self, var: &VarName) -> BoxStream<'static, Value> {
