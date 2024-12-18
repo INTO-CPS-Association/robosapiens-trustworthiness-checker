@@ -26,7 +26,7 @@ serde = {version = "1.0.215", features = ["derive"]}
 serde_json = "1.0.133"
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = {version = "0.12.5", features=["bundled"]}
+paho-mqtt = {version = "0.12.5", default-features=false, features=["bundled"]}
 async-trait = "0.1.51"
 async-once-cell = "0.5.4"
 
@@ -38,4 +38,8 @@ criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
 
 [[bench]]
 name = "simple_add"
+harness = false
+
+[[bench]]
+name = "maple_sequence"
 harness = false

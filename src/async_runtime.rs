@@ -114,7 +114,8 @@ async fn manage_var<V: StreamData>(
             data = input_stream.next() => {
                 if let Some(data) = data {
                     // println!("sending data {:?}", data);
-                    assert!(!senders.is_empty());
+                    // Senders can be empty if an input is not actually used
+                    // assert!(!senders.is_empty());
                     let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
                     for res in join_all(send_futs).await {
                         if let Err(_) = res {
@@ -484,7 +485,8 @@ where
             .collect();
         let mut async_streams = vec![];
         for (var, _) in to_launch_out.iter() {
-            let expr = model.var_expr(&var).unwrap();
+            let expr = model.var_expr(&var)
+                .expect(format!("Failed to find expression for var {}", var.0.as_str()).as_str());
             let stream = Box::pin(S::to_async_stream(expr, &var_exchange));
             // let stream = SS::transform_stream(
             //     DropGuardStream {

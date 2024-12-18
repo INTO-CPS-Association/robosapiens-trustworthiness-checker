@@ -139,16 +139,14 @@ fn from_elem(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(30));
 
     for size in sizes {
-        if size <= 10000 {
-            group.bench_with_input(
-                BenchmarkId::new("simple_add_constraints", size),
-                &size,
-                |b, &size| {
-                    b.to_async(&tokio_rt)
-                        .iter(|| monitor_outputs_untyped_constraints(size))
-                },
-            );
-        }
+        group.bench_with_input(
+            BenchmarkId::new("simple_add_constraints", size),
+            &size,
+            |b, &size| {
+                b.to_async(&tokio_rt)
+                    .iter(|| monitor_outputs_untyped_constraints(size))
+            },
+        );
         group.bench_with_input(
             BenchmarkId::new("simple_add_untyped_async", size),
             &size,

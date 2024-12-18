@@ -1,0 +1,19 @@
+in m : Bool
+in a : Bool
+in p : Bool
+in l : Bool
+in e : Bool
+out mout : Bool
+out aout : Bool
+out pout : Bool
+out lout : Bool
+out eout : Bool
+out maple : Bool
+out globallymaple : Bool
+mout = m && !a && !p && !l && !e && eout[-1, true]
+aout = !m && a && !p && !l && !e && mout[-1, false]
+pout = !m && !a && p && !l && !e && aout[-1, false]
+lout = !m && !a && !p && l && !e && pout[-1, false]
+eout = !m && !a && !p && !l && e && lout[-1, false]
+maple = mout || aout || pout || lout || eout
+globallymaple = maple && maple[-1, true]

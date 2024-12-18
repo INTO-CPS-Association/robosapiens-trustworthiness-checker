@@ -199,3 +199,36 @@ async fn test_multiple_parameters() {
         ]
     );
 }
+
+#[ignore = "currently broken"]
+#[tokio::test]
+async fn test_maple_sequence() {
+    let mut input_streams = maple_valid_input_stream(10);
+    let spec = lola_specification(&mut spec_maple_sequence()).unwrap();
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let maple_outputs = outputs
+        .into_iter()
+        .map(|(i, o)| (i, o[&VarName("maple".into())].clone()));
+    let expected_outputs = vec![
+        (0, Value::Bool(true)),
+        (1, Value::Bool(true)),
+        (2, Value::Bool(true)),
+        (3, Value::Bool(true)),
+        (4, Value::Bool(true)),
+        (5, Value::Bool(true)),
+        (6, Value::Bool(true)),
+        (7, Value::Bool(true)),
+        (8, Value::Bool(true)),
+        (9, Value::Bool(true)),
+    ];
+
+    assert_eq!(maple_outputs.collect::<Vec<_>>(), expected_outputs);
+}

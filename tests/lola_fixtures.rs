@@ -164,3 +164,89 @@ pub fn spec_eval_monitor() -> &'static str {
     z = x + y\n\
     w = eval(s)"
 }
+
+#[allow(dead_code)]
+pub fn spec_maple_sequence() -> &'static str {
+    "in stage : Str\n
+     out m: Bool\n
+     out a: Bool\n
+     out p: Bool\n
+     out l: Bool\n
+     out e: Bool\n
+     out maple : Bool\n
+     m = (stage == \"m\") && e[-1, true]\n
+     a = (stage == \"a\") && m[-1, false]\n
+     p = (stage == \"p\") && a[-1, false]\n
+     l = (stage == \"l\") && p[-1, false]\n
+     e = (stage == \"e\") && l[-1, false]\n
+     maple = m || a || p || l || e"
+}
+
+#[allow(dead_code)]
+pub fn maple_valid_input_stream(size: usize) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+    let size = size as i64;
+    let mut input_streams = BTreeMap::new();
+    input_streams.insert(
+        VarName("stage".into()),
+        Box::pin(stream::iter((0..size).map(|x| {
+            if x % 5 == 0 {
+                Value::Str("m".into())
+            } else if x % 5 == 1 {
+                Value::Str("a".into())
+            } else if x % 5 == 2 {
+                Value::Str("p".into())
+            } else if x % 5 == 3 {
+                Value::Str("l".into())
+            } else {
+                Value::Str("e".into())
+            }
+        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+    input_streams
+}
+
+#[allow(dead_code)]
+pub fn maple_invalid_input_stream_1(size: usize) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+    let size = size as i64;
+    let mut input_streams = BTreeMap::new();
+    input_streams.insert(
+        VarName("stage".into()),
+        Box::pin(stream::iter((0..size).map(|x| {
+            if x % 5 == 0 {
+                Value::Str("m".into())
+            } else if x % 5 == 1 {
+                Value::Str("a".into())
+            } else if x % 5 == 2 {
+                Value::Str("m".into())
+            } else if x % 5 == 3 {
+                Value::Str("l".into())
+            } else {
+                Value::Str("e".into())
+            }
+        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+    input_streams
+}
+
+#[allow(dead_code)]
+pub fn maple_invalid_input_stream_2(size: usize) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+    let size = size as i64;
+    let mut input_streams = BTreeMap::new();
+    input_streams.insert(
+        VarName("stage".into()),
+        Box::pin(stream::iter((0..size).map(|x| {
+            if x % 5 == 0 {
+                Value::Str("m".into())
+            } else if x % 5 == 1 {
+                Value::Str("a".into())
+            } else if x % 5 == 2 {
+                Value::Str("l".into())
+            } else if x % 5 == 3 {
+                Value::Str("p".into())
+            } else {
+                Value::Str("e".into())
+            }
+        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+    input_streams
+}

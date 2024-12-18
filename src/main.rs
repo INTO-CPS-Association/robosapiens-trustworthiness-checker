@@ -77,6 +77,7 @@ async fn main() {
     let model = parse_file(model_parser, cli.model.as_str())
         .await
         .expect("Model file could not be parsed");
+    println!("Model: {:?}", model);
 
     let output_handler: Box<dyn OutputHandler<Value>> = match cli.output_mode {
         trustworthiness_checker::commandline_args::OutputMode {

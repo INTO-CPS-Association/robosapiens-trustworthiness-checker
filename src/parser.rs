@@ -18,10 +18,10 @@ use crate::core::VarName;
 
 // This is the top-level parser for LOLA expressions
 pub fn lola_expression(s: &mut &str) -> PResult<SExpr<VarName>> {
-    sexpr.parse_next(s)
+    comp_or_sexpr.parse_next(s)
 }
 fn paren(s: &mut &str) -> PResult<SExpr<VarName>> {
-    delimited('(', sexpr, ')').parse_next(s)
+    delimited('(', comp_or_sexpr, ')').parse_next(s)
 }
 
 fn var(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -91,6 +91,38 @@ fn ifelse(s: &mut &str) -> PResult<SExpr<VarName>> {
     .parse_next(s)
 }
 
+fn eq(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: "==",
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+    ))
+    .map(|(lhs, rhs)| SExpr::Eq(Box::new(lhs), Box::new(rhs)))
+    .parse_next(s)
+}
+
+fn leq(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: "<=",
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+    ))
+    .map(|(lhs, rhs)| SExpr::Le(Box::new(lhs), Box::new(rhs)))
+    .parse_next(s)
+}
+
+fn comp_or_sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
+    alt((eq, leq, sexpr)).parse_next(s)
+}
+
 fn defer(s: &mut &str) -> PResult<SExpr<VarName>> {
     seq!((
         _: whitespace,
@@ -139,11 +171,26 @@ fn eval(s: &mut &str) -> PResult<SExpr<VarName>> {
     .parse_next(s)
 }
 
+fn not(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: "!",
+        _: whitespace,
+        atom,
+        _: whitespace,
+        _: whitespace,
+    ))
+    .map(|(e,)| SExpr::Not(Box::new(e)))
+    .parse_next(s)
+}
+
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
-        alt((time_index, eval, lit, ifelse, defer, update, var, paren)),
+        alt((
+            time_index, not, eval, lit, ifelse, defer, update, var, paren,
+        )),
         whitespace,
     )
     .parse_next(s)
@@ -490,6 +537,37 @@ mod tests {
                 ),),
                 SBinOp::IOp(IntBinOp::Add),
             )
+        );
+        assert_eq!(
+            sexpr(&mut (*"\"test\"".to_string()).into())?,
+            SExpr::Val(Value::Str("test".to_string())),
+        );
+        assert_eq!(
+            comp_or_sexpr(&mut (*"(stage == \"m\")").into())?,
+            SExpr::Eq(
+                Box::new(SExpr::Var("stage".into())),
+                Box::new(SExpr::Val("m".into()))
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_comp_or_sexpr() -> Result<(), ErrMode<ContextError>> {
+        assert_eq!(
+            comp_or_sexpr(&mut (*"stage == \"m\"").into())?,
+            SExpr::Eq(
+                Box::new(SExpr::Var("stage".into())),
+                Box::new(SExpr::Val("m".into()))
+            )
+        );
+        assert_eq!(
+            comp_or_sexpr(&mut (*"1 + 2".to_string()).into())?,
+            SExpr::BinOp(
+                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Val(Value::Int(2))),
+                SBinOp::IOp(IntBinOp::Add),
+            ),
         );
         Ok(())
     }

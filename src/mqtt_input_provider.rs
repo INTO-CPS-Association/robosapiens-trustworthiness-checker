@@ -13,7 +13,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{core::VarName, mqtt_client::provide_mqtt_client, InputProvider, OutputStream, Value};
 // use async_stream::stream;
 
-const QOS: &[i32] = &[1, 1];
+const QOS: i32 = 1;
 
 pub struct VarData {
     pub variable: VarName,
@@ -74,13 +74,14 @@ impl MQTTInputProvider {
             let client = provide_mqtt_client(host.clone()).await.unwrap();
             let mut stream = client.clone().get_stream(10);
             // println!("Connected to MQTT broker");
+            let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
             loop {
-                match client.subscribe_many(&topics, QOS).await {
+                match client.subscribe_many(&topics, &qos).await {
                     Ok(_) => break,
                     Err(e) => {
                         println!(
-                            "Failed to subscribe to topics with error {:?}, retrying in 100ms",
-                            e
+                            "Failed to subscribe to topics {:?} with error {:?}, retrying in 100ms",
+                            topics, e
                         );
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         println!("Reconnecting");
