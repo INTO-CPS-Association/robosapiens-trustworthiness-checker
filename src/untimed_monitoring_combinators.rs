@@ -317,65 +317,20 @@ pub fn defer(
 // We use Unknown for simulating no data on the stream
 pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
     return Box::pin(stream! {
-        let mut skip_sync = false;
-
-        // Pre phase
-        println!("Pre phase");
-        loop {
-            let x_val = x.next().await;
-            match x_val {
-                Some(x_val) => {
-                    if x_val == Value::Unknown {
-                        // Keep yielding from x until we get a value
-                        yield x_val;
-                    } else {
-                        // We are done with the pre phase as x is ready
-                        match y.next().await {
-                            Some(Value::Unknown) => {
-                                // Move to sync phase
-                                yield x_val;
-                                break;
-                            }
-                            Some(y_val) => {
-                                // Move to post phase
-                                yield y_val;
-                                skip_sync = true;
-                                break;
-                            }
-                            None => return
-                        }
-                    }
+        while let (Some(x_val), Some(y_val)) = join!(x.next(), y.next()) {
+            match (x_val, y_val) {
+                (x_val, Value::Unknown) => {
+                    yield x_val;
                 }
-                None => return
-            }
-        }
-
-        // Sync phase
-        if !skip_sync {
-            // If y_val is unknown start the syncing phase where we return x
-            // until y is ready
-            while let (Some(x_val), Some(y_val)) = join!(x.next(), y.next()) {
-                match y_val {
-                    // If y_val is unknown go into syncing phase
-                    Value::Unknown => {
-                        yield x_val;
-                    }
-                    // Otherwise go directly to post
-                    y_val => {
-                        yield y_val;
-                        break;
-                    }
+                (_, y_val) => {
+                    yield y_val;
+                    break;
                 }
             }
         }
-
-        // Post phase
-        println!("Post phase");
         while let Some(y_val) = y.next().await {
             yield y_val;
         }
-
-        return;
     });
 }
 
@@ -593,7 +548,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_first_y_then_x() {
-        // Notice that the length of res is longer than the input streams
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
             "x1".into(),
@@ -607,13 +561,7 @@ mod tests {
             "y3".into(),
         ]));
         let res: Vec<Value> = update(x, y).collect().await;
-        let exp: Vec<Value> = vec![
-            Value::Unknown,
-            "y0".into(),
-            "y1".into(),
-            "y2".into(),
-            "y3".into(),
-        ];
+        let exp: Vec<Value> = vec!["y0".into(), "y1".into(), "y2".into(), "y3".into()];
         assert_eq!(res, exp)
     }
 
@@ -645,13 +593,7 @@ mod tests {
             "y3".into(),
         ]));
         let res: Vec<Value> = update(x, y).collect().await;
-        let exp: Vec<Value> = vec![
-            Value::Unknown,
-            "x0".into(),
-            "y1".into(),
-            Value::Unknown,
-            "y3".into(),
-        ];
+        let exp: Vec<Value> = vec![Value::Unknown, "y1".into(), Value::Unknown, "y3".into()];
         assert_eq!(res, exp)
     }
 }
