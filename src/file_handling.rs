@@ -74,7 +74,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_boolean_file() {
         let parser = crate::parser::lola_input_file;
-        let file = "examples/maple_sequence_true.input";
+        let file = "tests/test_inputs/maple_sequence_true.input";
         let mut data = parse_file(parser, file).await.unwrap();
         let m_vals = data
             .input_stream(&VarName("m".into()))
