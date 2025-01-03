@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use winnow::ascii::dec_uint;
 use winnow::ascii::line_ending;
+use winnow::ascii::multispace0;
 use winnow::combinator::*;
 use winnow::token::{literal, take_until};
 use winnow::PResult;
@@ -372,13 +373,13 @@ fn var_decls(s: &mut &str) -> PResult<Vec<(VarName, SExpr<VarName>)>> {
 
 pub fn lola_specification(s: &mut &str) -> PResult<LOLASpecification> {
     seq!((
-        _: whitespace,
+        _: multispace0,
         input_decls,
         _: alt((linebreak.void(), empty)),
         output_decls,
         _: alt((linebreak.void(), empty)),
         var_decls,
-        _: whitespace,
+        _: multispace0,
     ))
     .map(|(input_vars, output_vars, exprs)| LOLASpecification {
         input_vars: input_vars.iter().map(|(name, _)| name.clone()).collect(),
