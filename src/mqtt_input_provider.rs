@@ -58,7 +58,7 @@ impl MQTTInputProvider {
             receivers.insert(v.clone(), rx);
         }
 
-        let topics = var_topics.values().map(|t| t.clone()).collect::<Vec<_>>();
+        let topics = var_topics.values().cloned().collect::<Vec<_>>();
 
         // Spawn a background task to receive messages from the MQTT broker and
         // send them to the appropriate channel based on which topic they were
@@ -73,7 +73,7 @@ impl MQTTInputProvider {
             // Create and connect to the MQTT client
             let client = provide_mqtt_client(host.clone()).await.unwrap();
             let mut stream = client.clone().get_stream(10);
-            // println!("Connected to MQTT broker");
+            println!("Connected to MQTT broker with topics {:?}", topics);
             let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
             loop {
                 match client.subscribe_many(&topics, &qos).await {
@@ -103,13 +103,14 @@ impl MQTTInputProvider {
                             )
                             .as_str(),
                         );
-                        let sender = senders
-                            .get(&VarName(msg.topic().to_string()))
-                            .expect("Channel not found for topic");
-                        sender
-                            .send(value)
-                            .await
-                            .expect("Failed to send value to channel");
+                        if let Some(sender) = senders.get(&VarName(msg.topic().to_string())) {
+                            sender
+                                .send(value)
+                                .await
+                                .expect("Failed to send value to channel");
+                        } else {
+                            println!("Channel not found for topic {:?}", msg.topic());
+                        }
                     }
                     None => {
                         // Connection lost, try to reconnect
