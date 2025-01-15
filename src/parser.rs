@@ -26,7 +26,8 @@ fn paren(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited('(', comp_or_sexpr, ')').parse_next(s)
 }
 
-fn list(s: &mut &str) -> PResult<SExpr<VarName>> {
+// Used for Lists in output streams
+fn sexpr_list(s: &mut &str) -> PResult<SExpr<VarName>> {
     let res = delimited(
         seq!("List", whitespace, '('),
         separated(0.., comp_or_sexpr, seq!(whitespace, ',', whitespace)),
@@ -37,6 +38,16 @@ fn list(s: &mut &str) -> PResult<SExpr<VarName>> {
         Ok(exprs) => Ok(SExpr::List(exprs)),
         Err(e) => Err(e),
     }
+}
+
+// Used for Lists in input streams (can only be Values)
+fn value_list(s: &mut &str) -> PResult<Vec<Value>> {
+    delimited(
+        seq!("List", whitespace, '('),
+        separated(0.., val, seq!(whitespace, ',', whitespace)),
+        ')',
+    )
+    .parse_next(s)
 }
 
 fn var(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -57,6 +68,7 @@ fn val(s: &mut &str) -> PResult<Value> {
             string.map(|s: &str| Value::Str(s.into())),
             literal("true").map(|_| Value::Bool(true)),
             literal("false").map(|_| Value::Bool(false)),
+            value_list.map(Value::List),
         )),
         whitespace,
     )
@@ -204,7 +216,7 @@ fn atom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
         alt((
-            time_index, not, eval, lit, ifelse, defer, update, list, var, paren,
+            time_index, not, eval, lit, ifelse, defer, update, sexpr_list, var, paren,
         )),
         whitespace,
     )
@@ -1039,17 +1051,19 @@ mod tests {
 
     #[test]
     fn parse_list() {
+        // Note: value_list has higher precedence than sexpr_list hence why
+        // this becomes a val
         assert_eq!(
             presult_to_string(&comp_or_sexpr(&mut r#"List()"#)),
-            r#"Ok(List([]))"#
+            r#"Ok(Val(List([])))"#
         );
         assert_eq!(
             presult_to_string(&comp_or_sexpr(&mut r#"List () "#)),
-            r#"Ok(List([]))"#
+            r#"Ok(Val(List([])))"#
         );
         assert_eq!(
             presult_to_string(&comp_or_sexpr(&mut r#"List(1,2)"#)),
-            r#"Ok(List([Val(Int(1)), Val(Int(2))]))"#
+            r#"Ok(Val(List([Int(1), Int(2)])))"#
         );
         assert_eq!(
             presult_to_string(&comp_or_sexpr(&mut r#"List(1+2,2*5)"#)),
@@ -1057,7 +1071,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&comp_or_sexpr(&mut r#"List("hello","world")"#)),
-            r#"Ok(List([Val(Str("hello")), Val(Str("world"))]))"#
+            r#"Ok(Val(List([Str("hello"), Str("world")])))"#
         );
         assert_eq!(
             presult_to_string(&comp_or_sexpr(&mut r#"List(true || false, true && false)"#)),
@@ -1066,7 +1080,20 @@ mod tests {
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
             presult_to_string(&comp_or_sexpr(&mut r#"List(1,"hello")"#)),
-            r#"Ok(List([Val(Int(1)), Val(Str("hello"))]))"#
+            r#"Ok(Val(List([Int(1), Str("hello")])))"#
         );
+        assert_eq!(
+            presult_to_string(&value_assignment(&mut "y = List()")),
+            r#"Ok((VarName("y"), List([])))"#
+        );
+        // Difference between value assignment and sexpr assignment
+        assert_eq!(
+            value_assignment(&mut "y = List()"),
+            Ok((VarName("y".into()), Value::List(vec![])))
+        );
+        assert_eq!(
+            var_decl(&mut "y = List()"),
+            Ok((VarName("y".into()), SExpr::Val(Value::List(vec![]))))
+        )
     }
 }

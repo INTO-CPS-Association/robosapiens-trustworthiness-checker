@@ -205,6 +205,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
             Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
             Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.clone()))),
             Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(*v))),
+            Value::List(_) => todo!(),
             Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(()))),
             Value::Unknown => {
                 errs.push(SemanticError::UnknownError(

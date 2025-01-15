@@ -15,6 +15,7 @@ pub enum Value {
     Int(i64),
     Str(String),
     Bool(bool),
+    List(Vec<Value>),
     Unknown,
     Unit,
 }
@@ -92,6 +93,13 @@ impl Display for Value {
             Value::Int(i) => write!(f, "{}", i),
             Value::Str(s) => write!(f, "{}", s),
             Value::Bool(b) => write!(f, "{}", b),
+            Value::List(vals) => {
+                write!(f, "[")?;
+                for val in vals.iter() {
+                    write!(f, "{}, ", val)?;
+                }
+                write!(f, "]")
+            }
             Value::Unknown => write!(f, "unknown"),
             Value::Unit => write!(f, "()"),
         }
