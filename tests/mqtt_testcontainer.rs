@@ -1,7 +1,7 @@
+use testcontainers_modules::testcontainers::core::wait::LogWaitStrategy;
 use testcontainers_modules::testcontainers::core::IntoContainerPort;
 use testcontainers_modules::testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers_modules::testcontainers::Image;
-use testcontainers_modules::testcontainers::core::wait::LogWaitStrategy;
 
 #[derive(Debug, Clone)]
 pub struct EmqxImage {

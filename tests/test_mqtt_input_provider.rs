@@ -80,7 +80,6 @@ mod tests {
             .await
             .expect("Failed to get host port for EMQX server");
 
-
         let var_topics = [("x".into(), "x".to_string()), ("y".into(), "y".to_string())]
             .into_iter()
             .collect::<BTreeMap<VarName, _>>();
@@ -117,7 +116,6 @@ mod tests {
             ys,
             emqx_port,
         ));
-
 
         // Test we have the expected outputs
         // We have to specify how many outputs we want to take as the ROS

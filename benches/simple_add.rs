@@ -126,8 +126,8 @@ async fn monitor_outputs_typed_queuing(num_outputs: usize) {
 
 fn from_elem(c: &mut Criterion) {
     let sizes = vec![
-        1, 10, 100, 500, 1000, 2000, 5000, 10000, 25000, // 100000, 
-        // 1000000,
+        1, 10, 100, 500, 1000, 2000, 5000, 10000, 25000, // 100000,
+              // 1000000,
     ];
 
     let tokio_rt = tokio::runtime::Builder::new_current_thread()
