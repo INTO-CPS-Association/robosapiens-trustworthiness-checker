@@ -21,8 +21,22 @@ use crate::core::VarName;
 pub fn lola_expression(s: &mut &str) -> PResult<SExpr<VarName>> {
     comp_or_sexpr.parse_next(s)
 }
+
 fn paren(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited('(', comp_or_sexpr, ')').parse_next(s)
+}
+
+fn list(s: &mut &str) -> PResult<SExpr<VarName>> {
+    let res = delimited(
+        seq!("List", whitespace, '('),
+        separated(0.., comp_or_sexpr, seq!(whitespace, ',', whitespace)),
+        ')',
+    )
+    .parse_next(s);
+    match res {
+        Ok(exprs) => Ok(SExpr::List(exprs)),
+        Err(e) => Err(e),
+    }
 }
 
 fn var(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -190,7 +204,7 @@ fn atom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
         alt((
-            time_index, not, eval, lit, ifelse, defer, update, var, paren,
+            time_index, not, eval, lit, ifelse, defer, update, list, var, paren,
         )),
         whitespace,
     )
@@ -1021,5 +1035,38 @@ mod tests {
             presult_to_string(&comp_or_sexpr(&mut r#"update(x, y)"#)),
             r#"Ok(Update(Var(VarName("x")), Var(VarName("y"))))"#
         )
+    }
+
+    #[test]
+    fn parse_list() {
+        assert_eq!(
+            presult_to_string(&comp_or_sexpr(&mut r#"List()"#)),
+            r#"Ok(List([]))"#
+        );
+        assert_eq!(
+            presult_to_string(&comp_or_sexpr(&mut r#"List () "#)),
+            r#"Ok(List([]))"#
+        );
+        assert_eq!(
+            presult_to_string(&comp_or_sexpr(&mut r#"List(1,2)"#)),
+            r#"Ok(List([Val(Int(1)), Val(Int(2))]))"#
+        );
+        assert_eq!(
+            presult_to_string(&comp_or_sexpr(&mut r#"List(1+2,2*5)"#)),
+            r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(2)), Val(Int(5)), IOp(Mul))]))"#
+        );
+        assert_eq!(
+            presult_to_string(&comp_or_sexpr(&mut r#"List("hello","world")"#)),
+            r#"Ok(List([Val(Str("hello")), Val(Str("world"))]))"#
+        );
+        assert_eq!(
+            presult_to_string(&comp_or_sexpr(&mut r#"List(true || false, true && false)"#)),
+            r#"Ok(List([BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))]))"#
+        );
+        // Can mix expressions - not that it is necessarily a good idea
+        assert_eq!(
+            presult_to_string(&comp_or_sexpr(&mut r#"List(1,"hello")"#)),
+            r#"Ok(List([Val(Int(1)), Val(Str("hello"))]))"#
+        );
     }
 }
