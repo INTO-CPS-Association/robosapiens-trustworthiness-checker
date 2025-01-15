@@ -205,28 +205,29 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
 
 pub fn eval(
     ctx: &dyn StreamContext<Value>,
-    mut x: OutputStream<Value>,
+    mut eval_stream: OutputStream<Value>,
     history_length: usize,
 ) -> OutputStream<Value> {
-    // Create a subcontext with a history window length of 10
+    // Create a subcontext with a history window length
     let subcontext = ctx.subcontext(history_length);
 
     // Build an output stream for eval of x over the subcontext
     Box::pin(stream! {
-        // Store the previous value of the stream we are evaluating so we can
-        // check when it changes
-        struct PrevData {
-            // The previous x value
-            x_val: Value,
-            // The output stream for eval
-            eval_output_stream: OutputStream<Value>
-        }
-        let mut prev_data: Option<PrevData> = None;
-        while let Some(current) = x.next().await {
-            // If we have a previous value and it is the same as the current
-            // value, we can continue using the existing stream as our output
+            // Store the previous value of the stream we are evaluating so we can
+            // check when it changes
+            struct PrevData {
+                // The previous property provided
+                eval_val: Value,
+                // The output stream for eval
+                eval_output_stream: OutputStream<Value>
+            }
+            let mut prev_data: Option<PrevData> = None;
+            while let Some(current) = eval_stream.next().await {
+                // If we have a previous value and it is the same as the current
+                // value or if the current value is unknown (not provided),
+            // continue using the existing stream as our output
             if let Some(prev_data) = &mut prev_data {
-                if prev_data.x_val == current {
+                if prev_data.eval_val == current || current == Value::Unknown {
                     // Advance the subcontext to make a new set of input values
                     // available for the eval stream
                     subcontext.advance();
@@ -238,25 +239,30 @@ pub fn eval(
                     }
                 }
             }
-
-            if let Value::Str(s) = current {
-                let expr = lola_expression.parse_next(&mut s.as_str())
-                    .expect("Invalid eval str");
-                let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
-                // Advance the subcontext to make a new set of input values
-                // available for the eval stream
-                subcontext.advance();
-                if let Some(eval_res) = eval_output_stream.next().await {
-                    yield eval_res;
-                } else {
-                    return;
+            match current {
+                Value::Unknown => {
+                    // Consume a sample from the subcontext but return Unknown (aka. Waiting)
+                    subcontext.advance();
+                    yield Value::Unknown;
                 }
-                prev_data = Some(PrevData{
-                    x_val: Value::Str(s),
-                    eval_output_stream
-                });
-            } else {
-                panic!("Invalid eval type {:?}", current)
+                Value::Str(s) => {
+                    let expr = lola_expression.parse_next(&mut s.as_str())
+                        .expect("Invalid eval str");
+                    let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
+                    // Advance the subcontext to make a new set of input values
+                    // available for the eval stream
+                    subcontext.advance();
+                    if let Some(eval_res) = eval_output_stream.next().await {
+                        yield eval_res;
+                    } else {
+                        return;
+                    }
+                    prev_data = Some(PrevData{
+                        eval_val: Value::Str(s),
+                        eval_output_stream
+                    });
+                }
+                cur => panic!("Invalid eval property type {:?}", cur)
             }
         }
     })
@@ -459,6 +465,40 @@ mod tests {
         let ctx = MockContext { xs: map };
         let res: Vec<Value> = eval(&ctx, e, 10).collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
+        assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
+    async fn test_eval_with_start_unknown() {
+        let e: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Unknown,
+            "x + 1".into(),
+            "x + 2".into(),
+        ]));
+        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into(), 3.into()]).into()]
+            .into_iter()
+            .collect();
+        let ctx = MockContext { xs: map };
+        let res: Vec<Value> = eval(&ctx, e, 10).collect().await;
+        // Continues evaluating to x+1 until we get a non-unknown value
+        let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 5.into()];
+        assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
+    async fn test_eval_with_mid_unknown() {
+        let e: OutputStream<Value> = Box::pin(stream::iter(vec![
+            "x + 1".into(),
+            Value::Unknown,
+            "x + 2".into(),
+        ]));
+        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into(), 3.into()]).into()]
+            .into_iter()
+            .collect();
+        let ctx = MockContext { xs: map };
+        let res: Vec<Value> = eval(&ctx, e, 10).collect().await;
+        // Continues evaluating to x+1 until we get a non-unknown value
+        let exp: Vec<Value> = vec![2.into(), 3.into(), 5.into()];
         assert_eq!(res, exp)
     }
 
