@@ -7,6 +7,7 @@ use crate::{
 use async_stream::stream;
 use core::panic;
 use futures::{
+    future::join_all,
     stream::{self, BoxStream},
     StreamExt,
 };
@@ -338,6 +339,19 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
             yield y_val;
         }
     });
+}
+
+pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        loop {
+            let vals = join_all(xs.iter_mut().map(|x| x.next())).await;
+            if vals.iter().all(|x| x.is_some()) {
+                yield Value::List(vals.iter().map(|x| x.clone().unwrap()).collect());
+            } else {
+                return;
+            }
+        }
+    })
 }
 
 mod tests {

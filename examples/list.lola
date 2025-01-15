@@ -1,0 +1,5 @@
+in x
+out z
+out nestedList
+z = x
+nestedList = List(x[-1, List()], x)
