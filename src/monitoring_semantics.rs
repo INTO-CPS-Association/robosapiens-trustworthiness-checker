@@ -64,6 +64,7 @@ impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
+            SExpr::List(_) => todo!(),
         }
     }
 }

@@ -35,7 +35,6 @@ pub enum SBinOp {
     SOp(StrBinOp),
 }
 
-// TODO: Remove generic VarT
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else
@@ -67,6 +66,9 @@ pub enum SExpr<VarT: Debug> {
     Eq(Box<Self>, Box<Self>),
     Le(Box<Self>, Box<Self>),
     Not(Box<Self>),
+
+    // List and list expressions
+    List(Vec<Self>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -126,6 +128,10 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             Eval(e) => write!(f, "eval({})", e),
             Defer(e) => write!(f, "defer({})", e),
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            List(es) => {
+                let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
+                write!(f, "[{}]", es_str.join(", "))
+            }
         }
     }
 }

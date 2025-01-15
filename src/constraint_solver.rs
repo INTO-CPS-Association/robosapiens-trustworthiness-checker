@@ -161,6 +161,7 @@ impl ConvertToAbsolute for SExpr<VarName> {
             SExpr::Eq(_, _) => todo!(),
             SExpr::Le(_, _) => todo!(),
             SExpr::Not(_) => todo!(),
+            SExpr::List(_) => todo!(),
         }
     }
 }
@@ -221,6 +222,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
             SExpr::Eq(_, _) => todo!(),
             SExpr::Le(_, _) => todo!(),
             SExpr::Not(_) => todo!(),
+            SExpr::List(_) => todo!(),
         }
     }
 }
@@ -268,6 +270,7 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::Eq(_, _) => todo!(),
             SExpr::Le(_, _) => todo!(),
             SExpr::Not(_) => todo!(),
+            SExpr::List(_) => todo!(),
         }
     }
 }

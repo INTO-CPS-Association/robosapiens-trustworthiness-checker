@@ -487,6 +487,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
                     }
                 }
             }
+            SExpr::List(_) => todo!(),
         }
     }
 }
