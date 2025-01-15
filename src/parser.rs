@@ -360,7 +360,7 @@ fn var_decl(s: &mut &str) -> PResult<(VarName, SExpr<VarName>)> {
         _: whitespace,
         _: literal("="),
         _: whitespace,
-        sexpr,
+        comp_or_sexpr,
         _: whitespace,
     ))
     .map(|(name, expr)| (VarName(name.into()), expr))
