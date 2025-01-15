@@ -1,4 +1,4 @@
-use crate::ast::{BoolBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
+use crate::ast::{BoolBinOp, CompBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::Value;
 use crate::core::{MonitoringSemantics, OutputStream, StreamContext, VarName};
 use crate::untimed_monitoring_combinators as mc;
@@ -24,17 +24,9 @@ impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
                     SBinOp::BOp(BoolBinOp::Or) => mc::or(e1, e2),
                     SBinOp::BOp(BoolBinOp::And) => mc::and(e1, e2),
                     SBinOp::SOp(StrBinOp::Concat) => mc::concat(e1, e2),
+                    SBinOp::COp(CompBinOp::Eq) => mc::eq(e1, e2),
+                    SBinOp::COp(CompBinOp::Le) => mc::le(e1, e2),
                 }
-            }
-            SExpr::Eq(x, y) => {
-                let x = Self::to_async_stream(*x, ctx);
-                let y = Self::to_async_stream(*y, ctx);
-                mc::eq(x, y)
-            }
-            SExpr::Le(x, y) => {
-                let x = Self::to_async_stream(*x, ctx);
-                let y = Self::to_async_stream(*y, ctx);
-                mc::le(x, y)
             }
             SExpr::Not(x) => {
                 let x = Self::to_async_stream(*x, ctx);

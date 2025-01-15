@@ -19,18 +19,18 @@ use crate::core::VarName;
 
 // This is the top-level parser for LOLA expressions
 pub fn lola_expression(s: &mut &str) -> PResult<SExpr<VarName>> {
-    comp_or_sexpr.parse_next(s)
+    sexpr.parse_next(s)
 }
 
 fn paren(s: &mut &str) -> PResult<SExpr<VarName>> {
-    delimited('(', comp_or_sexpr, ')').parse_next(s)
+    delimited('(', sexpr, ')').parse_next(s)
 }
 
 // Used for Lists in output streams
 fn sexpr_list(s: &mut &str) -> PResult<SExpr<VarName>> {
     let res = delimited(
         seq!("List", whitespace, '('),
-        separated(0.., comp_or_sexpr, seq!(whitespace, ',', whitespace)),
+        separated(0.., sexpr, seq!(whitespace, ',', whitespace)),
         ')',
     )
     .parse_next(s);
@@ -118,38 +118,6 @@ fn ifelse(s: &mut &str) -> PResult<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn eq(s: &mut &str) -> PResult<SExpr<VarName>> {
-    seq!((
-        _: whitespace,
-        sexpr,
-        _: whitespace,
-        _: "==",
-        _: whitespace,
-        sexpr,
-        _: whitespace,
-    ))
-    .map(|(lhs, rhs)| SExpr::Eq(Box::new(lhs), Box::new(rhs)))
-    .parse_next(s)
-}
-
-fn leq(s: &mut &str) -> PResult<SExpr<VarName>> {
-    seq!((
-        _: whitespace,
-        sexpr,
-        _: whitespace,
-        _: "<=",
-        _: whitespace,
-        sexpr,
-        _: whitespace,
-    ))
-    .map(|(lhs, rhs)| SExpr::Le(Box::new(lhs), Box::new(rhs)))
-    .parse_next(s)
-}
-
-fn comp_or_sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
-    alt((eq, leq, sexpr)).parse_next(s)
-}
-
 fn defer(s: &mut &str) -> PResult<SExpr<VarName>> {
     seq!((
         _: whitespace,
@@ -232,6 +200,8 @@ enum BinaryPrecedences {
     Sub,
     Mul,
     Div,
+    Le,
+    Eq,
 }
 impl BinaryPrecedences {
     pub fn next(&self) -> Option<Self> {
@@ -243,7 +213,9 @@ impl BinaryPrecedences {
             Sub => Some(Add),
             Add => Some(Mul),
             Mul => Some(Div),
-            Div => None,
+            Div => Some(Le),
+            Le => Some(Eq),
+            Eq => None,
         }
     }
 
@@ -257,6 +229,8 @@ impl BinaryPrecedences {
             Sub => "-",
             Mul => "*",
             Div => "/",
+            Le => "<=",
+            Eq => "==",
         }
     }
 
@@ -270,6 +244,8 @@ impl BinaryPrecedences {
             Sub => SBinOp::IOp(IntBinOp::Sub),
             Mul => SBinOp::IOp(IntBinOp::Mul),
             Div => SBinOp::IOp(IntBinOp::Div),
+            Le => SBinOp::COp(CompBinOp::Le),
+            Eq => SBinOp::COp(CompBinOp::Eq),
         }
     }
 
@@ -386,7 +362,7 @@ fn var_decl(s: &mut &str) -> PResult<(VarName, SExpr<VarName>)> {
         _: whitespace,
         _: literal("="),
         _: whitespace,
-        comp_or_sexpr,
+        sexpr,
         _: whitespace,
     ))
     .map(|(name, expr)| (VarName(name.into()), expr))
@@ -498,7 +474,7 @@ mod tests {
     #[test]
     fn test_sexpr() -> Result<(), ErrMode<ContextError>> {
         assert_eq!(
-            comp_or_sexpr(&mut (*"1 + 2".to_string()).into())?,
+            sexpr(&mut (*"1 + 2".to_string()).into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::Val(Value::Int(2))),
@@ -506,7 +482,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"1 + 2 * 3".to_string()).into())?,
+            sexpr(&mut (*"1 + 2 * 3".to_string()).into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::BinOp(
@@ -518,7 +494,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"x + (y + 2)".to_string()).into())?,
+            sexpr(&mut (*"x + (y + 2)".to_string()).into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Var(VarName("x".into()))),
                 Box::new(SExpr::BinOp(
@@ -530,7 +506,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"if true then 1 else 2".to_string()).into())?,
+            sexpr(&mut (*"if true then 1 else 2".to_string()).into())?,
             SExpr::If(
                 Box::new(SExpr::Val(true.into())),
                 Box::new(SExpr::Val(Value::Int(1))),
@@ -538,11 +514,11 @@ mod tests {
             ),
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"(x)[-1, 0]".to_string()).into())?,
+            sexpr(&mut (*"(x)[-1, 0]".to_string()).into())?,
             SExpr::Index(Box::new(SExpr::Var(VarName("x".into()))), -1, Value::Int(0),),
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
+            sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
             SExpr::Index(
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var(VarName("x".into()))),
@@ -554,7 +530,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
+            sexpr(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::Index(
@@ -566,35 +542,16 @@ mod tests {
             )
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"\"test\"".to_string()).into())?,
+            sexpr(&mut (*"\"test\"".to_string()).into())?,
             SExpr::Val(Value::Str("test".to_string())),
         );
         assert_eq!(
-            comp_or_sexpr(&mut (*"(stage == \"m\")").into())?,
-            SExpr::Eq(
-                Box::new(SExpr::Var("stage".into())),
-                Box::new(SExpr::Val("m".into()))
-            )
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_comp_or_comp_or_sexpr() -> Result<(), ErrMode<ContextError>> {
-        assert_eq!(
-            comp_or_sexpr(&mut (*"stage == \"m\"").into())?,
-            SExpr::Eq(
-                Box::new(SExpr::Var("stage".into())),
-                Box::new(SExpr::Val("m".into()))
-            )
-        );
-        assert_eq!(
-            comp_or_sexpr(&mut (*"1 + 2".to_string()).into())?,
+            sexpr(&mut (*"(stage == \"m\")").into())?,
             SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::Val(Value::Int(2))),
-                SBinOp::IOp(IntBinOp::Add),
-            ),
+                Box::new(SExpr::Var("stage".into())),
+                Box::new(SExpr::Val("m".into())),
+                SBinOp::COp(CompBinOp::Eq),
+            )
         );
         Ok(())
     }
@@ -796,161 +753,155 @@ mod tests {
     #[test]
     fn test_iexpr() {
         // Add
+        assert_eq!(presult_to_string(&sexpr(&mut "0")), "Ok(Val(Int(0)))");
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "0")),
-            "Ok(Val(Int(0)))"
-        );
-        assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "  1 +2  ")),
+            presult_to_string(&sexpr(&mut "  1 +2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut " 1  + 2 +3")),
+            presult_to_string(&sexpr(&mut " 1  + 2 +3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), Val(Int(3)), IOp(Add)))"
         );
         // Sub
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "  1 -2  ")),
+            presult_to_string(&sexpr(&mut "  1 -2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Sub)))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut " 1  - 2 -3")),
+            presult_to_string(&sexpr(&mut " 1  - 2 -3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Sub)), Val(Int(3)), IOp(Sub)))"
         );
         // Mul
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "  1 *2  ")),
+            presult_to_string(&sexpr(&mut "  1 *2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut " 1  * 2 *3")),
+            presult_to_string(&sexpr(&mut " 1  * 2 *3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), Val(Int(3)), IOp(Mul)))"
         );
         // Div
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "  1 /2  ")),
+            presult_to_string(&sexpr(&mut "  1 /2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Div)))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut " 1  / 2 /3")),
+            presult_to_string(&sexpr(&mut " 1  / 2 /3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Div)), Val(Int(3)), IOp(Div)))"
         );
         // Var
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "  x  ")),
+            presult_to_string(&sexpr(&mut "  x  ")),
             r#"Ok(Var(VarName("x")))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "  xsss ")),
+            presult_to_string(&sexpr(&mut "  xsss ")),
             r#"Ok(Var(VarName("xsss")))"#
         );
         // Time index
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "x [-1, 0 ]")),
+            presult_to_string(&sexpr(&mut "x [-1, 0 ]")),
             r#"Ok(Index(Var(VarName("x")), -1, Int(0)))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "x[1,0]")),
+            presult_to_string(&sexpr(&mut "x[1,0]")),
             r#"Ok(Index(Var(VarName("x")), 1, Int(0)))"#
         );
         // Paren
-        assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "  (1)  ")),
-            "Ok(Val(Int(1)))"
-        );
+        assert_eq!(presult_to_string(&sexpr(&mut "  (1)  ")), "Ok(Val(Int(1)))");
         // Don't care about order of eval; care about what the AST looks like
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut " 2 + (2 + 3)")),
+            presult_to_string(&sexpr(&mut " 2 + (2 + 3)")),
             "Ok(BinOp(Val(Int(2)), BinOp(Val(Int(2)), Val(Int(3)), IOp(Add)), IOp(Add)))"
         );
         // If then else
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "if true then 1 else 2")),
+            presult_to_string(&sexpr(&mut "if true then 1 else 2")),
             "Ok(If(Val(Bool(true)), Val(Int(1)), Val(Int(2))))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "if true then x+x else y+y")),
+            presult_to_string(&sexpr(&mut "if true then x+x else y+y")),
             r#"Ok(If(Val(Bool(true)), BinOp(Var(VarName("x")), Var(VarName("x")), IOp(Add)), BinOp(Var(VarName("y")), Var(VarName("y")), IOp(Add))))"#
         );
 
         // ChatGPT generated tests with mixed arithmetic and parentheses iexprs. It only had knowledge of the tests above.
         // Basic mixed addition and multiplication
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "1 + 2 * 3")),
+            presult_to_string(&sexpr(&mut "1 + 2 * 3")),
             "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), IOp(Mul)), IOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "1 * 2 + 3")),
+            presult_to_string(&sexpr(&mut "1 * 2 + 3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), Val(Int(3)), IOp(Add)))"
         );
         // Mixed addition, subtraction, and multiplication
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "1 + 2 * 3 - 4")),
+        assert_eq!(presult_to_string(&sexpr(&mut "1 + 2 * 3 - 4")),
                    "Ok(BinOp(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), IOp(Mul)), IOp(Add)), Val(Int(4)), IOp(Sub)))");
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "1 * 2 + 3 - 4")),
+        assert_eq!(presult_to_string(&sexpr(&mut "1 * 2 + 3 - 4")),
                    "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), Val(Int(3)), IOp(Add)), Val(Int(4)), IOp(Sub)))");
         // Mixed addition and division
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "10 + 20 / 5")),
+            presult_to_string(&sexpr(&mut "10 + 20 / 5")),
             "Ok(BinOp(Val(Int(10)), BinOp(Val(Int(20)), Val(Int(5)), IOp(Div)), IOp(Add)))"
         );
         // Nested parentheses with mixed operations
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "(1 + 2) * (3 - 4)")),
+        assert_eq!(presult_to_string(&sexpr(&mut "(1 + 2) * (3 - 4)")),
                    "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Sub)), IOp(Mul)))");
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "1 + (2 * (3 + 4))")),
+        assert_eq!(presult_to_string(&sexpr(&mut "1 + (2 * (3 + 4))")),
                    "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Add)), IOp(Mul)), IOp(Add)))");
         // Complex nested expressions
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "((1 + 2) * 3) + (4 / (5 - 6))")),
+        assert_eq!(presult_to_string(&sexpr(&mut "((1 + 2) * 3) + (4 / (5 - 6))")),
                    "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), Val(Int(3)), IOp(Mul)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), IOp(Sub)), IOp(Div)), IOp(Add)))"
         );
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "(1 + (2 * (3 - (4 / 5))))")),
+        assert_eq!(presult_to_string(&sexpr(&mut "(1 + (2 * (3 - (4 / 5))))")),
                    "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), Val(Int(5)), IOp(Div)), IOp(Sub)), IOp(Mul)), IOp(Add)))"
         );
         // More complex expressions with deep nesting
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "((1 + 2) * (3 + 4))")),
+        assert_eq!(presult_to_string(&sexpr(&mut "((1 + 2) * (3 + 4))")),
                    "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Add)), IOp(Mul)))"
         );
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "((1 * 2) + (3 * 4)) / 5")),
+        assert_eq!(presult_to_string(&sexpr(&mut "((1 * 2) + (3 * 4)) / 5")),
                    "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Mul)), IOp(Add)), Val(Int(5)), IOp(Div)))"
         );
         // Multiple levels of nested expressions
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "1 + (2 * (3 + (4 / (5 - 6))))")),
+        assert_eq!(presult_to_string(&sexpr(&mut "1 + (2 * (3 + (4 / (5 - 6))))")),
                    "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), IOp(Sub)), IOp(Div)), IOp(Add)), IOp(Mul)), IOp(Add)))"
         );
 
         // ChatGPT generated tests with mixed iexprs. It only had knowledge of the tests above.
         // Mixing addition, subtraction, and variables
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "x + 2 - y")),
+            presult_to_string(&sexpr(&mut "x + 2 - y")),
             r#"Ok(BinOp(BinOp(Var(VarName("x")), Val(Int(2)), IOp(Add)), Var(VarName("y")), IOp(Sub)))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "(x + y) * 3")),
+            presult_to_string(&sexpr(&mut "(x + y) * 3")),
             r#"Ok(BinOp(BinOp(Var(VarName("x")), Var(VarName("y")), IOp(Add)), Val(Int(3)), IOp(Mul)))"#
         );
         // Nested arithmetic with variables and parentheses
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "(a + b) / (c - d)")),
+            presult_to_string(&sexpr(&mut "(a + b) / (c - d)")),
             r#"Ok(BinOp(BinOp(Var(VarName("a")), Var(VarName("b")), IOp(Add)), BinOp(Var(VarName("c")), Var(VarName("d")), IOp(Sub)), IOp(Div)))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "x * (y + 3) - z / 2")),
+            presult_to_string(&sexpr(&mut "x * (y + 3) - z / 2")),
             r#"Ok(BinOp(BinOp(Var(VarName("x")), BinOp(Var(VarName("y")), Val(Int(3)), IOp(Add)), IOp(Mul)), BinOp(Var(VarName("z")), Val(Int(2)), IOp(Div)), IOp(Sub)))"#
         );
         // If-then-else with mixed arithmetic
-        assert_eq!(presult_to_string(&comp_or_sexpr(&mut "if true then 1 + 2 else 3 * 4")),
+        assert_eq!(presult_to_string(&sexpr(&mut "if true then 1 + 2 else 3 * 4")),
                    "Ok(If(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Mul))))");
         // Time index in arithmetic expression
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "x[0, 1] + y[-1, 0]")),
+            presult_to_string(&sexpr(&mut "x[0, 1] + y[-1, 0]")),
             r#"Ok(BinOp(Index(Var(VarName("x")), 0, Int(1)), Index(Var(VarName("y")), -1, Int(0)), IOp(Add)))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "x[1, 2] * (y + 3)")),
+            presult_to_string(&sexpr(&mut "x[1, 2] * (y + 3)")),
             r#"Ok(BinOp(Index(Var(VarName("x")), 1, Int(2)), BinOp(Var(VarName("y")), Val(Int(3)), IOp(Add)), IOp(Mul)))"#
         );
         // Complex expression with nested if-then-else and mixed operations
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "(1 + x) * if y then 3 else z / 2")),
+            presult_to_string(&sexpr(&mut "(1 + x) * if y then 3 else z / 2")),
             r#"Ok(BinOp(BinOp(Val(Int(1)), Var(VarName("x")), IOp(Add)), If(Var(VarName("y")), Val(Int(3)), BinOp(Var(VarName("z")), Val(Int(2)), IOp(Div))), IOp(Mul)))"#
         );
     }
@@ -978,7 +929,7 @@ mod tests {
     #[test]
     fn parse_empty_string() {
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "")),
+            presult_to_string(&sexpr(&mut "")),
             "Err(Backtrack(ContextError { context: [], cause: None }))"
         );
     }
@@ -986,9 +937,9 @@ mod tests {
     #[test]
     fn parse_invalid_expression() {
         // TODO: Bug here in parser. It should be able to handle these cases.
-        // assert_eq!(presult_to_string(&comp_or_sexpr(&mut "1 +")), "Err(Backtrack(ContextError { context: [], cause: None }))");
+        // assert_eq!(presult_to_string(&sexpr(&mut "1 +")), "Err(Backtrack(ContextError { context: [], cause: None }))");
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "&& true")),
+            presult_to_string(&sexpr(&mut "&& true")),
             "Err(Backtrack(ContextError { context: [], cause: None }))"
         );
     }
@@ -996,11 +947,11 @@ mod tests {
     #[test]
     fn parse_boolean_expressions() {
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "true && false")),
+            presult_to_string(&sexpr(&mut "true && false")),
             "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And)))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "true || false")),
+            presult_to_string(&sexpr(&mut "true || false")),
             "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)))"
         );
     }
@@ -1009,26 +960,26 @@ mod tests {
     fn parse_mixed_boolean_and_arithmetic() {
         // Expressions do not make sense but parser should allow it
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "1 + 2 && 3")),
+            presult_to_string(&sexpr(&mut "1 + 2 && 3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), Val(Int(3)), BOp(And)))"
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut "true || 1 * 2")),
+            presult_to_string(&sexpr(&mut "true || 1 * 2")),
             "Ok(BinOp(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), BOp(Or)))"
         );
     }
     #[test]
     fn parse_string_concatenation() {
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#""foo" ++ "bar""#)),
+            presult_to_string(&sexpr(&mut r#""foo" ++ "bar""#)),
             r#"Ok(BinOp(Val(Str("foo")), Val(Str("bar")), SOp(Concat)))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#""hello" ++ " " ++ "world""#)),
+            presult_to_string(&sexpr(&mut r#""hello" ++ " " ++ "world""#)),
             r#"Ok(BinOp(BinOp(Val(Str("hello")), Val(Str(" ")), SOp(Concat)), Val(Str("world")), SOp(Concat)))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#""a" ++ "b" ++ "c""#)),
+            presult_to_string(&sexpr(&mut r#""a" ++ "b" ++ "c""#)),
             r#"Ok(BinOp(BinOp(Val(Str("a")), Val(Str("b")), SOp(Concat)), Val(Str("c")), SOp(Concat)))"#
         );
     }
@@ -1036,7 +987,7 @@ mod tests {
     #[test]
     fn parse_defer() {
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"defer(x)"#)),
+            presult_to_string(&sexpr(&mut r#"defer(x)"#)),
             r#"Ok(Defer(Var(VarName("x"))))"#
         )
     }
@@ -1044,7 +995,7 @@ mod tests {
     #[test]
     fn parse_update() {
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"update(x, y)"#)),
+            presult_to_string(&sexpr(&mut r#"update(x, y)"#)),
             r#"Ok(Update(Var(VarName("x")), Var(VarName("y"))))"#
         )
     }
@@ -1054,32 +1005,32 @@ mod tests {
         // Note: value_list has higher precedence than sexpr_list hence why
         // this becomes a val
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"List()"#)),
+            presult_to_string(&sexpr(&mut r#"List()"#)),
             r#"Ok(Val(List([])))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"List () "#)),
+            presult_to_string(&sexpr(&mut r#"List () "#)),
             r#"Ok(Val(List([])))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"List(1,2)"#)),
+            presult_to_string(&sexpr(&mut r#"List(1,2)"#)),
             r#"Ok(Val(List([Int(1), Int(2)])))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"List(1+2,2*5)"#)),
+            presult_to_string(&sexpr(&mut r#"List(1+2,2*5)"#)),
             r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(2)), Val(Int(5)), IOp(Mul))]))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"List("hello","world")"#)),
+            presult_to_string(&sexpr(&mut r#"List("hello","world")"#)),
             r#"Ok(Val(List([Str("hello"), Str("world")])))"#
         );
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"List(true || false, true && false)"#)),
+            presult_to_string(&sexpr(&mut r#"List(true || false, true && false)"#)),
             r#"Ok(List([BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))]))"#
         );
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
-            presult_to_string(&comp_or_sexpr(&mut r#"List(1,"hello")"#)),
+            presult_to_string(&sexpr(&mut r#"List(1,"hello")"#)),
             r#"Ok(Val(List([Int(1), Str("hello")])))"#
         );
         assert_eq!(

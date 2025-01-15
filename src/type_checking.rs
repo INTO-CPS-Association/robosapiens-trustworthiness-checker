@@ -1,4 +1,4 @@
-use crate::ast::{BoolBinOp, IntBinOp, StrBinOp};
+use crate::ast::{BoolBinOp, CompBinOp, IntBinOp, StrBinOp};
 use crate::core::StreamType;
 use crate::{
     ast::{SBinOp, SExpr},
@@ -245,6 +245,21 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>)
             (SBinOp::SOp(op), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => Ok(SExprTE::Str(
                 SExprStr::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
+
+            // Comparison operations - could use a refactor
+            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(
+                SExprTE::Bool(SExprBool::EqBool(Box::new(se1), Box::new(se2))),
+            ),
+            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::EqStr(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::EqInt(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Le), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::LeInt(se1, se2)))
+            }
+
             // Any other case where sub-expressions are Ok, but `op` is not supported
             (_, Ok(ste1), Ok(ste2)) => {
                 errs.push(SemanticError::TypeError(
@@ -429,53 +444,6 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
             }
             SExpr::Defer(_) => todo!("Implement support for Defer"),
             SExpr::Update(_, _) => todo!("Implement support for Update"),
-            SExpr::Eq(sexpr1, sexpr2) => {
-                let sexpr1_check = sexpr1.type_check_raw(ctx, errs);
-                let sexpr2_check = sexpr2.type_check_raw(ctx, errs);
-                match (sexpr1_check?, sexpr2_check?) {
-                    (SExprTE::Int(se1), SExprTE::Int(se2)) => {
-                        Ok(SExprTE::Bool(SExprBool::EqInt(se1, se2)))
-                    }
-                    (SExprTE::Str(se1), SExprTE::Str(se2)) => {
-                        Ok(SExprTE::Bool(SExprBool::EqStr(se1, se2)))
-                    }
-                    (SExprTE::Bool(se1), SExprTE::Bool(se2)) => Ok(SExprTE::Bool(
-                        SExprBool::EqBool(Box::new(se1), Box::new(se2)),
-                    )),
-                    (SExprTE::Unit(se1), SExprTE::Unit(se2)) => {
-                        Ok(SExprTE::Bool(SExprBool::EqUnit(se1, se2)))
-                    }
-                    (se1, se2) => {
-                        errs.push(SemanticError::TypeError(
-                            format!(
-                                "Cannot compare expressions of different types: {:?} and {:?}",
-                                se1, se2
-                            )
-                            .into(),
-                        ));
-                        Err(())
-                    }
-                }
-            }
-            SExpr::Le(sexpr1, sexpr2) => {
-                let sexpr1_check = sexpr1.type_check_raw(ctx, errs);
-                let sexpr2_check = sexpr2.type_check_raw(ctx, errs);
-                match (sexpr1_check?, sexpr2_check?) {
-                    (SExprTE::Int(se1), SExprTE::Int(se2)) => {
-                        Ok(SExprTE::Bool(SExprBool::LeInt(se1, se2)))
-                    }
-                    (se1, se2) => {
-                        errs.push(SemanticError::TypeError(
-                            format!(
-                                "Cannot compare expressions of different types: {:?} and {:?}",
-                                se1, se2
-                            )
-                            .into(),
-                        ));
-                        Err(())
-                    }
-                }
-            }
             SExpr::Not(sexpr) => {
                 let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
                 match sexpr_check {
@@ -966,13 +934,14 @@ mod tests {
 
     #[test]
     fn test_dodgy_if() {
-        let dodgy_bexpr = SExpr::Eq(
+        let dodgy_bexpr = SExpr::BinOp(
             Box::new(SExprV::Val(Value::Int(0))),
             Box::new(SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Int(3))),
                 Box::new(SExprV::Val(Value::Str("Banana".into()))),
                 SBinOp::IOp(IntBinOp::Add),
             )),
+            SBinOp::COp(CompBinOp::Eq),
         );
         let sexpr = SExprV::If(
             Box::new(dodgy_bexpr),

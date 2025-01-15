@@ -27,12 +27,20 @@ pub enum StrBinOp {
     Concat,
 }
 
+// Comparison Binary Operations
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompBinOp {
+    Eq,
+    Le,
+}
+
 // Stream BinOp
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SBinOp {
     IOp(IntBinOp),
     BOp(BoolBinOp),
     SOp(StrBinOp),
+    COp(CompBinOp),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -62,9 +70,7 @@ pub enum SExpr<VarT: Debug> {
     Defer(Box<Self>),
     Update(Box<Self>, Box<Self>),
 
-    // Boolean expressions
-    Eq(Box<Self>, Box<Self>),
-    Le(Box<Self>, Box<Self>),
+    // Unary expressions (refactor if more are added...)
     Not(Box<Self>),
 
     // List and list expressions
@@ -121,8 +127,8 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             BinOp(e1, e2, BOp(BoolBinOp::Or)) => write!(f, "({} || {})", e1, e2),
             BinOp(e1, e2, BOp(BoolBinOp::And)) => write!(f, "({} && {})", e1, e2),
             BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),
-            Eq(e1, e2) => write!(f, "({} == {})", e1, e2),
-            Le(e1, e2) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Eq)) => write!(f, "({} == {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Le)) => write!(f, "({} <= {})", e1, e2),
             Not(b) => write!(f, "!{}", b),
             Var(v) => write!(f, "{}", v),
             Eval(e) => write!(f, "eval({})", e),
