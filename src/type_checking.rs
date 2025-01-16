@@ -60,7 +60,7 @@ pub enum SExprBool {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
     // Stream indexing
-    Index(
+    SIndex(
         // Inner SExpr e
         Box<Self>,
         // Index i
@@ -77,7 +77,7 @@ pub enum SExprInt {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
     // Stream indexing
-    Index(
+    SIndex(
         // Inner SExpr e
         Box<Self>,
         // Index i
@@ -100,7 +100,7 @@ pub enum SExprUnit {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
     // Stream indexing
-    Index(
+    SIndex(
         // Inner SExpr e
         Box<Self>,
         // Index i
@@ -120,7 +120,7 @@ pub enum SExprStr {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
     // Stream indexing
-    Index(
+    SIndex(
         // Inner SExpr e
         Box<Self>,
         // Index i
@@ -349,22 +349,22 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &Value) {
 
         match inner_check {
             Ok(ste) => match (ste, default) {
-                (SExprTE::Int(se), Value::Int(def)) => Ok(SExprTE::Int(SExprInt::Index(
+                (SExprTE::Int(se), Value::Int(def)) => Ok(SExprTE::Int(SExprInt::SIndex(
                     Box::new(se.clone()),
                     idx,
                     *def,
                 ))),
-                (SExprTE::Str(se), Value::Str(def)) => Ok(SExprTE::Str(SExprStr::Index(
+                (SExprTE::Str(se), Value::Str(def)) => Ok(SExprTE::Str(SExprStr::SIndex(
                     Box::new(se.clone()),
                     idx,
                     def.clone(),
                 ))),
-                (SExprTE::Bool(se), Value::Bool(def)) => Ok(SExprTE::Bool(SExprBool::Index(
+                (SExprTE::Bool(se), Value::Bool(def)) => Ok(SExprTE::Bool(SExprBool::SIndex(
                     Box::new(se.clone()),
                     idx,
                     *def,
                 ))),
-                (SExprTE::Unit(se), Value::Unit) => Ok(SExprTE::Unit(SExprUnit::Index(
+                (SExprTE::Unit(se), Value::Unit) => Ok(SExprTE::Unit(SExprUnit::SIndex(
                     Box::new(se.clone()),
                     idx,
                     (),
@@ -372,7 +372,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &Value) {
                 (se, def) => {
                     errs.push(SemanticError::TypeError(
                         format!(
-                            "Mismatched type in Index expression, expression and default does not match: {:?}",
+                            "Mismatched type in Stream Index expression, expression and default does not match: {:?}",
                             (se, def)
                         )
                             .into(),
@@ -426,7 +426,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
             SExpr::If(b, se1, se2) => {
                 (b.deref(), se1.deref(), se2.deref()).type_check_raw(ctx, errs)
             }
-            SExpr::Index(inner, idx, default) => {
+            SExpr::SIndex(inner, idx, default) => {
                 (inner.deref(), *idx, default).type_check_raw(ctx, errs)
             }
             SExpr::Var(id) => id.type_check_raw(ctx, errs),

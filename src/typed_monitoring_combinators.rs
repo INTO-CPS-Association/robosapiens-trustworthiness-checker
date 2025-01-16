@@ -54,7 +54,7 @@ pub fn if_stm<X: StreamData>(
     lift3(|x, y, z| if x { y } else { z }, x, y, z)
 }
 
-pub fn index<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream<X> {
+pub fn sindex<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream<X> {
     let c = c.clone();
     if i < 0 {
         let n: usize = (-i).try_into().unwrap();

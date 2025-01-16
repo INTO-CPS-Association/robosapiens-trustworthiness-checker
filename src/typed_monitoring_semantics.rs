@@ -34,9 +34,9 @@ impl MonitoringSemantics<SExprInt, i64, Value> for TypedUntimedLolaSemantics {
                 }
             }
             SExprInt::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprInt::Index(e, i, c) => {
+            SExprInt::SIndex(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::index(e, i, c)
+                mc::sindex(e, i, c)
             }
             SExprInt::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -53,9 +53,9 @@ impl MonitoringSemantics<SExprStr, String, Value> for TypedUntimedLolaSemantics 
         match expr {
             SExprStr::Val(v) => mc::val(v),
             SExprStr::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprStr::Index(e, i, c) => {
+            SExprStr::SIndex(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::index(e, i, c)
+                mc::sindex(e, i, c)
             }
             SExprStr::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -77,9 +77,9 @@ impl MonitoringSemantics<SExprUnit, (), Value> for TypedUntimedLolaSemantics {
         match expr {
             SExprUnit::Val(v) => mc::val(v),
             SExprUnit::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprUnit::Index(e, i, c) => {
+            SExprUnit::SIndex(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::index(e, i, c)
+                mc::sindex(e, i, c)
             }
             SExprUnit::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -135,9 +135,9 @@ impl MonitoringSemantics<SExprBool, bool, Value> for TypedUntimedLolaSemantics {
                 mc::or(e1, e2)
             }
             SExprBool::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprBool::Index(e, i, c) => {
+            SExprBool::SIndex(e, i, c) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::index(e, i, c)
+                mc::sindex(e, i, c)
             }
             SExprBool::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);

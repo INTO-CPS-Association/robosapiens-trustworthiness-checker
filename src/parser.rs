@@ -94,7 +94,7 @@ fn time_index(s: &mut &str) -> PResult<SExpr<VarName>> {
         _: whitespace,
         _: ']'
     )
-    .map(|(e, i, d)| SExpr::Index(Box::new(e), i, d))
+    .map(|(e, i, d)| SExpr::SIndex(Box::new(e), i, d))
     .parse_next(s)
 }
 
@@ -515,11 +515,11 @@ mod tests {
         );
         assert_eq!(
             sexpr(&mut (*"(x)[-1, 0]".to_string()).into())?,
-            SExpr::Index(Box::new(SExpr::Var(VarName("x".into()))), -1, Value::Int(0),),
+            SExpr::SIndex(Box::new(SExpr::Var(VarName("x".into()))), -1, Value::Int(0),),
         );
         assert_eq!(
             sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
-            SExpr::Index(
+            SExpr::SIndex(
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var(VarName("x".into()))),
                     Box::new(SExpr::Var(VarName("y".into())),),
@@ -533,7 +533,7 @@ mod tests {
             sexpr(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::Index(
+                Box::new(SExpr::SIndex(
                     Box::new(SExpr::Var(VarName("x".into()))),
                     -1,
                     Value::Int(0),
@@ -626,7 +626,7 @@ mod tests {
                 VarName("x".into()),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::Index(
+                    Box::new(SExpr::SIndex(
                         Box::new(SExpr::Var(VarName("x".into()))),
                         -1,
                         Value::Int(0),
@@ -801,11 +801,11 @@ mod tests {
         // Time index
         assert_eq!(
             presult_to_string(&sexpr(&mut "x [-1, 0 ]")),
-            r#"Ok(Index(Var(VarName("x")), -1, Int(0)))"#
+            r#"Ok(SIndex(Var(VarName("x")), -1, Int(0)))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "x[1,0]")),
-            r#"Ok(Index(Var(VarName("x")), 1, Int(0)))"#
+            r#"Ok(SIndex(Var(VarName("x")), 1, Int(0)))"#
         );
         // Paren
         assert_eq!(presult_to_string(&sexpr(&mut "  (1)  ")), "Ok(Val(Int(1)))");
@@ -893,11 +893,11 @@ mod tests {
         // Time index in arithmetic expression
         assert_eq!(
             presult_to_string(&sexpr(&mut "x[0, 1] + y[-1, 0]")),
-            r#"Ok(BinOp(Index(Var(VarName("x")), 0, Int(1)), Index(Var(VarName("y")), -1, Int(0)), IOp(Add)))"#
+            r#"Ok(BinOp(SIndex(Var(VarName("x")), 0, Int(1)), SIndex(Var(VarName("y")), -1, Int(0)), IOp(Add)))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "x[1, 2] * (y + 3)")),
-            r#"Ok(BinOp(Index(Var(VarName("x")), 1, Int(2)), BinOp(Var(VarName("y")), Val(Int(3)), IOp(Add)), IOp(Mul)))"#
+            r#"Ok(BinOp(SIndex(Var(VarName("x")), 1, Int(2)), BinOp(Var(VarName("y")), Val(Int(3)), IOp(Add)), IOp(Mul)))"#
         );
         // Complex expression with nested if-then-else and mixed operations
         assert_eq!(

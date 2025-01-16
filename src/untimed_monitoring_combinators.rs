@@ -134,7 +134,7 @@ pub fn if_stm(
     )
 }
 
-pub fn index(x: OutputStream<Value>, i: isize, c: Value) -> OutputStream<Value> {
+pub fn sindex(x: OutputStream<Value>, i: isize, c: Value) -> OutputStream<Value> {
     let c = c.clone();
     if i < 0 {
         let n = i.abs() as usize;

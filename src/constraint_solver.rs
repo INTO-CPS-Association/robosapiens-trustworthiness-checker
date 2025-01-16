@@ -137,13 +137,13 @@ impl ConvertToAbsolute for SExpr<VarName> {
                 op.clone(),
             ),
             SExpr::Var(name) => SExpr::Var(IndexedVarName(name.0.clone(), base_time)),
-            SExpr::Index(expr, offset, default) => {
+            SExpr::SIndex(expr, offset, default) => {
                 // Determine if it is something that can eventually be solved. If not, transform it to a lit
                 let absolute_time = base_time as isize + offset;
                 if absolute_time < 0 {
                     SExpr::Val(default.clone())
                 } else {
-                    SExpr::Index(
+                    SExpr::SIndex(
                         Box::new(expr.to_absolute(base_time)),
                         absolute_time,
                         default.clone(),
@@ -197,13 +197,13 @@ impl Simplifiable for SExpr<IndexedVarName> {
                     unreachable!("Var({:?}, {:?}) does not exist. Store: {:?}", name, base_time, store);
                 }
             }
-            SExpr::Index(expr, idx_time, default) => {
+            SExpr::SIndex(expr, idx_time, default) => {
                 // Should not be negative at this stage since it was indexed...
                 let uidx_time = *idx_time as usize;
                 if uidx_time <= base_time {
                     expr.simplify(uidx_time, store)
                 } else {
-                    Unresolved(Box::new(SExpr::Index(expr.clone(), *idx_time, default.clone())))
+                    Unresolved(Box::new(SExpr::SIndex(expr.clone(), *idx_time, default.clone())))
                 }
             }
             SExpr::If(bexpr, if_expr, else_expr) => {
@@ -241,14 +241,14 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::Var(name) => {
                 Unresolved(Box::new(SExpr::Var(name.clone())))
             }
-            SExpr::Index(expr, rel_time, default) => {
+            SExpr::SIndex(expr, rel_time, default) => {
                 if *rel_time == 0 {
                     expr.simplify(base_time, store)
                 } else {
                     // Attempt to partially solve the expression and return unresolved
                     match expr.simplify(base_time, store) {
-                        Unresolved(expr) => Unresolved(Box::new(SExpr::Index(expr.clone(), *rel_time, default.clone()))),
-                        Resolved(val) => Unresolved(Box::new(SExpr::Index( Box::new(SExpr::Val(val)), *rel_time, default.clone()))),
+                        Unresolved(expr) => Unresolved(Box::new(SExpr::SIndex(expr.clone(), *rel_time, default.clone()))),
+                        Resolved(val) => Unresolved(Box::new(SExpr::SIndex( Box::new(SExpr::Val(val)), *rel_time, default.clone()))),
                     }
                 }
             }

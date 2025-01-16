@@ -49,7 +49,7 @@ pub enum SExpr<VarT: Debug> {
     If(Box<Self>, Box<Self>, Box<Self>),
 
     // Stream indexing
-    Index(
+    SIndex(
         // Inner SExpr e
         Box<Self>,
         // Index i
@@ -118,7 +118,7 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
         use SExpr::*;
         match self {
             If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
-            Index(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
+            SIndex(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
             Val(n) => write!(f, "{}", n),
             BinOp(e1, e2, IOp(IntBinOp::Add)) => write!(f, "({} + {})", e1, e2),
             BinOp(e1, e2, IOp(IntBinOp::Sub)) => write!(f, "({} - {})", e1, e2),
