@@ -160,6 +160,7 @@ impl ConvertToAbsolute for SExpr<VarName> {
             SExpr::Update(_, _) => todo!(),
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
+            SExpr::LIndex(_, _) => todo!(),
         }
     }
 }
@@ -219,6 +220,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
             SExpr::Update(_, _) => todo!(),
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
+            SExpr::LIndex(_, _) => todo!(),
         }
     }
 }
@@ -265,6 +267,7 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::Update(_, _) => todo!(),
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
+            SExpr::LIndex(_, _) => todo!(),
         }
     }
 }

@@ -75,6 +75,8 @@ pub enum SExpr<VarT: Debug> {
 
     // List and list expressions
     List(Vec<Self>),
+    LIndex(Box<Self>, Box<Self>), // List indexing: First member is list expression, second is
+                                  // index
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -138,6 +140,7 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
                 let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "[{}]", es_str.join(", "))
             }
+            LIndex(e, i) => write!(f, "{}.get({})", e, i),
         }
     }
 }
