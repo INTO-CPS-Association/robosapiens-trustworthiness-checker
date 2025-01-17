@@ -79,7 +79,7 @@ fn lit(s: &mut &str) -> PResult<SExpr<VarName>> {
     val.map(|v| SExpr::Val(v)).parse_next(s)
 }
 
-fn time_index(s: &mut &str) -> PResult<SExpr<VarName>> {
+fn sindex(s: &mut &str) -> PResult<SExpr<VarName>> {
     seq!(
         _: whitespace,
         alt((lit, var, paren)),
@@ -179,12 +179,31 @@ fn not(s: &mut &str) -> PResult<SExpr<VarName>> {
     .parse_next(s)
 }
 
+fn lindex(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!(
+        _: whitespace,
+        _: "List.get",
+        _: whitespace,
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ',',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ')',
+    )
+    .map(|(e, i)| SExpr::LIndex(Box::new(e), Box::new(i)))
+    .parse_next(s)
+}
+
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
         alt((
-            time_index, not, eval, lit, ifelse, defer, update, sexpr_list, var, paren,
+            sindex, lindex, not, eval, lit, ifelse, defer, update, sexpr_list, var, paren,
         )),
         whitespace,
     )
@@ -1046,5 +1065,27 @@ mod tests {
             var_decl(&mut "y = List()"),
             Ok((VarName("y".into()), SExpr::Val(Value::List(vec![]))))
         )
+    }
+
+    #[test]
+    fn parse_lindex() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.get(List(1, 2), 42)"#)),
+            r#"Ok(LIndex(Val(List([Int(1), Int(2)])), Val(Int(42))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.get(x, 42)"#)),
+            r#"Ok(LIndex(Var(VarName("x")), Val(Int(42))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.get(x, 1+2)"#)),
+            r#"Ok(LIndex(Var(VarName("x")), BinOp(Val(Int(1)), Val(Int(2)), IOp(Add))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(
+                &mut r#"List.get(List.get(List(List(1, 2), List(3, 4)), 0), 1)"#
+            )),
+            r#"Ok(LIndex(LIndex(Val(List([List([Int(1), Int(2)]), List([Int(3), Int(4)])])), Val(Int(0))), Val(Int(1))))"#
+        );
     }
 }
