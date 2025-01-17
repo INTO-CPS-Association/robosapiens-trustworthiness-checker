@@ -63,9 +63,10 @@ impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
                     .collect();
                 mc::list(exprs)
             }
-            SExpr::LIndex(_e, _i) => {
-                let _e = Self::to_async_stream(*_e, ctx);
-                todo!("lindex combinator")
+            SExpr::LIndex(e, i) => {
+                let e = Self::to_async_stream(*e, ctx);
+                let i = Self::to_async_stream(*i, ctx);
+                mc::lindex(e, i)
             }
         }
     }

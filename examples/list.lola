@@ -1,5 +1,7 @@
 in x
 out z
 out nestedList
+out listIndex
 z = x
 nestedList = List(x[-1, List()], x)
+listIndex = List.get(nestedList, 1 - 1 * 1)

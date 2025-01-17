@@ -354,9 +354,8 @@ pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     })
 }
 
-pub fn lindex(xs: Vec<OutputStream<Value>>, mut i: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lindex(mut x: OutputStream<Value>, mut i: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
-        let mut x = list(xs);
         loop {
             if let (Some(l), Some(idx)) = join!(x.next(), i.next()){
                 match (l, idx) {
