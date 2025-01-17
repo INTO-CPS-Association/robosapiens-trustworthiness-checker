@@ -372,7 +372,7 @@ pub fn lindex(xs: Vec<OutputStream<Value>>, mut i: OutputStream<Value>) -> Outpu
                             panic!("List index must be non-negative: {}", idx); // For now
                         }
                     }
-                    (l, idx) => panic!("Evaluated to invalid list index. Expected List and Int expressions. Received: {:?}.get({:?})", l, idx)
+                    (l, idx) => panic!("Invalid list index. Expected List and Int expressions. Received: List.get({:?}, {:?})", l, idx)
                 }
             } else {
                 return;

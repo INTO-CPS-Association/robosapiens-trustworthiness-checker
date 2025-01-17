@@ -140,7 +140,7 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
                 let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "[{}]", es_str.join(", "))
             }
-            LIndex(e, i) => write!(f, "{}.get({})", e, i),
+            LIndex(e, i) => write!(f, "List.get({}, {})", e, i),
         }
     }
 }
