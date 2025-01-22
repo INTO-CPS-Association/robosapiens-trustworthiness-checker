@@ -3,14 +3,18 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use paho_mqtt as mqtt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use tokio_util::sync::CancellationToken;
 
 // use crate::stream_utils::drop_guard_stream;
-use crate::{core::VarName, mqtt_client::provide_mqtt_client, InputProvider, OutputStream, Value};
+use crate::{
+    core::VarName,
+    mqtt_client::{provide_mqtt_client, provide_mqtt_client_with_subscription},
+    InputProvider, OutputStream, Value,
+};
 // use async_stream::stream;
 
 const QOS: i32 = 1;
@@ -28,6 +32,7 @@ pub type InputChannelMap = BTreeMap<VarName, String>;
 pub struct MQTTInputProvider {
     pub var_map: BTreeMap<VarName, VarData>,
     // node: Arc<Mutex<r2r::Node>>,
+    pub started: watch::Receiver<bool>,
 }
 
 // #[Error]
@@ -39,7 +44,6 @@ impl MQTTInputProvider {
     // TODO: should we have dependency injection for the MQTT client?
     pub fn new(host: &str, var_topics: InputChannelMap) -> Result<Self, mqtt::Error> {
         // Client options
-        let mut reconnection_attempts: usize = 0;
         let host = host.to_string();
 
         // let (tx, rx) = tokio::sync::watch::channel(false);
@@ -59,6 +63,14 @@ impl MQTTInputProvider {
         }
 
         let topics = var_topics.values().cloned().collect::<Vec<_>>();
+        let topic_vars = var_topics
+            .iter()
+            .map(|(k, v)| (v.clone(), k.clone()))
+            .collect::<BTreeMap<_, _>>();
+        println!("[Input Provider] Var topics: {:?}", var_topics);
+        println!("[Input Provider] Topic vars: {:?}", topic_vars);
+
+        let (started_tx, started_rx) = watch::channel(false);
 
         // Spawn a background task to receive messages from the MQTT broker and
         // send them to the appropriate channel based on which topic they were
@@ -71,8 +83,9 @@ impl MQTTInputProvider {
             // println!("Spawning MQTT receiver task");
 
             // Create and connect to the MQTT client
-            let client = provide_mqtt_client(host.clone()).await.unwrap();
-            let mut stream = client.clone().get_stream(10);
+            let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone())
+                .await
+                .unwrap();
             println!("Connected to MQTT broker with topics {:?}", topics);
             let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
             loop {
@@ -90,37 +103,31 @@ impl MQTTInputProvider {
                 }
             }
             // println!("Connected to MQTT broker");
+            started_tx
+                .send(true)
+                .expect("Failed to send started signal");
 
             while let Some(msg) = stream.next().await {
-                match msg {
-                    Some(msg) => {
-                        // Process the message
-                        // println!("Received message: {:?} on {:?}", msg, msg.topic());
-                        let value = serde_json::from_str(&msg.payload_str()).expect(
-                            format!(
-                                "Failed to parse value {:?} sent from MQTT",
-                                msg.payload_str()
-                            )
-                            .as_str(),
-                        );
-                        if let Some(sender) = senders.get(&VarName(msg.topic().to_string())) {
-                            sender
-                                .send(value)
-                                .await
-                                .expect("Failed to send value to channel");
-                        } else {
-                            println!("Channel not found for topic {:?}", msg.topic());
-                        }
-                    }
-                    None => {
-                        // Connection lost, try to reconnect
-                        while let Err(e) = client.reconnect().await {
-                            println!("Reconnection attempt failed: {:?}", e);
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            reconnection_attempts += 1;
-                        }
-                        println!("Reconnected after {} attempts", reconnection_attempts);
-                    }
+                // Process the message
+                println!(
+                    "[Input Provider] Received message: {:?} on {:?}",
+                    msg,
+                    msg.topic()
+                );
+                let value = serde_json::from_str(&msg.payload_str()).expect(
+                    format!(
+                        "Failed to parse value {:?} sent from MQTT",
+                        msg.payload_str()
+                    )
+                    .as_str(),
+                );
+                if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
+                    sender
+                        .send(value)
+                        .await
+                        .expect("Failed to send value to channel");
+                } else {
+                    println!("Channel not found for topic {:?}", msg.topic());
                 }
             }
         });
@@ -142,7 +149,10 @@ impl MQTTInputProvider {
             })
             .collect::<BTreeMap<_, _>>();
 
-        Ok(MQTTInputProvider { var_map: var_data })
+        Ok(MQTTInputProvider {
+            var_map: var_data,
+            started: started_rx,
+        })
     }
 }
 

@@ -1,8 +1,8 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
-use async_once_cell::OnceCell;
-use paho_mqtt as mqtt;
-use tokio::sync::{mpsc, oneshot};
+use async_stream::stream;
+use futures::{stream::BoxStream, StreamExt};
+use paho_mqtt::{self as mqtt, Message};
 
 type Hostname = String;
 
@@ -10,86 +10,111 @@ type Hostname = String;
  * instance of the client across all whole application (i.e. sharing
  * it between the input provider and the output handler). */
 
-// This background async task listens for requests for MQTT clients and
-// provides a unique client for each hostname to requesters
-async fn mqtt_client_provider(
-    mut client_reqs: mpsc::Receiver<(
-        Hostname,
-        oneshot::Sender<Result<mqtt::AsyncClient, mqtt::Error>>,
-    )>,
-) {
-    let mut mqtt_clients: BTreeMap<String, paho_mqtt::AsyncClient> = BTreeMap::new();
-
-    while let Some((hostname, tx)) = client_reqs.recv().await {
-        // Check if we already have a client for this hostname which we can
-        // reuse
-        if let Some(client) = mqtt_clients.get(&hostname) {
-            if let Err(_) = tx.send(Ok(client.clone())) {
-                return;
+fn message_stream(mut client: mqtt::AsyncClient) -> BoxStream<'static, Message> {
+    Box::pin(stream! {
+        loop {
+            let mut stream = client.get_stream(10);
+            loop {
+                match stream.next().await {
+                    Some(msg) => {
+                        let msg = msg.expect("Expecting a correct message");
+                        println!(
+                            "[MQTT Stream] Received message: {:?} on {:?}",
+                            msg,
+                            msg.topic()
+                        );
+                        yield msg;
+                    }
+                    None => {
+                        break;
+                    }
+                }
             }
-            continue;
+            println!("[MQTT Client Provider] Connection lost. Attempting reconnect...");
+            while let Err(e) = client.reconnect().await {
+                println!("[MQTT Client Provider] Reconnection attempt failed: {:?}", e);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            println!("[MQTT Client Provider] Reconnected");
         }
-
-        // Create a new client
-        let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-            .server_uri(hostname.clone())
-            .client_id("robosapiens_trustworthiness_checker")
-            .finalize();
-
-        let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
-            .keep_alive_interval(Duration::from_secs(30))
-            .clean_session(false)
-            .finalize();
-
-        let mqtt_client = match mqtt::AsyncClient::new(create_opts) {
-            Ok(client) => client,
-            Err(e) => {
-                // (we don't care if the requester has gone away)
-                let _e = tx.send(Err(e));
-                continue;
-            }
-        };
-        mqtt_clients.insert(hostname.clone(), mqtt_client.clone());
-
-        // Try to connect to the broker
-        match mqtt_client.clone().connect(connect_opts).await {
-            Ok(_) => {
-                // Send the client to the requester
-                // (we don't care if the requester has gone away)
-                let _e = tx.send(Ok(mqtt_client));
-            }
-            // If we fail to connect, send the error to the requester
-            Err(e) => {
-                // (we don't care if the requester has gone away)
-                let _e = tx.send(Err(e));
-            }
-        }
-    }
+    })
 }
 
-static MQTT_CLIENT_REQ_SENDER: OnceCell<
-    mpsc::Sender<(
-        Hostname,
-        oneshot::Sender<Result<mqtt::AsyncClient, mqtt::Error>>,
-    )>,
-> = OnceCell::new();
+pub async fn provide_mqtt_client_with_subscription(
+    hostname: Hostname,
+) -> Result<(mqtt::AsyncClient, BoxStream<'static, Message>), mqtt::Error> {
+    let create_opts = mqtt::CreateOptionsBuilder::new_v3()
+        .server_uri(hostname.clone())
+        .client_id(format!(
+            "robosapiens_trustworthiness_checker_{}",
+            rand::random::<u16>()
+        ))
+        .finalize();
+
+    let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
+        .keep_alive_interval(Duration::from_secs(30))
+        .clean_session(false)
+        .finalize();
+
+    let mqtt_client = match mqtt::AsyncClient::new(create_opts) {
+        Ok(client) => client,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+
+    println!(
+        "[MQTT Client Provider] Created client for hostname: {} with client_id: {}",
+        hostname,
+        mqtt_client.client_id()
+    );
+
+    let stream = message_stream(mqtt_client.clone());
+    println!(
+        "[MQTT Client Provider] Started consuming for hostname: {}",
+        hostname
+    );
+
+    // Try to connect to the broker
+    mqtt_client
+        .clone()
+        .connect(connect_opts)
+        .await
+        .map(|_| (mqtt_client, stream))
+}
 
 pub async fn provide_mqtt_client(hostname: Hostname) -> Result<mqtt::AsyncClient, mqtt::Error> {
-    // Create a oneshot channel to receive the client from the background task
-    let (tx, rx) = oneshot::channel();
+    let create_opts = mqtt::CreateOptionsBuilder::new_v3()
+        .server_uri(hostname.clone())
+        .client_id(format!(
+            "robosapiens_trustworthiness_checker_{}",
+            rand::random::<u16>()
+        ))
+        .finalize();
 
-    // Get or initialize the background task and a sender to it
-    let req_sender = MQTT_CLIENT_REQ_SENDER
-        .get_or_init(async {
-            let (tx, rx) = mpsc::channel(10);
-            tokio::spawn(mqtt_client_provider(rx));
-            tx
-        })
-        .await;
+    let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
+        .keep_alive_interval(Duration::from_secs(30))
+        .clean_session(false)
+        .finalize();
 
-    // Send a request for the client to the background task
-    req_sender.send((hostname, tx)).await.unwrap();
+    let mqtt_client = match mqtt::AsyncClient::new(create_opts) {
+        Ok(client) => client,
+        Err(e) => {
+            // (we don't care if the requester has gone away)
+            return Err(e);
+        }
+    };
 
-    // Wait for the client to be created and return it
-    rx.await.unwrap()
+    println!(
+        "[MQTT Client Provider] Created client for hostname: {} with client_id: {}",
+        hostname,
+        mqtt_client.client_id()
+    );
+
+    // Try to connect to the broker
+    mqtt_client
+        .clone()
+        .connect(connect_opts)
+        .await
+        .map(|_| mqtt_client)
 }

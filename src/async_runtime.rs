@@ -544,6 +544,7 @@ where
     }
 
     async fn run(mut self) {
+        println!("[Async Runtime] Running monitor");
         self.output_handler.provide_streams(self.output_streams);
         self.output_handler.run().await;
     }
