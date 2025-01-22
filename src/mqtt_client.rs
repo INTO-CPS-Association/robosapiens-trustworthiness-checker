@@ -3,6 +3,7 @@ use std::time::Duration;
 use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use paho_mqtt::{self as mqtt, Message};
+use tracing::{debug, info, instrument, warn, Level};
 
 type Hostname = String;
 
@@ -10,6 +11,7 @@ type Hostname = String;
  * instance of the client across all whole application (i.e. sharing
  * it between the input provider and the output handler). */
 
+#[instrument(level=Level::INFO, skip(client))]
 fn message_stream(mut client: mqtt::AsyncClient) -> BoxStream<'static, Message> {
     Box::pin(stream! {
         loop {
@@ -18,11 +20,7 @@ fn message_stream(mut client: mqtt::AsyncClient) -> BoxStream<'static, Message> 
                 match stream.next().await {
                     Some(msg) => {
                         let msg = msg.expect("Expecting a correct message");
-                        println!(
-                            "[MQTT Stream] Received message: {:?} on {:?}",
-                            msg,
-                            msg.topic()
-                        );
+                        debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
                         yield msg;
                     }
                     None => {
@@ -30,12 +28,12 @@ fn message_stream(mut client: mqtt::AsyncClient) -> BoxStream<'static, Message> 
                     }
                 }
             }
-            println!("[MQTT Client Provider] Connection lost. Attempting reconnect...");
-            while let Err(e) = client.reconnect().await {
-                println!("[MQTT Client Provider] Reconnection attempt failed: {:?}", e);
+            warn!("Connection list. Attempting reconnect...");
+            while let Err(err) = client.reconnect().await {
+                warn!(name: "MQTT client reconnection failed", ?err);
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
-            println!("[MQTT Client Provider] Reconnected");
+            info!("MQTT client reconnected");
         }
     })
 }
@@ -63,16 +61,17 @@ pub async fn provide_mqtt_client_with_subscription(
         }
     };
 
-    println!(
-        "[MQTT Client Provider] Created client for hostname: {} with client_id: {}",
-        hostname,
-        mqtt_client.client_id()
+    debug!(
+        name = "Created MQTT client",
+        ?hostname,
+        client_id = mqtt_client.client_id()
     );
 
     let stream = message_stream(mqtt_client.clone());
-    println!(
-        "[MQTT Client Provider] Started consuming for hostname: {}",
-        hostname
+    debug!(
+        name = "Started consuming MQTT messages",
+        ?hostname,
+        client_id = mqtt_client.client_id()
     );
 
     // Try to connect to the broker
@@ -105,10 +104,10 @@ pub async fn provide_mqtt_client(hostname: Hostname) -> Result<mqtt::AsyncClient
         }
     };
 
-    println!(
-        "[MQTT Client Provider] Created client for hostname: {} with client_id: {}",
-        hostname,
-        mqtt_client.client_id()
+    debug!(
+        name = "Created MQTT client",
+        ?hostname,
+        client_id = mqtt_client.client_id()
     );
 
     // Try to connect to the broker

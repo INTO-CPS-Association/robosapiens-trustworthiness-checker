@@ -4,6 +4,7 @@ use std::{
 };
 
 use tokio::{fs::File, io::AsyncReadExt};
+use tracing::debug;
 use winnow::Parser;
 
 #[derive(Debug)]
@@ -40,10 +41,8 @@ pub async fn parse_file<
     let mut file = File::open(file).await?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
-    // println!(
-    //     "Parsed file: {:?}",
-    //     parser.parse_next(&mut contents.as_str().into()).unwrap()
-    // );
+    debug!(name: "Parsing file", 
+        contents=?parser.parse_next(&mut contents.as_str().into()).unwrap());
     parser
         .parse(contents.as_str().into())
         .map_err(|e| Box::new(FileParseError::new(e.to_string())) as Box<dyn Error>)
@@ -57,8 +56,9 @@ mod tests {
     use crate::{InputProvider, Value};
 
     use super::*;
+    use test_log::test;
 
-    #[tokio::test]
+    #[test(tokio::test)]
     async fn test_parse_file() {
         let parser = crate::parser::lola_input_file;
         let file = "examples/simple_add.input";
@@ -71,7 +71,7 @@ mod tests {
         assert_eq!(x_vals, vec![Value::Int(1), Value::Int(3)]);
     }
 
-    #[tokio::test]
+    #[test(tokio::test)]
     async fn test_parse_boolean_file() {
         let parser = crate::parser::lola_input_file;
         let file = "tests/test_inputs/maple_sequence_true.input";

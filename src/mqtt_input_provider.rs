@@ -1,19 +1,18 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use futures::StreamExt;
 use paho_mqtt as mqtt;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::{debug, error, info, info_span, instrument, warn, Level};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use tokio_util::sync::CancellationToken;
 
 // use crate::stream_utils::drop_guard_stream;
 use crate::{
-    core::VarName,
-    mqtt_client::{provide_mqtt_client, provide_mqtt_client_with_subscription},
-    InputProvider, OutputStream, Value,
+    core::VarName, mqtt_client::provide_mqtt_client_with_subscription, InputProvider, OutputStream,
+    Value,
 };
 // use async_stream::stream;
 
@@ -42,6 +41,7 @@ pub struct MQTTInputProvider {
 
 impl MQTTInputProvider {
     // TODO: should we have dependency injection for the MQTT client?
+    #[instrument(level = Level::INFO, skip(var_topics))]
     pub fn new(host: &str, var_topics: InputChannelMap) -> Result<Self, mqtt::Error> {
         // Client options
         let host = host.to_string();
@@ -67,8 +67,8 @@ impl MQTTInputProvider {
             .iter()
             .map(|(k, v)| (v.clone(), k.clone()))
             .collect::<BTreeMap<_, _>>();
-        println!("[Input Provider] Var topics: {:?}", var_topics);
-        println!("[Input Provider] Topic vars: {:?}", topic_vars);
+        info!(name: "InputProvider connecting to MQTT broker",
+            ?host, ?var_topics, ?topic_vars);
 
         let (started_tx, started_rx) = watch::channel(false);
 
@@ -77,43 +77,35 @@ impl MQTTInputProvider {
         // received on
         // Should go away when the sender goes away by sender.send throwing
         // due to no senders
+        let var_topics_clone = var_topics.clone();
         tokio::spawn(async move {
-            // let drop_guard = cancellation_token.clone().drop_guard();
-
-            // println!("Spawning MQTT receiver task");
-
+            let var_topics = var_topics_clone;
+            let mqtt_input_span = info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
+            let _enter = mqtt_input_span.enter();
             // Create and connect to the MQTT client
             let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone())
                 .await
                 .unwrap();
-            println!("Connected to MQTT broker with topics {:?}", topics);
+            info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
             let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
             loop {
                 match client.subscribe_many(&topics, &qos).await {
                     Ok(_) => break,
                     Err(e) => {
-                        println!(
-                            "Failed to subscribe to topics {:?} with error {:?}, retrying in 100ms",
-                            topics, e
-                        );
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        println!("Reconnecting");
+                        warn!(name: "Failed to subscribe to topics", ?topics, err=?e);
+                        info!("Retrying in 100ms");
                         let _e = client.reconnect().await;
                     }
                 }
             }
-            // println!("Connected to MQTT broker");
+            info!(name: "Connected to MQTT broker", ?host, ?var_topics);
             started_tx
                 .send(true)
                 .expect("Failed to send started signal");
 
             while let Some(msg) = stream.next().await {
                 // Process the message
-                println!(
-                    "[Input Provider] Received message: {:?} on {:?}",
-                    msg,
-                    msg.topic()
-                );
+                debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
                 let value = serde_json::from_str(&msg.payload_str()).expect(
                     format!(
                         "Failed to parse value {:?} sent from MQTT",
@@ -127,7 +119,7 @@ impl MQTTInputProvider {
                         .await
                         .expect("Failed to send value to channel");
                 } else {
-                    println!("Channel not found for topic {:?}", msg.topic());
+                    error!(name: "Channel not found for topic", topic=?msg.topic());
                 }
             }
         });

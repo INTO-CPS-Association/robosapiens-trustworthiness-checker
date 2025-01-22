@@ -469,6 +469,7 @@ mod tests {
     use super::{SemanticResult, TypeCheckable, TypeContext};
 
     use super::*;
+    use test_log::test;
 
     type SExprV = SExpr<VarName>;
     type SemantResultStr = SemanticResult<SExprTE>;

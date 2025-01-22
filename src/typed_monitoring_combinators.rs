@@ -145,11 +145,13 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
     )) as OutputStream<T>
 }
 
+#[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+    use test_log::test;
 
-    #[tokio::test]
+    #[test(tokio::test)]
     async fn test_plus() {
         let x: OutputStream<i64> = Box::pin(stream::iter(vec![1, 3].into_iter()));
         let y: OutputStream<i64> = Box::pin(stream::iter(vec![2, 4].into_iter()));
@@ -158,7 +160,7 @@ mod tests {
         assert_eq!(res, z);
     }
 
-    #[tokio::test]
+    #[test(tokio::test)]
     async fn test_str_plus() {
         let x: OutputStream<String> =
             Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));

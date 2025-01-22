@@ -2,6 +2,9 @@ use core::panic;
 
 // #![deny(warnings)]
 use clap::Parser;
+use tracing::info;
+use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
 use trustworthiness_checker::mqtt_output_handler::MQTTOutputHandler;
 use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
@@ -16,6 +19,11 @@ const MQTT_HOSTNAME: &str = "localhost";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+
     // Could use tokio-console for debugging
     // console_subscriber::init();
     let cli = Cli::parse();
@@ -77,7 +85,7 @@ async fn main() {
     let model = parse_file(model_parser, cli.model.as_str())
         .await
         .expect("Model file could not be parsed");
-    println!("Model: {:?}", model);
+    info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
 
     let output_handler: Box<dyn OutputHandler<Value>> = match cli.output_mode {
         trustworthiness_checker::commandline_args::OutputMode {
@@ -111,10 +119,6 @@ async fn main() {
             model.output_vars.clone(),
         )),
     };
-
-    // println!("Outputs: {:?}", model.output_vars);
-    // println!("Inputs: {:?}", model.input_vars);
-    // println!("Model: {:?}", model);
 
     // Get the outputs from the Monitor
     let task = match (runtime, semantics) {

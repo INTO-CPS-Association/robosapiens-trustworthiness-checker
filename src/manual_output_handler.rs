@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tracing::{debug, info, instrument, Level};
 
 use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
 
@@ -46,9 +47,10 @@ impl<V: StreamData> ManualOutputHandler<V> {
 
 #[async_trait]
 impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
+    #[instrument(skip(self, streams))]
     fn provide_streams(&mut self, mut streams: BTreeMap<VarName, OutputStream<V>>) {
-        println!("[Output Handler] Providing n={} streams",
-                 self.var_names.len());
+        debug!(name: "Providing streams",
+            num_streams = self.var_names.len());
         for (var_name, sender) in self
             .var_names
             .iter()
@@ -61,9 +63,14 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
         }
     }
 
+    #[instrument(name="Running ManualOutputHandler", level=Level::INFO,
+                 skip(self))]
     fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>> {
         let receivers = mem::take(&mut self.stream_receivers).expect("Stream receivers not found");
-        println!("[Output Handler] Running with n={} streams", receivers.len());
+        info!(
+            name = "Running ManualOutputHandler",
+            num_streams = receivers.len()
+        );
         let mut streams: Vec<_> = receivers
             .into_iter()
             .map(|mut r| r.try_recv().unwrap())
@@ -90,7 +97,7 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
                     let output: BTreeMap<VarName, V> =
                         var_names.iter().cloned().zip(vals.into_iter()).collect();
                     // Output the combined data
-                    println!("[Output Handler] Outputting: {:?}", output);
+                    debug!(name = "Outputting data", ?output);
                     output_sender.send(output).await.unwrap();
                 } else {
                     // One of the streams has ended, so we should stop
@@ -190,9 +197,10 @@ mod tests {
     use futures::stream;
     use tokio::time::interval;
     use tokio_stream::wrappers::IntervalStream;
+    use test_log::test;
 
     use super::*;
-    #[tokio::test]
+    #[test(tokio::test)]
     async fn sync_test_combined_output() {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
@@ -231,7 +239,7 @@ mod tests {
         task.await.unwrap();
     }
 
-    #[tokio::test]
+    #[test(tokio::test)]
     async fn async_test_combined_output() {
         // Helper to create a named stream with delay
         fn create_stream(

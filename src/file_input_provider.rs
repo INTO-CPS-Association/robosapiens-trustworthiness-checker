@@ -36,6 +36,7 @@ mod tests {
     use crate::ast::InputFileData;
     use crate::core::{Value, VarName};
     use crate::InputProvider;
+    use test_log::test;
 
     #[test]
     fn test_input_file_data_iter() {
@@ -61,7 +62,7 @@ mod tests {
         assert_eq!(vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
     }
 
-    #[tokio::test]
+    #[test(tokio::test)]
     async fn test_input_file_as_stream() {
         let mut data: InputFileData = BTreeMap::new();
         data.insert(0, {

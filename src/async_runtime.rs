@@ -14,6 +14,12 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
+use tracing::debug;
+use tracing::info;
+use tracing::info_span;
+use tracing::instrument;
+use tracing::warn;
+use tracing::Level;
 
 use crate::core::InputProvider;
 use crate::core::Monitor;
@@ -54,27 +60,30 @@ async fn manage_var<V: StreamData>(
 ) {
     let mut senders: Vec<mpsc::Sender<V>> = vec![];
     let mut send_requests = vec![];
-    // println!("Starting manage_var for {}", var);
-    // Gathering senders
+
+    // Tracing for variable manager task
+    let manage_var = info_span!("manage_var", var = format!("{:?}", var.clone()));
+    let _ = manage_var.enter();
 
     /* Stage 1. Gathering subscribers */
     loop {
         select! {
             biased;
             _ = cancel.cancelled() => {
-                // println!("Ending manage_var for {} due to cancellation", var);
+                info!(name: "Ending manage_var due to cancellation", ?var);
                 return;
             }
             _ = ready.wait_for(|x| *x) => {
-                // println!("Moving to stage 2");
+                info!(name: "Moving to stage 2", ?var);
                 break;
             }
             channel_sender = channel_request_rx.recv() => {
                 if let Some(channel_sender) = channel_sender {
-                    // println!("Received request for {}", var);
+                    info!(name: "Received request for var", ?var);
                     send_requests.push(channel_sender);
                 }
                 // We don't care if we stop receiving requests
+                info!(name: "Received request for var", ?var);
             }
         }
     }
@@ -98,6 +107,7 @@ async fn manage_var<V: StreamData>(
             let stream = ReceiverStream::new(rx);
             if let Err(_) = channel_sender.send(Box::pin(stream)) {
                 // panic!("Failed to send stream for {var} to requester");
+                warn!(name: "Failed to send stream for var to requester", ?var);
             }
         }
     }
@@ -107,23 +117,24 @@ async fn manage_var<V: StreamData>(
         select! {
             biased;
             _ = cancel.cancelled() => {
-                // println!("Ending manage_var for {} due to cancellation", var);
+                info!(name: "Ending manage_var due to cancellation", ?var);
                 return;
             }
             // Bad things will happen if this is called before everyone has subscribed
             data = input_stream.next() => {
                 if let Some(data) = data {
-                    // println!("sending data {:?}", data);
+                    debug!(name: "Sending var data", ?var, ?data);
                     // Senders can be empty if an input is not actually used
                     // assert!(!senders.is_empty());
                     let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
                     for res in join_all(send_futs).await {
-                        if let Err(_) = res {
-                            // println!("Failed to send data {:?} for {} due to no receivers", data, var);
+                        if let Err(err) = res {
+                            warn!(name: "Failed to send var data due to no receivers",
+                                ?data, ?var, ?err);
                         }
                     }
                 } else {
-                    // println!("Ending manage_var for {} as out of input data", var);
+                    info!(name: "manage_var out of input data", ?var);
                     return;
                 }
             }
@@ -145,6 +156,7 @@ async fn manage_var<V: StreamData>(
  * - cancellation_token: a cancellation token which is used to signal when to
  *   terminate the task
  */
+#[instrument(name="distribute", level=Level::INFO, skip(input_stream, send, clock, cancellation_token))]
 async fn distribute<V: StreamData>(
     mut input_stream: OutputStream<V>,
     send: broadcast::Sender<V>,
@@ -160,13 +172,13 @@ async fn distribute<V: StreamData>(
             }
             clock_upd = clock.changed() => {
                 if clock_upd.is_err() {
-                    // println!("Clock channel closed");
+                    warn!("Distribute clock channel closed");
                     return;
                 }
                 let clock_new = *clock.borrow_and_update();
-                // println!("Monitoring between {} and {}", clock_old, clock_new);
-                for _ in clock_old+1..=clock_new {
-                    // println!("Monitoring {}", i);
+                debug!(name: "Monitoring between clocks", clock_old, clock_new);
+                for clock in clock_old+1..=clock_new {
+                    debug!(name: "Monitoring", ?clock);
                     select! {
                         biased;
                         _ = cancellation_token.cancelled() => {
@@ -174,14 +186,12 @@ async fn distribute<V: StreamData>(
                         }
                         data = input_stream.next() => {
                             if let Some(data) = data {
-                                // println!("Distributing data {:?}", data);
-                                // let data_copy = data.clone();
+                                debug!(name: "Distributing data", ?data);
                                 if let Err(_) = send.send(data) {
-                                    // println!("sent")
-                                    // println!("Failed to send data {:?} due to no receivers (err = {:?})", data_copy, e);
+                                    warn!("Failed to distribute data due to no receivers");
                                 }
+                                debug!("Distributed data");
                             } else {
-                                // println!("Ending distribute");
                                 return;
                             }
                         }
@@ -220,7 +230,7 @@ async fn monitor<V: StreamData>(
             data = input_stream.next() => {
                 match data {
                     Some(data) => {
-                        // println!("Monitored data {:?}", data);
+                        debug!(name: "Monitored data", ?data);
                         if let Err(_) = send.send(data).await {
                             return;
                         }
@@ -299,13 +309,9 @@ impl<Val: StreamData> StreamContext<Val> for Arc<AsyncVarExchange<Val>> {
 
         tokio::spawn(async move {
             if let Err(e) = requester.send(tx).await {
-                println!(
-                    "Failed to request stream for {} due to no receivers (err = {:?})",
-                    var, e
-                );
+                warn!(name: "Failed to request stream for var due to no receivers", ?var, err=?e);
             }
             var_sender.send_modify(|x| *x -= 1);
-            // tx2.send(()).unwrap();
         });
 
         // Create a lazy typed stream from the request
@@ -489,12 +495,6 @@ where
                 .var_expr(&var)
                 .expect(format!("Failed to find expression for var {}", var.0.as_str()).as_str());
             let stream = Box::pin(S::to_async_stream(expr, &var_exchange));
-            // let stream = SS::transform_stream(
-            //     DropGuardStream {
-            //         drop_guard: cancellation_guard.clone(),
-            //     },
-            //     stream,
-            // );
             let stream = drop_guard_stream(stream, cancellation_guard.clone());
             async_streams.push(stream);
         }
@@ -524,13 +524,11 @@ where
             if let Err(e) = num_requested.wait_for(|x| *x == 0).await {
                 panic!("Failed to wait for all vars to be requested: {:?}", e);
             }
-            // println!("Var exchange ready!");
             var_exchange_ready.send(true).unwrap();
         });
 
         Self {
             model,
-            // var_exchange,
             output_streams,
             semantics_t: PhantomData,
             cancellation_guard,
@@ -543,8 +541,8 @@ where
         &self.model
     }
 
+    #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run(mut self) {
-        println!("[Async Runtime] Running monitor");
         self.output_handler.provide_streams(self.output_streams);
         self.output_handler.run().await;
     }

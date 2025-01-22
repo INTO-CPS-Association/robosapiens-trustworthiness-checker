@@ -2,6 +2,7 @@
 
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
+use tracing::info;
 use trustworthiness_checker::manual_output_handler::ManualOutputHandler;
 use trustworthiness_checker::queuing_runtime::QueuingMonitorRunner;
 use trustworthiness_checker::type_checking::type_check;
@@ -11,8 +12,10 @@ use trustworthiness_checker::{
 use trustworthiness_checker::{TypedUntimedLolaSemantics, Value};
 mod lola_fixtures;
 use lola_fixtures::*;
+// use tracing::info
+use test_log::test;
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_simple_add_monitor() {
     let mut input_streams = input_streams3();
     let spec = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
@@ -45,7 +48,7 @@ async fn test_simple_add_monitor() {
     );
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_concat_monitor() {
     let mut input_streams = input_streams4();
     let spec = lola_specification(&mut spec_typed_string_concat()).unwrap();
@@ -80,7 +83,7 @@ async fn test_concat_monitor() {
     );
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_count_monitor() {
     let mut input_streams: BTreeMap<VarName, BoxStream<'static, Value>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_typed_count_monitor()).unwrap();
@@ -126,13 +129,13 @@ async fn test_count_monitor() {
     );
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 #[ignore = "Not currently working"]
 async fn test_eval_monitor() {
     let mut input_streams = input_streams2();
     let spec = lola_specification(&mut spec_typed_eval_monitor()).unwrap();
     let spec = type_check(spec).expect("Type check failed");
-    println!("{:?}", spec);
+    info!("{:?}", spec);
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(
@@ -167,13 +170,13 @@ async fn test_eval_monitor() {
     );
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_multiple_parameters() {
     let mut input_streams = input_streams3();
     let mut spec = "in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y";
     let spec = lola_specification(&mut spec).unwrap();
     let spec = type_check(spec).expect("Type check failed");
-    println!("{:?}", spec);
+    info!("{:?}", spec);
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(

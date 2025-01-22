@@ -6,6 +6,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures::StreamExt;
 use paho_mqtt::{self as mqtt};
+use tracing::{debug, info, info_span, instrument, warn, Level};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use tokio_util::sync::CancellationToken;
@@ -33,28 +34,26 @@ pub struct MQTTOutputHandler {
     hostname: String,
 }
 
+#[instrument(level = Level::INFO, skip(stream, client))]
 async fn publish_stream(
     topic_name: String,
     mut stream: OutputStream<Value>,
     client: mqtt::AsyncClient,
 ) {
-    println!(
-        "[Output Handler] Publishing stream on topic: {:?}",
-        topic_name
-    );
     while let Some(data) = stream.next().await {
         let data = serde_json::to_string(&data).unwrap();
         let message = mqtt::Message::new(topic_name.clone(), data, 1);
         loop {
-            println!(
-                "[Output Handler] Publishing message: {:?} on topic: {:?}",
-                message,
-                message.topic()
+            debug!(
+                name="OutputHandler publishing MQTT message",
+                ?message,
+                topic=?message.topic()
             );
             match client.publish(message.clone()).await {
                 Ok(_) => break,
                 Err(_e) => {
-                    println!("Lost connection. Attempting reconnect...");
+                    warn!(name: "Lost connection. Attempting reconnect...",
+                        topic=?message.topic());
                     client.reconnect().await.unwrap();
                 }
             }
@@ -71,6 +70,7 @@ impl OutputHandler<Value> for MQTTOutputHandler {
         }
     }
 
+    #[instrument(level = Level::INFO, skip(self))]
     fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>> {
         let streams = self
             .var_map
@@ -82,24 +82,22 @@ impl OutputHandler<Value> for MQTTOutputHandler {
             })
             .collect::<Vec<_>>();
         let hostname = self.hostname.clone();
-        println!("[Output Handler] Running on hostname: {:?}", hostname);
-        println!("[Output Handler] Number of streams: {}", streams.len());
+        info!(name: "OutputProvider MQTT startup task launched",
+            ?hostname, num_streams = ?streams.len());
 
         Box::pin(async move {
-            println!("[Output Handler] Starting MQTT output handler future");
-            println!("[Output Handler] Awaiting client creation");
+            let mqtt_output_span = info_span!("OutputProvider MQTT startup task");
+            let _enter = mqtt_output_span.enter();
+
+            debug!("Awaiting client creation");
             let client = provide_mqtt_client(hostname).await.unwrap();
-            println!("[Output Handler] Client created");
+            debug!("Client created");
 
             futures::future::join_all(
                 streams
                     .into_iter()
                     .map(|(channel_name, stream)| {
                         let client = client.clone();
-                        println!(
-                            "[Output Handler] Task to publish stream on topic: {:?}",
-                            channel_name
-                        );
                         publish_stream(channel_name, stream, client)
                     })
                     .collect::<Vec<_>>(),
@@ -109,16 +107,11 @@ impl OutputHandler<Value> for MQTTOutputHandler {
     }
 }
 
-// #[Error]
-// enum MQTTInputProviderError {
-// MQTTClientError(mqtt::Error)
-// }
-
 impl MQTTOutputHandler {
     // TODO: should we have dependency injection for the MQTT client?
+    #[instrument(level = Level::INFO)]
     pub fn new(host: &str, var_topics: OutputChannelMap) -> Result<Self, mqtt::Error> {
         let hostname = host.to_string();
-        println!("[Output Handler] Var topics: {:?}", var_topics.clone());
 
         let var_map = var_topics
             .into_iter()

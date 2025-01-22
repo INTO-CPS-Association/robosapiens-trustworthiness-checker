@@ -468,6 +468,7 @@ mod tests {
     use winnow::error::{ContextError, ErrMode};
 
     use super::*;
+    use test_log::test;
 
     #[test]
     fn test_streamdata() {
