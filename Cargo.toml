@@ -12,22 +12,22 @@ bench = false
 
 [dependencies]
 # console-subscriber = "0.4.0"
-winnow = "0.6.20"
+winnow = "0.6.24"
 futures = "0.3.31"
-tokio = { version = "1.41.1", features = ["full", "tracing"] }
+tokio = { version = "1.43.0", features = ["full", "tracing"] }
 tokio-stream = {version ="0.1.16", features=["full"] }
 tokio-util = "0.7.12"
-clap = { version = "4.5.20", features = ["derive"] }
+clap = { version = "4.5.27", features = ["derive"] }
 async-stream = "0.3.6"
 r2r = { version = "0.9.3", optional=true }
-thiserror = "2.0.9"
+thiserror = "2.0.11"
 justerror = "1.1.0"
 serde = {version = "1.0.215", features = ["derive"]}
-serde_json = "1.0.133"
+serde_json = "1.0.137"
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = {version = "0.12.5", default-features=false, features=["bundled"]}
-async-trait = "0.1.51"
+paho-mqtt = {version = "0.13.0", default-features=false, features=["bundled", "ssl"]}
+async-trait = "0.1.85"
 async-once-cell = "0.5.4"
 random = "0.14.0"
 rand = "0.8.5"
@@ -39,7 +39,7 @@ ros = ["dep:r2r"]
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
-testcontainers-modules = "0.11.4"
+testcontainers-modules = "0.11.5"
 test-log = {version="0.2.17", features=["trace"]}
 
 [[bench]]
