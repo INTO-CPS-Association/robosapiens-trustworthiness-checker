@@ -4,6 +4,7 @@ use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use paho_mqtt::{self as mqtt, Message};
 use tracing::{debug, info, instrument, warn, Level};
+use uuid::Uuid;
 
 type Hostname = String;
 
@@ -45,7 +46,7 @@ pub async fn provide_mqtt_client_with_subscription(
         .server_uri(hostname.clone())
         .client_id(format!(
             "robosapiens_trustworthiness_checker_{}",
-            rand::random::<u16>()
+            Uuid::new_v4()
         ))
         .finalize();
 
@@ -87,7 +88,7 @@ pub async fn provide_mqtt_client(hostname: Hostname) -> Result<mqtt::AsyncClient
         .server_uri(hostname.clone())
         .client_id(format!(
             "robosapiens_trustworthiness_checker_{}",
-            rand::random::<u16>()
+            Uuid::new_v4()
         ))
         .finalize();
 
