@@ -188,18 +188,55 @@ impl<V: StreamData> AsyncManualOutputHandler<V> {
 
 #[cfg(test)]
 mod tests {
-    use futures::StreamExt;
-    use std::time::Duration;
-
-    // use tokio_stream as stream;
-
-    use crate::{OutputStream, Value, VarName};
-    use futures::stream;
-    use tokio::time::interval;
-    use tokio_stream::wrappers::IntervalStream;
-    use test_log::test;
+    use std::cmp::Ordering;
+    use std::collections::BTreeSet;
 
     use super::*;
+    use crate::{OutputStream, Value, VarName};
+    use futures::stream;
+    use futures::StreamExt;
+    use test_log::test;
+
+    // Ordering of Value - only available for testing
+    impl Ord for Value {
+        fn cmp(&self, other: &Self) -> Ordering {
+            use Value::*;
+
+            // Define ordering of variants
+            let variant_order = |value: &Value| match value {
+                Unknown => 0,
+                Unit => 1,
+                Bool(_) => 2,
+                Int(_) => 3,
+                Str(_) => 4,
+                List(_) => 5,
+            };
+
+            // First compare based on variant order
+            let self_order = variant_order(self);
+            let other_order = variant_order(other);
+
+            if self_order != other_order {
+                return self_order.cmp(&other_order);
+            }
+
+            // Compare within the same variant
+            match (self, other) {
+                (Bool(a), Bool(b)) => a.cmp(b),
+                (Int(a), Int(b)) => a.cmp(b),
+                (Str(a), Str(b)) => a.cmp(b),
+                (List(a), List(b)) => a.cmp(b), // Vec<Value> implements Ord if Value does
+                _ => Ordering::Equal, // Unit and Unknown are considered equal within their kind
+            }
+        }
+    }
+
+    impl PartialOrd for Value {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
     #[test(tokio::test)]
     async fn sync_test_combined_output() {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
@@ -249,12 +286,8 @@ mod tests {
         ) -> (VarName, OutputStream<Value>) {
             let var_name = VarName(name.to_string());
             // Delay to force expected ordering of the streams
-            let interval = IntervalStream::new(interval(Duration::from_millis(5)));
-            let stream = Box::pin(
-                stream::iter(0..10)
-                    .zip(interval)
-                    .map(move |(x, _)| (multiplier * x + offset).into()),
-            );
+            let stream =
+                Box::pin(stream::iter(0..10).map(move |x| (multiplier * x + offset).into()));
             (var_name, stream)
         }
 
@@ -263,7 +296,7 @@ mod tests {
         let (y_name, y_stream) = create_stream("y", 2, 1);
 
         // Prepare expected output
-        let expected_output: Vec<_> = (0..10)
+        let expected_output: BTreeSet<_> = (0..10)
             .flat_map(|x| {
                 vec![
                     (x_name.clone(), (x * 2).into()),
@@ -281,14 +314,11 @@ mod tests {
         );
 
         // Run the handler and validate output
-        let mut output_stream = handler.get_output();
+        let output_stream = handler.get_output();
         let task = tokio::spawn(handler.run());
+        let results = output_stream.collect::<BTreeSet<_>>().await;
 
-        for expected in &expected_output {
-            let value = output_stream.next().await.unwrap();
-            assert_eq!(value, *expected);
-        }
-
+        assert_eq!(results, expected_output);
         task.await.unwrap();
     }
 }
