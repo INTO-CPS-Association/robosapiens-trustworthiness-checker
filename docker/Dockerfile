@@ -39,7 +39,7 @@ RUN groupadd --gid $GID $USERNAME \
 # Set the ownership of the overlay workspace to the new user
 RUN chown -R ${UID}:${GID} /ws
 
-RUN groupadd fuse \
+RUN groupadd fuse\
     && usermod -aG fuse,video ${USERNAME}
 
 # Set the user and source entrypoint in the user's .bashrc file
