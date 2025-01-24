@@ -356,25 +356,83 @@ pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
 
 pub fn lindex(mut x: OutputStream<Value>, mut i: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
-        loop {
-            if let (Some(l), Some(idx)) = join!(x.next(), i.next()){
-                match (l, idx) {
-                    (Value::List(l), Value::Int(idx)) => {
-                        if idx >= 0 {
-                            if let Some(val) = l.get(idx as usize) {
-                                yield val.clone();
-                            } else {
-                                panic!("List index out of bounds: {}", idx);
-                            }
-                        }
-                        else {
-                            panic!("List index must be non-negative: {}", idx); // For now
+        while let (Some(l), Some(idx)) = join!(x.next(), i.next()){
+            match (l, idx) {
+                (Value::List(l), Value::Int(idx)) => {
+                    if idx >= 0 {
+                        if let Some(val) = l.get(idx as usize) {
+                            yield val.clone();
+                        } else {
+                            panic!("List index out of bounds: {}", idx);
                         }
                     }
-                    (l, idx) => panic!("Invalid list index. Expected List and Int expressions. Received: List.get({:?}, {:?})", l, idx)
+                    else {
+                        panic!("List index must be non-negative: {}", idx); // For now
+                    }
                 }
-            } else {
-                return;
+                (l, idx) => panic!("Invalid list index. Expected List and Int expressions. Received: List.get({:?}, {:?})", l, idx)
+            }
+        }
+    })
+}
+
+pub fn lappend(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let (Some(l), Some(val)) = join!(x.next(), y.next()){
+            match l {
+                Value::List(mut l) => {
+                    l.push(val);
+                    yield Value::List(l);
+                }
+                l => panic!("Invalid list append. Expected List and Value expressions. Received: List.append({:?}, {:?})", l, val)
+            }
+        }
+    })
+}
+
+pub fn lconcat(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let (Some(l1), Some(l2)) = join!(x.next(), y.next()){
+            match (l1, l2) {
+                (Value::List(mut l1), Value::List(l2)) => {
+                    l1.extend(l2);
+                    yield Value::List(l1);
+                }
+                (l1, l2) => panic!("Invalid list concatenation. Expected List and List expressions. Received: List.concat({:?}, {:?})", l1, l2)
+            }
+        }
+    })
+}
+
+pub fn lhead(mut x: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let Some(l) = x.next().await {
+            match l {
+                Value::List(l) => {
+                    if let Some(val) = l.first() {
+                        yield val.clone();
+                    } else {
+                        panic!("List is empty");
+                    }
+                }
+                l => panic!("Invalid list head. Expected List expression. Received: List.head({:?})", l)
+            }
+        }
+    })
+}
+
+pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let Some(l) = x.next().await {
+            match l {
+                Value::List(l) => {
+                    if let Some(val) = l.get(1..) {
+                        yield Value::List(val.to_vec());
+                    } else {
+                        panic!("List is empty");
+                    }
+                }
+                l => panic!("Invalid list tail. Expected List expression. Received: List.tail({:?})", l)
             }
         }
     })
@@ -765,5 +823,72 @@ mod tests {
         let res: Vec<Value> = lindex(list(x), i).collect().await;
         let exp: Vec<Value> = vec![1.into(), 4.into()];
         assert_eq!(res, exp)
+    }
+
+    #[tokio::test]
+    async fn test_list_append() {
+        let x: Vec<OutputStream<Value>> = vec![
+            Box::pin(stream::iter(vec![1.into(), 2.into()])),
+            Box::pin(stream::iter(vec![3.into(), 4.into()])),
+        ];
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
+        let res: Vec<Value> = lappend(list(x), y).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::List(vec![1.into(), 3.into(), 5.into()]),
+            Value::List(vec![2.into(), 4.into(), 6.into()]),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[tokio::test]
+    async fn test_list_concat() {
+        let x: Vec<OutputStream<Value>> = vec![
+            Box::pin(stream::iter(vec![1.into(), 2.into()])),
+            Box::pin(stream::iter(vec![3.into(), 4.into()])),
+        ];
+        let y: Vec<OutputStream<Value>> = vec![
+            Box::pin(stream::iter(vec![5.into(), 6.into()])),
+            Box::pin(stream::iter(vec![7.into(), 8.into()])),
+        ];
+        let res: Vec<Value> = lconcat(list(x), list(y)).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::List(vec![1.into(), 3.into(), 5.into(), 7.into()]),
+            Value::List(vec![2.into(), 4.into(), 6.into(), 8.into()]),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[tokio::test]
+    async fn test_list_head() {
+        let x: Vec<OutputStream<Value>> = vec![
+            Box::pin(stream::iter(vec![1.into(), 2.into()])),
+            Box::pin(stream::iter(vec![3.into(), 4.into()])),
+        ];
+        let res: Vec<Value> = lhead(list(x)).collect().await;
+        let exp: Vec<Value> = vec![Value::Int(1.into()), Value::Int(2.into())];
+        assert_eq!(res, exp);
+    }
+
+    #[tokio::test]
+    async fn test_list_tail() {
+        let x: Vec<OutputStream<Value>> = vec![
+            Box::pin(stream::iter(vec![1.into(), 2.into()])),
+            Box::pin(stream::iter(vec![3.into(), 4.into()])),
+            Box::pin(stream::iter(vec![5.into(), 6.into()])),
+        ];
+        let res: Vec<Value> = ltail(list(x)).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::List(vec![3.into(), 5.into()]),
+            Value::List(vec![4.into(), 6.into()]),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[tokio::test]
+    async fn test_list_tail_one_el() {
+        let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![1.into(), 2.into()]))];
+        let res: Vec<Value> = ltail(list(x)).collect().await;
+        let exp: Vec<Value> = vec![Value::List(vec![]), Value::List(vec![])];
+        assert_eq!(res, exp);
     }
 }
