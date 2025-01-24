@@ -1,7 +1,15 @@
-in x
-out z
+in iList
+out oList
 out nestedList
 out listIndex
-z = x
-nestedList = List(x[-1, List()], x)
-listIndex = List.get(nestedList, 1 - 1 * 1)
+out listAppend
+out listConcat
+out listHead
+out listTail
+oList = iList
+nestedList = List(iList, iList)
+listIndex = List.get(iList, 0)
+listAppend = List.append(iList, (1+1)/2)
+listConcat = List.concat(iList, iList)
+listHead = List.head(iList)
+listTail = List.tail(iList)

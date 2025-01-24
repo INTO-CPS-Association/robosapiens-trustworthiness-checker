@@ -198,12 +198,83 @@ fn lindex(s: &mut &str) -> PResult<SExpr<VarName>> {
     .parse_next(s)
 }
 
+fn lappend(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!(
+        _: whitespace,
+        _: "List.append",
+        _: whitespace,
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ',',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ')',
+    )
+    .map(|(lst, el)| SExpr::LAppend(Box::new(lst), Box::new(el)))
+    .parse_next(s)
+}
+
+fn lconcat(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!(
+        _: whitespace,
+        _: "List.concat",
+        _: whitespace,
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ',',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ')',
+    )
+    .map(|(lst1, lst2)| SExpr::LConcat(Box::new(lst1), Box::new(lst2)))
+    .parse_next(s)
+}
+
+fn lhead(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: "List.head",
+        _: whitespace,
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(lst,)| SExpr::LHead(Box::new(lst)))
+    .parse_next(s)
+}
+
+fn ltail(s: &mut &str) -> PResult<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: "List.tail",
+        _: whitespace,
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(lst,)| SExpr::LTail(Box::new(lst)))
+    .parse_next(s)
+}
+
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> PResult<SExpr<VarName>> {
     delimited(
         whitespace,
         alt((
-            sindex, lindex, not, eval, lit, ifelse, defer, update, sexpr_list, var, paren,
+            sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, lit, ifelse, defer, update,
+            sexpr_list, var, paren,
         )),
         whitespace,
     )
@@ -1087,6 +1158,60 @@ mod tests {
                 &mut r#"List.get(List.get(List(List(1, 2), List(3, 4)), 0), 1)"#
             )),
             r#"Ok(LIndex(LIndex(Val(List([List([Int(1), Int(2)]), List([Int(3), Int(4)])])), Val(Int(0))), Val(Int(1))))"#
+        );
+    }
+
+    #[test]
+    fn parse_lconcat() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.concat(List(1, 2), List(3, 4))"#)),
+            r#"Ok(LConcat(Val(List([Int(1), Int(2)])), Val(List([Int(3), Int(4)]))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.concat(List(), List())"#)),
+            r#"Ok(LConcat(Val(List([])), Val(List([]))))"#
+        );
+    }
+
+    #[test]
+    fn parse_lappend() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.append(List(1, 2), 3)"#)),
+            r#"Ok(LAppend(Val(List([Int(1), Int(2)])), Val(Int(3))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.append(List(), 3)"#)),
+            r#"Ok(LAppend(Val(List([])), Val(Int(3))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.append(List(), x)"#)),
+            r#"Ok(LAppend(Val(List([])), Var(VarName("x"))))"#
+        );
+    }
+
+    #[test]
+    fn parse_lhead() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.head(List(1, 2))"#)),
+            r#"Ok(LHead(Val(List([Int(1), Int(2)]))))"#
+        );
+        // Ok for parser but will result in runtime error:
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.head(List())"#)),
+            r#"Ok(LHead(Val(List([]))))"#
+        );
+    }
+
+    #[test]
+    fn parse_ltail() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.tail(List(1, 2))"#)),
+            r#"Ok(LTail(Val(List([Int(1), Int(2)]))))"#
+        );
+        // Ok for parser but will result in runtime error:
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.tail(List())"#)),
+            r#"Ok(LTail(Val(List([]))))"#
         );
     }
 }
