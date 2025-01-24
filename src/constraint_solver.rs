@@ -161,6 +161,10 @@ impl ConvertToAbsolute for SExpr<VarName> {
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),
+            SExpr::LAppend(_, _) => todo!(),
+            SExpr::LConcat(_, _) => todo!(),
+            SExpr::LHead(_) => todo!(),
+            SExpr::LTail(_) => todo!(),
         }
     }
 }
@@ -221,6 +225,10 @@ impl Simplifiable for SExpr<IndexedVarName> {
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),
+            SExpr::LAppend(_, _) => todo!(),
+            SExpr::LConcat(_, _) => todo!(),
+            SExpr::LHead(_) => todo!(),
+            SExpr::LTail(_) => todo!(),
         }
     }
 }
@@ -268,6 +276,10 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),
+            SExpr::LAppend(_, _) => todo!(),
+            SExpr::LConcat(_, _) => todo!(),
+            SExpr::LHead(_) => todo!(),
+            SExpr::LTail(_) => todo!(),
         }
     }
 }

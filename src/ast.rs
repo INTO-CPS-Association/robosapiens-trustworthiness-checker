@@ -75,8 +75,11 @@ pub enum SExpr<VarT: Debug> {
 
     // List and list expressions
     List(Vec<Self>),
-    LIndex(Box<Self>, Box<Self>), // List indexing: First member is list expression, second is
-                                  // index
+    LIndex(Box<Self>, Box<Self>), // List index: First is list, second is index
+    LAppend(Box<Self>, Box<Self>), // List append -- First is list, second is el to add
+    LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
+    LHead(Box<Self>),             // List head -- get first element of list
+    LTail(Box<Self>),             // List tail -- get all but first element of list
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -141,6 +144,10 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
                 write!(f, "[{}]", es_str.join(", "))
             }
             LIndex(e, i) => write!(f, "List.get({}, {})", e, i),
+            LAppend(lst, el) => write!(f, "List.append({}, {})", lst, el),
+            LConcat(lst1, lst2) => write!(f, "List.concat({}, {})", lst1, lst2),
+            LHead(lst) => write!(f, "List.head({})", lst),
+            LTail(lst) => write!(f, "List.tail({})", lst),
         }
     }
 }
