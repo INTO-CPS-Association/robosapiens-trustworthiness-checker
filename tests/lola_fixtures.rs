@@ -250,3 +250,19 @@ pub fn maple_invalid_input_stream_2(size: usize) -> BTreeMap<VarName, BoxStream<
     );
     input_streams
 }
+
+#[allow(dead_code)]
+pub fn spec_simple_add_decomposed_1() -> &'static str {
+    "in x
+     in y
+     out w
+     w = x + y"
+}
+
+#[allow(dead_code)]
+pub fn spec_simple_add_decomposed_2() -> &'static str {
+    "in z
+     in w
+     out v
+     v = z + w"
+}

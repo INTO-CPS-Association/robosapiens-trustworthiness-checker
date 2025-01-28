@@ -72,10 +72,14 @@ async fn main() {
                 .iter()
                 .map(|topic| (tc::VarName(topic.clone()), topic.clone()))
                 .collect();
-
-            let mqtt_input_provider =
+            let mut mqtt_input_provider =
                 tc::mqtt_input_provider::MQTTInputProvider::new(MQTT_HOSTNAME, var_topics)
                     .expect("MQTT input provider could not be created");
+            mqtt_input_provider
+                .started
+                .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+                .await
+                .expect("MQTT input provider failed to start");
             Box::new(mqtt_input_provider)
         } else {
             panic!("Input provider not specified")
