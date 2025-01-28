@@ -1,3 +1,5 @@
+use test_log::test;
+
 // From: https://stackoverflow.com/questions/51121446/how-do-i-assert-an-enum-is-a-specific-variant-if-i-dont-care-about-its-fields
 #[macro_export]
 macro_rules! is_enum_variant {
@@ -10,7 +12,10 @@ macro_rules! is_enum_variant {
     };
 }
 
-#[test]
-fn example() {
-    assert!(is_enum_variant!(Some(42), Some(_)));
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn example() {
+        assert!(is_enum_variant!(Some(42), Some(_)));
+    }
 }
