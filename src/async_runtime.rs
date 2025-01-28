@@ -70,20 +70,20 @@ async fn manage_var<V: StreamData>(
         select! {
             biased;
             _ = cancel.cancelled() => {
-                info!(name: "Ending manage_var due to cancellation", ?var);
+                info!(?var, "Ending manage_var due to cancellation");
                 return;
             }
             _ = ready.wait_for(|x| *x) => {
-                info!(name: "Moving to stage 2", ?var);
+                debug!(?var, "Moving to stage 2");
                 break;
             }
             channel_sender = channel_request_rx.recv() => {
                 if let Some(channel_sender) = channel_sender {
-                    info!(name: "Received request for var", ?var);
+                    debug!(?var, "Received request for var");
                     send_requests.push(channel_sender);
                 }
                 // We don't care if we stop receiving requests
-                info!(name: "Received request for var", ?var);
+                debug!(?var, "Channel sender went away for var");
             }
         }
     }
@@ -107,7 +107,7 @@ async fn manage_var<V: StreamData>(
             let stream = ReceiverStream::new(rx);
             if let Err(_) = channel_sender.send(Box::pin(stream)) {
                 // panic!("Failed to send stream for {var} to requester");
-                warn!(name: "Failed to send stream for var to requester", ?var);
+                warn!(?var, "Failed to send stream for var to requester");
             }
         }
     }
@@ -117,13 +117,13 @@ async fn manage_var<V: StreamData>(
         select! {
             biased;
             _ = cancel.cancelled() => {
-                info!(name: "Ending manage_var due to cancellation", ?var);
+                info!(?var, "Ending manage_var due to cancellation");
                 return;
             }
             // Bad things will happen if this is called before everyone has subscribed
             data = input_stream.next() => {
                 if let Some(data) = data {
-                    debug!(name: "Sending var data", ?var, ?data);
+                    debug!(?var, ?data, "Sending var data");
                     // Senders can be empty if an input is not actually used
                     // assert!(!senders.is_empty());
                     let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
@@ -134,7 +134,7 @@ async fn manage_var<V: StreamData>(
                         }
                     }
                 } else {
-                    info!(name: "manage_var out of input data", ?var);
+                    debug!(?var, "manage_var out of input data");
                     return;
                 }
             }

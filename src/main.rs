@@ -2,7 +2,7 @@ use core::panic;
 
 // #![deny(warnings)]
 use clap::Parser;
-use tracing::info;
+use tracing::{info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
