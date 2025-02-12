@@ -1,9 +1,11 @@
-use crate::ast::{BoolBinOp, IntBinOp, StrBinOp};
 use crate::core::Value;
 use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
-use crate::type_checking::{SExprBool, SExprInt, SExprStr, SExprTE, SExprUnit};
-use crate::typed_monitoring_combinators as mc;
-use crate::typed_monitoring_combinators::{from_typed_stream, to_typed_stream};
+use crate::lang::dynamic_lola::ast::{BoolBinOp, IntBinOp, StrBinOp};
+use crate::lang::dynamic_lola::type_checker::{SExprBool, SExprInt, SExprStr, SExprTE, SExprUnit};
+// use crate::semantics::typed_monitoring_semantics as mc;
+mod combinators;
+use combinators as mc;
+use combinators::{from_typed_stream, to_typed_stream};
 
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;

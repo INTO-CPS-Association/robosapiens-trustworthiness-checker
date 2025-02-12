@@ -11,8 +11,8 @@ use tracing::{debug, info, info_span, instrument, warn, Level};
 // or does it go away when anyway the receivers of our outputs go away?
 // use tokio_util::sync::CancellationToken;
 
+use super::client::provide_mqtt_client;
 use crate::core::OutputHandler;
-use crate::mqtt_client::provide_mqtt_client;
 // use crate::stream_utils::drop_guard_stream;
 use crate::{core::VarName, OutputStream, Value};
 

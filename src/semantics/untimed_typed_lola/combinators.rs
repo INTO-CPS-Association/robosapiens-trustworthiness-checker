@@ -1,13 +1,15 @@
+use crate::core::Value;
 use crate::core::{StreamContext, StreamData};
-use crate::untimed_monitoring_combinators::{lift1, lift2, lift3};
-use crate::{lola_expression, MonitoringSemantics, OutputStream, UntimedLolaSemantics, Value};
+use crate::lang::dynamic_lola::parser::lola_expression;
+use crate::semantics::untimed_untyped_lola::combinators::{lift1, lift2, lift3};
+use crate::{MonitoringSemantics, OutputStream};
 use futures::{
     stream::{self, BoxStream},
     StreamExt,
 };
 use std::fmt::Debug;
-use std::ops::Deref;
 use winnow::Parser;
+use crate::semantics::UntimedLolaSemantics;
 
 pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
     stream: OutputStream<Value>,
@@ -134,7 +136,7 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
                 Err(_) => unimplemented!("Invalid eval str"),
             };
             // let expr = expr.type_check_with_default().unwrap();
-            let es = UntimedLolaSemantics::to_async_stream(expr, subcontext.deref());
+            let es = UntimedLolaSemantics::to_async_stream(expr, subcontext.as_ref());
             let mut es = to_typed_stream(es);
             // println!("new eval stream");
             subcontext.advance();

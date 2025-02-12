@@ -3,10 +3,8 @@ use std::{collections::BTreeMap, future::Future, pin::Pin};
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use crate::{
-    core::{OutputHandler, OutputStream, StreamData, VarName},
-    manual_output_handler::ManualOutputHandler,
-};
+use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
+use crate::io::testing::ManualOutputHandler;
 
 /* Some members are defined as Option<T> as either they are provided after
  * construction by provide_streams or once they are used they are taken and

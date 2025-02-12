@@ -151,5 +151,3 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
         }
     }
 }
-
-pub type InputFileData = BTreeMap<usize, BTreeMap<VarName, Value>>;

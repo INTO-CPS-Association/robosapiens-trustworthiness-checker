@@ -10,10 +10,8 @@ use tracing::{debug, error, info, info_span, instrument, warn, Level};
 // use tokio_util::sync::CancellationToken;
 
 // use crate::stream_utils::drop_guard_stream;
-use crate::{
-    core::VarName, mqtt_client::provide_mqtt_client_with_subscription, InputProvider, OutputStream,
-    Value,
-};
+use super::client::provide_mqtt_client_with_subscription;
+use crate::{core::VarName, InputProvider, OutputStream, Value};
 // use async_stream::stream;
 
 const QOS: i32 = 1;

@@ -5,7 +5,7 @@ use std::{future::Future, vec};
 use futures::{stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
-use trustworthiness_checker::mqtt_client::{
+use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,
 };
 use winnow::Parser;
@@ -113,9 +113,10 @@ mod tests {
     use tokio::time::sleep;
     use tracing::info_span;
     use trustworthiness_checker::{
-        lola_specification, manual_output_handler::ManualOutputHandler,
-        mqtt_input_provider::MQTTInputProvider, mqtt_output_handler::MQTTOutputHandler,
-        AsyncMonitorRunner, Monitor, UntimedLolaSemantics, Value, VarName,
+        lola_specification, io::testing::manual_output_handler::ManualOutputHandler,
+        io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
+        runtime::asynchronous::AsyncMonitorRunner, Monitor, Value, VarName,
+        semantics::UntimedLolaSemantics
     };
 
     use super::*;

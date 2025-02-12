@@ -6,14 +6,15 @@ use tracing::{info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
-use trustworthiness_checker::mqtt_output_handler::MQTTOutputHandler;
-use trustworthiness_checker::{self as tc, parse_file, type_checking::type_check, Monitor};
+use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
+use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
+use trustworthiness_checker::{self as tc, io::file::parse_file, Monitor};
 use trustworthiness_checker::{InputProvider, Value};
 
-use trustworthiness_checker::commandline_args::{Cli, Language, Runtime, Semantics};
+use trustworthiness_checker::cli::args::{Cli, Language, Runtime, Semantics};
+use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::ros_input_provider;
-use trustworthiness_checker::stdout_output_handler::StdoutOutputHandler;
 
 const MQTT_HOSTNAME: &str = "localhost";
 
@@ -36,13 +37,13 @@ async fn main() {
     let runtime = cli.runtime.unwrap_or(Runtime::Async);
 
     let model_parser = match language {
-        Language::Lola => tc::parser::lola_specification,
+        Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
     };
 
     let mut input_streams: Box<dyn InputProvider<tc::Value>> = {
         if let Some(input_file) = input_mode.input_file {
             let input_file_parser = match language {
-                Language::Lola => tc::parser::lola_input_file,
+                Language::Lola => tc::lang::untimed_input::untimed_input_file,
             };
 
             Box::new(
@@ -73,7 +74,7 @@ async fn main() {
                 .map(|topic| (tc::VarName(topic.clone()), topic.clone()))
                 .collect();
             let mut mqtt_input_provider =
-                tc::mqtt_input_provider::MQTTInputProvider::new(MQTT_HOSTNAME, var_topics)
+                tc::io::mqtt::MQTTInputProvider::new(MQTT_HOSTNAME, var_topics)
                     .expect("MQTT input provider could not be created");
             mqtt_input_provider
                 .started
@@ -92,14 +93,14 @@ async fn main() {
     info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
 
     let output_handler: Box<dyn OutputHandler<Value>> = match cli.output_mode {
-        trustworthiness_checker::commandline_args::OutputMode {
+        trustworthiness_checker::cli::args::OutputMode {
             output_stdout: true,
             output_mqtt_topics: None,
             output_ros_topics: None,
         } => Box::new(StdoutOutputHandler::<tc::Value>::new(
             model.output_vars.clone(),
         )),
-        trustworthiness_checker::commandline_args::OutputMode {
+        trustworthiness_checker::cli::args::OutputMode {
             output_stdout: false,
             output_mqtt_topics: Some(topics),
             output_ros_topics: None,
@@ -113,7 +114,7 @@ async fn main() {
                     .expect("MQTT output handler could not be created"),
             )
         }
-        trustworthiness_checker::commandline_args::OutputMode {
+        trustworthiness_checker::cli::args::OutputMode {
             output_stdout: false,
             output_mqtt_topics: None,
             output_ros_topics: Some(_),
@@ -128,7 +129,7 @@ async fn main() {
     let task = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
             let runner = Box::new(
-                tc::AsyncMonitorRunner::<_, _, tc::UntimedLolaSemantics, _>::new(
+                tc::runtime::asynchronous::AsyncMonitorRunner::<_, _, tc::semantics::UntimedLolaSemantics, _>::new(
                     model,
                     &mut *input_streams,
                     output_handler,
@@ -137,10 +138,10 @@ async fn main() {
             tokio::spawn(runner.run())
         }
         (Runtime::Queuing, Semantics::Untimed) => {
-            let runner = tc::queuing_runtime::QueuingMonitorRunner::<
+            let runner = tc::runtime::queuing::QueuingMonitorRunner::<
                 _,
                 _,
-                tc::UntimedLolaSemantics,
+                tc::semantics::UntimedLolaSemantics,
                 _,
             >::new(model, &mut *input_streams, output_handler);
             tokio::spawn(runner.run())
@@ -149,7 +150,7 @@ async fn main() {
             let typed_model = type_check(model).expect("Model failed to type check");
             // let typed_input_streams = d
 
-            let runner = tc::AsyncMonitorRunner::<_, _, tc::TypedUntimedLolaSemantics, _>::new(
+            let runner = tc::runtime::asynchronous::AsyncMonitorRunner::<_, _, tc::semantics::TypedUntimedLolaSemantics, _>::new(
                 typed_model,
                 &mut *input_streams,
                 output_handler,
@@ -159,16 +160,16 @@ async fn main() {
         (Runtime::Queuing, Semantics::TypedUntimed) => {
             let typed_model = type_check(model).expect("Model failed to type check");
 
-            let runner = tc::queuing_runtime::QueuingMonitorRunner::<
+            let runner = tc::runtime::queuing::QueuingMonitorRunner::<
                 _,
                 _,
-                tc::TypedUntimedLolaSemantics,
+                tc::semantics::TypedUntimedLolaSemantics,
                 _,
             >::new(typed_model, &mut *input_streams, output_handler);
             tokio::spawn(runner.run())
         }
         (Runtime::Constraints, Semantics::Untimed) => {
-            let runner = tc::constraint_based_runtime::ConstraintBasedMonitor::new(
+            let runner = tc::runtime::constraints::ConstraintBasedMonitor::new(
                 model,
                 &mut *input_streams,
                 output_handler,

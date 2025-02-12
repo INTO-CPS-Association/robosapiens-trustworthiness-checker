@@ -1,11 +1,11 @@
 use futures::stream;
 
-use crate::ast::InputFileData;
+pub use crate::lang::untimed_input::UntimedInputFileData;
 use crate::core::Value;
 use crate::core::{InputProvider, OutputStream, VarName};
 
 fn input_file_data_iter(
-    data: InputFileData,
+    data: UntimedInputFileData,
     key: VarName,
 ) -> impl Iterator<Item = Value> + 'static {
     let keys = data.keys();
@@ -19,7 +19,7 @@ fn input_file_data_iter(
     })
 }
 
-impl InputProvider<Value> for InputFileData {
+impl InputProvider<Value> for UntimedInputFileData {
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         Some(Box::pin(stream::iter(input_file_data_iter(
             self.clone(),
@@ -33,14 +33,13 @@ mod tests {
     use futures::StreamExt;
     use std::collections::BTreeMap;
 
-    use crate::ast::InputFileData;
+    use super::*;
     use crate::core::{Value, VarName};
-    use crate::InputProvider;
     use test_log::test;
 
     #[test]
     fn test_input_file_data_iter() {
-        let mut data: InputFileData = BTreeMap::new();
+        let mut data: UntimedInputFileData = BTreeMap::new();
         data.insert(0, {
             let mut map = BTreeMap::new();
             map.insert(VarName("x".into()), Value::Int(1));
@@ -64,7 +63,7 @@ mod tests {
 
     #[test(tokio::test)]
     async fn test_input_file_as_stream() {
-        let mut data: InputFileData = BTreeMap::new();
+        let mut data: UntimedInputFileData = BTreeMap::new();
         data.insert(0, {
             let mut map = BTreeMap::new();
             map.insert(VarName("x".into()), Value::Int(1));

@@ -5,9 +5,10 @@ use futures::StreamExt;
 use std::collections::BTreeMap;
 use tokio::sync::broadcast;
 
-use crate::ast::LOLASpecification;
-use crate::ast::SExpr;
-use crate::constraint_solver::*;
+// use crate::ast::LOLASpecification;
+// use crate::ast::SExpr;
+// use crate::constraint_solver::*;
+pub mod solver;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::OutputHandler;
@@ -15,6 +16,9 @@ use crate::core::Specification;
 use crate::core::Value;
 use crate::core::VarName;
 use crate::is_enum_variant;
+use crate::lang::dynamic_lola::ast::LOLASpecification;
+use crate::lang::dynamic_lola::ast::SExpr;
+use solver::*;
 
 #[derive(Default)]
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);

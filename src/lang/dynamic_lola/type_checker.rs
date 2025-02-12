@@ -1,10 +1,7 @@
-use crate::ast::{BoolBinOp, CompBinOp, IntBinOp, StrBinOp};
+use super::ast::{BoolBinOp, CompBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::StreamType;
-use crate::{
-    ast::{SBinOp, SExpr},
-    Value, VarName,
-};
 use crate::{LOLASpecification, Specification};
+use crate::{Value, VarName};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -469,6 +466,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
 #[cfg(test)]
 mod tests {
     use std::{iter::zip, mem::discriminant};
+
+    use crate::lang::dynamic_lola::ast::StrBinOp;
 
     use super::{SemanticResult, TypeCheckable, TypeContext};
 

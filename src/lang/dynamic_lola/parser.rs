@@ -1,18 +1,13 @@
-use std::collections::BTreeMap;
 use std::fmt::Debug;
-use winnow::ascii::dec_uint;
 use winnow::ascii::line_ending;
 use winnow::ascii::multispace0;
 use winnow::combinator::*;
-use winnow::token::{literal, take_until};
+use winnow::token::literal;
 use winnow::PResult;
 use winnow::Parser;
 
-use winnow::ascii::alphanumeric1 as ident;
-use winnow::ascii::dec_int as integer;
-use winnow::ascii::space0 as whitespace;
-
-use crate::ast::*;
+use super::super::core::parser::*;
+use super::ast::*;
 use crate::core::StreamType;
 use crate::core::Value;
 use crate::core::VarName;
@@ -40,39 +35,10 @@ fn sexpr_list(s: &mut &str) -> PResult<SExpr<VarName>> {
     }
 }
 
-// Used for Lists in input streams (can only be Values)
-fn value_list(s: &mut &str) -> PResult<Vec<Value>> {
-    delimited(
-        seq!("List", whitespace, '('),
-        separated(0.., val, seq!(whitespace, ',', whitespace)),
-        ')',
-    )
-    .parse_next(s)
-}
-
 fn var(s: &mut &str) -> PResult<SExpr<VarName>> {
     ident
         .map(|name: &str| SExpr::Var(name.into()))
         .parse_next(s)
-}
-
-fn string<'a>(s: &mut &'a str) -> PResult<&'a str> {
-    delimited('"', take_until(0.., "\""), '\"').parse_next(s)
-}
-
-fn val(s: &mut &str) -> PResult<Value> {
-    delimited(
-        whitespace,
-        alt((
-            integer.map(Value::Int),
-            string.map(|s: &str| Value::Str(s.into())),
-            literal("true").map(|_| Value::Bool(true)),
-            literal("false").map(|_| Value::Bool(false)),
-            value_list.map(Value::List),
-        )),
-        whitespace,
-    )
-    .parse_next(s)
 }
 
 fn lit(s: &mut &str) -> PResult<SExpr<VarName>> {
@@ -383,10 +349,6 @@ pub fn sexpr(s: &mut &str) -> PResult<SExpr<VarName>> {
     .parse_next(s)
 }
 
-pub fn presult_to_string<T: Debug>(e: &PResult<T>) -> String {
-    format!("{:?}", e)
-}
-
 fn type_annotation(s: &mut &str) -> PResult<StreamType> {
     seq!((
         _: whitespace,
@@ -416,12 +378,6 @@ fn input_decl(s: &mut &str) -> PResult<(VarName, Option<StreamType>)> {
     ))
     .map(|(name, typ): (&str, _)| (VarName(name.into()), typ))
     .parse_next(s)
-}
-
-fn linebreak(s: &mut &str) -> PResult<()> {
-    delimited(whitespace, line_ending, whitespace)
-        .map(|_| ())
-        .parse_next(s)
 }
 
 fn input_decls(s: &mut &str) -> PResult<Vec<(VarName, Option<StreamType>)>> {
@@ -490,52 +446,10 @@ pub fn lola_specification(s: &mut &str) -> PResult<LOLASpecification> {
     .parse_next(s)
 }
 
-fn value_assignment(s: &mut &str) -> PResult<(VarName, Value)> {
-    seq!((
-        _: whitespace,
-        ident,
-        _: whitespace,
-        _: literal("="),
-        _: whitespace,
-        val,
-        _: whitespace,
-    ))
-    .map(|(name, value)| (VarName(name.into()), value))
-    .parse_next(s)
-}
-
-fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, Value>> {
-    seq!((
-        separated(0.., value_assignment, linebreak),
-        _: alt((linebreak.void(), empty)),
-    ))
-    .map(|(x,)| x)
-    .parse_next(s)
-}
-
-fn time_stamped_assignments(s: &mut &str) -> PResult<(usize, BTreeMap<VarName, Value>)> {
-    seq!((
-        _: whitespace,
-        dec_uint,
-        _: whitespace,
-        _: literal(":"),
-        _: separated(0.., whitespace, linebreak).map(|_: Vec<_>| ()),
-        value_assignments
-    ))
-    .map(|(time, assignments)| (time, assignments))
-    .parse_next(s)
-}
-
-fn timed_assignments(s: &mut &str) -> PResult<InputFileData> {
-    repeat(0.., time_stamped_assignments).parse_next(s)
-}
-
-pub fn lola_input_file(s: &mut &str) -> PResult<InputFileData> {
-    timed_assignments.parse_next(s)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use winnow::error::{ContextError, ErrMode};
 
     use super::*;
@@ -769,75 +683,6 @@ mod tests {
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, eval_spec);
-        Ok(())
-    }
-
-    #[test]
-    fn test_value_assignment() -> Result<(), ErrMode<ContextError>> {
-        assert_eq!(
-            value_assignment(&mut (*"x = 42".to_string()).into())?,
-            (VarName("x".into()), Value::Int(42)),
-        );
-        assert_eq!(
-            value_assignment(&mut (*"y = 3".to_string()).into())?,
-            (VarName("y".into()), Value::Int(3)),
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_value_assignments() -> Result<(), ErrMode<ContextError>> {
-        assert_eq!(
-            value_assignments(&mut (*"x = 42\ny = 3".to_string()).into())?,
-            vec![
-                (VarName("x".into()), Value::Int(42)),
-                (VarName("y".into()), Value::Int(3)),
-            ]
-            .into_iter()
-            .collect(),
-        );
-        assert_eq!(
-            value_assignments(&mut (*"".to_string()).into())?,
-            BTreeMap::new(),
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_time_stamped_assignment() -> Result<(), ErrMode<ContextError>> {
-        assert_eq!(
-            time_stamped_assignments(&mut (*"0: x = 42".to_string()).into())?,
-            (
-                0,
-                vec![(VarName("x".into()), Value::Int(42))]
-                    .into_iter()
-                    .collect()
-            ),
-        );
-        assert_eq!(
-            time_stamped_assignments(&mut (*"1: x = 42\ny = 3".to_string()).into())?,
-            (
-                1,
-                vec![
-                    (VarName("x".into()), Value::Int(42)),
-                    (VarName("y".into()), Value::Int(3))
-                ]
-                .into_iter()
-                .collect()
-            ),
-        );
-        assert_eq!(
-            time_stamped_assignments(&mut (*"2:\n x = 42\ny = 3".to_string()).into())?,
-            (
-                2,
-                vec![
-                    (VarName("x".into()), Value::Int(42)),
-                    (VarName("y".into()), Value::Int(3))
-                ]
-                .into_iter()
-                .collect()
-            ),
-        );
         Ok(())
     }
 
@@ -1123,15 +968,6 @@ mod tests {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List(1,"hello")"#)),
             r#"Ok(Val(List([Int(1), Str("hello")])))"#
-        );
-        assert_eq!(
-            presult_to_string(&value_assignment(&mut "y = List()")),
-            r#"Ok((VarName("y"), List([])))"#
-        );
-        // Difference between value assignment and sexpr assignment
-        assert_eq!(
-            value_assignment(&mut "y = List()"),
-            Ok((VarName("y".into()), Value::List(vec![])))
         );
         assert_eq!(
             var_decl(&mut "y = List()"),

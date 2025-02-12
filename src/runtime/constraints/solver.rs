@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use crate::ast::*;
 use crate::core::Value;
 use crate::core::{IndexedVarName, VarName};
+use crate::lang::dynamic_lola::ast::*;
 
 pub type SyncStream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
 pub type ValStream = SyncStream<Value>;

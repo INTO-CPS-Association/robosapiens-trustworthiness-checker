@@ -3,13 +3,13 @@
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
 use tracing::info;
-use trustworthiness_checker::manual_output_handler::ManualOutputHandler;
-use trustworthiness_checker::queuing_runtime::QueuingMonitorRunner;
-use trustworthiness_checker::type_checking::type_check;
+use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::runtime::queuing::QueuingMonitorRunner;
+use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::{
-    async_runtime::AsyncMonitorRunner, lola_specification, Monitor, VarName,
+    runtime::asynchronous::AsyncMonitorRunner, lola_specification, Monitor, VarName,
 };
-use trustworthiness_checker::{TypedUntimedLolaSemantics, Value};
+use trustworthiness_checker::{semantics::TypedUntimedLolaSemantics, Value};
 mod lola_fixtures;
 use lola_fixtures::*;
 // use tracing::info

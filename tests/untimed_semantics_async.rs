@@ -2,10 +2,10 @@
 
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
-use trustworthiness_checker::manual_output_handler::ManualOutputHandler;
-use trustworthiness_checker::UntimedLolaSemantics;
+use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::semantics::UntimedLolaSemantics;
 use trustworthiness_checker::{
-    async_runtime::AsyncMonitorRunner, lola_specification, Monitor, Value, VarName,
+    runtime::asynchronous::AsyncMonitorRunner, lola_specification, Monitor, Value, VarName,
 };
 mod lola_fixtures;
 use lola_fixtures::*;
