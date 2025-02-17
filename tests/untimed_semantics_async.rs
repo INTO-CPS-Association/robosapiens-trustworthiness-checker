@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::semantics::UntimedLolaSemantics;
 use trustworthiness_checker::{
-    runtime::asynchronous::AsyncMonitorRunner, lola_specification, Monitor, Value, VarName,
+    lola_specification, runtime::asynchronous::AsyncMonitorRunner, Monitor, Value, VarName,
 };
 mod lola_fixtures;
 use lola_fixtures::*;

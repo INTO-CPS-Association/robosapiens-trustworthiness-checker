@@ -113,10 +113,12 @@ mod tests {
     use tokio::time::sleep;
     use tracing::info_span;
     use trustworthiness_checker::{
-        lola_specification, io::testing::manual_output_handler::ManualOutputHandler,
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
-        runtime::asynchronous::AsyncMonitorRunner, Monitor, Value, VarName,
-        semantics::UntimedLolaSemantics
+        io::testing::manual_output_handler::ManualOutputHandler,
+        lola_specification,
+        runtime::asynchronous::AsyncMonitorRunner,
+        semantics::UntimedLolaSemantics,
+        Monitor, Value, VarName,
     };
 
     use super::*;
