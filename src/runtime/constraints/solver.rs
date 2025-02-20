@@ -65,10 +65,6 @@ impl ConstraintStore {
     ) -> Option<&SExpr<IndexedVarName>> {
         Self::get_value_from_stream(name, idx, &self.outputs_unresolved)
     }
-
-    pub fn get_from_output_exprs(&self, name: &VarName) -> Option<&SExpr<VarName>> {
-        self.output_exprs.get(name)
-    }
 }
 
 impl PartialEq for ConstraintStore {

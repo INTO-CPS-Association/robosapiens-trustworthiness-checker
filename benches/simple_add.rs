@@ -59,12 +59,11 @@ async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
     let mut input_streams = input_streams_concrete(num_outputs);
     let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
-    let async_monitor =
-        trustworthiness_checker::runtime::constraints::ConstraintBasedMonitor::new(
-            spec,
-            &mut input_streams,
-            output_handler,
-        );
+    let async_monitor = trustworthiness_checker::runtime::constraints::ConstraintBasedMonitor::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+    );
     async_monitor.run().await;
 }
 

@@ -128,13 +128,14 @@ async fn main() {
     // Get the outputs from the Monitor
     let task = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
-            let runner = Box::new(
-                tc::runtime::asynchronous::AsyncMonitorRunner::<_, _, tc::semantics::UntimedLolaSemantics, _>::new(
-                    model,
-                    &mut *input_streams,
-                    output_handler,
-                ),
-            );
+            let runner = Box::new(tc::runtime::asynchronous::AsyncMonitorRunner::<
+                _,
+                _,
+                tc::semantics::UntimedLolaSemantics,
+                _,
+            >::new(
+                model, &mut *input_streams, output_handler
+            ));
             tokio::spawn(runner.run())
         }
         (Runtime::Queuing, Semantics::Untimed) => {
@@ -150,11 +151,12 @@ async fn main() {
             let typed_model = type_check(model).expect("Model failed to type check");
             // let typed_input_streams = d
 
-            let runner = tc::runtime::asynchronous::AsyncMonitorRunner::<_, _, tc::semantics::TypedUntimedLolaSemantics, _>::new(
-                typed_model,
-                &mut *input_streams,
-                output_handler,
-            );
+            let runner = tc::runtime::asynchronous::AsyncMonitorRunner::<
+                _,
+                _,
+                tc::semantics::TypedUntimedLolaSemantics,
+                _,
+            >::new(typed_model, &mut *input_streams, output_handler);
             tokio::spawn(runner.run())
         }
         (Runtime::Queuing, Semantics::TypedUntimed) => {
