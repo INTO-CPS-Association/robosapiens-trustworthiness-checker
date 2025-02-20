@@ -39,6 +39,7 @@ uuid = {version = "1.12.1", features = [
 
 [features]
 ros = ["dep:r2r"]
+testcontainers = []
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
