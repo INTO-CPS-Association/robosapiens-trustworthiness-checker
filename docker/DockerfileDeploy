@@ -10,7 +10,7 @@ COPY . /opt/trustworthiness-checker
 WORKDIR /opt/trustworthiness-checker
 
 RUN cargo build --release
-# RUN cargo test
+RUN cargo test
 
 FROM build AS deploy
 
