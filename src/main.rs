@@ -14,7 +14,9 @@ use trustworthiness_checker::{InputProvider, Value};
 use trustworthiness_checker::cli::args::{Cli, Language, Runtime, Semantics};
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
-use trustworthiness_checker::ros_input_provider;
+use trustworthiness_checker::io::ros::{
+    input_provider::ROSInputProvider, ros_topic_stream_mapping,
+};
 
 const MQTT_HOSTNAME: &str = "localhost";
 
@@ -56,11 +58,10 @@ async fn main() {
             {
                 let input_mapping_str = std::fs::read_to_string(&_input_ros_topics)
                     .expect("Input mapping file could not be read");
-                let input_mapping =
-                    tc::ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
-                        .expect("Input mapping file could not be parsed");
+                let input_mapping = ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
+                    .expect("Input mapping file could not be parsed");
                 Box::new(
-                    ros_input_provider::ROSInputProvider::new(input_mapping)
+                    ROSInputProvider::new(input_mapping)
                         .expect("ROS input provider could not be created"),
                 )
             }
