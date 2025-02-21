@@ -445,8 +445,8 @@ pub fn lola_specification(s: &mut &str) -> PResult<LOLASpecification> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use crate::core::Value;
+    use std::collections::BTreeMap;
 
     use winnow::error::{ContextError, ErrMode};
 

@@ -2,6 +2,7 @@ use crate::core::Value;
 use crate::core::{StreamContext, StreamData};
 use crate::lang::dynamic_lola::parser::lola_expression;
 use crate::semantics::untimed_untyped_lola::combinators::{lift1, lift2, lift3};
+use crate::semantics::UntimedLolaSemantics;
 use crate::{MonitoringSemantics, OutputStream};
 use futures::{
     stream::{self, BoxStream},
@@ -9,7 +10,6 @@ use futures::{
 };
 use std::fmt::Debug;
 use winnow::Parser;
-use crate::semantics::UntimedLolaSemantics;
 
 pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
     stream: OutputStream<Value>,

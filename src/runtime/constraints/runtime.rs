@@ -1,10 +1,3 @@
-
-use async_stream::stream;
-use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::StreamExt;
-use std::collections::BTreeMap;
-use tokio::sync::broadcast;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::OutputHandler;
@@ -14,12 +7,18 @@ use crate::core::VarName;
 use crate::is_enum_variant;
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 use crate::lang::dynamic_lola::ast::SExpr;
-use crate::runtime::constraints::solver::ConvertToAbsolute;
-use crate::runtime::constraints::solver::Simplifiable;
 use crate::runtime::constraints::solver::model_constraints;
 use crate::runtime::constraints::solver::ConstraintStore;
+use crate::runtime::constraints::solver::ConvertToAbsolute;
 use crate::runtime::constraints::solver::SExprStream;
+use crate::runtime::constraints::solver::Simplifiable;
 use crate::runtime::constraints::solver::SimplifyResult;
+use async_stream::stream;
+use async_trait::async_trait;
+use futures::stream::BoxStream;
+use futures::StreamExt;
+use std::collections::BTreeMap;
+use tokio::sync::broadcast;
 
 #[derive(Default)]
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);

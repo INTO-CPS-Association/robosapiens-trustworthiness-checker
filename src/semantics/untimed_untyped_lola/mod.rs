@@ -1,6 +1,6 @@
-use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::Value;
 use crate::core::{MonitoringSemantics, OutputStream, StreamContext, VarName};
+use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use combinators as mc;
 pub mod combinators;
 

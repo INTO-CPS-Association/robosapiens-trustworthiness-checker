@@ -1,8 +1,8 @@
 use futures::stream;
 
-pub use crate::lang::untimed_input::UntimedInputFileData;
 use crate::core::Value;
 use crate::core::{InputProvider, OutputStream, VarName};
+pub use crate::lang::untimed_input::UntimedInputFileData;
 
 fn input_file_data_iter(
     data: UntimedInputFileData,
