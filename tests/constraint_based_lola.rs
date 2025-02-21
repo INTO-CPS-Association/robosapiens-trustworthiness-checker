@@ -271,6 +271,55 @@ mod tests {
     }
 
     #[test(tokio::test)]
+    async fn test_index_past_mult_dependencies() {
+        // Specifically tests past indexing that the cleaner does not delete dependencies too early
+        let mut input_streams = input_streams1();
+        let mut spec = "in x\nout z1\nout z2\nz2 = x[-2, 0]\nz1 = x[-1, 0]";
+        let spec = lola_specification(&mut spec).unwrap();
+        let mut output_handler = output_handler(spec.clone());
+        let outputs = output_handler.get_output();
+        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        tokio::spawn(monitor.run());
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+        assert!(outputs.len() == 3);
+        assert_eq!(
+            outputs,
+            vec![
+                (
+                    // Both resolve to default
+                    0,
+                    vec![
+                        (VarName("z1".into()), Value::Int(0)),
+                        (VarName("z2".into()), Value::Int(0))
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                (
+                    // z1 resolves to prev, z2 resolves to default
+                    1,
+                    vec![
+                        (VarName("z1".into()), Value::Int(1)),
+                        (VarName("z2".into()), Value::Int(0))
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                (
+                    // z1 resolves to prev, z2 resolves to prev_prev
+                    2,
+                    vec![
+                        (VarName("z1".into()), Value::Int(3)),
+                        (VarName("z2".into()), Value::Int(1))
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ]
+        );
+    }
+
+    #[test(tokio::test)]
     async fn test_index_future() {
         let mut input_streams = input_streams1();
         let mut spec = "in x\nout z\nz =x[1, 0]";
@@ -279,9 +328,8 @@ mod tests {
         let outputs = output_handler.get_output();
         let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
         tokio::spawn(monitor.run());
-        // let outputs: Vec<(usize, (VarName, Value))> = outputs.enumerate().collect().await;
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
-        assert!(outputs.len() == 2);
+        assert_eq!(outputs.len(), 2);
         assert_eq!(
             outputs,
             vec![

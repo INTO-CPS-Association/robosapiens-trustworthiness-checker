@@ -14,6 +14,7 @@ pub type SExprStream = SyncStream<SExpr<IndexedVarName>>;
 pub struct ConstraintStore {
     pub input_streams: ValStream,
     pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
+    pub output_dependencies: BTreeMap<VarName, usize>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
 }
@@ -33,6 +34,7 @@ impl Default for ConstraintStore {
         ConstraintStore {
             input_streams: BTreeMap::new(),
             output_exprs: BTreeMap::new(),
+            output_dependencies: BTreeMap::new(),
             outputs_resolved: BTreeMap::new(),
             outputs_unresolved: BTreeMap::new(),
         }
