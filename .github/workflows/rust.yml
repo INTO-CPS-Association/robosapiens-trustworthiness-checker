@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+      - name: rustup
+        run: rustup update stable
       - name: measure benchmarks on main
         uses: actions-rs/cargo@v1
         with:
