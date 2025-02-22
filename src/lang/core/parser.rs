@@ -1,23 +1,23 @@
 use winnow::{
+    Result,
     ascii::line_ending,
     combinator::{alt, delimited, separated, seq},
     token::{literal, take_until},
-    PResult,
 };
 
 use crate::Value;
 use std::fmt::Debug;
+use winnow::Parser;
 pub use winnow::ascii::alphanumeric1 as ident;
 pub use winnow::ascii::dec_int as integer;
 pub use winnow::ascii::space0 as whitespace;
-use winnow::Parser;
 
-pub fn presult_to_string<T: Debug>(e: &PResult<T>) -> String {
+pub fn presult_to_string<T: Debug>(e: &Result<T>) -> String {
     format!("{:?}", e)
 }
 
 // Used for Lists in input streams (can only be Values)
-pub fn value_list(s: &mut &str) -> PResult<Vec<Value>> {
+pub fn value_list(s: &mut &str) -> Result<Vec<Value>> {
     delimited(
         seq!("List", whitespace, '('),
         separated(0.., val, seq!(whitespace, ',', whitespace)),
@@ -26,11 +26,11 @@ pub fn value_list(s: &mut &str) -> PResult<Vec<Value>> {
     .parse_next(s)
 }
 
-pub fn string<'a>(s: &mut &'a str) -> PResult<&'a str> {
+pub fn string<'a>(s: &mut &'a str) -> Result<&'a str> {
     delimited('"', take_until(0.., "\""), '\"').parse_next(s)
 }
 
-pub fn val(s: &mut &str) -> PResult<Value> {
+pub fn val(s: &mut &str) -> Result<Value> {
     delimited(
         whitespace,
         alt((
@@ -45,7 +45,7 @@ pub fn val(s: &mut &str) -> PResult<Value> {
     .parse_next(s)
 }
 
-pub fn linebreak(s: &mut &str) -> PResult<()> {
+pub fn linebreak(s: &mut &str) -> Result<()> {
     delimited(whitespace, line_ending, whitespace)
         .map(|_| ())
         .parse_next(s)

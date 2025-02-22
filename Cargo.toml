@@ -12,26 +12,26 @@ bench = false
 
 [dependencies]
 # console-subscriber = "0.4.0"
-winnow = "0.6.24"
+winnow = "0.7.3"
 futures = "0.3.31"
 tokio = { version = "1.43.0", features = ["full", "tracing"] }
-tokio-stream = {version ="0.1.16", features=["full"] }
-tokio-util = "0.7.12"
-clap = { version = "4.5.27", features = ["derive"] }
+tokio-stream = {version ="0.1.17", features=["full"] }
+tokio-util = "0.7.13"
+clap = { version = "4.5.30", features = ["derive"] }
 async-stream = "0.3.6"
-r2r = { version = "0.9.3", optional=true }
+r2r = { version = "0.9.4", optional=true }
 thiserror = "2.0.11"
 justerror = "1.1.0"
-serde = {version = "1.0.215", features = ["derive"]}
-serde_json = "1.0.137"
+serde = {version = "1.0.218", features = ["derive"]}
+serde_json = "1.0.139"
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = {version = "0.13.0", default-features=false, features=["bundled", "ssl"]}
-async-trait = "0.1.85"
+paho-mqtt = {version = "0.13.1", default-features=false, features=["bundled", "ssl"]}
+async-trait = "0.1.86"
 async-once-cell = "0.5.4"
 tracing = {version = "0.1.41", features = ["attributes", "std", "tracing-attributes", "async-await"]}
 tracing-subscriber = {version="0.3.19", features=["env-filter", "fmt"]}
-uuid = {version = "1.12.1", features = [
+uuid = {version = "1.14.0", features = [
     "v4",                # Lets you generate random UUIDs
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
@@ -43,7 +43,7 @@ testcontainers = []
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
-testcontainers-modules = "0.11.5"
+testcontainers-modules = "0.11.6"
 test-log = {version="0.2.17", features=["trace"]}
 
 [[bench]]

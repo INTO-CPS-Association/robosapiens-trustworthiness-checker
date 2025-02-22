@@ -3,15 +3,15 @@ use std::collections::BTreeMap;
 use crate::lang::core::parser::*;
 use crate::{Value, VarName};
 use winnow::{
+    Result, Parser,
     ascii::dec_uint,
     combinator::{alt, empty, repeat, separated, seq},
     token::literal,
-    PResult, Parser,
 };
 
 use super::UntimedInputFileData;
 
-fn value_assignment(s: &mut &str) -> PResult<(VarName, Value)> {
+fn value_assignment(s: &mut &str) -> Result<(VarName, Value)> {
     seq!((
         _: whitespace,
         ident,
@@ -25,7 +25,7 @@ fn value_assignment(s: &mut &str) -> PResult<(VarName, Value)> {
     .parse_next(s)
 }
 
-fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, Value>> {
+fn value_assignments(s: &mut &str) -> Result<BTreeMap<VarName, Value>> {
     seq!((
         separated(0.., value_assignment, linebreak),
         _: alt((linebreak.void(), empty)),
@@ -34,7 +34,7 @@ fn value_assignments(s: &mut &str) -> PResult<BTreeMap<VarName, Value>> {
     .parse_next(s)
 }
 
-fn time_stamped_assignments(s: &mut &str) -> PResult<(usize, BTreeMap<VarName, Value>)> {
+fn time_stamped_assignments(s: &mut &str) -> Result<(usize, BTreeMap<VarName, Value>)> {
     seq!((
         _: whitespace,
         dec_uint,
@@ -47,23 +47,23 @@ fn time_stamped_assignments(s: &mut &str) -> PResult<(usize, BTreeMap<VarName, V
     .parse_next(s)
 }
 
-fn timed_assignments(s: &mut &str) -> PResult<UntimedInputFileData> {
+fn timed_assignments(s: &mut &str) -> Result<UntimedInputFileData> {
     repeat(0.., time_stamped_assignments).parse_next(s)
 }
 
-pub fn untimed_input_file(s: &mut &str) -> PResult<UntimedInputFileData> {
+pub fn untimed_input_file(s: &mut &str) -> Result<UntimedInputFileData> {
     timed_assignments(s)
 }
 
 #[cfg(test)]
 mod tests {
-    use winnow::error::{ContextError, ErrMode};
+    use winnow::error::ContextError;
 
     use super::*;
-    use crate::{lang::untimed_input::parser::value_assignment, Value, VarName};
+    use crate::{Value, VarName, lang::untimed_input::parser::value_assignment};
 
     #[test]
-    fn test_value_assignment() -> Result<(), ErrMode<ContextError>> {
+    fn test_value_assignment() -> Result<(), ContextError> {
         assert_eq!(
             value_assignment(&mut (*"x = 42".to_string()).into())?,
             (VarName("x".into()), Value::Int(42)),
@@ -76,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn test_value_assignments() -> Result<(), ErrMode<ContextError>> {
+    fn test_value_assignments() -> Result<(), ContextError> {
         assert_eq!(
             value_assignments(&mut (*"x = 42\ny = 3".to_string()).into())?,
             vec![
@@ -94,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn test_time_stamped_assignment() -> Result<(), ErrMode<ContextError>> {
+    fn test_time_stamped_assignment() -> Result<(), ContextError> {
         assert_eq!(
             time_stamped_assignments(&mut (*"0: x = 42".to_string()).into())?,
             (

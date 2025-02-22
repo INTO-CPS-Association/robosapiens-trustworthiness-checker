@@ -2,7 +2,7 @@
 use std::time::Duration;
 use std::{future::Future, vec};
 
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::io::mqtt::client::{
@@ -107,18 +107,18 @@ mod tests {
         input_streams1, spec_simple_add_decomposed_1, spec_simple_add_decomposed_2,
     };
     use testcontainers_modules::testcontainers::{
-        runners::{self, AsyncRunner},
         ContainerAsync,
+        runners::{self, AsyncRunner},
     };
     use tokio::time::sleep;
     use tracing::info_span;
     use trustworthiness_checker::{
+        Monitor, Value, VarName,
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
         io::testing::manual_output_handler::ManualOutputHandler,
         lola_specification,
         runtime::asynchronous::AsyncMonitorRunner,
         semantics::UntimedLolaSemantics,
-        Monitor, Value, VarName,
     };
 
     use super::*;
