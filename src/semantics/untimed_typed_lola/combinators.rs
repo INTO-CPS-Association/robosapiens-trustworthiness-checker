@@ -154,6 +154,14 @@ mod tests {
     use test_log::test;
 
     #[test(tokio::test)]
+    async fn test_not() {
+        let x: OutputStream<bool> = Box::pin(stream::iter(vec![true, false].into_iter()));
+        let z: Vec<bool> = vec![false, true];
+        let res: Vec<bool> = not(x).collect().await;
+        assert_eq!(res, z);
+    }
+
+    #[test(tokio::test)]
     async fn test_plus() {
         let x: OutputStream<i64> = Box::pin(stream::iter(vec![1, 3].into_iter()));
         let y: OutputStream<i64> = Box::pin(stream::iter(vec![2, 4].into_iter()));
