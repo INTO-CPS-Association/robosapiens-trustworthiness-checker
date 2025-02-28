@@ -19,6 +19,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::BTreeMap;
 use tokio::sync::broadcast;
+use tracing::debug;
 use tracing::info;
 
 use super::dependency_graph::DepGraph;
@@ -149,9 +150,10 @@ impl ConstraintBasedRuntime {
                     // TODO: Write a unit test for this...
                     let longest_dep = graph
                         .edges_directed(node, petgraph::Direction::Incoming)
-                        .map(|edge| *edge.weight())
+                        .filter_map(|edge| edge.weight().iter().map(|&w| w.abs()).max()) // Take max of abs values
                         .max()
                         .unwrap_or(0);
+
                     // Modify the collection in place
                     // TODO: Probably a bug here regarding the usage of unsigned_abs
                     values.retain(|(time, _)| *time + longest_dep.unsigned_abs() >= self.time);
@@ -195,9 +197,9 @@ impl ConstraintBasedRuntime {
         info!("Runtime step at time: {}", self.time);
         self.receive_inputs(inputs);
         self.resolve_possible();
-        info!("Store before clean: {:#?}", self.store);
+        debug!("Store before clean: {:#?}", self.store);
         self.cleanup();
-        info!("Store after clean: {:#?}", self.store);
+        debug!("Store after clean: {:#?}", self.store);
         self.time += 1;
     }
 }

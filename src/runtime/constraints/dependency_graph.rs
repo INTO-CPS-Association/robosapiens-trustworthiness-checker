@@ -2,14 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
 
 use petgraph::dot::{Config, Dot};
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::EdgeRef;
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
+use petgraph::visit::{EdgeRef, IntoEdgeReferences};
+use tracing::info;
 
 use crate::{SExpr, VarName};
 
 // Graph weights are Vecs of time indices
 // (we want a container with duplicates for DUPs)
-type Weight = isize;
+type Weight = Vec<isize>;
 type Node = VarName;
 // Edges are represented as triplets. .0 = from, .1 = to, .2 = weight
 type Edge = (Node, Node, Weight);
@@ -62,7 +63,7 @@ impl DepGraph {
                 (
                     self.graph[edge.source()].clone(),
                     self.graph[edge.target()].clone(),
-                    *edge.weight(),
+                    edge.weight().clone(),
                 )
             })
             .collect()
@@ -85,21 +86,53 @@ impl DepGraph {
         self.graph = merged.graph;
     }
 
+    fn combine_edges(&mut self) {
+        // A HashMap to store edges by (source, target) as keys
+        let mut edge_map: BTreeMap<(usize, usize), Vec<isize>> = BTreeMap::new();
+
+        // Iterate over all edges in the graph
+        for edge in self.graph.edge_references() {
+            let source = edge.source().index();
+            let target = edge.target().index();
+            let weight = edge.weight().clone();
+
+            // Combine the weights if there are multiple edges between the same nodes
+            edge_map
+                .entry((source, target))
+                .or_insert_with(Vec::new)
+                .extend(weight);
+        }
+
+        // Clear all the edges in the graph to re-add combined edges
+        self.graph.clear_edges();
+
+        // Re-add the combined edges to the graph
+        for ((source, target), weights) in edge_map {
+            self.graph.add_edge(
+                self.graph.node_indices().nth(source).unwrap(),
+                self.graph.node_indices().nth(target).unwrap(),
+                weights,
+            );
+        }
+    }
+
     // Traverses the sexpr and returns a map of its dependencies to other variables
     fn sexpr_dependencies(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
         fn deps_impl(
             sexpr: &SExpr<Node>,
-            steps: Weight,
+            steps: &Weight,
             map: &mut DepGraph,
             current_node: &NodeIndex,
         ) {
             match sexpr {
                 SExpr::Var(name) => {
                     let node = map.add_node(name.clone());
-                    map.add_edge(*current_node, node, steps);
+                    map.add_edge(*current_node, node, steps.clone());
                 }
                 SExpr::SIndex(sexpr, idx, _) => {
-                    deps_impl(sexpr, *idx, map, current_node);
+                    let mut steps = steps.clone();
+                    steps.push(*idx);
+                    deps_impl(sexpr, &steps, map, current_node);
                 }
                 SExpr::If(iff, then, els) => {
                     deps_impl(iff, steps, map, current_node);
@@ -129,7 +162,7 @@ impl DepGraph {
 
         let mut graph = DepGraph::new();
         let root_node = graph.add_node(root_name.clone());
-        deps_impl(sexpr, 0, &mut graph, &root_node);
+        deps_impl(sexpr, &vec![], &mut graph, &root_node);
         graph
     }
 
@@ -193,6 +226,7 @@ impl DepGraph {
             // Add to dependency graph
             let expr_deps = Self::sexpr_dependencies(expr, name);
             self.merge_graphs(&expr_deps);
+            self.combine_edges();
 
             // Add to time graph
             let mut sexpr_times = Self::sexpr_time_required(expr);
@@ -203,6 +237,7 @@ impl DepGraph {
             // Merge with global dependencies
             merge_max(&mut self.time_required, sexpr_times);
         }
+        info!("Dependencies: {:?}", self.as_dot_graph());
     }
 }
 
