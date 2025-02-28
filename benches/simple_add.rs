@@ -6,9 +6,9 @@ use criterion::Criterion;
 use criterion::SamplingMode;
 use criterion::{criterion_group, criterion_main};
 use futures::stream::{self, BoxStream};
+use trustworthiness_checker::OutputStream;
 use trustworthiness_checker::io::testing::null_output_handler::NullOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
-use trustworthiness_checker::OutputStream;
 use trustworthiness_checker::{Monitor, Value, VarName};
 
 pub fn spec_simple_add_monitor() -> &'static str {

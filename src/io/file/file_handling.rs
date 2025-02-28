@@ -5,7 +5,7 @@ use std::{
 
 use tokio::{fs::File, io::AsyncReadExt};
 use tracing::debug;
-use winnow::{error::ContextError, Parser};
+use winnow::{Parser, error::ContextError};
 
 #[derive(Debug)]
 struct FileParseError {
@@ -26,9 +26,7 @@ impl Display for FileParseError {
 
 impl Error for FileParseError {}
 
-pub async fn parse_file<
-    O: Clone + Debug,
->(
+pub async fn parse_file<O: Clone + Debug>(
     // The for<'a> syntax is a higher-ranked trait bound which is
     // necessary to specify that the lifetime of the string passed
     // into the parser does not need to outlive this function call

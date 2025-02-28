@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use async_stream::stream;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use paho_mqtt::{self as mqtt, Message};
-use tracing::{debug, info, instrument, warn, Level};
+use tracing::{Level, debug, info, instrument, warn};
 use uuid::Uuid;
 
 type Hostname = String;

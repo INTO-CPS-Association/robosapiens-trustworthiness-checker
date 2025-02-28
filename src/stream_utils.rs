@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use futures::{
-    stream::{self, BoxStream},
     FutureExt, StreamExt,
+    stream::{self, BoxStream},
 };
 use tokio::sync::oneshot;
 use tokio_util::sync::DropGuard;

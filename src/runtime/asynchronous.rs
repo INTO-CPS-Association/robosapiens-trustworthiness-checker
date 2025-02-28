@@ -3,8 +3,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::future::join_all;
 use futures::StreamExt;
+use futures::future::join_all;
 use tokio::select;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -14,12 +14,12 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
+use tracing::Level;
 use tracing::debug;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
 use tracing::warn;
-use tracing::Level;
 
 use crate::core::InputProvider;
 use crate::core::Monitor;

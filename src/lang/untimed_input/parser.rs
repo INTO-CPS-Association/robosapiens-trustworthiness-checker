@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::lang::core::parser::*;
 use crate::{Value, VarName};
 use winnow::{
-    Result, Parser,
+    Parser, Result,
     ascii::dec_uint,
     combinator::{alt, empty, repeat, separated, seq},
     token::literal,

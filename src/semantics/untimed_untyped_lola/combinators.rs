@@ -6,9 +6,9 @@ use crate::{MonitoringSemantics, OutputStream, StreamContext, VarName};
 use async_stream::stream;
 use core::panic;
 use futures::{
+    StreamExt,
     future::join_all,
     stream::{self, BoxStream},
-    StreamExt,
 };
 use std::ops::Deref;
 use tokio::join;

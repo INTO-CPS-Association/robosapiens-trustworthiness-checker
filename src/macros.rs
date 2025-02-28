@@ -2,11 +2,7 @@
 #[macro_export]
 macro_rules! is_enum_variant {
     ($v:expr, $p:pat) => {
-        if let $p = $v {
-            true
-        } else {
-            false
-        }
+        if let $p = $v { true } else { false }
     };
 }
 

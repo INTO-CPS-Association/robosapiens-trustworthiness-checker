@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
 
-use futures::stream;
 use futures::StreamExt;
+use futures::stream;
 
 use crate::core::InputProvider;
 use crate::core::Monitor;

@@ -7,9 +7,9 @@ use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::runtime::queuing::QueuingMonitorRunner;
 use trustworthiness_checker::{
-    lola_specification, runtime::asynchronous::AsyncMonitorRunner, Monitor, VarName,
+    Monitor, VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
 };
-use trustworthiness_checker::{semantics::TypedUntimedLolaSemantics, Value};
+use trustworthiness_checker::{Value, semantics::TypedUntimedLolaSemantics};
 mod lola_fixtures;
 use lola_fixtures::*;
 // use tracing::info

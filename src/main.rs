@@ -8,7 +8,7 @@ use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
-use trustworthiness_checker::{self as tc, io::file::parse_file, Monitor};
+use trustworthiness_checker::{self as tc, Monitor, io::file::parse_file};
 use trustworthiness_checker::{InputProvider, Value};
 
 use trustworthiness_checker::cli::args::{Cli, Language, Runtime, Semantics};

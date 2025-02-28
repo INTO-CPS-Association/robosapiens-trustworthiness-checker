@@ -4,14 +4,14 @@ use futures::StreamExt;
 use paho_mqtt as mqtt;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, error, info, info_span, instrument, warn, Level};
+use tracing::{Level, debug, error, info, info_span, instrument, warn};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use tokio_util::sync::CancellationToken;
 
 // use crate::stream_utils::drop_guard_stream;
 use super::client::provide_mqtt_client_with_subscription;
-use crate::{core::VarName, InputProvider, OutputStream, Value};
+use crate::{InputProvider, OutputStream, Value, core::VarName};
 // use async_stream::stream;
 
 const QOS: i32 = 1;

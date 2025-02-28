@@ -4,13 +4,12 @@ use std::future::Future;
 
 use futures::StreamExt;
 #[cfg(feature = "ros")]
-use r2r::{std_msgs::msg::Int32, WrappedTypesupport};
+use r2r::{WrappedTypesupport, std_msgs::msg::Int32};
 use tokio_util::sync::CancellationToken;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::{
-    lola_specification, ros_input_provider::ROSInputProvider,
-    ros_topic_stream_mapping::json_to_mapping, AsyncMonitorRunner, Monitor, UntimedLolaSemantics,
-    Value, VarName,
+    AsyncMonitorRunner, Monitor, UntimedLolaSemantics, Value, VarName, lola_specification,
+    ros_input_provider::ROSInputProvider, ros_topic_stream_mapping::json_to_mapping,
 };
 use winnow::Parser;
 mod lola_fixtures;

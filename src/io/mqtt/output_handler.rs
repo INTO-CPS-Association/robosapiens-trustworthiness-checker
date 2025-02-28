@@ -6,7 +6,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures::StreamExt;
 use paho_mqtt::{self as mqtt};
-use tracing::{debug, info, info_span, instrument, warn, Level};
+use tracing::{Level, debug, info, info_span, instrument, warn};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use tokio_util::sync::CancellationToken;
@@ -14,7 +14,7 @@ use tracing::{debug, info, info_span, instrument, warn, Level};
 use super::client::provide_mqtt_client;
 use crate::core::OutputHandler;
 // use crate::stream_utils::drop_guard_stream;
-use crate::{core::VarName, OutputStream, Value};
+use crate::{OutputStream, Value, core::VarName};
 
 // const QOS: &[i32] = &[1, 1];
 

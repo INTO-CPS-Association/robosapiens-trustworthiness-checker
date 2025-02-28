@@ -26,7 +26,7 @@ pub fn json_to_mapping(json: &str) -> Result<ROSStreamMapping, serde_json::Error
 
 #[cfg(test)]
 mod tests {
-    use crate::ros_topic_stream_mapping::{json_to_mapping, ROSMsgType, ROSStreamMapping};
+    use crate::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, json_to_mapping};
     use test_log::test;
 
     #[test]

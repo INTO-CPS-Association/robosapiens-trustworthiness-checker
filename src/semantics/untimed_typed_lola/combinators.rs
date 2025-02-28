@@ -1,12 +1,12 @@
 use crate::core::Value;
 use crate::core::{StreamContext, StreamData};
 use crate::lang::dynamic_lola::parser::lola_expression;
-use crate::semantics::untimed_untyped_lola::combinators::{lift1, lift2, lift3};
 use crate::semantics::UntimedLolaSemantics;
+use crate::semantics::untimed_untyped_lola::combinators::{lift1, lift2, lift3};
 use crate::{MonitoringSemantics, OutputStream};
 use futures::{
-    stream::{self, BoxStream},
     StreamExt,
+    stream::{self, BoxStream},
 };
 use std::fmt::Debug;
 use winnow::Parser;

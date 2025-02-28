@@ -3,8 +3,8 @@
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::{Monitor, Value, VarName, runtime::queuing::QueuingMonitorRunner};
 use trustworthiness_checker::{lola_specification, semantics::UntimedLolaSemantics};
-use trustworthiness_checker::{runtime::queuing::QueuingMonitorRunner, Monitor, Value, VarName};
 mod lola_fixtures;
 use lola_fixtures::*;
 
