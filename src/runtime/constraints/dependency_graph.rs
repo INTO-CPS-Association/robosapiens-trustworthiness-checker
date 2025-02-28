@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
 
 use petgraph::dot::{Config, Dot};
-use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
-use petgraph::visit::{EdgeRef, IntoEdgeReferences};
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
 use tracing::info;
 
 use crate::{SExpr, VarName};
@@ -20,6 +20,8 @@ type GraphType = DiGraph<Node, Weight>;
 #[derive(Debug, Clone)]
 pub struct DepGraph {
     graph: GraphType,
+    // TODO: Currently there is an implicit contract that time_required is calculated after graph.
+    // This is not ideal
     pub time_required: BTreeMap<Node, usize>,
 }
 
@@ -34,24 +36,30 @@ impl DepGraph {
         Dot::with_config(&self.graph, config)
     }
 
-    pub fn extend_nodes_from_set(&mut self, nodes: BTreeSet<Node>) {
+    pub fn extend_nodes_from_iter<'a, I>(&mut self, nodes: I)
+    where
+        I: IntoIterator<Item = &'a Node>,
+    {
         for node in nodes {
-            self.graph.add_node(node);
+            self.add_node(node.clone());
         }
     }
 
-    pub fn extend_edges_from_set(&mut self, edges: BTreeSet<Edge>) {
-        for (from, to, weight) in edges {
+    pub fn extend_edges_from_iter<'a, I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = &'a Edge>,
+    {
+        for (from, to, weight) in iter {
             let from_node = self
                 .graph
                 .node_indices()
-                .find(|node| self.graph[*node] == from);
+                .find(|node| self.graph[*node] == *from);
             let to_node = self
                 .graph
                 .node_indices()
-                .find(|node| self.graph[*node] == to);
+                .find(|node| self.graph[*node] == *to);
             if let (Some(from_node), Some(to_node)) = (from_node, to_node) {
-                self.graph.add_edge(from_node, to_node, weight);
+                self.graph.add_edge(from_node, to_node, weight.clone());
             }
         }
     }
@@ -70,19 +78,18 @@ impl DepGraph {
     }
 
     pub fn merge_graphs(&mut self, other: &DepGraph) {
-        // TODO: Perhaps make this mutate self instead
-        // TODO: Make add_*_from_set work on iterables
+        // TODO: Make this not unnecessarily work on a new DepGraph,
         let mut merged: DepGraph = DepGraph::new();
         let g1_nvals: BTreeSet<Node> = self.node_indices().map(|node| self[node].clone()).collect();
         let g2_nvals: BTreeSet<Node> = other
             .node_indices()
             .map(|node| other[node].clone())
             .collect();
-        Self::extend_nodes_from_set(&mut merged, g1_nvals.union(&g2_nvals).cloned().collect());
+        merged.extend_nodes_from_iter(g1_nvals.union(&g2_nvals));
 
         let g1_edges = Self::edges_into_set(self);
         let g2_edges = Self::edges_into_set(other);
-        Self::extend_edges_from_set(&mut merged, g1_edges.union(&g2_edges).cloned().collect());
+        merged.extend_edges_from_iter(g1_edges.union(&g2_edges));
         self.graph = merged.graph;
     }
 
@@ -226,7 +233,6 @@ impl DepGraph {
             // Add to dependency graph
             let expr_deps = Self::sexpr_dependencies(expr, name);
             self.merge_graphs(&expr_deps);
-            self.combine_edges();
 
             // Add to time graph
             let mut sexpr_times = Self::sexpr_time_required(expr);
@@ -237,6 +243,8 @@ impl DepGraph {
             // Merge with global dependencies
             merge_max(&mut self.time_required, sexpr_times);
         }
+        // Turn multiple edges within same source and target into a single edges
+        self.combine_edges();
         info!("Dependencies: {:?}", self.as_dot_graph());
     }
 }
