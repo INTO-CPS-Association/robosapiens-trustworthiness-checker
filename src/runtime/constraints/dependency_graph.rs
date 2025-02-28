@@ -7,12 +7,19 @@ use petgraph::visit::EdgeRef;
 
 use crate::{SExpr, VarName};
 
-type GraphType = DiGraph<VarName, isize>;
+// Graph weights are Vecs of time indices
+// (we want a container with duplicates for DUPs)
+type Weight = isize;
+type Node = VarName;
+// Edges are represented as triplets. .0 = from, .1 = to, .2 = weight
+type Edge = (Node, Node, Weight);
+// Graphs are directed
+type GraphType = DiGraph<Node, Weight>;
 
 #[derive(Debug, Clone)]
 pub struct DepGraph {
     graph: GraphType,
-    pub time_required: BTreeMap<VarName, usize>,
+    pub time_required: BTreeMap<Node, usize>,
 }
 
 impl DepGraph {
@@ -26,13 +33,13 @@ impl DepGraph {
         Dot::with_config(&self.graph, config)
     }
 
-    pub fn extend_nodes_from_set(&mut self, nodes: BTreeSet<VarName>) {
+    pub fn extend_nodes_from_set(&mut self, nodes: BTreeSet<Node>) {
         for node in nodes {
             self.graph.add_node(node);
         }
     }
 
-    pub fn extend_edges_from_set(&mut self, edges: BTreeSet<(VarName, VarName, isize)>) {
+    pub fn extend_edges_from_set(&mut self, edges: BTreeSet<Edge>) {
         for (from, to, weight) in edges {
             let from_node = self
                 .graph
@@ -48,7 +55,7 @@ impl DepGraph {
         }
     }
 
-    pub fn edges_into_set(&self) -> BTreeSet<(VarName, VarName, isize)> {
+    pub fn edges_into_set(&self) -> BTreeSet<Edge> {
         self.graph
             .edge_references()
             .map(|edge| {
@@ -65,9 +72,8 @@ impl DepGraph {
         // TODO: Perhaps make this mutate self instead
         // TODO: Make add_*_from_set work on iterables
         let mut merged: DepGraph = DepGraph::new();
-        let g1_nvals: BTreeSet<VarName> =
-            self.node_indices().map(|node| self[node].clone()).collect();
-        let g2_nvals: BTreeSet<VarName> = other
+        let g1_nvals: BTreeSet<Node> = self.node_indices().map(|node| self[node].clone()).collect();
+        let g2_nvals: BTreeSet<Node> = other
             .node_indices()
             .map(|node| other[node].clone())
             .collect();
@@ -80,10 +86,10 @@ impl DepGraph {
     }
 
     // Traverses the sexpr and returns a map of its dependencies to other variables
-    fn sexpr_dependencies(sexpr: &SExpr<VarName>, root_name: &VarName) -> DepGraph {
+    fn sexpr_dependencies(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
         fn deps_impl(
-            sexpr: &SExpr<VarName>,
-            steps: isize,
+            sexpr: &SExpr<Node>,
+            steps: Weight,
             map: &mut DepGraph,
             current_node: &NodeIndex,
         ) {
@@ -129,8 +135,8 @@ impl DepGraph {
 
     // Traverses the sexpr and returns a Map of the time required to save all variables involved
     // (in absolute time)
-    fn sexpr_time_required(sexpr: &SExpr<VarName>) -> BTreeMap<VarName, usize> {
-        fn time_req_impl(sexpr: &SExpr<VarName>, steps: usize, map: &mut BTreeMap<VarName, usize>) {
+    fn sexpr_time_required(sexpr: &SExpr<Node>) -> BTreeMap<Node, usize> {
+        fn time_req_impl(sexpr: &SExpr<Node>, steps: usize, map: &mut BTreeMap<Node, usize>) {
             match sexpr {
                 SExpr::Var(name) => {
                     map.entry(name.clone())
@@ -171,8 +177,8 @@ impl DepGraph {
         map
     }
 
-    pub fn generate_dependencies(&mut self, exprs: &BTreeMap<VarName, SExpr<VarName>>) {
-        fn merge_max(map1: &mut BTreeMap<VarName, usize>, map2: BTreeMap<VarName, usize>) {
+    pub fn generate_dependencies(&mut self, exprs: &BTreeMap<Node, SExpr<Node>>) {
+        fn merge_max(map1: &mut BTreeMap<Node, usize>, map2: BTreeMap<Node, usize>) {
             for (key, value) in map2 {
                 map1.entry(key)
                     .and_modify(|existing| *existing = (*existing).max(value))
