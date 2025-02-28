@@ -7,19 +7,21 @@ use crate::core::VarName;
 use crate::is_enum_variant;
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 use crate::lang::dynamic_lola::ast::SExpr;
-use crate::runtime::constraints::solver::model_constraints;
 use crate::runtime::constraints::solver::ConstraintStore;
 use crate::runtime::constraints::solver::ConvertToAbsolute;
 use crate::runtime::constraints::solver::SExprStream;
 use crate::runtime::constraints::solver::Simplifiable;
 use crate::runtime::constraints::solver::SimplifyResult;
+use crate::runtime::constraints::solver::model_constraints;
 use async_stream::stream;
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use std::collections::BTreeMap;
 use tokio::sync::broadcast;
-use tracing::{debug, info};
+use tracing::info;
+
+use super::dependency_graph::DepGraph;
 
 #[derive(Default)]
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);
@@ -46,82 +48,11 @@ impl ValStreamCollection {
 #[derive(Debug, Default)]
 pub struct ConstraintBasedRuntime {
     store: ConstraintStore,
+    dependencies: DepGraph,
     time: usize,
-}
-impl SExpr<VarName> {
-    // Traverses the sexpr and returns a map of its dependencies to other variables
-    fn dependencies(&self) -> BTreeMap<VarName, usize> {
-        fn dependencies_impl(
-            sexpr: &SExpr<VarName>,
-            steps: usize,
-            map: &mut BTreeMap<VarName, usize>,
-        ) {
-            match sexpr {
-                SExpr::Var(name) => {
-                    map.entry(name.clone())
-                        .and_modify(|existing_depth| *existing_depth = (*existing_depth).max(steps))
-                        .or_insert(steps);
-                }
-                SExpr::SIndex(sexpr, idx, _) => {
-                    dependencies_impl(sexpr, steps + idx.unsigned_abs(), map);
-                }
-                SExpr::If(iff, then, els) => {
-                    dependencies_impl(iff, steps, map);
-                    dependencies_impl(then, steps, map);
-                    dependencies_impl(els, steps, map);
-                }
-                SExpr::Val(_) => {}
-                SExpr::List(vec) => {
-                    vec.iter()
-                        .for_each(|sexpr| dependencies_impl(sexpr, steps, map));
-                }
-                SExpr::Eval(sexpr)
-                | SExpr::Not(sexpr)
-                | SExpr::LHead(sexpr)
-                | SExpr::LTail(sexpr)
-                | SExpr::Defer(sexpr) => dependencies_impl(sexpr, steps, map),
-                SExpr::BinOp(sexpr1, sexpr2, _)
-                | SExpr::Update(sexpr1, sexpr2)
-                | SExpr::LIndex(sexpr1, sexpr2)
-                | SExpr::LAppend(sexpr1, sexpr2)
-                | SExpr::LConcat(sexpr1, sexpr2) => {
-                    dependencies_impl(sexpr1, steps, map);
-                    dependencies_impl(sexpr2, steps, map);
-                }
-            }
-        }
-
-        let mut map = BTreeMap::new();
-        dependencies_impl(self, 0, &mut map);
-        map
-    }
 }
 
 impl ConstraintBasedRuntime {
-    fn generate_dependencies(&mut self) -> BTreeMap<VarName, usize> {
-        // Merge map prioritizing the smallest value during conflicts
-        // (smallest value in this case means expressions going further back in history)
-        fn merge_min(map1: &mut BTreeMap<VarName, usize>, map2: BTreeMap<VarName, usize>) {
-            for (key, value) in map2 {
-                map1.entry(key)
-                    .and_modify(|existing| *existing = (*existing).max(value))
-                    .or_insert(value);
-            }
-        }
-
-        let mut dependencies: BTreeMap<VarName, usize> = BTreeMap::new();
-        for (name, expr) in &self.store.output_exprs {
-            let mut expr_deps = expr.dependencies();
-            // Make sure it is not deleted immediately after being resolved,
-            // by adding a dependency on itself to the longest dependency
-            let max_dep = expr_deps.values().max().cloned().unwrap_or(0);
-            expr_deps.insert(name.clone(), max_dep);
-            // Merge with global dependencies
-            merge_min(&mut dependencies, expr_deps);
-        }
-        dependencies
-    }
-
     fn receive_inputs(&mut self, inputs: &BTreeMap<VarName, Value>) {
         // Add new input values
         for (name, val) in inputs {
@@ -198,8 +129,43 @@ impl ConstraintBasedRuntime {
         }
     }
 
-    fn cleanup(&mut self) {
-        // Remove unused input values and resolved outputs
+    // Cleans up the store based on the dependency graph
+    #[allow(dead_code)]
+    fn cleanup_with_graph(&mut self) {
+        for collection in [
+            &mut self.store.input_streams,
+            &mut self.store.outputs_resolved,
+        ] {
+            let graph = &self.dependencies;
+            // Go through each saved value and remove it if it is older than the current time,
+            // keeping the longest dependency in mind
+            for (name, values) in collection {
+                // Find node with name:
+                let node_opt = graph.node_indices().find(|&i| graph[i] == *name);
+                if let Some(node) = node_opt {
+                    // TODO: Not recursively searching through the graph, only immediate neighbors.
+                    // If we have spec: in a; out x; out y; x = a[-1]; y = x[-1]; then we need to
+                    // keep the value of a for 2 steps, but we only keep it for 1 step.
+                    // TODO: Write a unit test for this...
+                    let longest_dep = graph
+                        .edges_directed(node, petgraph::Direction::Incoming)
+                        .map(|edge| *edge.weight())
+                        .max()
+                        .unwrap_or(0);
+                    // Modify the collection in place
+                    // TODO: Probably a bug here regarding the usage of unsigned_abs
+                    values.retain(|(time, _)| *time + longest_dep.unsigned_abs() >= self.time);
+                } else {
+                    // Nothing depends on this value
+                    values.clear();
+                }
+            }
+        }
+    }
+
+    // Cleans up the store based on the time_required map
+    #[allow(dead_code)]
+    fn cleanup_with_times(&mut self) {
         for collection in [
             &mut self.store.input_streams,
             &mut self.store.outputs_resolved,
@@ -208,8 +174,8 @@ impl ConstraintBasedRuntime {
             // keeping the longest dependency in mind
             for (name, values) in collection {
                 let longest_dep = self
-                    .store
-                    .output_dependencies
+                    .dependencies
+                    .time_required
                     .get(name)
                     .cloned()
                     .unwrap_or(0);
@@ -219,12 +185,19 @@ impl ConstraintBasedRuntime {
         }
     }
 
+    // Remove unused input values and resolved outputs
+    fn cleanup(&mut self) {
+        // self.cleanup_with_graph();
+        self.cleanup_with_times();
+    }
+
     pub fn step(&mut self, inputs: &BTreeMap<VarName, Value>) {
         info!("Runtime step at time: {}", self.time);
         self.receive_inputs(inputs);
         self.resolve_possible();
+        info!("Store before clean: {:#?}", self.store);
         self.cleanup();
-        debug!("Store after clean: {:?}", self.store);
+        info!("Store after clean: {:#?}", self.store);
         self.time += 1;
     }
 }
@@ -321,7 +294,9 @@ impl ConstraintBasedMonitor {
         let input_receiver = self.input_producer.subscribe();
         let mut runtime_initial = ConstraintBasedRuntime::default();
         runtime_initial.store = model_constraints(self.model.clone());
-        runtime_initial.store.output_dependencies = runtime_initial.generate_dependencies();
+        runtime_initial
+            .dependencies
+            .generate_dependencies(&runtime_initial.store.output_exprs);
         let has_inputs = self.has_inputs.clone();
         Box::pin(stream!(
             let mut runtime = runtime_initial;

@@ -14,7 +14,6 @@ pub type SExprStream = SyncStream<SExpr<IndexedVarName>>;
 pub struct ConstraintStore {
     pub input_streams: ValStream,
     pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
-    pub output_dependencies: BTreeMap<VarName, usize>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
 }
@@ -34,7 +33,6 @@ impl Default for ConstraintStore {
         ConstraintStore {
             input_streams: BTreeMap::new(),
             output_exprs: BTreeMap::new(),
-            output_dependencies: BTreeMap::new(),
             outputs_resolved: BTreeMap::new(),
             outputs_unresolved: BTreeMap::new(),
         }
@@ -180,24 +178,31 @@ impl Simplifiable for SExpr<IndexedVarName> {
                 match (e1.simplify(base_time, store), e2.simplify(base_time, store)) {
                     (Resolved(e1), Resolved(e2)) => Resolved(binop_table(e1, e2, op.clone())),
                     // Does not reuse the previous e1 and e2s as the subexpressions may have been simplified
-                    (Unresolved(ue), Resolved(re)) | (Resolved(re), Unresolved(ue)) => {
-                        Unresolved(Box::new(SExpr::BinOp(ue, Box::new(SExpr::Val(re)), op.clone())))
+                    (Unresolved(ue), Resolved(re)) | (Resolved(re), Unresolved(ue)) => Unresolved(
+                        Box::new(SExpr::BinOp(ue, Box::new(SExpr::Val(re)), op.clone())),
+                    ),
+                    (Unresolved(e1), Unresolved(e2)) => {
+                        Unresolved(Box::new(SExpr::BinOp(e1, e2, op.clone())))
                     }
-                    (Unresolved(e1), Unresolved(e2)) => Unresolved(Box::new(SExpr::BinOp(e1, e2, op.clone()))),
                 }
             }
             SExpr::Var(name) => {
-                let name= VarName(name.0.clone());
+                let name = VarName(name.0.clone());
                 // Check if we have a value inside resolved or input values
-                if let Some(v) = store.get_from_outputs_resolved(&name, &base_time)
-                    .or_else(|| store.get_from_input_streams(&name, &base_time)) {
+                if let Some(v) = store
+                    .get_from_outputs_resolved(&name, &base_time)
+                    .or_else(|| store.get_from_input_streams(&name, &base_time))
+                {
                     return Resolved(v.clone());
                 }
                 // Otherwise it must be inside unresolved
                 if let Some(expr) = store.get_from_outputs_unresolved(&name, &base_time) {
                     Unresolved(Box::new(expr.clone()))
                 } else {
-                    unreachable!("Var({:?}, {:?}) does not exist. Store: {:?}", name, base_time, store);
+                    unreachable!(
+                        "Var({:?}, {:?}) does not exist. Store: {:?}",
+                        name, base_time, store
+                    );
                 }
             }
             SExpr::SIndex(expr, idx_time, default) => {
@@ -206,17 +211,26 @@ impl Simplifiable for SExpr<IndexedVarName> {
                 if uidx_time <= base_time {
                     expr.simplify(uidx_time, store)
                 } else {
-                    Unresolved(Box::new(SExpr::SIndex(expr.clone(), *idx_time, default.clone())))
+                    Unresolved(Box::new(SExpr::SIndex(
+                        expr.clone(),
+                        *idx_time,
+                        default.clone(),
+                    )))
                 }
             }
-            SExpr::If(bexpr, if_expr, else_expr) => {
-                match bexpr.simplify(base_time, store) {
-                    Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store),
-                    Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store),
-                    Unresolved(expr) => Unresolved(Box::new(SExpr::If(expr, if_expr.clone(), else_expr.clone()))),
-                    Resolved(v) => unreachable!("Solving SExprA did not yield a boolean as the conditional to if-statement: v={:?}", v),
-                }
-            }
+            SExpr::If(bexpr, if_expr, else_expr) => match bexpr.simplify(base_time, store) {
+                Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store),
+                Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store),
+                Unresolved(expr) => Unresolved(Box::new(SExpr::If(
+                    expr,
+                    if_expr.clone(),
+                    else_expr.clone(),
+                ))),
+                Resolved(v) => unreachable!(
+                    "Solving SExprA did not yield a boolean as the conditional to if-statement: v={:?}",
+                    v
+                ),
+            },
             SExpr::Eval(_) => todo!(),
             SExpr::Defer(_) => todo!(),
             SExpr::Update(_, _) => todo!(),
@@ -240,34 +254,47 @@ impl Simplifiable for SExpr<VarName> {
                 match (e1.simplify(base_time, store), e2.simplify(base_time, store)) {
                     (Resolved(e1), Resolved(e2)) => Resolved(binop_table(e1, e2, op.clone())),
                     // Does not reuse the previous e1 and e2s as the subexpressions may have been simplified
-                    (Unresolved(ue), Resolved(re)) | (Resolved(re), Unresolved(ue)) => {
-                        Unresolved(Box::new(SExpr::BinOp(ue, Box::new(SExpr::Val(re)), op.clone())))
+                    (Unresolved(ue), Resolved(re)) | (Resolved(re), Unresolved(ue)) => Unresolved(
+                        Box::new(SExpr::BinOp(ue, Box::new(SExpr::Val(re)), op.clone())),
+                    ),
+                    (Unresolved(e1), Unresolved(e2)) => {
+                        Unresolved(Box::new(SExpr::BinOp(e1, e2, op.clone())))
                     }
-                    (Unresolved(e1), Unresolved(e2)) => Unresolved(Box::new(SExpr::BinOp(e1, e2, op.clone()))),
                 }
             }
-            SExpr::Var(name) => {
-                Unresolved(Box::new(SExpr::Var(name.clone())))
-            }
+            SExpr::Var(name) => Unresolved(Box::new(SExpr::Var(name.clone()))),
             SExpr::SIndex(expr, rel_time, default) => {
                 if *rel_time == 0 {
                     expr.simplify(base_time, store)
                 } else {
                     // Attempt to partially solve the expression and return unresolved
                     match expr.simplify(base_time, store) {
-                        Unresolved(expr) => Unresolved(Box::new(SExpr::SIndex(expr.clone(), *rel_time, default.clone()))),
-                        Resolved(val) => Unresolved(Box::new(SExpr::SIndex( Box::new(SExpr::Val(val)), *rel_time, default.clone()))),
+                        Unresolved(expr) => Unresolved(Box::new(SExpr::SIndex(
+                            expr.clone(),
+                            *rel_time,
+                            default.clone(),
+                        ))),
+                        Resolved(val) => Unresolved(Box::new(SExpr::SIndex(
+                            Box::new(SExpr::Val(val)),
+                            *rel_time,
+                            default.clone(),
+                        ))),
                     }
                 }
             }
-            SExpr::If(bexpr, if_expr, else_expr) => {
-                match bexpr.simplify(base_time, store) {
-                    Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store),
-                    Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store),
-                    Unresolved(expr) => Unresolved(Box::new(SExpr::If(expr, if_expr.clone(), else_expr.clone()))),
-                    Resolved(v) => unreachable!("Solving SExpr did not yield a boolean as the conditional to if-statement: v={:?}", v),
-                }
-            }
+            SExpr::If(bexpr, if_expr, else_expr) => match bexpr.simplify(base_time, store) {
+                Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store),
+                Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store),
+                Unresolved(expr) => Unresolved(Box::new(SExpr::If(
+                    expr,
+                    if_expr.clone(),
+                    else_expr.clone(),
+                ))),
+                Resolved(v) => unreachable!(
+                    "Solving SExpr did not yield a boolean as the conditional to if-statement: v={:?}",
+                    v
+                ),
+            },
             SExpr::Eval(_) => todo!(),
             SExpr::Defer(_) => todo!(),
             SExpr::Update(_, _) => todo!(),
