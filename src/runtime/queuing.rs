@@ -15,6 +15,7 @@ use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::StreamData;
 use crate::core::{OutputStream, StreamContext, VarName};
+use crate::dependencies::traits::DependencyStore;
 
 /*
  * A StreamContext that track the history of each of the variables as a queue
@@ -267,6 +268,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
         model: M,
         input_streams: &mut dyn InputProvider<Val>,
         output: Box<dyn OutputHandler<Val>>,
+        _dependencies: Box<dyn DependencyStore>,
     ) -> Self {
         let var_names: Vec<VarName> = model
             .input_vars()
