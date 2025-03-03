@@ -4,7 +4,6 @@ use std::ops::{Deref, DerefMut};
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
-use tracing::info;
 
 use crate::{SExpr, VarName};
 
@@ -27,6 +26,11 @@ pub struct DepGraph {
 
 impl DepGraph {
     #[allow(dead_code)]
+    pub fn graph(&self) -> &GraphType {
+        &self.graph
+    }
+
+    #[allow(dead_code)]
     pub fn as_dot_graph<'a>(&'a self) -> Dot<'a, &'a GraphType> {
         self.as_dot_graph_with_config(&[])
     }
@@ -36,6 +40,7 @@ impl DepGraph {
         Dot::with_config(&self.graph, config)
     }
 
+    #[allow(dead_code)]
     pub fn extend_nodes_from_iter<'a, I>(&mut self, nodes: I)
     where
         I: IntoIterator<Item = &'a Node>,
@@ -45,6 +50,7 @@ impl DepGraph {
         }
     }
 
+    #[allow(dead_code)]
     pub fn extend_edges_from_iter<'a, I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = &'a Edge>,
@@ -64,6 +70,7 @@ impl DepGraph {
         }
     }
 
+    #[allow(dead_code)]
     pub fn edges_into_set(&self) -> BTreeSet<Edge> {
         self.graph
             .edge_references()
@@ -77,20 +84,38 @@ impl DepGraph {
             .collect()
     }
 
+    // Similar to creating a new graph with the union of the nodes and edges,
+    // but this is done in-place
     pub fn merge_graphs(&mut self, other: &DepGraph) {
-        // TODO: Make this not unnecessarily work on a new DepGraph,
-        let mut merged: DepGraph = DepGraph::new();
-        let g1_nvals: BTreeSet<Node> = self.node_indices().map(|node| self[node].clone()).collect();
-        let g2_nvals: BTreeSet<Node> = other
-            .node_indices()
-            .map(|node| other[node].clone())
-            .collect();
-        merged.extend_nodes_from_iter(g1_nvals.union(&g2_nvals));
+        let mut node_map = BTreeMap::new();
 
-        let g1_edges = Self::edges_into_set(self);
-        let g2_edges = Self::edges_into_set(other);
-        merged.extend_edges_from_iter(g1_edges.union(&g2_edges));
-        self.graph = merged.graph;
+        // Add all nodes from `self` into the map
+        for node in self.node_indices() {
+            let node_value = self[node].clone();
+            node_map.insert(node_value, node);
+        }
+
+        // Add nodes from `other` if they are not already in `self`
+        for node in other.node_indices() {
+            let node_value = other[node].clone();
+            node_map
+                .entry(node_value.clone())
+                .or_insert_with(|| self.add_node(node_value));
+        }
+
+        // Merge edges from `other`
+        for edge in other.edge_indices() {
+            let (source, target) = other.edge_endpoints(edge).unwrap();
+            let weight = other[edge].clone();
+
+            let source_index = node_map[&other[source]];
+            let target_index = node_map[&other[target]];
+
+            // Ensure the edge does not already exist before adding
+            if !self.contains_edge(source_index, target_index) {
+                self.add_edge(source_index, target_index, weight);
+            }
+        }
     }
 
     fn combine_edges(&mut self) {
@@ -245,7 +270,6 @@ impl DepGraph {
         }
         // Turn multiple edges within same source and target into a single edges
         self.combine_edges();
-        info!("Dependencies: {:?}", self.as_dot_graph());
     }
 }
 
