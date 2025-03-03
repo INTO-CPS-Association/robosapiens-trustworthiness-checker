@@ -1,28 +1,27 @@
 use std::collections::BTreeMap;
 
-use petgraph::graph::DiGraph;
-
 use crate::{SExpr, VarName};
 
 use super::traits::DependencyStore;
 
 #[derive(Default)]
-pub struct Empty {
-    _empty: DiGraph<VarName, Vec<isize>>,
-}
+pub struct Empty {}
 
-impl Empty {
-    pub fn new() -> Box<dyn DependencyStore> {
-        Box::new(Empty {
-            _empty: DiGraph::new(),
-        })
-    }
-}
+impl Empty {}
 
 impl DependencyStore for Empty {
-    fn generate_dependencies(&self, _: BTreeMap<VarName, SExpr<VarName>>) {}
+    fn longest_time_dependency(&self, _: &VarName) -> Option<usize> {
+        None
+    }
 
-    fn container(&self) -> &DiGraph<VarName, Vec<isize>> {
-        &self._empty
+    fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize> {
+        BTreeMap::new()
+    }
+
+    fn new(_: Box<dyn crate::Specification<SExpr<VarName>>>) -> Box<dyn DependencyStore>
+    where
+        Self: Sized,
+    {
+        Box::new(Empty {})
     }
 }

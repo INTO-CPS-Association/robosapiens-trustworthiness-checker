@@ -1,16 +1,19 @@
 use std::collections::BTreeMap;
 
-use petgraph::graph::DiGraph;
-
-use crate::{SExpr, VarName};
+use crate::{SExpr, Specification, VarName};
 
 // Interface for a dependency store.
-// @types `Identifier` and `Data` are used to define the type of the dependency identifiers and the data associated with each dependency connection.
-// E.g., a collection of time indices like in LOLA paper
-// @types `Container` is the type of the container that holds the dependencies.
 pub trait DependencyStore: Send + Sync {
     // TODO: Add dependency, get dependency
-    fn generate_dependencies(&self, exprs: BTreeMap<VarName, SExpr<VarName>>);
 
-    fn container(&self) -> &DiGraph<VarName, Vec<isize>>;
+    // Generates the dependency graph from the given expressions
+    fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Box<dyn DependencyStore>
+    where
+        Self: Sized;
+
+    // Returns how long the variable needs to be saved for before it can be forgotten
+    fn longest_time_dependency(&self, var: &VarName) -> Option<usize>;
+
+    // Calls `longest_time_dependency` on all variables
+    fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize>;
 }

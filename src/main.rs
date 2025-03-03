@@ -7,6 +7,7 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
 use trustworthiness_checker::dependencies::Empty;
+use trustworthiness_checker::dependencies::traits::DependencyStore;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::{self as tc, Monitor, io::file::parse_file};
@@ -136,22 +137,29 @@ async fn main() {
                 tc::semantics::UntimedLolaSemantics,
                 _,
             >::new(
-                model, &mut *input_streams, output_handler, Empty::new()
+                model.clone(),
+                &mut *input_streams,
+                output_handler,
+                Empty::new(Box::new(model)),
             ));
             tokio::spawn(runner.run())
         }
         (Runtime::Queuing, Semantics::Untimed) => {
-            let runner =
-                tc::runtime::queuing::QueuingMonitorRunner::<
-                    _,
-                    _,
-                    tc::semantics::UntimedLolaSemantics,
-                    _,
-                >::new(model, &mut *input_streams, output_handler, Empty::new());
+            let runner = tc::runtime::queuing::QueuingMonitorRunner::<
+                _,
+                _,
+                tc::semantics::UntimedLolaSemantics,
+                _,
+            >::new(
+                model.clone(),
+                &mut *input_streams,
+                output_handler,
+                Empty::new(Box::new(model)),
+            );
             tokio::spawn(runner.run())
         }
         (Runtime::Async, Semantics::TypedUntimed) => {
-            let typed_model = type_check(model).expect("Model failed to type check");
+            let typed_model = type_check(model.clone()).expect("Model failed to type check");
 
             let runner = tc::runtime::asynchronous::AsyncMonitorRunner::<
                 _,
@@ -162,12 +170,12 @@ async fn main() {
                 typed_model,
                 &mut *input_streams,
                 output_handler,
-                Empty::new(),
+                Empty::new(Box::new(model)),
             );
             tokio::spawn(runner.run())
         }
         (Runtime::Queuing, Semantics::TypedUntimed) => {
-            let typed_model = type_check(model).expect("Model failed to type check");
+            let typed_model = type_check(model.clone()).expect("Model failed to type check");
 
             let runner = tc::runtime::queuing::QueuingMonitorRunner::<
                 _,
@@ -178,16 +186,16 @@ async fn main() {
                 typed_model,
                 &mut *input_streams,
                 output_handler,
-                Empty::new(),
+                Empty::new(Box::new(model)),
             );
             tokio::spawn(runner.run())
         }
         (Runtime::Constraints, Semantics::Untimed) => {
             let runner = tc::runtime::constraints::ConstraintBasedMonitor::new(
-                model,
+                model.clone(),
                 &mut *input_streams,
                 output_handler,
-                Empty::new(),
+                Empty::new(Box::new(model)),
             );
             tokio::spawn(runner.run())
         }
