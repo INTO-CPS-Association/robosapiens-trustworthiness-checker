@@ -6,8 +6,7 @@ use trustworthiness_checker::dependencies::traits::{DependencyKind, create_depen
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::{Monitor, Value, VarName, runtime::queuing::QueuingMonitorRunner};
 use trustworthiness_checker::{lola_specification, semantics::UntimedLolaSemantics};
-mod lola_fixtures;
-use lola_fixtures::*;
+use trustworthiness_checker::lola_fixtures::*;
 
 use test_log::test;
 

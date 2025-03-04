@@ -15,6 +15,8 @@ pub use lang::dynamic_lola::{
     ast::{LOLASpecification, SExpr},
     parser::lola_specification,
 };
+pub mod distributed;
+pub mod lola_fixtures;
 pub mod macros;
 pub mod runtime;
 pub mod semantics;

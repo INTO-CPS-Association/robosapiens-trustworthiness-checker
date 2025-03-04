@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 248378b6846a2a5b56f937ed8109feb9c449c2c82d34668075f508ec271234e7 # shrinks to spec = LOLASpecification { input_vars: [VarName("a")], output_vars: [VarName("i")], exprs: {}, type_annotations: {} }, restricted_vars = {"i"}

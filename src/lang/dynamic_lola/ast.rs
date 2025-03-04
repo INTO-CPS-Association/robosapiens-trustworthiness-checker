@@ -43,6 +43,24 @@ pub enum SBinOp {
     COp(CompBinOp),
 }
 
+// Helper function to specify binary operations from a string
+impl From<&str> for SBinOp {
+    fn from(s: &str) -> Self {
+        match s {
+            "+" => SBinOp::IOp(IntBinOp::Add),
+            "-" => SBinOp::IOp(IntBinOp::Sub),
+            "*" => SBinOp::IOp(IntBinOp::Mul),
+            "/" => SBinOp::IOp(IntBinOp::Div),
+            "||" => SBinOp::BOp(BoolBinOp::Or),
+            "&&" => SBinOp::BOp(BoolBinOp::And),
+            "++" => SBinOp::SOp(StrBinOp::Concat),
+            "==" => SBinOp::COp(CompBinOp::Eq),
+            "<=" => SBinOp::COp(CompBinOp::Le),
+            _ => panic!("Unknown binary operation: {}", s),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else
@@ -80,6 +98,60 @@ pub enum SExpr<VarT: Debug> {
     LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
     LHead(Box<Self>),             // List head -- get first element of list
     LTail(Box<Self>),             // List tail -- get all but first element of list
+}
+
+impl SExpr<VarName> {
+    pub fn inputs(&self) -> Vec<VarName> {
+        use SExpr::*;
+        match self {
+            If(b, e1, e2) => {
+                let mut inputs = b.inputs();
+                inputs.extend(e1.inputs());
+                inputs.extend(e2.inputs());
+                inputs
+            }
+            SIndex(s, _, _) => s.inputs(),
+            Val(_) => vec![],
+            BinOp(e1, e2, _) => {
+                let mut inputs = e1.inputs();
+                inputs.extend(e2.inputs());
+                inputs
+            }
+            Var(v) => vec![v.clone()],
+            Not(b) => b.inputs(),
+            Eval(e) => e.inputs(),
+            Defer(e) => e.inputs(),
+            Update(e1, e2) => {
+                let mut inputs = e1.inputs();
+                inputs.extend(e2.inputs());
+                inputs
+            }
+            List(es) => {
+                let mut inputs = vec![];
+                for e in es {
+                    inputs.extend(e.inputs());
+                }
+                inputs
+            }
+            LIndex(e, i) => {
+                let mut inputs = e.inputs();
+                inputs.extend(i.inputs());
+                inputs
+            }
+            LAppend(lst, el) => {
+                let mut inputs = lst.inputs();
+                inputs.extend(el.inputs());
+                inputs
+            }
+            LConcat(lst1, lst2) => {
+                let mut inputs = lst1.inputs();
+                inputs.extend(lst2.inputs());
+                inputs
+            }
+            LHead(lst) => lst.inputs(),
+            LTail(lst) => lst.inputs(),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -148,6 +220,102 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             LConcat(lst1, lst2) => write!(f, "List.concat({}, {})", lst1, lst2),
             LHead(lst) => write!(f, "List.head({})", lst),
             LTail(lst) => write!(f, "List.tail({})", lst),
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod generation {
+    use super::*;
+
+    use proptest::prelude::*;
+
+    use crate::{
+        LOLASpecification, SExpr, VarName,
+        lang::dynamic_lola::ast::{BoolBinOp, SBinOp},
+    };
+
+    pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr<VarName>> {
+        let leaf = prop_oneof![
+            any::<bool>().prop_map(|x| SExpr::Val(x.into())),
+            proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
+        ];
+        leaf.prop_recursive(5, 50, 10, |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::BOp(BoolBinOp::Or)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::BOp(BoolBinOp::And)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::BOp(BoolBinOp::And)
+                )),
+            ]
+        })
+    }
+
+    pub fn arb_boolean_lola_spec() -> impl Strategy<Value = LOLASpecification> {
+        (
+            // Generate a hash set of inputs from 'a' to 'h' with at least one element.
+            prop::collection::hash_set("[a-h]", 1..5),
+            // Generate a hash set of outputs from 'i' to 'z'. Could be empty.
+            prop::collection::hash_set("[i-z]", 0..5),
+        )
+            .prop_flat_map(|(input_set, output_set)| {
+                // Convert the sets into Vec<VarName>
+                let input_vars: Vec<VarName> = input_set.into_iter().map(|s| s.into()).collect();
+                let output_vars: Vec<VarName> = output_set.into_iter().map(|s| s.into()).collect();
+
+                // Combine input and output variables.
+                let mut all_vars = input_vars.clone();
+                all_vars.extend(output_vars.clone());
+                all_vars.sort();
+                all_vars.dedup();
+
+                // Create a strategy for generating the expression map.
+                // For each key (chosen from the union of variables) generate an expression.
+                prop::collection::btree_map(
+                    prop::sample::select(all_vars.clone()),
+                    arb_boolean_sexpr(all_vars.clone()),
+                    0..=all_vars.len(),
+                )
+                .prop_map(move |exprs| LOLASpecification {
+                    input_vars: input_vars.clone(),
+                    output_vars: output_vars.clone(),
+                    exprs,
+                    type_annotations: BTreeMap::new(),
+                })
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::VarName;
+    use super::generation::arb_boolean_sexpr;
+
+    proptest! {
+        #[test]
+        fn test_prop_format_works(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
+            let _ = format!("{}", e);
+        }
+
+        #[test]
+        fn test_prop_inputs_works(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
+            let valid_inputs: Vec<VarName> = vec!["a".into(), "b".into()];
+            let inputs = e.inputs();
+            for input in inputs.iter() {
+                assert!(valid_inputs.contains(&input));
+            }
         }
     }
 }

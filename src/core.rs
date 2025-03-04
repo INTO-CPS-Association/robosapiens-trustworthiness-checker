@@ -133,7 +133,7 @@ pub enum StreamType {
 // Could also do this with async steams
 // trait InputStream = Iterator<Item = StreamData>;
 
-#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub struct VarName(pub String);
 
 impl From<&str> for VarName {

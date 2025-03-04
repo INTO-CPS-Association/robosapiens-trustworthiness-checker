@@ -1,17 +1,15 @@
 // Test untimed monitoring of LOLA specifications with the async runtime
 
+use futures::stream;
+use futures::stream::BoxStream;
 use futures::stream::StreamExt;
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use trustworthiness_checker::runtime::constraints::ConstraintBasedMonitor;
 use trustworthiness_checker::{
     LOLASpecification, io::testing::ManualOutputHandler, lola_specification,
 };
 use trustworthiness_checker::{Monitor, Value, VarName};
-mod lola_fixtures;
-use futures::stream;
-use futures::stream::BoxStream;
-use lola_fixtures::*;
-use std::pin::Pin;
 
 pub fn input_streams1() -> BTreeMap<VarName, BoxStream<'static, Value>> {
     let mut input_streams = BTreeMap::new();
@@ -37,6 +35,7 @@ fn output_handler(spec: LOLASpecification) -> Box<ManualOutputHandler<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trustworthiness_checker::lola_fixtures::{spec_simple_add_monitor, spec_empty, input_empty, input_streams5, input_streams4};
     use test_log::test;
     use trustworthiness_checker::dependencies::traits::{
         DependencyKind, create_dependency_manager,

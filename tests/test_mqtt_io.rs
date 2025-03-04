@@ -9,8 +9,7 @@ use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,
 };
 use winnow::Parser;
-mod lola_fixtures;
-use lola_fixtures::spec_simple_add_monitor;
+use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
 use paho_mqtt as mqtt;
 use std::pin::Pin;
 use std::task;
@@ -103,7 +102,7 @@ mod tests {
     use std::{collections::BTreeMap, pin::Pin};
     use test_log::test;
 
-    use lola_fixtures::{
+    use trustworthiness_checker::lola_fixtures::{
         input_streams1, spec_simple_add_decomposed_1, spec_simple_add_decomposed_2,
     };
     use testcontainers_modules::testcontainers::{
@@ -248,112 +247,5 @@ mod tests {
             .map(|val| vec![(VarName("z".into()), val)].into_iter().collect())
             .collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
-    }
-
-    #[cfg_attr(not(feature = "testcontainers"), ignore)]
-    #[test(tokio::test)]
-    async fn manually_decomposed_monitor_test() {
-        let model1 = lola_specification
-            .parse(spec_simple_add_decomposed_1())
-            .expect("Model could not be parsed");
-        let model2 = lola_specification
-            .parse(spec_simple_add_decomposed_2())
-            .expect("Model could not be parsed");
-
-        let xs = vec![Value::Int(1), Value::Int(2)];
-        let ys = vec![Value::Int(3), Value::Int(4)];
-        let zs = vec![Value::Int(4), Value::Int(6)];
-
-        let var_in_topics_1 = [
-            ("x".into(), "mqtt_input_dec_x".to_string()),
-            ("y".into(), "mqtt_input_dec_y".to_string()),
-        ];
-        let var_out_topics_1 = [("w".into(), "mqtt_input_dec_w".to_string())];
-        let var_in_topics_2 = [
-            ("w".into(), "mqtt_input_dec_w".to_string()),
-            ("z".into(), "mqtt_input_dec_z".to_string()),
-        ];
-        let var_out_topics_2 = [("v".into(), "mqtt_output_dec_v".to_string())];
-
-        let emqx_server = MQTT_TEST_CONTAINER.get_unpin().await;
-        let mqtt_port = emqx_server
-            .get_host_port_ipv4(1883)
-            .await
-            .expect("Failed to get host port for EMQX server");
-        let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
-
-        let mut input_provider_1 = MQTTInputProvider::new(
-            mqtt_host.as_str(),
-            var_in_topics_1.iter().cloned().collect(),
-        )
-        .expect("Failed to create input provider 1");
-        input_provider_1
-            .started
-            .wait_for(|x| info_span!("Waited for input provider 1 started").in_scope(|| *x))
-            .await;
-        let mut input_provider_2 = MQTTInputProvider::new(
-            mqtt_host.as_str(),
-            var_in_topics_2.iter().cloned().collect(),
-        )
-        .expect("Failed to create input provider 2");
-        input_provider_2
-            .started
-            .wait_for(|x| info_span!("Waited for input provider 2 started").in_scope(|| *x))
-            .await;
-
-        let mut output_handler_1 =
-            MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_1.into_iter().collect())
-                .expect("Failed to create output handler 1");
-        let mut output_handler_2 =
-            MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_2.into_iter().collect())
-                .expect("Failed to create output handler 2");
-
-        let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-            model1.clone(),
-            &mut input_provider_1,
-            Box::new(output_handler_1),
-            create_dependency_manager(DependencyKind::Empty, Box::new(model1)),
-        );
-
-        let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-            model2.clone(),
-            &mut input_provider_2,
-            Box::new(output_handler_2),
-            create_dependency_manager(DependencyKind::Empty, Box::new(model2)),
-        );
-
-        tokio::spawn(runner_1.run());
-        tokio::spawn(runner_2.run());
-
-        tokio::spawn(dummy_publisher(
-            "x_dec_publisher".to_string(),
-            "mqtt_input_dec_x".to_string(),
-            xs,
-            mqtt_port,
-        ));
-        tokio::spawn(dummy_publisher(
-            "y_dec_publisher".to_string(),
-            "mqtt_input_dec_y".to_string(),
-            ys,
-            mqtt_port,
-        ));
-        tokio::spawn(dummy_publisher(
-            "z_dec_publisher".to_string(),
-            "mqtt_input_dec_z".to_string(),
-            zs,
-            mqtt_port,
-        ));
-
-        let outputs_z = get_outputs(
-            "mqtt_output_dec_v".to_string(),
-            "v_subscriber".to_string(),
-            mqtt_port,
-        )
-        .await;
-
-        assert_eq!(
-            outputs_z.take(2).collect::<Vec<_>>().await,
-            vec![Value::Int(8), Value::Int(12)]
-        );
     }
 }

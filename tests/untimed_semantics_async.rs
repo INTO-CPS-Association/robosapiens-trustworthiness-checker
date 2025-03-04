@@ -8,8 +8,7 @@ use trustworthiness_checker::semantics::UntimedLolaSemantics;
 use trustworthiness_checker::{
     Monitor, Value, VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
 };
-mod lola_fixtures;
-use lola_fixtures::*;
+use trustworthiness_checker::lola_fixtures::*;
 use test_log::test;
 
 #[test(tokio::test)]

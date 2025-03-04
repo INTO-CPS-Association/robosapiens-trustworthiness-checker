@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4231ec303a85a91a2e9359f99a4e4ef012f1c941e3a3a900f04f523220321274 # shrinks to e = BinOp(Val(Bool(false)), Var(VarName("c")), BOp(And))

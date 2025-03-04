@@ -12,7 +12,7 @@ use trustworthiness_checker::{
     ros_input_provider::ROSInputProvider, ros_topic_stream_mapping::json_to_mapping,
 };
 use winnow::Parser;
-mod lola_fixtures;
+use trustworthiness_checker::lola_fixtures;
 use lola_fixtures::spec_simple_add_monitor;
 
 /* A simple ROS publisher node which publishes a sequence of values on a topic

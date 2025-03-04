@@ -1,7 +1,7 @@
+use crate::{OutputStream, Value, VarName};
 use futures::stream;
 use futures::stream::BoxStream;
 use std::{collections::BTreeMap, pin::Pin};
-use trustworthiness_checker::{OutputStream, Value, VarName};
 
 // Dead code is allowed in this file since cargo does not correctly
 // track when functions are used in tests.
@@ -264,5 +264,16 @@ pub fn spec_simple_add_decomposed_2() -> &'static str {
     "in z
      in w
      out v
+     v = z + w"
+}
+
+#[allow(dead_code)]
+pub fn spec_simple_add_decomposable() -> &'static str {
+    "in x
+     in y
+     in z
+     out w
+     out v
+     w = x + y
      v = z + w"
 }
