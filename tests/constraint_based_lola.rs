@@ -38,6 +38,7 @@ fn output_handler(spec: LOLASpecification) -> Box<ManualOutputHandler<Value>> {
 mod tests {
     use super::*;
     use test_log::test;
+    use trustworthiness_checker::dependencies::{Empty, traits::DependencyStore};
 
     #[test(tokio::test)]
     async fn test_simple_add_monitor() {
@@ -45,7 +46,12 @@ mod tests {
         let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert_eq!(
@@ -80,7 +86,12 @@ mod tests {
         let spec = lola_specification(&mut spec_empty()).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = Box::new(output_handler.get_output());
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<BTreeMap<VarName, Value>> = outputs.collect().await;
         assert_eq!(outputs.len(), 0);
@@ -93,7 +104,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 3);
@@ -129,7 +145,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             outputs.take(3).enumerate().collect().await;
@@ -166,7 +187,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 3);
@@ -202,7 +228,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 3);
@@ -238,7 +269,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 3);
@@ -278,7 +314,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 3);
@@ -326,7 +367,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert_eq!(outputs.len(), 2);
@@ -357,7 +403,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 3);
@@ -393,7 +444,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 2);
@@ -423,7 +479,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut output_handler = output_handler(spec.clone());
         let outputs = output_handler.get_output();
-        let monitor = ConstraintBasedMonitor::new(spec, &mut input_streams, output_handler);
+        let monitor = ConstraintBasedMonitor::new(
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            Empty::new(Box::new(spec)),
+        );
         tokio::spawn(monitor.run());
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
         assert!(outputs.len() == 3);

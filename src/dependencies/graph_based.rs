@@ -248,7 +248,7 @@ impl DependencyStore for DepGraph {
         Box::new(graph)
     }
 
-    fn longest_time_dependency(&self, var: &VarName) -> Option<usize> {
+    fn longest_time_dependency(&self, _var: &VarName) -> Option<usize> {
         todo!()
     }
 

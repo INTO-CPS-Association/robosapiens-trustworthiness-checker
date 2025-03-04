@@ -114,8 +114,11 @@ mod tests {
     use tracing::info_span;
     use trustworthiness_checker::{
         Monitor, Value, VarName,
-        io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
-        io::testing::manual_output_handler::ManualOutputHandler,
+        dependencies::{Empty, traits::DependencyStore},
+        io::{
+            mqtt::{MQTTInputProvider, MQTTOutputHandler},
+            testing::manual_output_handler::ManualOutputHandler,
+        },
         lola_specification,
         runtime::asynchronous::AsyncMonitorRunner,
         semantics::UntimedLolaSemantics,
@@ -158,9 +161,10 @@ mod tests {
         let mut output_handler =
             Box::new(MQTTOutputHandler::new(mqtt_host.as_str(), mqtt_topics).unwrap());
         let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-            spec,
+            spec.clone(),
             &mut input_streams,
             output_handler,
+            Empty::new(Box::new(spec)),
         );
         tokio::spawn(async_monitor.run());
         // Test the outputs
@@ -210,9 +214,10 @@ mod tests {
         let mut output_handler = ManualOutputHandler::new(vec!["z".into()]);
         let outputs = output_handler.get_output();
         let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-            model,
+            model.clone(),
             &mut input_provider,
             Box::new(output_handler),
+            Empty::new(Box::new(model)),
         );
 
         tokio::spawn(runner.run());
@@ -304,15 +309,17 @@ mod tests {
                 .expect("Failed to create output handler 2");
 
         let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-            model1,
+            model1.clone(),
             &mut input_provider_1,
             Box::new(output_handler_1),
+            Empty::new(Box::new(model1)),
         );
 
         let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-            model2,
+            model2.clone(),
             &mut input_provider_2,
             Box::new(output_handler_2),
+            Empty::new(Box::new(model2)),
         );
 
         tokio::spawn(runner_1.run());

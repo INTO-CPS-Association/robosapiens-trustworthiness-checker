@@ -2,6 +2,8 @@
 
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
+use trustworthiness_checker::dependencies::Empty;
+use trustworthiness_checker::dependencies::traits::DependencyStore;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::semantics::UntimedLolaSemantics;
 use trustworthiness_checker::{
@@ -18,9 +20,10 @@ async fn test_simple_add_monitor() {
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-        spec,
+        spec.clone(),
         &mut input_streams,
         output_handler,
+        Empty::new(Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -51,9 +54,10 @@ async fn test_simple_add_monitor_does_not_go_away() {
         let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
         let outputs = output_handler.get_output();
         let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-            spec,
+            spec.clone(),
             &mut input_streams,
             output_handler,
+            Empty::new(Box::new(spec)),
         );
         tokio::spawn(async_monitor.run());
         outputs
@@ -85,9 +89,10 @@ async fn test_count_monitor() {
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-        spec,
+        spec.clone(),
         &mut input_streams,
         output_handler,
+        Empty::new(Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -130,9 +135,10 @@ async fn test_eval_monitor() {
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-        spec,
+        spec.clone(),
         &mut input_streams,
         output_handler,
+        Empty::new(Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -169,9 +175,10 @@ async fn test_multiple_parameters() {
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-        spec,
+        spec.clone(),
         &mut input_streams,
         output_handler,
+        Empty::new(Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -209,9 +216,10 @@ async fn test_maple_sequence() {
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
     let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
-        spec,
+        spec.clone(),
         &mut input_streams,
         output_handler,
+        Empty::new(Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
