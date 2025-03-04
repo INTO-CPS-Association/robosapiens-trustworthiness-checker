@@ -4,7 +4,7 @@ use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::Value;
 use crate::core::VarName;
-use crate::dependencies::traits::DependencyStore;
+use crate::dependencies::traits::DependencyManager;
 use crate::is_enum_variant;
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 use crate::lang::dynamic_lola::ast::SExpr;
@@ -251,7 +251,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
         model: LOLASpecification,
         input: &mut dyn InputProvider<Value>,
         output: Box<dyn OutputHandler<Value>>,
-        _dependencies: Box<dyn DependencyStore>,
+        _dependencies: DependencyManager,
     ) -> Self {
         let input_streams = model
             .input_vars()

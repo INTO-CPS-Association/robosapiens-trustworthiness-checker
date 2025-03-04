@@ -3,8 +3,7 @@
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
 use tracing::info;
-use trustworthiness_checker::dependencies::Empty;
-use trustworthiness_checker::dependencies::traits::DependencyStore;
+use trustworthiness_checker::dependencies::traits::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::runtime::queuing::QueuingMonitorRunner;
@@ -28,7 +27,7 @@ async fn test_simple_add_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -64,7 +63,7 @@ async fn test_concat_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -98,7 +97,7 @@ async fn test_count_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -147,7 +146,7 @@ async fn test_eval_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -189,7 +188,7 @@ async fn test_multiple_parameters() {
         spec,
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;

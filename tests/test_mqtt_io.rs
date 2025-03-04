@@ -114,7 +114,7 @@ mod tests {
     use tracing::info_span;
     use trustworthiness_checker::{
         Monitor, Value, VarName,
-        dependencies::{Empty, traits::DependencyStore},
+        dependencies::traits::{DependencyKind, create_dependency_manager},
         io::{
             mqtt::{MQTTInputProvider, MQTTOutputHandler},
             testing::manual_output_handler::ManualOutputHandler,
@@ -164,7 +164,7 @@ mod tests {
             spec.clone(),
             &mut input_streams,
             output_handler,
-            Empty::new(Box::new(spec)),
+            create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
         );
         tokio::spawn(async_monitor.run());
         // Test the outputs
@@ -217,7 +217,7 @@ mod tests {
             model.clone(),
             &mut input_provider,
             Box::new(output_handler),
-            Empty::new(Box::new(model)),
+            create_dependency_manager(DependencyKind::Empty, Box::new(model)),
         );
 
         tokio::spawn(runner.run());
@@ -312,14 +312,14 @@ mod tests {
             model1.clone(),
             &mut input_provider_1,
             Box::new(output_handler_1),
-            Empty::new(Box::new(model1)),
+            create_dependency_manager(DependencyKind::Empty, Box::new(model1)),
         );
 
         let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
             model2.clone(),
             &mut input_provider_2,
             Box::new(output_handler_2),
-            Empty::new(Box::new(model2)),
+            create_dependency_manager(DependencyKind::Empty, Box::new(model2)),
         );
 
         tokio::spawn(runner_1.run());

@@ -2,8 +2,7 @@
 
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
-use trustworthiness_checker::dependencies::Empty;
-use trustworthiness_checker::dependencies::traits::DependencyStore;
+use trustworthiness_checker::dependencies::traits::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::semantics::UntimedLolaSemantics;
 use trustworthiness_checker::{
@@ -23,7 +22,7 @@ async fn test_simple_add_monitor() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -57,7 +56,7 @@ async fn test_simple_add_monitor_does_not_go_away() {
             spec.clone(),
             &mut input_streams,
             output_handler,
-            Empty::new(Box::new(spec)),
+            create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
         );
         tokio::spawn(async_monitor.run());
         outputs
@@ -92,7 +91,7 @@ async fn test_count_monitor() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -138,7 +137,7 @@ async fn test_eval_monitor() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -178,7 +177,7 @@ async fn test_multiple_parameters() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -219,7 +218,7 @@ async fn test_maple_sequence() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;

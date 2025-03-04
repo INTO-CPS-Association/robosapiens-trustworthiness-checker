@@ -1,27 +1,35 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{SExpr, VarName};
 
-use super::traits::DependencyStore;
+use super::traits::DependencyResolver;
 
-#[derive(Default)]
-pub struct Empty {}
+pub struct Empty {
+    names: BTreeSet<VarName>,
+}
 
-impl Empty {}
+// A DependencyStore that simply saves the VarNames.
+// It always returns time infinity for all dependencies.
+impl DependencyResolver for Empty {
+    fn new(spec: Box<dyn crate::Specification<SExpr<VarName>>>) -> Self {
+        let mut names = BTreeSet::new();
+        spec.output_vars().iter().for_each(|name| {
+            names.insert(name.clone());
+        });
+        spec.input_vars().iter().for_each(|name| {
+            names.insert(name.clone());
+        });
+        Self { names }
+    }
 
-impl DependencyStore for Empty {
     fn longest_time_dependency(&self, _: &VarName) -> Option<usize> {
-        None
+        Some(usize::MAX)
     }
 
     fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize> {
-        BTreeMap::new()
-    }
-
-    fn new(_: Box<dyn crate::Specification<SExpr<VarName>>>) -> Box<dyn DependencyStore>
-    where
-        Self: Sized,
-    {
-        Box::new(Empty {})
+        self.names
+            .iter()
+            .map(|name| (name.clone(), usize::MAX))
+            .collect()
     }
 }

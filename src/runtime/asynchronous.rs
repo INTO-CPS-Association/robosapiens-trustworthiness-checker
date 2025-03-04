@@ -27,7 +27,7 @@ use crate::core::MonitoringSemantics;
 use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
-use crate::dependencies::traits::DependencyStore;
+use crate::dependencies::traits::DependencyManager;
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
 /* An actor which manages access to a stream variable by tracking the
@@ -452,7 +452,7 @@ where
         model: M,
         input_streams: &mut dyn InputProvider<Val>,
         output: Box<dyn OutputHandler<Val>>,
-        _dependencies: Box<dyn DependencyStore>,
+        _dependencies: DependencyManager,
     ) -> Self {
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());

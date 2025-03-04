@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::{Deref, DerefMut};
 
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::EdgeRef;
+use petgraph::visit::{EdgeRef, IntoNodeReferences};
 
 use crate::{SExpr, Specification, VarName};
 
-use super::traits::DependencyStore;
+use super::traits::DependencyResolver;
 
 // Graph weights are Vecs of time indices
 // (we want a container with duplicates for DUPs)
@@ -18,17 +17,12 @@ type Edge = (Node, Node, Weight);
 // Graphs are directed
 type GraphType = DiGraph<Node, Weight>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DepGraph {
     graph: GraphType,
 }
 
 impl DepGraph {
-    #[allow(dead_code)]
-    pub fn graph(&self) -> &GraphType {
-        &self.graph
-    }
-
     #[allow(dead_code)]
     pub fn as_dot_graph<'a>(&'a self) -> Dot<'a, &'a GraphType> {
         self.as_dot_graph_with_config(&[])
@@ -45,7 +39,7 @@ impl DepGraph {
         I: IntoIterator<Item = &'a Node>,
     {
         for node in nodes {
-            self.add_node(node.clone());
+            self.graph.add_node(node.clone());
         }
     }
 
@@ -85,34 +79,34 @@ impl DepGraph {
 
     // Similar to creating a new graph with the union of the nodes and edges,
     // but this is done in-place
-    pub fn merge_graphs(&mut self, other: &DepGraph) {
+    fn merge_graphs(&mut self, other: &DepGraph) {
         let mut node_map = BTreeMap::new();
 
         // Add all nodes from `self` into the map
-        for node in self.node_indices() {
-            let node_value = self[node].clone();
+        for node in self.graph.node_indices() {
+            let node_value = self.graph[node].clone();
             node_map.insert(node_value, node);
         }
 
         // Add nodes from `other` if they are not already in `self`
-        for node in other.node_indices() {
-            let node_value = other[node].clone();
+        for node in other.graph.node_indices() {
+            let node_value = other.graph[node].clone();
             node_map
                 .entry(node_value.clone())
-                .or_insert_with(|| self.add_node(node_value));
+                .or_insert_with(|| self.graph.add_node(node_value));
         }
 
         // Merge edges from `other`
-        for edge in other.edge_indices() {
-            let (source, target) = other.edge_endpoints(edge).unwrap();
-            let weight = other[edge].clone();
+        for edge in other.graph.edge_indices() {
+            let (source, target) = other.graph.edge_endpoints(edge).unwrap();
+            let weight = other.graph[edge].clone();
 
-            let source_index = node_map[&other[source]];
-            let target_index = node_map[&other[target]];
+            let source_index = node_map[&other.graph[source]];
+            let target_index = node_map[&other.graph[target]];
 
             // Ensure the edge does not already exist before adding
-            if !self.contains_edge(source_index, target_index) {
-                self.add_edge(source_index, target_index, weight);
+            if !self.graph.contains_edge(source_index, target_index) {
+                self.graph.add_edge(source_index, target_index, weight);
             }
         }
     }
@@ -157,8 +151,8 @@ impl DepGraph {
         ) {
             match sexpr {
                 SExpr::Var(name) => {
-                    let node = map.add_node(name.clone());
-                    map.add_edge(*current_node, node, steps.clone());
+                    let node = map.graph.add_node(name.clone());
+                    map.graph.add_edge(*current_node, node, steps.clone());
                 }
                 SExpr::SIndex(sexpr, idx, _) => {
                     let mut steps = steps.clone();
@@ -192,7 +186,7 @@ impl DepGraph {
         }
 
         let mut graph = DepGraph::empty_graph();
-        let root_node = graph.add_node(root_name.clone());
+        let root_node = graph.graph.add_node(root_name.clone());
         deps_impl(sexpr, &vec![], &mut graph, &root_node);
         graph
     }
@@ -220,39 +214,50 @@ impl DepGraph {
     }
 }
 
-impl Deref for DepGraph {
-    type Target = GraphType;
-
-    fn deref(&self) -> &Self::Target {
-        &self.graph
-    }
-}
-
-impl DerefMut for DepGraph {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.graph
-    }
-}
-
-impl DependencyStore for DepGraph {
-    fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Box<dyn DependencyStore>
-    where
-        Self: Sized,
-    {
+impl DependencyResolver for DepGraph {
+    fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Self {
         let mut graph = DepGraph::empty_graph();
         for (name, expr) in Self::spec_to_map(spec) {
             let expr_deps = Self::sexpr_dependencies(&expr, &name);
             graph.merge_graphs(&expr_deps);
         }
         graph.combine_edges();
-        Box::new(graph)
+        graph
     }
 
-    fn longest_time_dependency(&self, _var: &VarName) -> Option<usize> {
-        todo!()
+    fn longest_time_dependency(&self, name: &VarName) -> Option<usize> {
+        let node = self
+            .graph
+            .node_indices()
+            .find(|i| self.graph[*i] == *name)?;
+        // TODO: Not recursively searching through the graph, only immediate neighbors.
+        // If we have spec: in a; out x; out y; x = a[-1]; y = x[-1]; then we need to
+        // keep the value of a for 2 steps, but we only keep it for 1 step.
+        // TODO: Write a unit test for this...
+        let longest_dep = self
+            .graph
+            .edges_directed(node, petgraph::Direction::Incoming)
+            .filter_map(|edge| edge.weight().iter().map(|&w| w.unsigned_abs()).max()) // Take max of abs values
+            .max()
+            .unwrap_or(0);
+        Some(longest_dep)
     }
 
     fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize> {
-        todo!()
+        // TODO: Not recursively searching through the graph, only immediate neighbors.
+        // If we have spec: in a; out x; out y; x = a[-1]; y = x[-1]; then we need to
+        // keep the value of a for 2 steps, but we only keep it for 1 step.
+        // TODO: Write a unit test for this...
+        let mut map = BTreeMap::new();
+        for (node, name) in self.graph.node_references() {
+            let longest_dep = self
+                .graph
+                .edges_directed(node, petgraph::Direction::Incoming)
+                .filter_map(|edge| edge.weight().iter().map(|&w| w.unsigned_abs()).max()) // Take max of abs values
+                .max()
+                .unwrap_or(0);
+            map.insert(name.clone(), longest_dep);
+        }
+        map
     }
 }

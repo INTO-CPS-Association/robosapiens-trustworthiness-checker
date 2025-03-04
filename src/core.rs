@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
-use crate::dependencies::traits::DependencyStore;
+use crate::dependencies::traits::DependencyManager;
+
 // use serde_json::{Deserializer, Sserializer};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,7 +223,7 @@ pub trait Monitor<M, V: StreamData>: Send {
         model: M,
         input: &mut dyn InputProvider<V>,
         output: Box<dyn OutputHandler<V>>,
-        dependencies: Box<dyn DependencyStore>,
+        dependencies: DependencyManager,
     ) -> Self;
 
     fn spec(&self) -> &M;

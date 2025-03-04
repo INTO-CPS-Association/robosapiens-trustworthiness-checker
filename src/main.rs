@@ -6,8 +6,7 @@ use tracing::{info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
-use trustworthiness_checker::dependencies::Empty;
-use trustworthiness_checker::dependencies::traits::DependencyStore;
+use trustworthiness_checker::dependencies::traits::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::{self as tc, Monitor, io::file::parse_file};
@@ -140,7 +139,7 @@ async fn main() {
                 model.clone(),
                 &mut *input_streams,
                 output_handler,
-                Empty::new(Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
             ));
             tokio::spawn(runner.run())
         }
@@ -154,7 +153,7 @@ async fn main() {
                 model.clone(),
                 &mut *input_streams,
                 output_handler,
-                Empty::new(Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
             );
             tokio::spawn(runner.run())
         }
@@ -170,7 +169,7 @@ async fn main() {
                 typed_model,
                 &mut *input_streams,
                 output_handler,
-                Empty::new(Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
             );
             tokio::spawn(runner.run())
         }
@@ -186,7 +185,7 @@ async fn main() {
                 typed_model,
                 &mut *input_streams,
                 output_handler,
-                Empty::new(Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
             );
             tokio::spawn(runner.run())
         }
@@ -195,7 +194,7 @@ async fn main() {
                 model.clone(),
                 &mut *input_streams,
                 output_handler,
-                Empty::new(Box::new(model)),
+                create_dependency_manager(DependencyKind::DepGraph, Box::new(model)),
             );
             tokio::spawn(runner.run())
         }

@@ -7,8 +7,8 @@ use criterion::SamplingMode;
 use criterion::{criterion_group, criterion_main};
 use futures::stream::{self, BoxStream};
 use trustworthiness_checker::OutputStream;
-use trustworthiness_checker::dependencies::Empty;
-use trustworthiness_checker::dependencies::traits::DependencyStore;
+use trustworthiness_checker::dependencies::traits::DependencyKind;
+use trustworthiness_checker::dependencies::traits::create_dependency_manager;
 use trustworthiness_checker::io::testing::null_output_handler::NullOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::{Monitor, Value, VarName};
@@ -65,7 +65,7 @@ async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     async_monitor.run().await;
 }
@@ -83,7 +83,7 @@ async fn monitor_outputs_untyped_async(num_outputs: usize) {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     async_monitor.run().await;
 }
@@ -103,7 +103,7 @@ async fn monitor_outputs_typed_async(num_outputs: usize) {
         spec,
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec_untyped.clone())),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
     );
     async_monitor.run().await;
 }
@@ -121,7 +121,7 @@ async fn monitor_outputs_untyped_queuing(num_outputs: usize) {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
     );
     async_monitor.run().await;
 }
@@ -141,7 +141,7 @@ async fn monitor_outputs_typed_queuing(num_outputs: usize) {
         spec,
         &mut input_streams,
         output_handler,
-        Empty::new(Box::new(spec_untyped.clone())),
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
     );
     async_monitor.run().await;
 }
