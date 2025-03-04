@@ -32,6 +32,11 @@ impl LocalitySpec for (NodeName, LabelledConcDistributionGraph) {
         (self.0.clone(), &self.1).local_vars()
     }
 }
+impl LocalitySpec for Box<dyn LocalitySpec> {
+    fn local_vars(&self) -> Vec<VarName> {
+        self.as_ref().local_vars()
+    }
+}
 
 pub trait Localisable {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self;

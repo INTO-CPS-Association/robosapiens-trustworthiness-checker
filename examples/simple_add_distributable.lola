@@ -1,0 +1,7 @@
+in x
+in y
+in z
+out w
+out v
+w = x + y
+v = z + w

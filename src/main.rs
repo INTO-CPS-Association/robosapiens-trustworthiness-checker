@@ -7,8 +7,10 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
 use trustworthiness_checker::dependencies::traits::{DependencyKind, create_dependency_manager};
+use trustworthiness_checker::distributed::distribution_graphs::LabelledConcDistributionGraph;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
+use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, Monitor, io::file::parse_file};
 use trustworthiness_checker::{InputProvider, Value};
 
@@ -41,6 +43,52 @@ async fn main() {
 
     let model_parser = match language {
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
+    };
+
+    let locality_mode: Option<Box<dyn LocalitySpec>> = match cli.distribution_mode {
+        trustworthiness_checker::cli::args::DistributionMode {
+            centralised: true,
+            distribution_graph: _,
+            local_topics: _,
+        } => None,
+        trustworthiness_checker::cli::args::DistributionMode {
+            centralised: false,
+            distribution_graph: Some(s),
+            local_topics: _,
+        } => {
+            let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
+            let distribution_graph: LabelledConcDistributionGraph =
+                serde_json::from_str(&f).expect("Distribution graph could not be parsed");
+            let local_node = cli.local_node.expect("Local node not specified").into();
+
+            Some(Box::new((local_node, distribution_graph)))
+        }
+        trustworthiness_checker::cli::args::DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: Some(topics),
+        } => Some(Box::new(
+            topics
+                .into_iter()
+                .map(tc::VarName)
+                .collect::<Vec<tc::VarName>>(),
+        )),
+        _ => unreachable!(),
+    };
+
+    let model = parse_file(model_parser, cli.model.as_str())
+        .await
+        .expect("Model file could not be parsed");
+    info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
+
+    // Localise the model to contain only the local variables (if needed)
+    let model = match locality_mode {
+        Some(locality_mode) => {
+            let model = model.localise(&locality_mode);
+            info!(name: "Localised model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
+            model
+        }
+        None => model,
     };
 
     let mut input_streams: Box<dyn InputProvider<tc::Value>> = {
@@ -84,20 +132,32 @@ async fn main() {
                 .await
                 .expect("MQTT input provider failed to start");
             Box::new(mqtt_input_provider)
-        } else {
+        } else if input_mode.mqtt_input {
+            let var_topics = model
+                .input_vars
+                .iter()
+                .map(|var| (var.clone(), var.0.clone()))
+                .collect();
+            let mut mqtt_input_provider =
+                tc::io::mqtt::MQTTInputProvider::new(MQTT_HOSTNAME, var_topics)
+                    .expect("MQTT input provider could not be created");
+            mqtt_input_provider
+                .started
+                .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+                .await
+                .expect("MQTT input provider failed to start");
+            Box::new(mqtt_input_provider)
+        }
+        else {
             panic!("Input provider not specified")
         }
     };
-
-    let model = parse_file(model_parser, cli.model.as_str())
-        .await
-        .expect("Model file could not be parsed");
-    info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
 
     let output_handler: Box<dyn OutputHandler<Value>> = match cli.output_mode {
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: true,
             output_mqtt_topics: None,
+            mqtt_output: false,
             output_ros_topics: None,
         } => Box::new(StdoutOutputHandler::<tc::Value>::new(
             model.output_vars.clone(),
@@ -105,10 +165,14 @@ async fn main() {
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: false,
             output_mqtt_topics: Some(topics),
+            mqtt_output: false,
             output_ros_topics: None,
         } => {
             let topics = topics
                 .into_iter()
+                // Only include topics that are in the output_vars
+                // this is necessary for localisation support
+                .filter(|topic| model.output_vars.contains(&tc::VarName(topic.clone())))
                 .map(|topic| (tc::VarName(topic.clone()), topic))
                 .collect();
             Box::new(
@@ -118,6 +182,23 @@ async fn main() {
         }
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: false,
+            output_mqtt_topics: None,
+            mqtt_output: true,
+            output_ros_topics: None,
+        } => {
+            let topics = model
+                .output_vars
+                .iter()
+                .map(|var| (var.clone(), var.0.clone()))
+                .collect();
+            Box::new(
+                MQTTOutputHandler::new(MQTT_HOSTNAME, topics)
+                    .expect("MQTT output handler could not be created"),
+            )
+        },
+        trustworthiness_checker::cli::args::OutputMode {
+            output_stdout: false,
+            mqtt_output: false,
             output_mqtt_topics: None,
             output_ros_topics: Some(_),
         } => unimplemented!("ROS output not implemented"),

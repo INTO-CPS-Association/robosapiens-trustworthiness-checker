@@ -28,6 +28,9 @@ pub struct InputMode {
     #[clap(long, value_delimiter = ' ', num_args = 1..)]
     pub input_mqtt_topics: Option<Vec<String>>,
 
+    #[clap(long)]
+    pub mqtt_input: bool,
+
     // #[cfg(feature = "ros")]
     #[clap(long)]
     pub input_ros_topics: Option<String>,
@@ -42,10 +45,27 @@ pub struct OutputMode {
     #[clap(long, value_delimiter = ' ', num_args = 1..)]
     pub output_mqtt_topics: Option<Vec<String>>,
 
+    #[clap(long)]
+    pub mqtt_output: bool,
+
     // #[cfg(feature = "ros")]
     // TODO: Implement ROS output support
     #[clap(long)]
     pub output_ros_topics: Option<String>,
+}
+
+#[derive(Args)]
+#[group(required = false, multiple = false)]
+pub struct DistributionMode {
+    #[clap(long)]
+    pub centralised: bool,
+
+    #[clap(long)]
+    #[clap(requires = "local_node")]
+    pub distribution_graph: Option<String>,
+
+    #[clap(long)]
+    pub local_topics: Option<Vec<String>>,
 }
 
 #[derive(Parser)]
@@ -66,6 +86,13 @@ pub struct Cli {
     pub semantics: Option<Semantics>,
     #[arg(long)]
     pub runtime: Option<Runtime>,
+
+    #[command(flatten)]
+    pub distribution_mode: DistributionMode,
+
+    #[arg(long)]
+    #[clap(requires = "distribution_graph")]
+    pub local_node: Option<String>,
 }
 
 #[derive(Parser)]
