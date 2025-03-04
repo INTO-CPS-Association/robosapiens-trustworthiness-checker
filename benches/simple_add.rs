@@ -7,6 +7,8 @@ use criterion::SamplingMode;
 use criterion::{criterion_group, criterion_main};
 use futures::stream::{self, BoxStream};
 use trustworthiness_checker::OutputStream;
+use trustworthiness_checker::dependencies::Empty;
+use trustworthiness_checker::dependencies::traits::DependencyStore;
 use trustworthiness_checker::io::testing::null_output_handler::NullOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::{Monitor, Value, VarName};
@@ -60,9 +62,10 @@ async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
     let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::constraints::ConstraintBasedMonitor::new(
-        spec,
+        spec.clone(),
         &mut input_streams,
         output_handler,
+        Empty::new(Box::new(spec)),
     );
     async_monitor.run().await;
 }
@@ -76,22 +79,32 @@ async fn monitor_outputs_untyped_async(num_outputs: usize) {
         _,
         trustworthiness_checker::semantics::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
-    >::new(spec, &mut input_streams, output_handler);
+    >::new(
+        spec.clone(),
+        &mut input_streams,
+        output_handler,
+        Empty::new(Box::new(spec)),
+    );
     async_monitor.run().await;
 }
 
 async fn monitor_outputs_typed_async(num_outputs: usize) {
     let mut input_streams = input_streams_typed(num_outputs);
-    let spec =
+    let spec_untyped =
         trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-    let spec = type_check(spec).expect("Type check failed");
+    let spec = type_check(spec_untyped.clone()).expect("Type check failed");
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::asynchronous::AsyncMonitorRunner::<
         _,
         _,
         trustworthiness_checker::semantics::TypedUntimedLolaSemantics,
         _,
-    >::new(spec, &mut input_streams, output_handler);
+    >::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+        Empty::new(Box::new(spec_untyped.clone())),
+    );
     async_monitor.run().await;
 }
 
@@ -104,22 +117,32 @@ async fn monitor_outputs_untyped_queuing(num_outputs: usize) {
         _,
         trustworthiness_checker::semantics::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
-    >::new(spec, &mut input_streams, output_handler);
+    >::new(
+        spec.clone(),
+        &mut input_streams,
+        output_handler,
+        Empty::new(Box::new(spec)),
+    );
     async_monitor.run().await;
 }
 
 async fn monitor_outputs_typed_queuing(num_outputs: usize) {
     let mut input_streams = input_streams_typed(num_outputs);
-    let spec =
+    let spec_untyped =
         trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-    let spec = type_check(spec).expect("Type check failed");
+    let spec = type_check(spec_untyped.clone()).expect("Type check failed");
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::queuing::QueuingMonitorRunner::<
         _,
         _,
         trustworthiness_checker::semantics::TypedUntimedLolaSemantics,
         _,
-    >::new(spec, &mut input_streams, output_handler);
+    >::new(
+        spec,
+        &mut input_streams,
+        output_handler,
+        Empty::new(Box::new(spec_untyped.clone())),
+    );
     async_monitor.run().await;
 }
 
