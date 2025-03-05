@@ -35,10 +35,12 @@ fn output_handler(spec: LOLASpecification) -> Box<ManualOutputHandler<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trustworthiness_checker::lola_fixtures::{spec_simple_add_monitor, spec_empty, input_empty, input_streams5, input_streams4};
     use test_log::test;
     use trustworthiness_checker::dependencies::traits::{
         DependencyKind, create_dependency_manager,
+    };
+    use trustworthiness_checker::lola_fixtures::{
+        input_empty, input_streams4, input_streams5, spec_empty, spec_simple_add_monitor,
     };
 
     #[test(tokio::test)]

@@ -2,14 +2,14 @@
 
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
+use test_log::test;
 use trustworthiness_checker::dependencies::traits::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::lola_fixtures::*;
 use trustworthiness_checker::semantics::UntimedLolaSemantics;
 use trustworthiness_checker::{
     Monitor, Value, VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
 };
-use trustworthiness_checker::lola_fixtures::*;
-use test_log::test;
 
 #[test(tokio::test)]
 async fn test_simple_add_monitor() {

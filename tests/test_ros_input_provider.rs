@@ -3,17 +3,17 @@
 use std::future::Future;
 
 use futures::StreamExt;
+use lola_fixtures::spec_simple_add_monitor;
 #[cfg(feature = "ros")]
 use r2r::{WrappedTypesupport, std_msgs::msg::Int32};
 use tokio_util::sync::CancellationToken;
+use trustworthiness_checker::lola_fixtures;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::{
     AsyncMonitorRunner, Monitor, UntimedLolaSemantics, Value, VarName, lola_specification,
     ros_input_provider::ROSInputProvider, ros_topic_stream_mapping::json_to_mapping,
 };
 use winnow::Parser;
-use trustworthiness_checker::lola_fixtures;
-use lola_fixtures::spec_simple_add_monitor;
 
 /* A simple ROS publisher node which publishes a sequence of values on a topic
  * This creates a ROS node node_name which runs in a background thread

@@ -17,7 +17,10 @@ pub struct MQTTLocalityReceiver {
 
 impl MQTTLocalityReceiver {
     pub fn new(mqtt_host: String, local_node: String) -> Self {
-        Self { mqtt_host, local_node }
+        Self {
+            mqtt_host,
+            local_node,
+        }
     }
 
     fn topic(&self) -> String {
@@ -35,7 +38,8 @@ impl LocalityReceiver for MQTTLocalityReceiver {
             Some(msg) => {
                 let msg_content = msg.payload_str().to_string();
                 let local_topics: Vec<String> = serde_json::from_str(&msg_content)?;
-                let local_topics: Vec<VarName> = local_topics.into_iter().map(|s| s.into()).collect();
+                let local_topics: Vec<VarName> =
+                    local_topics.into_iter().map(|s| s.into()).collect();
                 Ok(local_topics)
             }
             None => Err("No message received".into()),
