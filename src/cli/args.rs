@@ -69,7 +69,7 @@ pub struct DistributionMode {
 
     #[clap(long)]
     #[clap(requires = "local_node")]
-    pub deferred_work: bool,
+    pub distributed_work: bool,
 }
 
 #[derive(Parser)]

@@ -51,13 +51,13 @@ async fn main() {
             centralised: true,
             distribution_graph: _,
             local_topics: _,
-            deferred_work: _,
+            distributed_work: _,
         } => None,
         trustworthiness_checker::cli::args::DistributionMode {
             centralised: false,
             distribution_graph: Some(s),
             local_topics: _,
-            deferred_work: _,
+            distributed_work: _,
         } => {
             let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
             let distribution_graph: LabelledConcDistributionGraph =
@@ -70,7 +70,7 @@ async fn main() {
             centralised: false,
             distribution_graph: None,
             local_topics: Some(topics),
-            deferred_work: _,
+            distributed_work: _,
         } => Some(Box::new(
             topics
                 .into_iter()
@@ -81,7 +81,7 @@ async fn main() {
             centralised: false,
             distribution_graph: None,
             local_topics: None,
-            deferred_work: true,
+            distributed_work: true,
         } => {
             let local_node = cli.local_node.expect("Local node not specified").into();
             info!("Waiting for work assignment on node {}", local_node);
