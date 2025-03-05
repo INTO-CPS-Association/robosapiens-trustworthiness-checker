@@ -66,6 +66,10 @@ pub struct DistributionMode {
 
     #[clap(long)]
     pub local_topics: Option<Vec<String>>,
+
+    #[clap(long)]
+    #[clap(requires = "local_node")]
+    pub deferred_work: bool,
 }
 
 #[derive(Parser)]
@@ -91,7 +95,6 @@ pub struct Cli {
     pub distribution_mode: DistributionMode,
 
     #[arg(long)]
-    #[clap(requires = "distribution_graph")]
     pub local_node: Option<String>,
 }
 

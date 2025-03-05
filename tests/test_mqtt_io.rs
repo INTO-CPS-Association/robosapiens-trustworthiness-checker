@@ -3,17 +3,17 @@ use std::time::Duration;
 use std::{future::Future, vec};
 
 use futures::{StreamExt, stream};
+use paho_mqtt as mqtt;
+use std::pin::Pin;
+use std::task;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,
 };
-use winnow::Parser;
 use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
-use paho_mqtt as mqtt;
-use std::pin::Pin;
-use std::task;
 use trustworthiness_checker::{OutputStream, Value};
+use winnow::Parser;
 
 use async_once_cell::Lazy;
 use testcontainers_modules::testcontainers::core::WaitFor;
@@ -102,9 +102,6 @@ mod tests {
     use std::{collections::BTreeMap, pin::Pin};
     use test_log::test;
 
-    use trustworthiness_checker::lola_fixtures::{
-        input_streams1, spec_simple_add_decomposed_1, spec_simple_add_decomposed_2,
-    };
     use testcontainers_modules::testcontainers::{
         ContainerAsync,
         runners::{self, AsyncRunner},
@@ -121,6 +118,14 @@ mod tests {
         lola_specification,
         runtime::asynchronous::AsyncMonitorRunner,
         semantics::UntimedLolaSemantics,
+    };
+    use trustworthiness_checker::{
+        distributed::locality_receiver::LocalityReceiver,
+        io::mqtt::MQTTLocalityReceiver,
+        lola_fixtures::{
+            input_streams1, spec_simple_add_decomposed_1, spec_simple_add_decomposed_2,
+        },
+        semantics::distributed::localisation::LocalitySpec,
     };
 
     use super::*;
@@ -247,5 +252,46 @@ mod tests {
             .map(|val| vec![(VarName("z".into()), val)].into_iter().collect())
             .collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
+    }
+
+    #[cfg_attr(not(feature = "testcontainers"), ignore)]
+    #[test(tokio::test)]
+    async fn test_mqtt_locality_receiver() {
+        println!("Starting test");
+        let emqx_server = MQTT_TEST_CONTAINER.get_unpin().await;
+        println!("Got EMQX server");
+        let mqtt_port = emqx_server
+            .get_host_port_ipv4(1883)
+            .await
+            .expect("Failed to get host port for EMQX server");
+        let mqtt_uri = format!("tcp://localhost:{}", mqtt_port);
+
+        let receiver = MQTTLocalityReceiver::new(mqtt_uri.clone(), "test_node".to_string());
+
+        println!("Created receiver");
+
+        let handle = tokio::spawn(async move {
+            // Wait for the receiver to be ready
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+            let mqtt_client = provide_mqtt_client(mqtt_uri)
+                .await
+                .expect("Failed to create MQTT client");
+            let topic = "start_monitors_at_test_node".to_string();
+            let message = serde_json::to_string(&vec!["x", "y"]).unwrap();
+            let message = mqtt::Message::new(topic, message, 1);
+            mqtt_client.publish(message).await.unwrap();
+            println!("Published message");
+        });
+
+        println!("Awaiting locality spec");
+
+        let locality_spec = receiver.receive().await.unwrap();
+        println!("Received locality spec");
+
+        let local_vars = locality_spec.local_vars();
+
+        assert_eq!(local_vars, vec!["x".into(), "y".into()]);
+
+        handle.abort();
     }
 }

@@ -8,6 +8,7 @@ use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
 use trustworthiness_checker::dependencies::traits::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledConcDistributionGraph;
+use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
@@ -50,11 +51,13 @@ async fn main() {
             centralised: true,
             distribution_graph: _,
             local_topics: _,
+            deferred_work: _,
         } => None,
         trustworthiness_checker::cli::args::DistributionMode {
             centralised: false,
             distribution_graph: Some(s),
             local_topics: _,
+            deferred_work: _,
         } => {
             let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
             let distribution_graph: LabelledConcDistributionGraph =
@@ -67,12 +70,32 @@ async fn main() {
             centralised: false,
             distribution_graph: None,
             local_topics: Some(topics),
+            deferred_work: _,
         } => Some(Box::new(
             topics
                 .into_iter()
                 .map(tc::VarName)
                 .collect::<Vec<tc::VarName>>(),
         )),
+        trustworthiness_checker::cli::args::DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            deferred_work: true,
+        } => {
+            let local_node = cli.local_node.expect("Local node not specified").into();
+            info!("Waiting for work assignment on node {}", local_node);
+            let receiver = tc::io::mqtt::MQTTLocalityReceiver::new(
+                MQTT_HOSTNAME.to_string(),
+                local_node,
+            );
+            let locality = receiver
+                .receive()
+                .await
+                .expect("Work could not be received");
+            info!("Received work: {:?}", locality.local_vars());
+            Some(Box::new(locality))
+        }
         _ => unreachable!(),
     };
 
@@ -147,8 +170,7 @@ async fn main() {
                 .await
                 .expect("MQTT input provider failed to start");
             Box::new(mqtt_input_provider)
-        }
-        else {
+        } else {
             panic!("Input provider not specified")
         }
     };
@@ -195,7 +217,7 @@ async fn main() {
                 MQTTOutputHandler::new(MQTT_HOSTNAME, topics)
                     .expect("MQTT output handler could not be created"),
             )
-        },
+        }
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: false,
             mqtt_output: false,
