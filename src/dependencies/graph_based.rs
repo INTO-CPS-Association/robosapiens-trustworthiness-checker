@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use petgraph::algo::{find_negative_cycle, is_cyclic_directed};
 use petgraph::dot::{Config, Dot};
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::{EdgeRef, IntoNodeReferences};
+use petgraph::graph::{DiGraph, EdgeReference, NodeIndex};
+use petgraph::visit::{EdgeFiltered, EdgeRef, FilterEdge, IntoNodeReferences};
 
 use crate::{SExpr, Specification, VarName};
 
@@ -190,6 +191,43 @@ impl DepGraph {
         deps_impl(sexpr, &vec![], &mut graph, &root_node);
         graph
     }
+
+    #[allow(dead_code)]
+    /// Returns a filtered graph with only the instantaneous dependencies (i.e. time = 0)
+    fn instantaneous_dependencies(
+        &self,
+    ) -> EdgeFiltered<&GraphType, impl FilterEdge<EdgeReference<'_, Weight>>> {
+        EdgeFiltered::from_fn(&self.graph, |edge| {
+            // TODO: I don't know how this will work when we genuinely have
+            // a vector of different indices; for now we just use the first one
+            let weight = edge.weight().get(0).unwrap_or(&0);
+            *weight == 0
+        })
+    }
+
+    #[allow(dead_code)]
+    /// Check if the graph is productive (i.e. has no cycles in which zero time
+    /// passes). This is necessary to check that the runtime will not
+    /// deadlock when processing them.
+    pub fn is_productive(&self) -> bool {
+        let inst_deps = self.instantaneous_dependencies();
+        !is_cyclic_directed(&inst_deps)
+    }
+
+    #[allow(dead_code)]
+    /// Check if the graph is effectively monitorable (i.e. has no positive cycles)
+    pub fn is_effectively_monitorable(&self) -> bool {
+        // Quite inefficient, but should be good enough for now, given we mostly
+        // need this function for testing
+        // TODO: I don't know how this will work when we genuinely have
+        // a vector of different indices; for now we just use the first one
+        let neg_graph = self
+            .graph
+            .map(|_, n| n.clone(), |_, e| (-e.get(0).unwrap_or(&0)) as f64);
+        self.graph
+            .node_indices()
+            .all(|node| find_negative_cycle(&neg_graph, node).is_none())
+    }
 }
 
 impl DepGraph {
@@ -259,5 +297,143 @@ impl DependencyResolver for DepGraph {
             map.insert(name.clone(), longest_dep);
         }
         map
+    }
+}
+
+#[cfg(test)]
+mod generation {
+    use proptest::string::string_regex;
+
+    use super::*;
+
+    use proptest::prelude::*;
+
+    /// Generate arbitrary dependency graphs for testing
+    pub fn arb_dependency_graph() -> impl Strategy<Value = DepGraph> {
+        // First generate variable names (1-10 unique names)
+        let var_strategy = string_regex("[a-z][a-z0-9_]{0,5}").unwrap();
+        let node_set_strategy = proptest::collection::btree_set(var_strategy, 1..10usize);
+
+        // Then build a graph from those names
+        node_set_strategy.prop_flat_map(|node_set| {
+            let nodes: Vec<VarName> = node_set.into_iter().map(|x| x.into()).collect();
+            let n = nodes.len();
+
+            // Generate a set of edges
+            proptest::collection::vec(
+                (
+                    0..n,                                        // source node index
+                    0..n,                                        // target node index
+                    proptest::collection::vec(-5..5isize, 1..3), // edge weights: time indices between -5 and 5
+                ),
+                0..2 * n,
+            )
+            .prop_map(move |edges| {
+                let mut graph = DepGraph::empty_graph();
+
+                // Add all nodes to the graph
+                for name in &nodes {
+                    graph.graph.add_node(name.clone());
+                }
+
+                // Add edges
+                for (src_idx, dst_idx, weights) in edges {
+                    let src = graph.graph.node_indices().nth(src_idx).unwrap();
+                    let dst = graph.graph.node_indices().nth(dst_idx).unwrap();
+                    graph.graph.add_edge(src, dst, weights);
+                }
+
+                graph
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::dynamic_lola::ast::generation::arb_boolean_sexpr;
+    use proptest::{prelude::*, sample};
+    use test_log::test;
+
+    #[test]
+    fn test_is_productive_true() {
+        let mut graph = DepGraph::empty_graph();
+        let a = graph.graph.add_node("a".into());
+        let b = graph.graph.add_node("b".into());
+        let c = graph.graph.add_node("c".into());
+        graph.graph.add_edge(a, b, vec![0]);
+        graph.graph.add_edge(b, c, vec![0]);
+        graph.graph.add_edge(c, a, vec![1]);
+        assert!(graph.is_productive());
+    }
+
+    #[test]
+    fn test_is_productive_false() {
+        let mut graph = DepGraph::empty_graph();
+        let a = graph.graph.add_node("a".into());
+        let b = graph.graph.add_node("b".into());
+        let c = graph.graph.add_node("c".into());
+        graph.graph.add_edge(a, b, vec![0]);
+        graph.graph.add_edge(b, c, vec![0]);
+        graph.graph.add_edge(c, a, vec![0]);
+        assert!(!graph.is_productive());
+    }
+
+    #[test]
+    fn test_prop_is_effectively_monitorable_true() {
+        let mut graph = DepGraph::empty_graph();
+        let a = graph.graph.add_node("a".into());
+        let b = graph.graph.add_node("b".into());
+        let c = graph.graph.add_node("c".into());
+        graph.graph.add_edge(a, b, vec![1]);
+        graph.graph.add_edge(b, c, vec![-1]);
+        graph.graph.add_edge(c, a, vec![-1]);
+        assert!(graph.is_effectively_monitorable());
+    }
+
+    #[test]
+    fn test_prop_is_effectively_monitorable_false() {
+        let mut graph = DepGraph::empty_graph();
+        let a = graph.graph.add_node("a".into());
+        let b = graph.graph.add_node("b".into());
+        let c = graph.graph.add_node("c".into());
+        graph.graph.add_edge(a, b, vec![-1]);
+        graph.graph.add_edge(b, c, vec![1]);
+        graph.graph.add_edge(c, a, vec![1]);
+        assert!(!graph.is_effectively_monitorable());
+    }
+
+    proptest! {
+        #[test]
+        fn test_prop_is_productive(depgraph in generation::arb_dependency_graph()) {
+            // Just check that the method doesn't panic or loop infinitely
+            let _ = depgraph.is_productive();
+        }
+
+        #[test]
+        fn test_prop_sexpr_dependencies(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()]), name in sample::select(vec![VarName("a".into()), VarName("b".into()), VarName("c".into())])) {
+            // Basic test to check that the graph contains only nodes from
+            // the input SExpr
+            let graph = DepGraph::sexpr_dependencies(&sexpr, &name.clone().into());
+            let mut inputs = sexpr.inputs();
+            inputs.push(name.clone());
+            for node in graph.graph.node_indices() {
+                assert!(inputs.contains(&graph.graph[node]));
+            }
+        }
+
+        #[test]
+        fn test_prop_boolean_dependency_graphs_productive(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()])) {
+            let name = "a".into();
+            let depgraph = DepGraph::sexpr_dependencies(&sexpr, &name);
+            assert!(depgraph.is_productive());
+        }
+
+        #[test]
+        fn test_prop_is_effectively_monitorable(depgraph in generation::arb_dependency_graph()) {
+            // Just check that the method doesn't panic or loop infinitely
+            let _ = depgraph.is_effectively_monitorable();
+        }
     }
 }
