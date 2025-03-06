@@ -190,7 +190,6 @@ pub mod generation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
     use proptest::{prop_assert_eq, proptest};
 
     #[test]

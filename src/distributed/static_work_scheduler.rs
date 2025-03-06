@@ -98,7 +98,7 @@ pub async fn static_work_scheduler(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::time::Duration;
 
     use proptest::proptest;
     use test_log::test;
