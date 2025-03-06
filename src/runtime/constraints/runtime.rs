@@ -23,8 +23,6 @@ use tokio::sync::broadcast;
 use tracing::debug;
 use tracing::info;
 
-use super::dependency_graph::DepGraph;
-
 #[derive(Default)]
 pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);
 
@@ -47,14 +45,22 @@ impl ValStreamCollection {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ConstraintBasedRuntime {
     store: ConstraintStore,
-    dependencies: DepGraph,
     time: usize,
+    _dependencies: DependencyManager,
 }
 
 impl ConstraintBasedRuntime {
+    fn new(dependencies: DependencyManager) -> Self {
+        Self {
+            store: ConstraintStore::default(),
+            time: 0,
+            _dependencies: dependencies,
+        }
+    }
+
     fn receive_inputs(&mut self, inputs: &BTreeMap<VarName, Value>) {
         // Add new input values
         for (name, val) in inputs {
@@ -131,67 +137,21 @@ impl ConstraintBasedRuntime {
         }
     }
 
-    // Cleans up the store based on the dependency graph
-    #[allow(dead_code)]
-    fn cleanup_with_graph(&mut self) {
-        for collection in [
-            &mut self.store.input_streams,
-            &mut self.store.outputs_resolved,
-        ] {
-            let graph = &self.dependencies;
-            // Go through each saved value and remove it if it is older than the current time,
-            // keeping the longest dependency in mind
-            for (name, values) in collection {
-                // Find node with name:
-                let node_opt = graph.node_indices().find(|&i| graph[i] == *name);
-                if let Some(node) = node_opt {
-                    // TODO: Not recursively searching through the graph, only immediate neighbors.
-                    // If we have spec: in a; out x; out y; x = a[-1]; y = x[-1]; then we need to
-                    // keep the value of a for 2 steps, but we only keep it for 1 step.
-                    // TODO: Write a unit test for this...
-                    let longest_dep = graph
-                        .edges_directed(node, petgraph::Direction::Incoming)
-                        .filter_map(|edge| edge.weight().iter().map(|&w| w.abs()).max()) // Take max of abs values
-                        .max()
-                        .unwrap_or(0);
-
-                    // Modify the collection in place
-                    // TODO: Probably a bug here regarding the usage of unsigned_abs
-                    values.retain(|(time, _)| *time + longest_dep.unsigned_abs() >= self.time);
-                } else {
-                    // Nothing depends on this value
-                    values.clear();
-                }
-            }
-        }
-    }
-
-    // Cleans up the store based on the time_required map
-    #[allow(dead_code)]
-    fn cleanup_with_times(&mut self) {
-        for collection in [
-            &mut self.store.input_streams,
-            &mut self.store.outputs_resolved,
-        ] {
-            // Go through each saved value and remove it if it is older than the current time,
-            // keeping the longest dependency in mind
-            for (name, values) in collection {
-                let longest_dep = self
-                    .dependencies
-                    .time_required
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(0);
-                // Modify the collection in place
-                values.retain(|(time, _)| *time + longest_dep >= self.time);
-            }
-        }
-    }
-
     // Remove unused input values and resolved outputs
     fn cleanup(&mut self) {
-        // self.cleanup_with_graph();
-        self.cleanup_with_times();
+        // let longest_times = self.dependencies.longest_time_dependencies();
+        // for collection in [
+        //     &mut self.store.input_streams,
+        //     &mut self.store.outputs_resolved,
+        // ] {
+        //     // Go through each saved value and remove it if it is older than the current time,
+        //     // keeping the longest dependency in mind
+        //     for (name, values) in collection {
+        //         let longest_dep = longest_times.get(name).cloned().unwrap_or(0);
+        //         // Modify the collection in place
+        //         values.retain(|(time, _)| *time + longest_dep >= self.time);
+        //     }
+        // }
     }
 
     pub fn step(&mut self, inputs: &BTreeMap<VarName, Value>) {
@@ -243,6 +203,7 @@ pub struct ConstraintBasedMonitor {
     model: LOLASpecification,
     output_handler: Box<dyn OutputHandler<Value>>,
     has_inputs: bool,
+    dependencies: DependencyManager,
 }
 
 #[async_trait]
@@ -251,7 +212,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
         model: LOLASpecification,
         input: &mut dyn InputProvider<Value>,
         output: Box<dyn OutputHandler<Value>>,
-        _dependencies: DependencyManager,
+        dependencies: DependencyManager,
     ) -> Self {
         let input_streams = model
             .input_vars()
@@ -271,6 +232,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
             model,
             output_handler: output,
             has_inputs,
+            dependencies,
         }
     }
 
@@ -296,11 +258,8 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 impl ConstraintBasedMonitor {
     fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
         let input_receiver = self.input_producer.subscribe();
-        let mut runtime_initial = ConstraintBasedRuntime::default();
+        let mut runtime_initial = ConstraintBasedRuntime::new(self.dependencies.clone());
         runtime_initial.store = model_constraints(self.model.clone());
-        runtime_initial
-            .dependencies
-            .generate_dependencies(&runtime_initial.store.output_exprs);
         let has_inputs = self.has_inputs.clone();
         Box::pin(stream!(
             let mut runtime = runtime_initial;

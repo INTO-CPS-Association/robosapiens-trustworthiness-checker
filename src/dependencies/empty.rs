@@ -4,6 +4,7 @@ use crate::{SExpr, VarName};
 
 use super::traits::DependencyResolver;
 
+#[derive(Clone, Debug)]
 pub struct Empty {
     names: BTreeSet<VarName>,
 }

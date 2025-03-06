@@ -17,7 +17,7 @@ type Edge = (Node, Node, Weight);
 // Graphs are directed
 type GraphType = DiGraph<Node, Weight>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DepGraph {
     graph: GraphType,
 }
