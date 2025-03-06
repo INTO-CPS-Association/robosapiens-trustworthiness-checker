@@ -354,7 +354,7 @@ mod generation {
 mod tests {
     use super::*;
     use crate::lang::dynamic_lola::ast::generation::arb_boolean_sexpr;
-    use proptest::{prelude::*, sample};
+    use proptest::prelude::*;
     use test_log::test;
     use tracing::info;
 

@@ -1,4 +1,4 @@
-use crate::{OutputStream, Value, VarName};
+use crate::{InputProvider, OutputStream, Value, VarName};
 use futures::stream;
 use futures::stream::BoxStream;
 use std::{collections::BTreeMap, pin::Pin};
@@ -276,4 +276,90 @@ pub fn spec_simple_add_decomposable() -> &'static str {
      out v
      w = x + y
      v = z + w"
+}
+
+#[allow(dead_code)]
+pub fn input_streams_defer_1() -> impl InputProvider<Value> {
+    let mut input_streams = BTreeMap::new();
+
+    // Create x stream with values 1 through 15
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i))))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    // Create e stream with the defer expression
+    input_streams.insert(
+        VarName("e".into()),
+        Box::pin(futures::stream::iter((0..15).map(|i| {
+            if i == 1 {
+                Value::Str("x + 1".into())
+            } else {
+                Value::Unknown
+            }
+        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    input_streams
+}
+
+#[allow(dead_code)]
+pub fn input_streams_defer_2() -> impl InputProvider<Value> {
+    let mut input_streams = BTreeMap::new();
+
+    // Create x stream with values 1 through 15
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i))))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    // Create e stream with the defer expression
+    input_streams.insert(
+        VarName("e".into()),
+        Box::pin(futures::stream::iter((0..15).map(|i| {
+            if i == 3 {
+                Value::Str("x + 1".into())
+            } else {
+                Value::Unknown
+            }
+        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    input_streams
+}
+
+#[allow(dead_code)]
+pub fn input_streams_defer_3() -> impl InputProvider<Value> {
+    let mut input_streams = BTreeMap::new();
+
+    // Create x stream with values 1 through 15
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i))))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    // Create e stream with the defer expression
+    input_streams.insert(
+        VarName("e".into()),
+        Box::pin(futures::stream::iter((0..15).map(|i| {
+            if i == 12 {
+                Value::Str("x + 1".into())
+            } else {
+                Value::Unknown
+            }
+        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    input_streams
+}
+
+#[allow(dead_code)]
+pub fn spec_defer() -> &'static str {
+    "in x
+     in e
+     out z
+     z = defer(e)"
 }

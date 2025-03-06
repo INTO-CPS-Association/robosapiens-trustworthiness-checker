@@ -101,6 +101,10 @@ impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
                     output_sender.send(output).await.unwrap();
                 } else {
                     // One of the streams has ended, so we should stop
+                    info!(
+                        "Stopping ManualOutputHandler with len(nexts) = {}",
+                        streams.len()
+                    );
                     break;
                 }
             }

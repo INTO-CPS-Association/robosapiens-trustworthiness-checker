@@ -26,6 +26,7 @@ use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::OutputHandler;
 use crate::core::Specification;
+use crate::core::TimedStreamContext;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 use crate::dependencies::traits::DependencyManager;
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
@@ -65,6 +66,7 @@ async fn manage_var<V: StreamData>(
     // Tracing for variable manager task
     let manage_var = info_span!("manage_var", var = format!("{:?}", var.clone()));
     let _ = manage_var.enter();
+    let mut time = 0;
 
     /* Stage 1. Gathering subscribers */
     loop {
@@ -98,6 +100,7 @@ async fn manage_var<V: StreamData>(
             panic!("Failed to send stream for {var} to requester");
         }
         // We directly re-forwarded the input stream, so we are done
+        // info!(?var, "manage_var done after single subscription");
         return;
     } else {
         /* Normal case: create a new channel for each subscriber and send
@@ -124,18 +127,20 @@ async fn manage_var<V: StreamData>(
             // Bad things will happen if this is called before everyone has subscribed
             data = input_stream.next() => {
                 if let Some(data) = data {
-                    debug!(?var, ?data, "Sending var data");
+                    debug!(?var, ?data, ?time, "Sending var data");
                     // Senders can be empty if an input is not actually used
                     // assert!(!senders.is_empty());
                     let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
                     for res in join_all(send_futs).await {
+                        debug!(?var, ?data, "Sent var data");
                         if let Err(err) = res {
                             warn!(name: "Failed to send var data due to no receivers",
                                 ?data, ?var, ?err);
                         }
                     }
+                    time += 1;
                 } else {
-                    debug!(?var, "manage_var out of input data");
+                    debug!(?var, ?time, "manage_var out of input data");
                     return;
                 }
             }
@@ -156,13 +161,16 @@ async fn manage_var<V: StreamData>(
  * - clock: a watch channel which is used to signal when the clock advances
  * - cancellation_token: a cancellation token which is used to signal when to
  *   terminate the task
+ * - var: the name of the variable being managed
  */
-#[instrument(name="distribute", level=Level::INFO, skip(input_stream, send, clock, cancellation_token))]
+#[instrument(name="distribute", level=Level::INFO, skip(input_stream, send, parent_clock, child_clock, cancellation_token))]
 async fn distribute<V: StreamData>(
     mut input_stream: OutputStream<V>,
     send: broadcast::Sender<V>,
-    mut clock: watch::Receiver<usize>,
+    mut parent_clock: watch::Receiver<usize>,
+    child_clock: watch::Sender<usize>,
     cancellation_token: CancellationToken,
+    var: VarName,
 ) {
     let mut clock_old = 0;
     loop {
@@ -171,34 +179,42 @@ async fn distribute<V: StreamData>(
             _ = cancellation_token.cancelled() => {
                 return;
             }
-            clock_upd = clock.changed() => {
+            clock_upd = parent_clock.changed() => {
                 if clock_upd.is_err() {
                     warn!("Distribute clock channel closed");
                     return;
                 }
-                let clock_new = *clock.borrow_and_update();
-                debug!(name: "Monitoring between clocks", clock_old, clock_new);
+                let clock_new = *parent_clock.borrow_and_update();
+                debug!(clock_old, clock_new, "Monitoring between clocks");
                 for clock in clock_old+1..=clock_new {
-                    debug!(name: "Monitoring", ?clock);
+                    debug!(?clock, "Distributing single");
                     select! {
                         biased;
                         _ = cancellation_token.cancelled() => {
+                            debug!(?clock, "Ending distribute due to cancellation");
                             return;
                         }
                         data = input_stream.next() => {
                             if let Some(data) = data {
-                                debug!(name: "Distributing data", ?data);
+                                // Update the child clock to report our progress
+                                let _ = child_clock.send(clock);
+                                debug!(?data, "Distributing data");
                                 if let Err(_) = send.send(data) {
-                                    warn!("Failed to distribute data due to no receivers");
+                                    debug!("Failed to distribute data due to no receivers");
+                                    // This should not be a halt condition
+                                    // since in the case of eval, they may
+                                    // join later
+                                    // return;
                                 }
                                 debug!("Distributed data");
                             } else {
+                                debug!("Stopped distributing data due to end of input stream");
                                 return;
                             }
                         }
                     }
-                    // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
+                debug!(clock_old, clock_new, "Finished monitoring between clocks");
                 clock_old = clock_new;
             }
         }
@@ -217,10 +233,12 @@ async fn distribute<V: StreamData>(
  * - cancellation_token: a cancellation token which is used to signal when to
  *   terminate the task
  */
+#[instrument(name="monitor", level=Level::INFO, skip(input_stream, send, cancellation_token))]
 async fn monitor<V: StreamData>(
     mut input_stream: OutputStream<V>,
     send: mpsc::Sender<V>,
     cancellation_token: CancellationToken,
+    var: VarName,
 ) {
     loop {
         select! {
@@ -233,10 +251,12 @@ async fn monitor<V: StreamData>(
                     Some(data) => {
                         debug!(name: "Monitored data", ?data);
                         if let Err(_) = send.send(data).await {
+                            info!("Failed to send data due to no receivers; shutting down");
                             return;
                         }
                     }
                     None => {
+                        debug!("Monitor out of input data");
                         return;
                     }
                 }
@@ -321,11 +341,7 @@ impl<Val: StreamData> StreamContext<Val> for Arc<AsyncVarExchange<Val>> {
         Some(stream)
     }
 
-    fn advance(&self) {
-        // Do nothing
-    }
-
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Val>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>> {
         Box::new(SubMonitor::new(self.clone(), history_length))
     }
 }
@@ -341,15 +357,21 @@ struct SubMonitor<Val: StreamData> {
     parent: Arc<AsyncVarExchange<Val>>,
     senders: BTreeMap<VarName, broadcast::Sender<Val>>,
     buffer_size: usize,
-    progress_sender: watch::Sender<usize>,
+    child_clocks: BTreeMap<VarName, watch::Receiver<usize>>,
+    clock: watch::Sender<usize>,
 }
 
 impl<Val: StreamData> SubMonitor<Val> {
     fn new(parent: Arc<AsyncVarExchange<Val>>, buffer_size: usize) -> Self {
         let mut senders = BTreeMap::new();
+        let mut child_clock_recvs = BTreeMap::new();
+        let mut child_clock_senders = BTreeMap::new();
 
         for (var, _var_data) in parent.var_data.iter() {
             senders.insert(var.clone(), broadcast::Sender::new(100));
+            let (watch_tx, watch_rx) = watch::channel(0);
+            child_clock_recvs.insert(var.clone(), watch_rx);
+            child_clock_senders.insert(var.clone(), watch_tx);
         }
 
         let progress_sender = watch::channel(0).0;
@@ -358,31 +380,44 @@ impl<Val: StreamData> SubMonitor<Val> {
             parent,
             senders,
             buffer_size,
-            progress_sender,
+            child_clocks: child_clock_recvs,
+            clock: progress_sender,
         }
-        .start_monitors()
+        .start_monitors(child_clock_senders)
     }
 
-    fn start_monitors(self) -> Self {
+    fn start_monitors(
+        self,
+        mut child_progress_senders: BTreeMap<VarName, watch::Sender<usize>>,
+    ) -> Self {
         for var in self.parent.var_data.keys() {
             let (send, recv) = mpsc::channel(self.buffer_size);
             let input_stream = self.parent.var(var).unwrap();
             let child_sender = self.senders.get(var).unwrap().clone();
-            let clock = self.progress_sender.subscribe();
+            let clock = self.clock.subscribe();
             tokio::spawn(distribute(
                 Box::pin(ReceiverStream::new(recv)),
                 child_sender,
                 clock,
+                child_progress_senders.remove(var).unwrap(),
                 self.parent.cancellation_token.clone(),
+                var.clone(),
             ));
             tokio::spawn(monitor(
                 Box::pin(input_stream),
                 send.clone(),
                 self.parent.cancellation_token.clone(),
+                var.clone(),
             ));
         }
 
         self
+    }
+
+    /// Drop our internal references to senders, letting them close once all
+    /// current subscribers have received all data
+    fn finish_startup(&mut self) {
+        self.senders = BTreeMap::new()
     }
 }
 
@@ -391,21 +426,48 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
         let sender = self.senders.get(var).unwrap();
 
         let recv: broadcast::Receiver<Val> = sender.subscribe();
+        info!(?var, "SubMonitor: giving stream for var");
         let stream: OutputStream<Val> = Box::pin(BroadcastStream::new(recv).map(|x| x.unwrap()));
 
         Some(stream)
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Val>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>> {
         // TODO: consider if this is the right approach; creating a subcontext
         // is only used if eval is called within an eval, and it will require
         // careful thought to decide how much history should be passed down
         // (the current implementation passes down none)
         self.parent.subcontext(history_length)
     }
+}
 
-    fn advance(&self) {
-        self.progress_sender.send_modify(|x| *x += 1)
+#[async_trait]
+impl<Val: StreamData> TimedStreamContext<Val> for SubMonitor<Val> {
+    fn start_clock(&mut self) {
+        info!("SubMonitor: finalised!");
+        self.finish_startup()
+    }
+
+    fn advance_clock(&self) {
+        self.clock.send_modify(|x| *x += 1);
+    }
+
+    async fn clock(&self) -> usize {
+        self.clock.borrow().clone()
+    }
+
+    async fn wait_till(&self, time: usize) {
+        let futs = self.child_clocks.values().map(|x| {
+            let mut x = x.clone();
+            async move {
+                x.wait_for(|y| *y >= time).await.unwrap();
+            }
+        });
+        join_all(futs).await;
+    }
+
+    fn upcast(&self) -> &dyn StreamContext<Val> {
+        self
     }
 }
 

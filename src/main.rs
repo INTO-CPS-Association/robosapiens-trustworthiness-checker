@@ -28,6 +28,9 @@ const MQTT_HOSTNAME: &str = "localhost";
 async fn main() {
     tracing_subscriber::registry()
         .with(fmt::layer())
+        // Uncomment the following line to enable full span events which logs
+        // every time the code enters/exits an instrumented function/block
+        // .with(fmt::layer().with_span_events(FmtSpan::FULL))
         .with(EnvFilter::from_default_env())
         .init();
 

@@ -114,7 +114,7 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
             if let Some((prev, mut es)) = last {
                 if prev == current {
                     // println!("prev == current == {:?}", current);
-                    subcontext.advance();
+                    subcontext.advance_clock();
                     let eval_res = es.next().await;
                     // println!("returning val from existing stream: {:?}", eval_res);
                     return match eval_res {
@@ -135,11 +135,10 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
                 Ok(expr) => expr,
                 Err(_) => unimplemented!("Invalid eval str"),
             };
-            // let expr = expr.type_check_with_default().unwrap();
-            let es = UntimedLolaSemantics::to_async_stream(expr, subcontext.as_ref());
+            let es = { UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()) };
             let mut es = to_typed_stream(es);
             // println!("new eval stream");
-            subcontext.advance();
+            subcontext.advance_clock();
             let eval_res = es.next().await?;
             // println!("eval producing {:?}", eval_res);
             return Some((eval_res, (subcontext, x, Some((current, es)))));

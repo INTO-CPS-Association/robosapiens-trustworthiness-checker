@@ -174,9 +174,22 @@ impl<V> InputProvider<V> for BTreeMap<VarName, OutputStream<V>> {
 pub trait StreamContext<Val: StreamData>: Send + 'static {
     fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn StreamContext<Val>>;
+    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>>;
+}
 
-    fn advance(&self);
+#[async_trait]
+pub trait TimedStreamContext<Val: StreamData>: StreamContext<Val> + Send + 'static {
+    fn advance_clock(&self);
+
+    async fn clock(&self) -> usize;
+
+    async fn wait_till(&self, time: usize);
+
+    fn start_clock(&mut self);
+
+    // This allows TimedStreamContext to be used as a StreamContext
+    // This is necessary due to https://github.com/rust-lang/rust/issues/65991
+    fn upcast(&self) -> &dyn StreamContext<Val>;
 }
 
 pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Sync + Send + 'static {
