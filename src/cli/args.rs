@@ -57,7 +57,7 @@ pub struct OutputMode {
 #[derive(Args)]
 #[group(required = false, multiple = false)]
 pub struct DistributionMode {
-    #[clap(long)]
+    #[clap(long, default_value_t = true)]
     pub centralised: bool,
 
     #[clap(long)]
