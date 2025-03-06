@@ -415,12 +415,11 @@ mod tests {
 
         #[ignore = "Ignored by TWright: The assertion about edges is currently failing and I don't know if this expected behaviour or not"]
         #[test]
-        fn test_prop_sexpr_dependencies(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()]), name in sample::select(vec![VarName("a".into()), VarName("b".into()), VarName("c".into())])) {
+        fn test_prop_sexpr_dependencies(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()])) {
             // Basic test to check that the graph contains only nodes from
             // the input SExpr
             let graph = DepGraph::sexpr_dependencies(&sexpr, &"ROOT".into());
-            let mut inputs = sexpr.inputs();
-            inputs.push(name.clone());
+            let inputs = sexpr.inputs();
             for node in graph.graph.node_indices() {
                 let node_name = &graph.graph[node];
                 assert!(*node_name == "ROOT".into() || inputs.contains(&graph.graph[node]));
