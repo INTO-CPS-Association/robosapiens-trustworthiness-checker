@@ -309,6 +309,7 @@ mod generation {
     use proptest::prelude::*;
 
     /// Generate arbitrary dependency graphs for testing
+    /// For now, we only generate graphs with a single node weight
     pub fn arb_dependency_graph() -> impl Strategy<Value = DepGraph> {
         // First generate variable names (1-10 unique names)
         let var_strategy = string_regex("[a-z][a-z0-9_]{0,5}").unwrap();
@@ -322,9 +323,9 @@ mod generation {
             // Generate a set of edges
             proptest::collection::vec(
                 (
-                    0..n,                                        // source node index
-                    0..n,                                        // target node index
-                    proptest::collection::vec(-5..5isize, 1..3), // edge weights: time indices between -5 and 5
+                    0..n,       // source
+                    0..n,       // target
+                    -5..5isize, // edge weights
                 ),
                 0..2 * n,
             )
@@ -337,10 +338,10 @@ mod generation {
                 }
 
                 // Add edges
-                for (src_idx, dst_idx, weights) in edges {
+                for (src_idx, dst_idx, weight) in edges {
                     let src = graph.graph.node_indices().nth(src_idx).unwrap();
                     let dst = graph.graph.node_indices().nth(dst_idx).unwrap();
-                    graph.graph.add_edge(src, dst, weights);
+                    graph.graph.add_edge(src, dst, vec![weight]);
                 }
 
                 graph
@@ -424,10 +425,20 @@ mod tests {
         }
 
         #[test]
-        fn test_prop_boolean_dependency_graphs_productive(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()])) {
+        fn test_prop_boolean_dependency_graphs_effectively_monitorable(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()])) {
             let name = "a".into();
             let depgraph = DepGraph::sexpr_dependencies(&sexpr, &name);
-            assert!(depgraph.is_productive());
+            assert!(depgraph.is_effectively_monitorable());
+        }
+
+        #[test]
+        fn test_prop_boolean_dependency_productivity(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()])) {
+            let name = "a".into();
+            let depgraph = DepGraph::sexpr_dependencies(&sexpr, &name);
+            let is_cyclic = is_cyclic_directed(&depgraph.instantaneous_dependencies());
+            // For boolean expressions, the graph should be productive if
+            // and only if it is acyclic, since there are no time indexes
+            assert!(depgraph.is_productive() == !is_cyclic);
         }
 
         #[test]
