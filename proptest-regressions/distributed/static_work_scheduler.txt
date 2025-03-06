@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 78d9e85e13ea8a81f1bbb67d8f3d37ac700d5aae657fb3beb999c76913cdea0d # shrinks to dist_graph = LabelledConcDistributionGraph { dist_graph: ConcDistributionGraph { central_monitor: NodeIndex(0), graph: Graph { Ty: "Directed", node_count: 2, edge_count: 1, edges: (0, 1), node weights: {0: NodeName("a"), 1: NodeName("a")}, edge weights: {0: Internal} } }, var_names: [VarName("a")], node_labels: {NodeIndex(0): [VarName("a")], NodeIndex(1): [VarName("a")]} }

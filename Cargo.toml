@@ -50,6 +50,9 @@ testcontainers-modules = "0.11.6"
 test-log = {version="0.2.17", features=["trace"]}
 proptest = "1.6.0"
 
+[[bin]]
+name = "work_scheduler"
+
 [[bench]]
 name = "simple_add"
 harness = false

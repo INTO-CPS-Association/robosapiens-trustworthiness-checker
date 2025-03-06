@@ -3,7 +3,7 @@
  *   of an individual robot)?
  */
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Display};
 
 use petgraph::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,12 @@ use crate::VarName;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct NodeName(String);
+
+impl Display for NodeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &self.0)
+    }
+}
 
 impl From<&str> for NodeName {
     fn from(s: &str) -> Self {
@@ -25,7 +31,7 @@ impl From<String> for NodeName {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-enum EdgeLabel {
+pub enum EdgeLabel {
     Internal,
     Physical { dist: f64, latency: f64 },
 }
@@ -37,8 +43,8 @@ struct NodeLabel {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ConcDistributionGraph {
-    central_monitor: NodeIndex,
-    graph: DiGraph<NodeName, EdgeLabel>,
+    pub central_monitor: NodeIndex,
+    pub graph: DiGraph<NodeName, EdgeLabel>,
 }
 
 impl ConcDistributionGraph {
@@ -81,9 +87,9 @@ impl PartialEq for ConcDistributionGraph {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct LabelledConcDistributionGraph {
-    dist_graph: ConcDistributionGraph,
-    var_names: Vec<VarName>,
-    node_labels: BTreeMap<NodeIndex, Vec<VarName>>,
+    pub dist_graph: ConcDistributionGraph,
+    pub var_names: Vec<VarName>,
+    pub node_labels: BTreeMap<NodeIndex, Vec<VarName>>,
 }
 
 impl LabelledConcDistributionGraph {
@@ -314,19 +320,31 @@ mod tests {
     }
 
     proptest! {
-        fn test_get_monitor_by_name_prop(node_index in 0usize..10usize, dist_graph in generation::arb_conc_distribution_graph()) {
+        #[test]
+        fn test_prop_get_node_index_by_name_prop(node_index in 0usize..10usize, dist_graph in generation::arb_conc_distribution_graph()) {
             if let Some(_) = dist_graph.graph.node_indices().find(|&node| node.index() == node_index) {
                 let node_name_ref = &dist_graph.graph[NodeIndex::new(node_index)];
-                prop_assert_eq!(dist_graph.get_node_index_by_name(node_name_ref), Some(NodeIndex::new(node_index)));
+                let indexed_node_index = dist_graph.get_node_index_by_name(node_name_ref).unwrap();
+                prop_assert_eq!(dist_graph.graph[indexed_node_index].clone(), node_name_ref.clone());
             }
         }
 
-        fn test_get_node_index_by_name_prop(node_name in generation::arb_conc_distribution_graph().prop_map(|x| x.graph[NodeIndex::new(0)].clone()), dist_graph in generation::arb_conc_distribution_graph()) {
-            prop_assert_eq!(dist_graph.get_node_index_by_name(&node_name), Some(NodeIndex::new(0)));
+        #[test]
+        fn test_prop_get_node_index_by_name_labelled_prop(node_index in 0usize..10usize, dist_graph in generation::arb_conc_distribution_graph()) {
+            if let Some(_) = dist_graph.graph.node_indices().find(|&node| node.index() == node_index) {
+                let node_name_ref = &dist_graph.graph[NodeIndex::new(node_index)];
+                let indexed_node_index = dist_graph.get_node_index_by_name(node_name_ref).unwrap();
+                prop_assert_eq!(dist_graph.graph[indexed_node_index].clone(), node_name_ref.clone());
+            }
         }
 
-        fn test_get_node_index_by_name_labelled_prop(node_name in generation::arb_labelled_conc_distribution_graph().prop_map(|x| x.dist_graph.graph[NodeIndex::new(0)].clone()), dist_graph in generation::arb_conc_distribution_graph()) {
-            prop_assert_eq!(dist_graph.get_node_index_by_name(&node_name), Some(NodeIndex::new(0)));
+        #[test]
+        fn test_prop_monitors_at_node(node_index in 0usize..10usize, labelled_dist_graph in generation::arb_labelled_conc_distribution_graph()) {
+            if let Some(_) = labelled_dist_graph.dist_graph.graph.node_indices().find(|&node| node.index() == node_index) {
+                let node_name_ref = &labelled_dist_graph.dist_graph.graph[NodeIndex::new(node_index)];
+                let indexed_node_index = labelled_dist_graph.get_node_index_by_name(node_name_ref).unwrap();
+                prop_assert_eq!(labelled_dist_graph.monitors_at_node(indexed_node_index), Some(&labelled_dist_graph.node_labels[&indexed_node_index]));
+            }
         }
     }
 }
