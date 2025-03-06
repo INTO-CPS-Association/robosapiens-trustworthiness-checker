@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 119d94829a80aa4494f02abbb3411aa1814a3c79c61c2165392fb9245a169509 # shrinks to sexpr = Val(Bool(false)), name = "a_"
+cc 28e3ddf2428941f0562239632f99eeb2d71ef9b0f349f486af4b19975111d4b3 # shrinks to sexpr = BinOp(Val(Bool(false)), Var(VarName("a")), BOp(And)), name = VarName("a")
