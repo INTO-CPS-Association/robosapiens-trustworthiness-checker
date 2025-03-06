@@ -39,6 +39,7 @@ uuid = {version = "1.14.0", features = [
 strum = "0.27.1"
 strum_macros = "0.27.1"
 petgraph = { version = "0.7.1", features = ["serde-1"] }
+enum_inner_method = { git = "https://github.com/mortenhaahr/enum_inner_method", tag = "v0.1.0" }
 
 [features]
 ros = ["dep:r2r"]
