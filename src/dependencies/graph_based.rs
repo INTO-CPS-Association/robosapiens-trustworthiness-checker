@@ -142,8 +142,10 @@ impl DepGraph {
         }
     }
 
-    // Traverses the sexpr and returns a map of its dependencies to other variables
-    fn sexpr_dependencies(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
+    // See: sexpr_dependencies
+    // NOTE: The graph returned here may have multiple edges to the same node.
+    // Can be combined by calling `combine_edges`. This is not done in this function for efficiency
+    fn sexpr_dependencies_impl(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
         fn deps_impl(
             sexpr: &SExpr<Node>,
             steps: &Weight,
@@ -155,8 +157,9 @@ impl DepGraph {
                     let node = map.graph.add_node(name.clone());
                     if steps.is_empty() {
                         map.graph.add_edge(*current_node, node, vec![0]);
+                    } else {
+                        map.graph.add_edge(*current_node, node, steps.clone());
                     }
-                    map.graph.add_edge(*current_node, node, steps.clone());
                 }
                 SExpr::SIndex(sexpr, idx, _) => {
                     let mut steps = steps.clone();
@@ -192,6 +195,13 @@ impl DepGraph {
         let mut graph = DepGraph::empty_graph();
         let root_node = graph.graph.add_node(root_name.clone());
         deps_impl(sexpr, &vec![], &mut graph, &root_node);
+        graph
+    }
+
+    // Traverses the sexpr and returns a map of its dependencies to other variables
+    pub fn sexpr_dependencies(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
+        let mut graph = DepGraph::sexpr_dependencies_impl(sexpr, &root_name);
+        graph.combine_edges();
         graph
     }
 
@@ -259,11 +269,10 @@ impl DependencyResolver for DepGraph {
     fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Self {
         let mut graph = DepGraph::empty_graph();
         for (name, expr) in Self::spec_to_map(spec) {
-            let expr_deps = Self::sexpr_dependencies(&expr, &name);
+            let expr_deps = Self::sexpr_dependencies_impl(&expr, &name);
             graph.merge_graphs(&expr_deps);
         }
         graph.combine_edges();
-        println!("graph:\n{:?}", graph.as_dot_graph());
         graph
     }
 
@@ -541,19 +550,18 @@ mod tests {
             let _ = depgraph.is_productive();
         }
 
-        #[ignore = "Ignored by TWright: The assertion about edges is currently failing and I don't know if this expected behaviour or not"]
         #[test]
         fn test_prop_sexpr_dependencies(sexpr in arb_boolean_sexpr(vec!["a".into(), "b".into(), "c".into()])) {
             // Basic test to check that the graph contains only nodes from
             // the input SExpr
             let graph = DepGraph::sexpr_dependencies(&sexpr, &"ROOT".into());
             let inputs = sexpr.inputs();
+            info!{"Tested graph:\n{:?}", graph.as_dot_graph()};
             for node in graph.graph.node_indices() {
                 let node_name = &graph.graph[node];
                 assert!(*node_name == "ROOT".into() || inputs.contains(&graph.graph[node]));
             }
             for edge in graph.graph.edge_references() {
-                info!("{:?}", edge);
                 assert!(*edge.weight() == vec![0]);
             }
         }
