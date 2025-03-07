@@ -299,9 +299,13 @@ impl DependencyResolver for DepGraph {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
+    use crate::lang::dynamic_lola::ast::generation::arb_boolean_sexpr;
     use crate::lola_specification;
+    use proptest::prelude::*;
+    use test_log::test;
+    use tracing::info;
 
     fn specs() -> BTreeMap<&'static str, &'static str> {
         BTreeMap::from([
@@ -477,65 +481,10 @@ mod test {
             BTreeMap::from([("x".into(), 1), ("y".into(), 0), ("a".into(), 1)]);
         assert_eq!(dep.longest_time_dependencies(), expected);
     }
-}
 
-#[cfg(test)]
-mod generation {
-    use proptest::string::string_regex;
-
-    use super::*;
-
-    use proptest::prelude::*;
-
-    /// Generate arbitrary dependency graphs for testing
-    /// For now, we only generate graphs with a single node weight
-    pub fn arb_dependency_graph() -> impl Strategy<Value = DepGraph> {
-        // First generate variable names (1-10 unique names)
-        let var_strategy = string_regex("[a-z][a-z0-9_]{0,5}").unwrap();
-        let node_set_strategy = proptest::collection::btree_set(var_strategy, 1..10usize);
-
-        // Then build a graph from those names
-        node_set_strategy.prop_flat_map(|node_set| {
-            let nodes: Vec<VarName> = node_set.into_iter().map(|x| x.into()).collect();
-            let n = nodes.len();
-
-            // Generate a set of edges
-            proptest::collection::vec(
-                (
-                    0..n,       // source
-                    0..n,       // target
-                    -5..5isize, // edge weights
-                ),
-                0..2 * n,
-            )
-            .prop_map(move |edges| {
-                let mut graph = DepGraph::empty_graph();
-
-                // Add all nodes to the graph
-                for name in &nodes {
-                    graph.graph.add_node(name.clone());
-                }
-
-                // Add edges
-                for (src_idx, dst_idx, weight) in edges {
-                    let src = graph.graph.node_indices().nth(src_idx).unwrap();
-                    let dst = graph.graph.node_indices().nth(dst_idx).unwrap();
-                    graph.graph.add_edge(src, dst, vec![weight]);
-                }
-
-                graph
-            })
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::lang::dynamic_lola::ast::generation::arb_boolean_sexpr;
-    use proptest::prelude::*;
-    use test_log::test;
-    use tracing::info;
+    // TODO: TWright: the following tests assume that we have a way to get a
+    // view of the graph where the weights are only the dependencies, not
+    // vectors for compositional computation
 
     #[test]
     fn test_is_productive_true() {
@@ -631,5 +580,55 @@ mod tests {
             // Just check that the method doesn't panic or loop infinitely
             let _ = depgraph.is_effectively_monitorable();
         }
+    }
+}
+
+#[cfg(test)]
+mod generation {
+    use proptest::string::string_regex;
+
+    use super::*;
+
+    use proptest::prelude::*;
+
+    /// Generate arbitrary dependency graphs for testing
+    /// For now, we only generate graphs with a single node weight
+    pub fn arb_dependency_graph() -> impl Strategy<Value = DepGraph> {
+        // First generate variable names (1-10 unique names)
+        let var_strategy = string_regex("[a-z][a-z0-9_]{0,5}").unwrap();
+        let node_set_strategy = proptest::collection::btree_set(var_strategy, 1..10usize);
+
+        // Then build a graph from those names
+        node_set_strategy.prop_flat_map(|node_set| {
+            let nodes: Vec<VarName> = node_set.into_iter().map(|x| x.into()).collect();
+            let n = nodes.len();
+
+            // Generate a set of edges
+            proptest::collection::vec(
+                (
+                    0..n,       // source
+                    0..n,       // target
+                    -5..5isize, // edge weights
+                ),
+                0..2 * n,
+            )
+            .prop_map(move |edges| {
+                let mut graph = DepGraph::empty_graph();
+
+                // Add all nodes to the graph
+                for name in &nodes {
+                    graph.graph.add_node(name.clone());
+                }
+
+                // Add edges
+                for (src_idx, dst_idx, weight) in edges {
+                    let src = graph.graph.node_indices().nth(src_idx).unwrap();
+                    let dst = graph.graph.node_indices().nth(dst_idx).unwrap();
+                    graph.graph.add_edge(src, dst, vec![weight]);
+                }
+
+                graph
+            })
+        })
     }
 }
