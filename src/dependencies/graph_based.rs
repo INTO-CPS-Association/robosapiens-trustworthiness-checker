@@ -153,6 +153,9 @@ impl DepGraph {
             match sexpr {
                 SExpr::Var(name) => {
                     let node = map.graph.add_node(name.clone());
+                    if steps.is_empty() {
+                        map.graph.add_edge(*current_node, node, vec![0]);
+                    }
                     map.graph.add_edge(*current_node, node, steps.clone());
                 }
                 SExpr::SIndex(sexpr, idx, _) => {
@@ -260,6 +263,7 @@ impl DependencyResolver for DepGraph {
             graph.merge_graphs(&expr_deps);
         }
         graph.combine_edges();
+        println!("graph:\n{:?}", graph.as_dot_graph());
         graph
     }
 
@@ -297,6 +301,189 @@ impl DependencyResolver for DepGraph {
             map.insert(name.clone(), longest_dep);
         }
         map
+    }
+
+    // TODO: Add filter_view on the weights - requested by TW
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::lola_specification;
+
+    fn specs() -> BTreeMap<&'static str, &'static str> {
+        BTreeMap::from([
+            ("single_no_inp", "out x\nx = 42"),
+            ("single_inp_past", "in a\nout x\nx = a[-1, 0]"),
+            ("multi_out_past", "in a\nout x\nout y\nx = a\ny = a[-1, 0]"),
+            ("multi_dependent", "in a\nout x\nout y\nx = a\ny = x"),
+            (
+                "multi_dependent_past",
+                "in a\nout x\nout y\nx = a[-1, 0]\ny = x[-1, 0]",
+            ),
+        ])
+    }
+
+    fn find_node(graph: &GraphType, name: &'static str) -> NodeIndex {
+        graph
+            .node_indices()
+            .find(|i| graph[*i] == name.into())
+            .unwrap()
+    }
+
+    fn get_edge(graph: &GraphType, from: NodeIndex, to: NodeIndex) -> Edge {
+        let edge_index = graph.find_edge(from, to).unwrap();
+        let weight = graph.edge_weight(edge_index).unwrap();
+        (graph[from].clone(), graph[to].clone(), weight.clone())
+    }
+
+    fn get_weight(graph: &GraphType, from: NodeIndex, to: NodeIndex) -> Weight {
+        let (_, _, weight) = get_edge(graph, from, to);
+        weight
+    }
+
+    #[test]
+    fn test_graph_empty() {
+        let graph = DepGraph::empty_graph();
+        assert_eq!(graph.graph.node_count(), 0);
+        assert_eq!(graph.graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_graph_simple() {
+        let mut spec = specs()["single_no_inp"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let graph = &DepGraph::new(Box::new(spec)).graph;
+        assert_eq!(graph.node_count(), 1);
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_graph_index_past() {
+        let mut spec = specs()["single_inp_past"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let graph = &DepGraph::new(Box::new(spec)).graph;
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 1);
+        let a = find_node(&graph, "a");
+        let x = find_node(&graph, "x");
+        assert!(graph.contains_edge(x, a));
+        let weight = get_weight(&graph, x, a);
+        assert_eq!(weight, vec![-1]);
+    }
+
+    #[test]
+    fn test_graph_multi_out_past() {
+        let mut spec = specs()["multi_out_past"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let graph = &DepGraph::new(Box::new(spec)).graph;
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 2);
+        let a = find_node(&graph, "a");
+        let x = find_node(&graph, "x");
+        let y = find_node(&graph, "y");
+        assert!(graph.contains_edge(x, a));
+        assert!(graph.contains_edge(y, a));
+        let weight = get_weight(&graph, x, a);
+        assert_eq!(weight, vec![0]);
+        let weight = get_weight(&graph, y, a);
+        assert_eq!(weight, vec![-1]);
+    }
+
+    #[test]
+    fn test_graph_multi_dependent() {
+        let mut spec = specs()["multi_dependent"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let graph = &DepGraph::new(Box::new(spec)).graph;
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 2);
+        let a = find_node(&graph, "a");
+        let x = find_node(&graph, "x");
+        let y = find_node(&graph, "y");
+        assert!(graph.contains_edge(x, a));
+        assert!(graph.contains_edge(y, x));
+        let weight = get_weight(&graph, x, a);
+        assert_eq!(weight, vec![0]);
+        let weight = get_weight(&graph, y, x);
+        assert_eq!(weight, vec![0]);
+    }
+
+    #[test]
+    fn test_graph_multi_dependent_past() {
+        let mut spec = specs()["multi_dependent_past"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let graph = &DepGraph::new(Box::new(spec)).graph;
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 2);
+        let a = find_node(&graph, "a");
+        let x = find_node(&graph, "x");
+        let y = find_node(&graph, "y");
+        assert!(graph.contains_edge(x, a));
+        assert!(graph.contains_edge(y, x));
+        let weight = get_weight(&graph, x, a);
+        assert_eq!(weight, vec![-1]);
+        let weight = get_weight(&graph, y, x);
+        assert_eq!(weight, vec![-1]);
+    }
+
+    #[test]
+    fn test_time_simple() {
+        let mut spec = specs()["single_no_inp"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let dep = DepGraph::new(Box::new(spec));
+        assert_eq!(dep.longest_time_dependency(&"x".into()), Some(0));
+        let expected: BTreeMap<VarName, usize> = BTreeMap::from([("x".into(), 0)]);
+        assert_eq!(dep.longest_time_dependencies(), expected);
+    }
+
+    #[test]
+    fn test_time_index_past() {
+        let mut spec = specs()["single_inp_past"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let dep = DepGraph::new(Box::new(spec));
+        assert_eq!(dep.longest_time_dependency(&"x".into()), Some(0));
+        assert_eq!(dep.longest_time_dependency(&"a".into()), Some(1));
+        let expected: BTreeMap<VarName, usize> = BTreeMap::from([("x".into(), 0), ("a".into(), 1)]);
+        assert_eq!(dep.longest_time_dependencies(), expected);
+    }
+
+    #[test]
+    fn test_time_multi_out_past() {
+        let mut spec = specs()["multi_out_past"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let dep = DepGraph::new(Box::new(spec));
+        assert_eq!(dep.longest_time_dependency(&"x".into()), Some(0));
+        assert_eq!(dep.longest_time_dependency(&"y".into()), Some(0));
+        assert_eq!(dep.longest_time_dependency(&"a".into()), Some(1));
+        let expected: BTreeMap<VarName, usize> =
+            BTreeMap::from([("x".into(), 0), ("y".into(), 0), ("a".into(), 1)]);
+        assert_eq!(dep.longest_time_dependencies(), expected);
+    }
+
+    #[test]
+    fn test_time_multi_dependent() {
+        let mut spec = specs()["multi_dependent"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let dep = DepGraph::new(Box::new(spec));
+        assert_eq!(dep.longest_time_dependency(&"x".into()), Some(0));
+        assert_eq!(dep.longest_time_dependency(&"y".into()), Some(0));
+        assert_eq!(dep.longest_time_dependency(&"a".into()), Some(0));
+        let expected: BTreeMap<VarName, usize> =
+            BTreeMap::from([("x".into(), 0), ("y".into(), 0), ("a".into(), 0)]);
+        assert_eq!(dep.longest_time_dependencies(), expected);
+    }
+
+    #[test]
+    fn test_time_multi_dependent_past() {
+        let mut spec = specs()["multi_dependent_past"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let dep = DepGraph::new(Box::new(spec));
+        assert_eq!(dep.longest_time_dependency(&"x".into()), Some(1));
+        assert_eq!(dep.longest_time_dependency(&"y".into()), Some(0));
+        assert_eq!(dep.longest_time_dependency(&"a".into()), Some(1));
+        let expected: BTreeMap<VarName, usize> =
+            BTreeMap::from([("x".into(), 1), ("y".into(), 0), ("a".into(), 1)]);
+        assert_eq!(dep.longest_time_dependencies(), expected);
     }
 }
 

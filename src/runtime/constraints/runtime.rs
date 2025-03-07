@@ -49,7 +49,7 @@ impl ValStreamCollection {
 pub struct ConstraintBasedRuntime {
     store: ConstraintStore,
     time: usize,
-    _dependencies: DependencyManager,
+    dependencies: DependencyManager,
 }
 
 impl ConstraintBasedRuntime {
@@ -57,7 +57,7 @@ impl ConstraintBasedRuntime {
         Self {
             store: ConstraintStore::default(),
             time: 0,
-            _dependencies: dependencies,
+            dependencies,
         }
     }
 
@@ -139,19 +139,24 @@ impl ConstraintBasedRuntime {
 
     // Remove unused input values and resolved outputs
     fn cleanup(&mut self) {
-        // let longest_times = self.dependencies.longest_time_dependencies();
-        // for collection in [
-        //     &mut self.store.input_streams,
-        //     &mut self.store.outputs_resolved,
-        // ] {
-        //     // Go through each saved value and remove it if it is older than the current time,
-        //     // keeping the longest dependency in mind
-        //     for (name, values) in collection {
-        //         let longest_dep = longest_times.get(name).cloned().unwrap_or(0);
-        //         // Modify the collection in place
-        //         values.retain(|(time, _)| *time + longest_dep >= self.time);
-        //     }
-        // }
+        let longest_times = self.dependencies.longest_time_dependencies();
+        for collection in [
+            &mut self.store.input_streams,
+            &mut self.store.outputs_resolved,
+        ] {
+            // Go through each saved value and remove it if it is older than the current time,
+            // keeping the longest dependency in mind
+            for (name, values) in collection {
+                let longest_dep = longest_times.get(name).cloned().unwrap_or(0);
+                // Modify the collection in place
+                values.retain(|(time, _)| {
+                    longest_dep
+                        .checked_add(*time)
+                        // Overflow means that data for this var should always be kept - hence the true
+                        .map_or(true, |t| t >= self.time)
+                });
+            }
+        }
     }
 
     pub fn step(&mut self, inputs: &BTreeMap<VarName, Value>) {
