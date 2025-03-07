@@ -272,10 +272,6 @@ impl DependencyResolver for DepGraph {
             .graph
             .node_indices()
             .find(|i| self.graph[*i] == *name)?;
-        // TODO: Not recursively searching through the graph, only immediate neighbors.
-        // If we have spec: in a; out x; out y; x = a[-1]; y = x[-1]; then we need to
-        // keep the value of a for 2 steps, but we only keep it for 1 step.
-        // TODO: Write a unit test for this...
         let longest_dep = self
             .graph
             .edges_directed(node, petgraph::Direction::Incoming)
@@ -286,10 +282,6 @@ impl DependencyResolver for DepGraph {
     }
 
     fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize> {
-        // TODO: Not recursively searching through the graph, only immediate neighbors.
-        // If we have spec: in a; out x; out y; x = a[-1]; y = x[-1]; then we need to
-        // keep the value of a for 2 steps, but we only keep it for 1 step.
-        // TODO: Write a unit test for this...
         let mut map = BTreeMap::new();
         for (node, name) in self.graph.node_references() {
             let longest_dep = self
