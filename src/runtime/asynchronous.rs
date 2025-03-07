@@ -148,7 +148,7 @@ async fn manage_var<V: StreamData>(
     }
 }
 
-/* Task for moving data from a channel to an broadcast channel
+/* Task for moving data from a channel to a broadcast channel
  * with a clock used to control the rate of data distribution
  *
  * This is used alongside the monitor task to implement subcontexts

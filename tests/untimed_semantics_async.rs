@@ -254,7 +254,6 @@ async fn test_defer_stream_1() {
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
-    assert_eq!(outputs.len(), 15);
     let expected_outputs = vec![
         (
             0,
@@ -347,6 +346,7 @@ async fn test_defer_stream_1() {
                 .collect(),
         ),
     ];
+    assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
     }
@@ -366,7 +366,6 @@ async fn test_defer_stream_2() {
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
-    assert_eq!(outputs.len(), 15);
     let expected_outputs = vec![
         (
             0,
@@ -459,6 +458,7 @@ async fn test_defer_stream_2() {
                 .collect(),
         ),
     ];
+    assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
     }
@@ -478,7 +478,6 @@ async fn test_defer_stream_3() {
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
-    assert_eq!(outputs.len(), 15);
     let expected_outputs = vec![
         (
             0,
@@ -571,6 +570,60 @@ async fn test_defer_stream_3() {
                 .collect(),
         ),
     ];
+    assert_eq!(outputs.len(), expected_outputs.len());
+    for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
+        assert_eq!(x, y);
+    }
+}
+
+#[ignore = "MHK: Test fails - IMO something is broken with either SIndex or Defer"]
+#[test(tokio::test)]
+async fn test_defer_stream_4() {
+    let mut input_streams = input_streams_defer_4();
+    let spec = lola_specification(&mut spec_defer()).unwrap();
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        spec.clone(),
+        &mut input_streams,
+        output_handler,
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let expected_outputs = vec![
+        (
+            0,
+            vec![(VarName("z".into()), Value::Unknown)]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            1,
+            vec![(VarName("z".into()), Value::Unknown)]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            2,
+            vec![(VarName("z".into()), Value::Int(1))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            3,
+            vec![(VarName("z".into()), Value::Int(2))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            4,
+            vec![(VarName("z".into()), Value::Int(3))]
+                .into_iter()
+                .collect(),
+        ),
+    ];
+    assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
     }

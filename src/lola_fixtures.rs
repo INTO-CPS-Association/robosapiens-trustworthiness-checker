@@ -356,6 +356,33 @@ pub fn input_streams_defer_3() -> impl InputProvider<Value> {
     input_streams
 }
 
+// Example where defer needs to use the history
+#[allow(dead_code)]
+pub fn input_streams_defer_4() -> impl InputProvider<Value> {
+    let mut input_streams = BTreeMap::new();
+
+    // Create x stream with values 1 through 5
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(futures::stream::iter((0..5).map(|i| Value::Int(i))))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    // Create e stream with the defer expression
+    input_streams.insert(
+        VarName("e".into()),
+        Box::pin(futures::stream::iter((0..5).map(|i| {
+            if i == 2 {
+                Value::Str("x[-1, 0]".into())
+            } else {
+                Value::Unknown
+            }
+        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+
+    input_streams
+}
+
 #[allow(dead_code)]
 pub fn spec_defer() -> &'static str {
     "in x
