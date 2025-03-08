@@ -371,6 +371,21 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
     });
 }
 
+pub fn default(mut x: OutputStream<Value>, c: Value) -> OutputStream<Value> {
+    return Box::pin(stream! {
+        while let Some(x_val) = x.next().await {
+            match x_val {
+                Value::Unknown => {
+                    yield c.clone();
+                }
+                x_val => {
+                    yield x_val;
+                }
+            }
+        }
+    });
+}
+
 pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     Box::pin(stream! {
         loop {
@@ -736,6 +751,39 @@ mod tests {
         let y: OutputStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
         let res: Vec<Value> = update(x, y).collect().await;
         let exp: Vec<Value> = vec!["y0".into(), "y1".into()];
+        assert_eq!(res, exp)
+    }
+
+    #[test(tokio::test)]
+    async fn test_default_no_unknown() {
+        let x: OutputStream<Value> =
+            Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
+        let c = "c".into();
+        let res: Vec<Value> = default(x, c).collect().await;
+        let exp: Vec<Value> = vec!["x0".into(), "x1".into(), "x2".into()];
+        assert_eq!(res, exp)
+    }
+
+    #[test(tokio::test)]
+    async fn test_default_all_unknown() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Unknown,
+            Value::Unknown,
+            Value::Unknown,
+        ]));
+        let c = "c".into();
+        let res: Vec<Value> = default(x, c).collect().await;
+        let exp: Vec<Value> = vec!["c".into(), "c".into(), "c".into()];
+        assert_eq!(res, exp)
+    }
+
+    #[test(tokio::test)]
+    async fn test_default_one_unknown() {
+        let x: OutputStream<Value> =
+            Box::pin(stream::iter(vec!["x0".into(), Value::Unknown, "x2".into()]));
+        let c = "c".into();
+        let res: Vec<Value> = default(x, c).collect().await;
+        let exp: Vec<Value> = vec!["x0".into(), "c".into(), "x2".into()];
         assert_eq!(res, exp)
     }
 
