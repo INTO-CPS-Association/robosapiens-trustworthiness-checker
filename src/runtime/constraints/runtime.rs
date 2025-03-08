@@ -89,6 +89,9 @@ impl ConstraintBasedRuntime {
                         new_exprs.insert(name.clone(), SExpr::Val(v));
                     }
                     SimplifyResult::Unresolved(e) => {
+                        if *e != *expr {
+                            changed = true;
+                        }
                         new_exprs.insert(name.clone(), *e);
                     }
                 }

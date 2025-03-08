@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use crate::core::Value;
 use crate::core::{IndexedVarName, VarName};
 use crate::lang::dynamic_lola::ast::*;
+use crate::lang::dynamic_lola::parser::lola_expression;
 
 pub type SyncStream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
 pub type ValStream = SyncStream<Value>;
@@ -83,6 +84,7 @@ pub enum SimplifyResult<T> {
 }
 
 use SimplifyResult::*;
+use winnow::Parser;
 
 fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
     use SBinOp::*;
@@ -152,7 +154,9 @@ impl ConvertToAbsolute for SExpr<VarName> {
                 Box::new(else_expr.to_absolute(base_time)),
             ),
             SExpr::Eval(_) => todo!(),
-            SExpr::Defer(_) => todo!(),
+            // If we have reached this point with defer then we know that we haven't received a
+            // property
+            SExpr::Defer(_) => SExpr::Val(Value::Unknown),
             SExpr::Update(_, _) => todo!(),
             SExpr::Default(expr, default) => {
                 SExpr::Default(Box::new(expr.to_absolute(base_time)), default.clone())
@@ -235,7 +239,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
                 ),
             },
             SExpr::Eval(_) => todo!(),
-            SExpr::Defer(_) => todo!(),
+            SExpr::Defer(_) => unreachable!("Defer should not be reachable as an IndexedVarName"),
             SExpr::Update(_, _) => todo!(),
             SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
                 Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
@@ -253,9 +257,9 @@ impl Simplifiable for SExpr<IndexedVarName> {
     }
 }
 
+// SExprR
 impl Simplifiable for SExpr<VarName> {
     fn simplify(&self, base_time: usize, store: &ConstraintStore) -> SimplifyResult<Box<Self>> {
-        // Implement function
         match self {
             SExpr::Val(i) => Resolved(i.clone()),
             SExpr::BinOp(e1, e2, op) => {
@@ -304,7 +308,62 @@ impl Simplifiable for SExpr<VarName> {
                 ),
             },
             SExpr::Eval(_) => todo!(),
-            SExpr::Defer(_) => todo!(),
+            SExpr::Defer(expr) => {
+                // Important to remember here that what we return here is the new "state" of the
+                // defer in `output_exprs`.
+                //
+                // Find the defer str - a bit ugly with all the edge cases
+                let defer_s = match expr.simplify(base_time, store) {
+                    // Resolved: Only if the defer property is a string
+                    Resolved(v) => match v {
+                        Value::Str(defer_s) => defer_s,
+                        Value::Unknown => return Unresolved(Box::new(SExpr::Defer(expr.clone()))),
+                        val => panic!("Invalid defer property type {:?}", val),
+                    },
+                    Unresolved(expr) => match *expr.clone() {
+                        // Var: Try to look it up
+                        SExpr::Var(name) => {
+                            let expr_opt = store
+                                .get_from_input_streams(&name, &base_time)
+                                .or_else(|| store.get_from_outputs_resolved(&name, &base_time));
+                            if let Some(val) = expr_opt {
+                                match val {
+                                    Value::Str(defer_s) => defer_s.clone(),
+                                    Value::Unknown => {
+                                        let def = SExpr::Defer(Box::new(SExpr::Var(name)));
+                                        return Unresolved(Box::new(def));
+                                    }
+                                    val => panic!("Invalid defer property type {:?}", val),
+                                }
+                            } else {
+                                return Unresolved(Box::new(SExpr::Defer(Box::new(SExpr::Var(
+                                    name,
+                                )))));
+                            }
+                        }
+                        simplified => {
+                            // Last chance - try to manually solve it.
+                            // Needed in case we are wrapped in e.g., Default or TimeIndex
+                            let expr_abs =
+                                simplified.to_absolute(base_time).simplify(base_time, store);
+                            match expr_abs {
+                                Resolved(Value::Str(defer_s)) => defer_s,
+                                Resolved(Value::Unknown) | Unresolved(_) => {
+                                    return Unresolved(Box::new(SExpr::Defer(Box::new(
+                                        simplified,
+                                    ))));
+                                }
+                                Resolved(val) => panic!("Invalid defer property type {:?}", val),
+                            }
+                        }
+                    },
+                };
+                let defer_parse = &mut defer_s.as_str();
+                let expr = lola_expression
+                    .parse_next(defer_parse)
+                    .expect("Parsing the defer string resulted in an invalid expression.");
+                expr.simplify(base_time, store)
+            }
             SExpr::Update(_, _) => todo!(),
             SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
                 Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
