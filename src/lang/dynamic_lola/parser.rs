@@ -1,6 +1,5 @@
 use winnow::Parser;
 use winnow::Result;
-use winnow::ascii::multispace0;
 use winnow::combinator::*;
 use winnow::token::literal;
 
@@ -397,7 +396,7 @@ fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
 }
 
 fn input_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
-    separated(0.., input_decl, linebreak).parse_next(s)
+    separated(0.., input_decl, lb_or_lc).parse_next(s)
 }
 
 fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
@@ -414,7 +413,7 @@ fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
 }
 
 fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
-    separated(0.., output_decl, linebreak).parse_next(s)
+    separated(0.., output_decl, lb_or_lc).parse_next(s)
 }
 
 fn var_decl(s: &mut &str) -> Result<(VarName, SExpr<VarName>)> {
@@ -432,18 +431,18 @@ fn var_decl(s: &mut &str) -> Result<(VarName, SExpr<VarName>)> {
 }
 
 fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr<VarName>)>> {
-    separated(0.., var_decl, linebreak).parse_next(s)
+    separated(0.., var_decl, lb_or_lc).parse_next(s)
 }
 
 pub fn lola_specification(s: &mut &str) -> Result<LOLASpecification> {
     seq!((
-        _: multispace0,
+        _: loop_ms_or_lb_or_lc,
         input_decls,
-        _: alt((linebreak.void(), empty)),
+        _: loop_ms_or_lb_or_lc,
         output_decls,
-        _: alt((linebreak.void(), empty)),
+        _: loop_ms_or_lb_or_lc,
         var_decls,
-        _: multispace0,
+        _: loop_ms_or_lb_or_lc,
     ))
     .map(|(input_vars, output_vars, exprs)| LOLASpecification {
         input_vars: input_vars.iter().map(|(name, _)| name.clone()).collect(),

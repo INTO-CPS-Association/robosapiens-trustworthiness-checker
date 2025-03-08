@@ -27,8 +27,8 @@ fn value_assignment(s: &mut &str) -> Result<(VarName, Value)> {
 
 fn value_assignments(s: &mut &str) -> Result<BTreeMap<VarName, Value>> {
     seq!((
-        separated(0.., value_assignment, linebreak),
-        _: alt((linebreak.void(), empty)),
+        separated(0.., value_assignment, lb_or_lc),
+        _: alt((lb_or_lc, empty)),
     ))
     .map(|(x,)| x)
     .parse_next(s)
@@ -40,7 +40,7 @@ fn time_stamped_assignments(s: &mut &str) -> Result<(usize, BTreeMap<VarName, Va
         dec_uint,
         _: whitespace,
         _: literal(":"),
-        _: separated(0.., whitespace, linebreak).map(|_: Vec<_>| ()),
+        _: separated(0.., whitespace, lb_or_lc).map(|_: Vec<_>| ()),
         value_assignments
     ))
     .map(|(time, assignments)| (time, assignments))

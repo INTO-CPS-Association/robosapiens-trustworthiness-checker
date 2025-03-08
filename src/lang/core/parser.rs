@@ -1,7 +1,7 @@
 use winnow::{
     Result,
-    ascii::line_ending,
-    combinator::{alt, delimited, separated, seq},
+    ascii::{line_ending, multispace1},
+    combinator::{alt, delimited, opt, separated, seq},
     token::{literal, take_until},
 };
 
@@ -49,4 +49,29 @@ pub fn linebreak(s: &mut &str) -> Result<()> {
     delimited(whitespace, line_ending, whitespace)
         .map(|_| ())
         .parse_next(s)
+}
+
+pub fn line_comment(s: &mut &str) -> Result<()> {
+    delimited(
+        whitespace,
+        seq!("//", opt(take_until(0.., '\n')), opt(line_ending)),
+        whitespace,
+    )
+    .map(|_| ())
+    .parse_next(s)
+}
+
+// Linebreak or Line Comment
+pub fn lb_or_lc(s: &mut &str) -> Result<()> {
+    alt((linebreak.void(), line_comment.void())).parse_next(s)
+}
+
+pub fn loop_ms_or_lb_or_lc(s: &mut &str) -> Result<()> {
+    loop {
+        let res = alt((multispace1.void(), lb_or_lc)).parse_next(s);
+        if res.is_err() {
+            // When neither matches - not an error, we are just done
+            return Ok(());
+        }
+    }
 }
