@@ -1,0 +1,5 @@
+// Use input file `eval.input`
+in x
+in e
+out z
+z = eval(default(e, "x")) // On steps where e=Unknown, evaluate to eval("x")

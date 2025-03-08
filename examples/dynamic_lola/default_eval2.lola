@@ -1,0 +1,6 @@
+// Use input file `eval.input`
+in x
+in e
+out z
+// Yield -42 whenever e doesn't have a value
+z = eval(default(e, "-42"))

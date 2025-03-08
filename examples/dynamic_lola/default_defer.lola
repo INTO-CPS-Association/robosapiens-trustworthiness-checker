@@ -1,0 +1,5 @@
+// Use input file `defer.input`
+in x
+in e
+out z
+z = default(defer(e), -42) // Use default value -42 if e is not present

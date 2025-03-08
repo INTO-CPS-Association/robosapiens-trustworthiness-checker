@@ -1,4 +1,0 @@
-in x
-in e
-out z
-z = eval(e)

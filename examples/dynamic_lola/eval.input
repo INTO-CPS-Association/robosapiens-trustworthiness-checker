@@ -1,15 +1,12 @@
-0: x = 0
-   e = "x + 0"
+0: x = 0 // No e on first few samples
 1: x = 1
-   e = "x + 1"
 2: x = 2
    e = "x + 2"
 3: x = 3
    e = "x + 3"
 4: x = 4
    e = "x + 4"
-5: x = 5
-   e = "x + 5"
+5: x = 5 // Note: no e here
 6: x = 6
    e = "x + 6"
 7: x = 7

@@ -1,0 +1,6 @@
+// Use input file `eval.input`
+in x
+in e
+out z
+// Yield -42 until eval receives first value
+z = default(eval(e), -42)

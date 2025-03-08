@@ -1,0 +1,5 @@
+// Use input file `defer.input`
+in x
+in e
+out z
+z = defer(default(e, "x")) // Similar to defer("x") if e is Unknown on first sample
