@@ -16,13 +16,13 @@ pub fn input_streams1() -> BTreeMap<VarName, BoxStream<'static, Value>> {
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(
-            vec![Value::Int(1), Value::Int(3), Value::Int(5)].into_iter(),
+            vec![Value::Int(1), 3.into(), 5.into()].into_iter(),
         )) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(
-            vec![Value::Int(2), Value::Int(4), Value::Int(6)].into_iter(),
+            vec![Value::Int(2), 4.into(), 6.into()].into_iter(),
         )) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
     );
     input_streams
@@ -78,21 +78,15 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("z".into()), Value::Int(3))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 3.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("z".into()), Value::Int(7))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 7.into())].into_iter().collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("z".into()), Value::Int(11))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 11.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -142,21 +136,15 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("z".into()), Value::Int(1))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 1.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("z".into()), Value::Int(3))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 3.into())].into_iter().collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("z".into()), Value::Int(5))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 5.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -186,21 +174,15 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("z".into()), Value::Int(42))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 42.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("z".into()), Value::Int(42))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 42.into())].into_iter().collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("z".into()), Value::Int(42))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 42.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -230,21 +212,15 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("z".into()), Value::Int(2))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 2.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("z".into()), Value::Int(4))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 4.into())].into_iter().collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("z".into()), Value::Int(6))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 6.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -319,23 +295,17 @@ mod tests {
                     (
                         // Resolved to default on first step
                         0,
-                        vec![(VarName("z".into()), Value::Int(0))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 0.into())].into_iter().collect(),
                     ),
                     (
                         // Resolving to previous value on second step
                         1,
-                        vec![(VarName("z".into()), Value::Int(1))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 1.into())].into_iter().collect(),
                     ),
                     (
                         // Resolving to previous value on second step
                         2,
-                        vec![(VarName("z".into()), Value::Int(3))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 3.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -368,8 +338,8 @@ mod tests {
                         // Both resolve to default
                         0,
                         vec![
-                            (VarName("z1".into()), Value::Int(0)),
-                            (VarName("z2".into()), Value::Int(0))
+                            (VarName("z1".into()), 0.into()),
+                            (VarName("z2".into()), 0.into())
                         ]
                         .into_iter()
                         .collect(),
@@ -378,8 +348,8 @@ mod tests {
                         // z1 resolves to prev, z2 resolves to default
                         1,
                         vec![
-                            (VarName("z1".into()), Value::Int(1)),
-                            (VarName("z2".into()), Value::Int(0))
+                            (VarName("z1".into()), 1.into()),
+                            (VarName("z2".into()), 0.into())
                         ]
                         .into_iter()
                         .collect(),
@@ -388,8 +358,8 @@ mod tests {
                         // z1 resolves to prev, z2 resolves to prev_prev
                         2,
                         vec![
-                            (VarName("z1".into()), Value::Int(3)),
-                            (VarName("z2".into()), Value::Int(1))
+                            (VarName("z1".into()), 3.into()),
+                            (VarName("z2".into()), 1.into())
                         ]
                         .into_iter()
                         .collect(),
@@ -426,15 +396,11 @@ mod tests {
                     (
                         // Resolved to index 1 on first step
                         0,
-                        vec![(VarName("z".into()), Value::Int(3))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 3.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("z".into()), Value::Int(5))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("z".into()), 5.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -464,19 +430,19 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("z".into()), Value::Bool(true))]
+                        vec![(VarName("z".into()), true.into())]
                             .into_iter()
                             .collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("z".into()), Value::Bool(false))]
+                        vec![(VarName("z".into()), false.into())]
                             .into_iter()
                             .collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("z".into()), Value::Bool(false))]
+                        vec![(VarName("z".into()), false.into())]
                             .into_iter()
                             .collect(),
                     ),
@@ -508,13 +474,13 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("z".into()), Value::Str("ab".to_string()))]
+                        vec![(VarName("z".into()), "ab".into())]
                             .into_iter()
                             .collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("z".into()), Value::Str("cd".to_string()))]
+                        vec![(VarName("z".into()), "cd".into())]
                             .into_iter()
                             .collect(),
                     ),
@@ -547,8 +513,8 @@ mod tests {
                     (
                         0,
                         vec![
-                            (VarName("r1".into()), Value::Int(3)),
-                            (VarName("r2".into()), Value::Int(2)),
+                            (VarName("r1".into()), 3.into()),
+                            (VarName("r2".into()), 2.into()),
                         ]
                         .into_iter()
                         .collect(),
@@ -556,8 +522,8 @@ mod tests {
                     (
                         1,
                         vec![
-                            (VarName("r1".into()), Value::Int(7)),
-                            (VarName("r2".into()), Value::Int(12)),
+                            (VarName("r1".into()), 7.into()),
+                            (VarName("r2".into()), 12.into()),
                         ]
                         .into_iter()
                         .collect(),
@@ -565,8 +531,8 @@ mod tests {
                     (
                         2,
                         vec![
-                            (VarName("r1".into()), Value::Int(11)),
-                            (VarName("r2".into()), Value::Int(30)),
+                            (VarName("r1".into()), 11.into()),
+                            (VarName("r2".into()), 30.into()),
                         ]
                         .into_iter()
                         .collect(),
@@ -600,21 +566,15 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("y".into()), Value::Int(0))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 0.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("y".into()), Value::Int(1))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 1.into())].into_iter().collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("y".into()), Value::Int(2))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 2.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -645,21 +605,15 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("y".into()), Value::Int(42))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 42.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("y".into()), Value::Int(42))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 42.into())].into_iter().collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("y".into()), Value::Int(42))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 42.into())].into_iter().collect(),
                     ),
                 ]
             );
@@ -690,21 +644,15 @@ mod tests {
                 vec![
                     (
                         0,
-                        vec![(VarName("y".into()), Value::Int(0))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 0.into())].into_iter().collect(),
                     ),
                     (
                         1,
-                        vec![(VarName("y".into()), Value::Int(42))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 42.into())].into_iter().collect(),
                     ),
                     (
                         2,
-                        vec![(VarName("y".into()), Value::Int(2))]
-                            .into_iter()
-                            .collect(),
+                        vec![(VarName("y".into()), 2.into())].into_iter().collect(),
                     ),
                 ]
             );
