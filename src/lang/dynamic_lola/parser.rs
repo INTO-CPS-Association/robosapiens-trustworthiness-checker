@@ -38,14 +38,15 @@ fn var(s: &mut &str) -> Result<SExpr<VarName>> {
         .parse_next(s)
 }
 
-fn lit(s: &mut &str) -> Result<SExpr<VarName>> {
+// Same as `val` but returns SExpr::Val
+fn sval(s: &mut &str) -> Result<SExpr<VarName>> {
     val.map(|v| SExpr::Val(v)).parse_next(s)
 }
 
 fn sindex(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!(
         _: whitespace,
-        alt((lit, var, paren)),
+        alt((sval, var, paren)),
         _: whitespace,
         _: '[',
         _: whitespace,
@@ -126,6 +127,24 @@ fn eval(s: &mut &str) -> Result<SExpr<VarName>> {
         _: whitespace,
     ))
     .map(|(e,)| SExpr::Eval(Box::new(e)))
+    .parse_next(s)
+}
+
+fn default(s: &mut &str) -> Result<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: literal("default"),
+        _: '(',
+        _: whitespace,
+        sexpr,
+        _: whitespace,
+        _: ',',
+        _: whitespace,
+        val,
+        _: whitespace,
+        _: ')',
+    ))
+    .map(|(lhs, rhs)| SExpr::Default(Box::new(lhs), rhs))
     .parse_next(s)
 }
 
@@ -236,8 +255,8 @@ fn atom(s: &mut &str) -> Result<SExpr<VarName>> {
     delimited(
         whitespace,
         alt((
-            sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, lit, ifelse, defer, update,
-            sexpr_list, var, paren,
+            sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
+            default, sexpr_list, var, paren,
         )),
         whitespace,
     )
@@ -946,6 +965,23 @@ mod tests {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"update(x, y)"#)),
             r#"Ok(Update(Var(VarName("x")), Var(VarName("y"))))"#
+        )
+    }
+
+    #[test]
+    fn parse_default() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"default(x, 0)"#)),
+            r#"Ok(Default(Var(VarName("x")), Int(0)))"#
+        )
+    }
+
+    #[test]
+    fn parse_default_sexpr() {
+        // Negative test - should not parse into Default expression
+        assert_ne!(
+            presult_to_string(&sexpr(&mut r#"default(x, y)"#)),
+            r#"Ok(Default(Var(VarName("x")), Var(VarName("y"))))"#
         )
     }
 
