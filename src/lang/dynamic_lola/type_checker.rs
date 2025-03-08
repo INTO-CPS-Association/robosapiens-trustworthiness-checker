@@ -441,6 +441,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
             }
             SExpr::Defer(_) => todo!("Implement support for Defer"),
             SExpr::Update(_, _) => todo!("Implement support for Update"),
+            SExpr::Default(_, _) => todo!(),
             SExpr::Not(sexpr) => {
                 let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
                 match sexpr_check {
