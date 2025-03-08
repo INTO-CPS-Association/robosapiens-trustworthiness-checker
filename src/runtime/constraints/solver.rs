@@ -154,7 +154,9 @@ impl ConvertToAbsolute for SExpr<VarName> {
             SExpr::Eval(_) => todo!(),
             SExpr::Defer(_) => todo!(),
             SExpr::Update(_, _) => todo!(),
-            SExpr::Default(_, _) => todo!(),
+            SExpr::Default(expr, default) => {
+                SExpr::Default(Box::new(expr.to_absolute(base_time)), default.clone())
+            }
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),
@@ -235,7 +237,11 @@ impl Simplifiable for SExpr<IndexedVarName> {
             SExpr::Eval(_) => todo!(),
             SExpr::Defer(_) => todo!(),
             SExpr::Update(_, _) => todo!(),
-            SExpr::Default(_, _) => todo!(),
+            SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
+                Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
+                Resolved(v) => Resolved(v),
+                Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
+            },
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),
@@ -300,7 +306,11 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::Eval(_) => todo!(),
             SExpr::Defer(_) => todo!(),
             SExpr::Update(_, _) => todo!(),
-            SExpr::Default(_, _) => todo!(),
+            SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
+                Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
+                Resolved(v) => Resolved(v),
+                Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
+            },
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),

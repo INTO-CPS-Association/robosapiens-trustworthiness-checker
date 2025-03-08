@@ -28,6 +28,20 @@ pub fn input_streams1() -> BTreeMap<VarName, BoxStream<'static, Value>> {
     input_streams
 }
 
+pub fn new_input_stream(
+    map: BTreeMap<VarName, Vec<Value>>,
+) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+    let mut input_streams = BTreeMap::new();
+    for (name, values) in map {
+        input_streams.insert(
+            name,
+            Box::pin(stream::iter(values.into_iter()))
+                as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        );
+    }
+    input_streams
+}
+
 fn output_handler(spec: LOLASpecification) -> Box<ManualOutputHandler<Value>> {
     Box::new(ManualOutputHandler::new(spec.output_vars.clone()))
 }
@@ -556,6 +570,141 @@ mod tests {
                         ]
                         .into_iter()
                         .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_default_no_unknown() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let v = vec![0.into(), 1.into(), 2.into()];
+            let mut input_streams = new_input_stream(BTreeMap::from([("x".into(), v)]));
+            let mut spec = "in x\nout y\ny=default(x, 42)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("y".into()), Value::Int(0))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("y".into()), Value::Int(1))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("y".into()), Value::Int(2))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_default_all_unknown() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let v = vec![Value::Unknown, Value::Unknown, Value::Unknown];
+            let mut input_streams = new_input_stream(BTreeMap::from([("x".into(), v)]));
+            let mut spec = "in x\nout y\ny=default(x, 42)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("y".into()), Value::Int(42))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("y".into()), Value::Int(42))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("y".into()), Value::Int(42))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_default_one_unknown() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let v = vec![0.into(), Value::Unknown, 2.into()];
+            let mut input_streams = new_input_stream(BTreeMap::from([("x".into(), v)]));
+            let mut spec = "in x\nout y\ny=default(x, 42)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("y".into()), Value::Int(0))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("y".into()), Value::Int(42))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("y".into()), Value::Int(2))]
+                            .into_iter()
+                            .collect(),
                     ),
                 ]
             );
