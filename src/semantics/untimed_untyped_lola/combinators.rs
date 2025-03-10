@@ -138,11 +138,10 @@ pub fn if_stm(
 pub fn sindex(x: OutputStream<Value>, i: isize, c: Value) -> OutputStream<Value> {
     let c = c.clone();
     let n = i.abs() as usize;
+    let cs = stream::repeat(c).take(n);
     if i < 0 {
-        let cs = stream::repeat(c).take(n);
         Box::pin(cs.chain(x)) as BoxStream<'static, Value>
     } else {
-        let cs = stream::repeat(c).take(n);
         Box::pin(x.skip(n).chain(cs)) as BoxStream<'static, Value>
     }
 }
