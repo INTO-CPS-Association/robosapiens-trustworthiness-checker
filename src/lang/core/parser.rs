@@ -2,7 +2,7 @@ use winnow::{
     Result,
     ascii::{line_ending, multispace1},
     combinator::{alt, delimited, opt, separated, seq},
-    token::{literal, take_until},
+    token::{literal, take_until, take_while},
 };
 
 use crate::Value;
@@ -46,7 +46,8 @@ pub fn val(s: &mut &str) -> Result<Value> {
 }
 
 pub fn linebreak(s: &mut &str) -> Result<()> {
-    delimited(whitespace, line_ending, whitespace)
+    let while_line_ending = take_while(1.., |c: char| c == '\n' || c == '\r');
+    delimited(whitespace, while_line_ending, whitespace)
         .map(|_| ())
         .parse_next(s)
 }

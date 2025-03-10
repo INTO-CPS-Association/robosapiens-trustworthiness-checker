@@ -20,8 +20,12 @@ fn paren(s: &mut &str) -> Result<SExpr<VarName>> {
 // Used for Lists in output streams
 fn sexpr_list(s: &mut &str) -> Result<SExpr<VarName>> {
     let res = delimited(
-        seq!("List", whitespace, '('),
-        separated(0.., sexpr, seq!(whitespace, ',', whitespace)),
+        seq!("List", loop_ms_or_lb_or_lc, '('),
+        separated(
+            0..,
+            sexpr,
+            seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+        ),
         ')',
     )
     .parse_next(s);
@@ -46,15 +50,15 @@ fn sindex(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!(
         _: whitespace,
         alt((sval, var, paren)),
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: '[',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         integer,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ',',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         val,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ']'
     )
     .map(|(e, i, d)| SExpr::SIndex(Box::new(e), i, d))
@@ -65,15 +69,15 @@ fn ifelse(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: "if",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: "then",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: "else",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
         _: whitespace,
     ))
@@ -85,10 +89,11 @@ fn defer(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: literal("defer"),
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
     .map(|(e,)| SExpr::Defer(Box::new(e)))
@@ -99,14 +104,14 @@ fn update(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: literal("update"),
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ',',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
     .map(|(lhs, rhs)| SExpr::Update(Box::new(lhs), Box::new(rhs)))
@@ -117,11 +122,11 @@ fn eval(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: "eval",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
@@ -134,13 +139,13 @@ fn default(s: &mut &str) -> Result<SExpr<VarName>> {
         _: whitespace,
         _: literal("default"),
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ',',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         val,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
     .map(|(lhs, rhs)| SExpr::Default(Box::new(lhs), rhs))
@@ -151,9 +156,8 @@ fn not(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: "!",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         atom,
-        _: whitespace,
         _: whitespace,
     ))
     .map(|(e,)| SExpr::Not(Box::new(e)))
@@ -164,15 +168,15 @@ fn lindex(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!(
         _: whitespace,
         _: "List.get",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ',',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
     )
     .map(|(e, i)| SExpr::LIndex(Box::new(e), Box::new(i)))
@@ -183,15 +187,15 @@ fn lappend(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!(
         _: whitespace,
         _: "List.append",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ',',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
     )
     .map(|(lst, el)| SExpr::LAppend(Box::new(lst), Box::new(el)))
@@ -202,15 +206,15 @@ fn lconcat(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!(
         _: whitespace,
         _: "List.concat",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ',',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
     )
     .map(|(lst1, lst2)| SExpr::LConcat(Box::new(lst1), Box::new(lst2)))
@@ -221,11 +225,11 @@ fn lhead(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: "List.head",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
@@ -237,11 +241,11 @@ fn ltail(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
         _: "List.tail",
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: '(',
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
@@ -368,7 +372,7 @@ fn type_annotation(s: &mut &str) -> Result<StreamType> {
     seq!((
         _: whitespace,
         _: literal(":"),
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         alt((literal("Int"), literal("Bool"), literal("Str"), literal("Unit"))),
         _: whitespace,
     ))
@@ -386,7 +390,7 @@ fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     seq!((
         _: whitespace,
         _: literal("in"),
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         ident,
         opt(type_annotation),
         _: whitespace,
@@ -396,14 +400,14 @@ fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
 }
 
 fn input_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
-    separated(0.., input_decl, lb_or_lc).parse_next(s)
+    separated(0.., input_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
 fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     seq!((
         _: whitespace,
         _: literal("out"),
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         ident,
         opt(type_annotation),
         _: whitespace,
@@ -413,25 +417,23 @@ fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
 }
 
 fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
-    separated(0.., output_decl, lb_or_lc).parse_next(s)
+    separated(0.., output_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
 fn var_decl(s: &mut &str) -> Result<(VarName, SExpr<VarName>)> {
     seq!((
-        _: whitespace,
         ident,
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         _: literal("="),
-        _: whitespace,
+        _: loop_ms_or_lb_or_lc,
         sexpr,
-        _: whitespace,
     ))
     .map(|(name, expr)| (VarName(name.into()), expr))
     .parse_next(s)
 }
 
 fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr<VarName>)>> {
-    separated(0.., var_decl, lb_or_lc).parse_next(s)
+    separated(0.., var_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
 pub fn lola_specification(s: &mut &str) -> Result<LOLASpecification> {
@@ -703,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iexpr() {
+    fn test_integer_exprs() {
         // Add
         assert_eq!(presult_to_string(&sexpr(&mut "0")), "Ok(Val(Int(0)))");
         assert_eq!(
@@ -894,7 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_empty_string() {
+    fn test_parse_empty_string() {
         assert_eq!(
             presult_to_string(&sexpr(&mut "")),
             "Err(ContextError { context: [], cause: None })"
@@ -902,7 +904,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_invalid_expression() {
+    fn test_parse_invalid_expression() {
         // TODO: Bug here in parser. It should be able to handle these cases.
         // assert_eq!(presult_to_string(&sexpr(&mut "1 +")), "Err(Backtrack(ContextError { context: [], cause: None }))");
         assert_eq!(
@@ -912,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_boolean_expressions() {
+    fn test_parse_boolean_expressions() {
         assert_eq!(
             presult_to_string(&sexpr(&mut "true && false")),
             "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And)))"
@@ -924,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_mixed_boolean_and_arithmetic() {
+    fn test_parse_mixed_boolean_and_arithmetic() {
         // Expressions do not make sense but parser should allow it
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 + 2 && 3")),
@@ -936,7 +938,7 @@ mod tests {
         );
     }
     #[test]
-    fn parse_string_concatenation() {
+    fn test_parse_string_concatenation() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#""foo" ++ "bar""#)),
             r#"Ok(BinOp(Val(Str("foo")), Val(Str("bar")), SOp(Concat)))"#
@@ -952,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_defer() {
+    fn test_parse_defer() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"defer(x)"#)),
             r#"Ok(Defer(Var(VarName("x"))))"#
@@ -960,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_update() {
+    fn test_parse_update() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"update(x, y)"#)),
             r#"Ok(Update(Var(VarName("x")), Var(VarName("y"))))"#
@@ -968,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_default() {
+    fn test_parse_default() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"default(x, 0)"#)),
             r#"Ok(Default(Var(VarName("x")), Int(0)))"#
@@ -976,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_default_sexpr() {
+    fn test_parse_default_sexpr() {
         // Negative test - should not parse into Default expression
         assert_ne!(
             presult_to_string(&sexpr(&mut r#"default(x, y)"#)),
@@ -985,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_list() {
+    fn test_parse_list() {
         // Note: value_list has higher precedence than sexpr_list hence why
         // this becomes a val
         assert_eq!(
@@ -1024,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_lindex() {
+    fn test_parse_lindex() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.get(List(1, 2), 42)"#)),
             r#"Ok(LIndex(Val(List([Int(1), Int(2)])), Val(Int(42))))"#
@@ -1046,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_lconcat() {
+    fn test_parse_lconcat() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.concat(List(1, 2), List(3, 4))"#)),
             r#"Ok(LConcat(Val(List([Int(1), Int(2)])), Val(List([Int(3), Int(4)]))))"#
@@ -1058,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_lappend() {
+    fn test_parse_lappend() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.append(List(1, 2), 3)"#)),
             r#"Ok(LAppend(Val(List([Int(1), Int(2)])), Val(Int(3))))"#
@@ -1074,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_lhead() {
+    fn test_parse_lhead() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.head(List(1, 2))"#)),
             r#"Ok(LHead(Val(List([Int(1), Int(2)]))))"#
@@ -1087,7 +1089,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_ltail() {
+    fn test_parse_ltail() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.tail(List(1, 2))"#)),
             r#"Ok(LTail(Val(List([Int(1), Int(2)]))))"#
@@ -1097,5 +1099,127 @@ mod tests {
             presult_to_string(&sexpr(&mut r#"List.tail(List())"#)),
             r#"Ok(LTail(Val(List([]))))"#
         );
+    }
+
+    fn counter_inf() -> (&'static str, &'static str) {
+        (
+            "out z\nz = z[-1, 0] + 1",
+            r#"Ok(LOLASpecification { input_vars: [], output_vars: [VarName("z")], exprs: {VarName("z"): BinOp(SIndex(Var(VarName("z")), -1, Int(0)), Val(Int(1)), IOp(Add))}, type_annotations: {} })"#,
+        )
+    }
+
+    fn counter() -> (&'static str, &'static str) {
+        (
+            "in x\nout z\nz = z[-1, 0] + x",
+            "Ok(LOLASpecification { input_vars: [VarName(\"x\")], output_vars: [VarName(\"z\")], exprs: {VarName(\"z\"): BinOp(SIndex(Var(VarName(\"z\")), -1, Int(0)), Var(VarName(\"x\")), IOp(Add))}, type_annotations: {} })",
+        )
+    }
+
+    fn future() -> (&'static str, &'static str) {
+        (
+            "in x\nin y\nout z\nout a\nz = x[1, 0]\na = y",
+            "Ok(LOLASpecification { input_vars: [VarName(\"x\"), VarName(\"y\")], output_vars: [VarName(\"z\"), VarName(\"a\")], exprs: {VarName(\"a\"): Var(VarName(\"y\")), VarName(\"z\"): SIndex(Var(VarName(\"x\")), 1, Int(0))}, type_annotations: {} })",
+        )
+    }
+
+    fn list() -> (&'static str, &'static str) {
+        (
+            "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
+            "Ok(LOLASpecification { input_vars: [VarName(\"iList\")], output_vars: [VarName(\"oList\"), VarName(\"nestedList\"), VarName(\"listIndex\"), VarName(\"listAppend\"), VarName(\"listConcat\"), VarName(\"listHead\"), VarName(\"listTail\")], exprs: {VarName(\"listAppend\"): LAppend(Var(VarName(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), IOp(Add)), Val(Int(2)), IOp(Div))), VarName(\"listConcat\"): LConcat(Var(VarName(\"iList\")), Var(VarName(\"iList\"))), VarName(\"listHead\"): LHead(Var(VarName(\"iList\"))), VarName(\"listIndex\"): LIndex(Var(VarName(\"iList\")), Val(Int(0))), VarName(\"listTail\"): LTail(Var(VarName(\"iList\"))), VarName(\"nestedList\"): List([Var(VarName(\"iList\")), Var(VarName(\"iList\"))]), VarName(\"oList\"): Var(VarName(\"iList\"))}, type_annotations: {} })",
+        )
+    }
+
+    fn simple_add_typed() -> (&'static str, &'static str) {
+        (
+            "in x: Int\nin y: Int\nout z: Int\nz = x + y",
+            "Ok(LOLASpecification { input_vars: [VarName(\"x\"), VarName(\"y\")], output_vars: [VarName(\"z\")], exprs: {VarName(\"z\"): BinOp(Var(VarName(\"x\")), Var(VarName(\"y\")), IOp(Add))}, type_annotations: {VarName(\"x\"): Int, VarName(\"y\"): Int, VarName(\"z\"): Int} })",
+        )
+    }
+
+    fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
+        (
+            "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
+            "Ok(LOLASpecification { input_vars: [VarName(\"x\"), VarName(\"y\")], output_vars: [VarName(\"z\")], exprs: {VarName(\"z\"): BinOp(Var(VarName(\"x\")), Var(VarName(\"y\")), IOp(Add))}, type_annotations: {VarName(\"x\"): Int, VarName(\"y\"): Int, VarName(\"z\"): Int} })",
+        )
+    }
+
+    fn if_statement() -> (&'static str, &'static str) {
+        (
+            "in x\nin y\nout z\nz = if x == 0 then y else 42",
+            "Ok(LOLASpecification { input_vars: [VarName(\"x\"), VarName(\"y\")], output_vars: [VarName(\"z\")], exprs: {VarName(\"z\"): If(BinOp(Var(VarName(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+        )
+    }
+
+    fn if_statement_newlines() -> (&'static str, &'static str) {
+        (
+            "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
+            "Ok(LOLASpecification { input_vars: [VarName(\"x\"), VarName(\"y\")], output_vars: [VarName(\"z\")], exprs: {VarName(\"z\"): If(BinOp(Var(VarName(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+        )
+    }
+
+    fn function_name<T>(_: T) -> &'static str {
+        std::any::type_name::<T>()
+    }
+
+    fn specs() -> Vec<(&'static str, (&'static str, &'static str))> {
+        // Unfortunately, can't iterate because that converts them to general function pointers
+        // instead of strong types
+        Vec::from([
+            (function_name(counter), counter()),
+            (function_name(counter_inf), counter_inf()),
+            (function_name(future), future()),
+            (function_name(list), list()),
+            (function_name(simple_add_typed), simple_add_typed()),
+            (
+                function_name(simple_add_typed_start_and_end_comment),
+                simple_add_typed_start_and_end_comment(),
+            ),
+            (function_name(if_statement), if_statement()),
+            (
+                function_name(if_statement_newlines),
+                if_statement_newlines(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn test_lola_specs_normal() {
+        for &(name, (mut spec, exp)) in specs().iter() {
+            let parsed = presult_to_string(&lola_specification(&mut spec));
+            assert_eq!(
+                format!("{}: {}", name, parsed),
+                format!("{}: {}", name, exp)
+            );
+        }
+    }
+
+    #[test]
+    fn test_lola_specs_added_newlines() {
+        for &(name, (spec, exp)) in specs().iter() {
+            let spec = spec.replace("\n", "\n\n");
+            let parsed = presult_to_string(&lola_specification(&mut spec.as_str()));
+            assert_eq!(
+                format!("{}: {}", name, parsed),
+                format!("{}: {}", name, exp)
+            );
+        }
+    }
+
+    #[test]
+    fn test_lola_specs_added_comments() {
+        for &(name, (spec, exp)) in specs().iter() {
+            let mod_spec = spec.replace("\n", "\n//This is a comment\n");
+            let parsed = presult_to_string(&lola_specification(&mut mod_spec.as_str()));
+            assert_eq!(
+                format!("{}: {}", name, parsed),
+                format!("{}: {}", name, exp)
+            );
+            let mod_spec = spec.replace("\n", "//This is a comment\n"); // Beginning \n
+            let parsed = presult_to_string(&lola_specification(&mut mod_spec.as_str()));
+            assert_eq!(
+                format!("{}: {}", name, parsed),
+                format!("{}: {}", name, exp)
+            );
+        }
     }
 }

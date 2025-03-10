@@ -1,0 +1,5 @@
+// Use input file "simple_add.input"
+in x
+in y
+out z
+z = if x == 0 then y else 42
