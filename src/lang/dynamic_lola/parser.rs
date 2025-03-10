@@ -422,11 +422,13 @@ fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
 
 fn var_decl(s: &mut &str) -> Result<(VarName, SExpr<VarName>)> {
     seq!((
+        _: whitespace,
         ident,
         _: loop_ms_or_lb_or_lc,
         _: literal("="),
         _: loop_ms_or_lb_or_lc,
         sexpr,
+        _: whitespace,
     ))
     .map(|(name, expr)| (VarName(name.into()), expr))
     .parse_next(s)
