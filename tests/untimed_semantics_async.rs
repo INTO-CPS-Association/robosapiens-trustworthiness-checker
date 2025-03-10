@@ -643,7 +643,7 @@ async fn test_future_indexing() {
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
-    assert_eq!(outputs.len(), 5);
+    assert_eq!(outputs.len(), 6);
     let expected_outputs = vec![
         (
             0,
@@ -686,6 +686,15 @@ async fn test_future_indexing() {
             vec![
                 (VarName("z".into()), Value::Int(5)),
                 (VarName("a".into()), Value::Int(4)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        (
+            5,
+            vec![
+                (VarName("z".into()), Value::Int(0)), // The default value
+                (VarName("a".into()), Value::Int(5)),
             ]
             .into_iter()
             .collect(),

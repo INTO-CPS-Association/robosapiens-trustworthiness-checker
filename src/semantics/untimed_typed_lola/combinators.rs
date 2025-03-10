@@ -58,13 +58,12 @@ pub fn if_stm<X: StreamData>(
 
 pub fn sindex<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream<X> {
     let c = c.clone();
+    let n = i.abs() as usize;
+    let cs = stream::repeat(c).take(n);
     if i < 0 {
-        let n: usize = (-i).try_into().unwrap();
-        let cs = stream::repeat(c).take(n);
         Box::pin(cs.chain(x)) as BoxStream<'static, X>
     } else {
-        let n: usize = i.try_into().unwrap();
-        Box::pin(x.skip(n)) as BoxStream<'static, X>
+        Box::pin(x.skip(n).chain(cs)) as BoxStream<'static, X>
     }
 }
 

@@ -405,14 +405,14 @@ pub fn spec_future_indexing() -> &'static str {
 pub fn input_streams_future() -> impl InputProvider<Value> {
     let mut input_streams = BTreeMap::new();
 
-    // Create x stream with values 1 through 15
+    // Create x stream with values 1 through 6
     input_streams.insert(
         VarName("x".into()),
         Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i))))
             as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
     );
 
-    // Create y stream with values 1 through 15
+    // Create x stream with values 1 through 6
     input_streams.insert(
         VarName("y".into()),
         Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i))))
