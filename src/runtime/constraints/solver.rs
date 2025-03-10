@@ -193,23 +193,20 @@ impl Simplifiable for SExpr<IndexedVarName> {
                     }
                 }
             }
-            SExpr::Var(name) => {
-                let name = VarName(name.0.clone());
+            SExpr::Var(idx_var_name) => {
+                let var_name = VarName(idx_var_name.0.clone());
                 // Check if we have a value inside resolved or input values
                 if let Some(v) = store
-                    .get_from_outputs_resolved(&name, &base_time)
-                    .or_else(|| store.get_from_input_streams(&name, &base_time))
+                    .get_from_outputs_resolved(&var_name, &base_time)
+                    .or_else(|| store.get_from_input_streams(&var_name, &base_time))
                 {
                     return Resolved(v.clone());
                 }
                 // Otherwise it must be inside unresolved
-                if let Some(expr) = store.get_from_outputs_unresolved(&name, &base_time) {
+                if let Some(expr) = store.get_from_outputs_unresolved(&var_name, &base_time) {
                     Unresolved(Box::new(expr.clone()))
                 } else {
-                    unreachable!(
-                        "Var({:?}, {:?}) does not exist. Store: {:?}",
-                        name, base_time, store
-                    );
+                    Resolved(Value::Unknown)
                 }
             }
             SExpr::SIndex(expr, idx_time, default) => {

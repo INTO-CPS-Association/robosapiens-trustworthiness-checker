@@ -166,9 +166,6 @@ impl ConstraintBasedRuntime {
         info!("Runtime step at time: {}", self.time);
         self.receive_inputs(inputs);
         self.resolve_possible();
-        debug!("Store before clean: {:#?}", self.store);
-        self.cleanup();
-        debug!("Store after clean: {:#?}", self.store);
         self.time += 1;
     }
 }
@@ -276,8 +273,11 @@ impl ConstraintBasedMonitor {
                 while let Ok(inputs) = input_receiver.recv().await {
                     match inputs {
                         ProducerMessage::Data(inputs) => {
-                        runtime.step(&inputs);
-                        yield runtime.store.clone();
+                            runtime.step(&inputs);
+                            yield runtime.store.clone();
+                            debug!("Store before clean: {:#?}", runtime.store);
+                            runtime.cleanup();
+                            debug!("Store after clean: {:#?}", runtime.store);
                         }
                         ProducerMessage::Done => {
                             break;
@@ -289,6 +289,7 @@ impl ConstraintBasedMonitor {
                 loop {
                     runtime.step(&BTreeMap::new());
                     yield runtime.store.clone();
+                    runtime.cleanup();
                 }
             }
         ))

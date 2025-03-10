@@ -658,4 +658,289 @@ mod tests {
             );
         }
     }
+
+    #[test(tokio::test)]
+    async fn test_counter() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let mut input_streams = new_input_stream(BTreeMap::from([]));
+            let mut spec = "out y\ny=y[-1, 0] + 1";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().take(3).collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("y".into()), 1.into())].into_iter().collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("y".into()), 2.into())].into_iter().collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("y".into()), 3.into())].into_iter().collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_defer() {
+        // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec![0.into(), 1.into(), 2.into()];
+            let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let mut spec = "in x\nin e\nout z\nz = defer(e)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), 1.into())].into_iter().collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), 2.into())].into_iter().collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), 3.into())].into_iter().collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_defer_x_squared() {
+        // This test is interesting since we use x twice in the eval strings
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec![1.into(), 2.into(), 3.into()];
+            let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let mut spec = "in x\nin e\nout z\nz = defer(e)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), 1.into())].into_iter().collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), 4.into())].into_iter().collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), 9.into())].into_iter().collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_defer_unknown() {
+        // Using unknown to represent no data on the stream
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec![0.into(), 1.into(), 2.into()];
+            let e = vec![Value::Unknown, "x + 1".into(), "x + 2".into()];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let mut spec = "in x\nin e\nout z\nz = defer(e)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), Value::Unknown)]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), 2.into())].into_iter().collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), 3.into())].into_iter().collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_defer_unknown2() {
+        // Unknown followed by property followed by unknown returns [U; val; val].
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec![0.into(), 1.into(), 2.into()];
+            let e = vec![Value::Unknown, "x + 1".into(), Value::Unknown];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let mut spec = "in x\nin e\nout z\nz = defer(e)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), Value::Unknown)]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), 2.into())].into_iter().collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), 3.into())].into_iter().collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_defer_dependency() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec![0.into(), 1.into(), 2.into()];
+            let e = vec![Value::Unknown, "x[-1, 42]".into(), Value::Unknown];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let mut spec = "in x\nin e\nout z\nz = defer(e)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            if kind == DependencyKind::Empty {
+                assert_eq!(
+                    outputs,
+                    vec![
+                        (
+                            0,
+                            vec![(VarName("z".into()), Value::Unknown)]
+                                .into_iter()
+                                .collect(),
+                        ),
+                        (
+                            1,
+                            vec![(VarName("z".into()), 0.into())].into_iter().collect(),
+                        ),
+                        (
+                            2,
+                            vec![(VarName("z".into()), 1.into())].into_iter().collect(),
+                        ),
+                    ]
+                );
+            } else {
+                // NOTE: This is because we currently don't update the dependency graph dynamically
+                // eventually the expected outcome should be [Unknown, Unknown, 1]
+                // because we add the dependency at time idx 1, which is then solveable at time idx
+                // 2.
+                // NOTE: Perhaps the Unknown's here should be the SIndex' default instead. Easy to
+                // add with a conditional in SIndex
+                assert_eq!(
+                    outputs,
+                    vec![
+                        (
+                            0,
+                            vec![(VarName("z".into()), Value::Unknown)]
+                                .into_iter()
+                                .collect(),
+                        ),
+                        (
+                            1,
+                            vec![(VarName("z".into()), Value::Unknown)]
+                                .into_iter()
+                                .collect(),
+                        ),
+                        (
+                            2,
+                            vec![(VarName("z".into()), Value::Unknown)]
+                                .into_iter()
+                                .collect(),
+                        ),
+                    ]
+                );
+            }
+        }
+    }
 }
