@@ -56,6 +56,15 @@ pub fn if_stm<X: StreamData>(
     lift3(|x, y, z| if x { y } else { z }, x, y, z)
 }
 
+// NOTE: For past-time indexing there is a trade-off between allowing recursive definitions with infinite streams
+// (such as the count example) and getting the "correct" number of values with finite streams.
+// We chose allowing recursive definitions, which means we get N too many
+// values for finite streams where N is the absolute value of index.
+//
+// (Reason: If we want to get the "correct" number of values we need to skip the N
+// last samples. This is accomplished by yielding the x[-N] sample but having the stream
+// currently at x[0]. However, with recursive streams that puts us in a deadlock when calling
+// x.next()
 pub fn sindex<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream<X> {
     let c = c.clone();
     let n = i.abs() as usize;

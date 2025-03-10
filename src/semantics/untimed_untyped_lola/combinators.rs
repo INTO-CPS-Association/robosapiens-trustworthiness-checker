@@ -135,6 +135,15 @@ pub fn if_stm(
     )
 }
 
+// NOTE: For past-time indexing there is a trade-off between allowing recursive definitions with infinite streams
+// (such as the count example) and getting the "correct" number of values with finite streams.
+// We chose allowing recursive definitions, which means we get N too many
+// values for finite streams where N is the absolute value of index.
+//
+// (Reason: If we want to get the "correct" number of values we need to skip the N
+// last samples. This is accomplished by yielding the x[-N] sample but having the stream
+// currently at x[0]. However, with recursive streams that puts us in a deadlock when calling
+// x.next()
 pub fn sindex(x: OutputStream<Value>, i: isize, c: Value) -> OutputStream<Value> {
     let c = c.clone();
     let n = i.abs() as usize;

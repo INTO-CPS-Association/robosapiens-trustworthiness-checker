@@ -631,7 +631,7 @@ async fn test_defer_stream_4() {
 
 #[test(tokio::test)]
 async fn test_future_indexing() {
-    let mut input_streams = input_streams_future();
+    let mut input_streams = input_streams_indexing();
     let spec = lola_specification(&mut spec_future_indexing()).unwrap();
     let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
     let outputs = output_handler.get_output();
@@ -698,6 +698,68 @@ async fn test_future_indexing() {
             ]
             .into_iter()
             .collect(),
+        ),
+    ];
+    assert_eq!(outputs, expected_outputs);
+}
+
+#[test(tokio::test)]
+async fn test_past_indexing() {
+    let mut input_streams = input_streams_indexing();
+    let spec = lola_specification(&mut spec_past_indexing()).unwrap();
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        spec.clone(),
+        &mut input_streams,
+        output_handler,
+        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    assert_eq!(outputs.len(), 7); // NOTE: 1 "too" many. See comment sindex combinator
+    let expected_outputs = vec![
+        (
+            0,
+            vec![(VarName("z".into()), Value::Int(42))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            1,
+            vec![(VarName("z".into()), Value::Int(0))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            2,
+            vec![(VarName("z".into()), Value::Int(1))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            3,
+            vec![(VarName("z".into()), Value::Int(2))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            4,
+            vec![(VarName("z".into()), Value::Int(3))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            5,
+            vec![(VarName("z".into()), Value::Int(4))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            6,
+            vec![(VarName("z".into()), Value::Int(5))]
+                .into_iter()
+                .collect(),
         ),
     ];
     assert_eq!(outputs, expected_outputs);

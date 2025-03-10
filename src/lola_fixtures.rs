@@ -402,7 +402,15 @@ pub fn spec_future_indexing() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn input_streams_future() -> impl InputProvider<Value> {
+pub fn spec_past_indexing() -> &'static str {
+    "in x
+     in y
+     out z
+     z = x[-1, 42]"
+}
+
+#[allow(dead_code)]
+pub fn input_streams_indexing() -> impl InputProvider<Value> {
     let mut input_streams = BTreeMap::new();
 
     // Create x stream with values 1 through 6
