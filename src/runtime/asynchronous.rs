@@ -191,7 +191,8 @@ async fn distribute<V: StreamData>(
                     select! {
                         biased;
                         _ = cancellation_token.cancelled() => {
-                            debug!(?clock, "Ending distribute due to cancellation");
+                            debug!(?clock, "Ending distribute due to \
+                            cancellation");
                             return;
                         }
                         data = input_stream.next() => {
@@ -201,14 +202,19 @@ async fn distribute<V: StreamData>(
                                 debug!(?data, "Distributing data");
                                 if let Err(_) = send.send(data) {
                                     debug!("Failed to distribute data due to no receivers");
-                                    // This should not be a halt condition
-                                    // since in the case of eval, they may
-                                    // join later
-                                    // return;
+                                    if clock_new == usize::MAX {
+                                        debug!(
+                                            "Stopping distributing since we currently have no subscribers \
+                                             and the clock is auto advancing so no more subscriber can \
+                                             join in the future"
+                                        );
+                                        return;
+                                    }
                                 }
                                 debug!("Distributed data");
                             } else {
-                                debug!("Stopped distributing data due to end of input stream");
+                                debug!("Stopped distributing data due to end \
+                                of input stream");
                                 return;
                             }
                         }
