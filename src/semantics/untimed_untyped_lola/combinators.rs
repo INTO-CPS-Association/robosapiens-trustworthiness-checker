@@ -314,7 +314,7 @@ pub fn defer(
                         .expect("Invalid eval str");
                     eval_output_stream = Some(UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()));
                     debug!(defer_s, "Evaluated defer string");
-                    subcontext.start_clock();
+                    subcontext.start_auto_clock();
                     break;
                 }
                 Value::Unknown => {
@@ -338,23 +338,14 @@ pub fn defer(
 
         // Wind forward the stream to the current time
         let time_progressed = i.min(history_length);
-        info!(?i, ?time_progressed, ?history_length, "Time progressed");
-        subcontext.advance_clock();
-        let mut eval_output_stream = eval_output_stream;
+        debug!(?i, ?time_progressed, ?history_length, "Time progressed");
+        // subcontext.advance_clock();
+        let mut eval_output_stream = eval_output_stream.skip(time_progressed);
 
         // Yield the saved value until the inner stream is done
-        let mut j = 0;
         while let Some(eval_res) = eval_output_stream.next().await {
-            if j >= time_progressed {
-                debug!(?j, ?eval_res, "Defer");
-                yield eval_res;
-            } else {
-                info!(?j, ?eval_res, "Defer skipping");
-            }
-            j += 1;
-            subcontext.advance_clock();
+            yield eval_res;
         }
-        debug!("Defer stream ended");
     })
 }
 
@@ -494,7 +485,7 @@ pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{TimedStreamContext, Value, VarName};
+    use crate::core::{SyncStreamContext, Value, VarName};
     use async_trait::async_trait;
     use futures::stream;
     use std::collections::BTreeMap;
@@ -542,7 +533,7 @@ mod tests {
                 std::panic!("Mutex was poisoned");
             }
         }
-        fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Value>> {
+        fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Value>> {
             // Create new xs with only the `history_length` latest values for the Vec
             let new_xs = self
                 .xs
@@ -566,7 +557,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl TimedStreamContext<Value> for MockContext {
+    impl SyncStreamContext<Value> for MockContext {
         fn advance_clock(&self) {
             // Remove the first element from each Vec (the oldest value)
             for (_, vec_mutex) in self.xs.iter() {
@@ -580,12 +571,17 @@ mod tests {
             }
             return;
         }
-        fn start_clock(&mut self) {
-            // Do nothing
+
+        fn clock(&self) -> usize {
+            0
         }
 
-        async fn clock(&self) -> usize {
-            0
+        fn is_clock_started(&self) -> bool {
+            true
+        }
+
+        fn start_auto_clock(&mut self) {
+            // Do nothing
         }
 
         async fn wait_till(&self, _time: usize) {

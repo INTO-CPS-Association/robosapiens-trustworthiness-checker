@@ -174,18 +174,29 @@ impl<V> InputProvider<V> for BTreeMap<VarName, OutputStream<V>> {
 pub trait StreamContext<Val: StreamData>: Send + 'static {
     fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>>;
+    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>>;
 }
 
 #[async_trait]
-pub trait TimedStreamContext<Val: StreamData>: StreamContext<Val> + Send + 'static {
+pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + Send + 'static {
+    /// Advance the clock used by the context by one step, letting all
+    /// streams to progress
     fn advance_clock(&self);
 
-    async fn clock(&self) -> usize;
+    /// Set the clock to automatically advance, allowing all substreams
+    /// to progress freely (limited only by buffering)
+    fn start_auto_clock(&mut self);
 
+    /// Check if the clock is currently started
+    fn is_clock_started(&self) -> bool;
+
+    /// Get the current value of the clock (this may not guarantee
+    /// that all stream have reached this time)
+    fn clock(&self) -> usize;
+
+    /// Wait until the clock and all child streams reached the given
+    /// a given time
     async fn wait_till(&self, time: usize);
-
-    fn start_clock(&mut self);
 
     // This allows TimedStreamContext to be used as a StreamContext
     // This is necessary due to https://github.com/rust-lang/rust/issues/65991

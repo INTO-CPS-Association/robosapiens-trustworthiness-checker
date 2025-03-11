@@ -26,7 +26,7 @@ use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::OutputHandler;
 use crate::core::Specification;
-use crate::core::TimedStreamContext;
+use crate::core::SyncStreamContext;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 use crate::dependencies::traits::DependencyManager;
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
@@ -341,7 +341,7 @@ impl<Val: StreamData> StreamContext<Val> for Arc<AsyncVarExchange<Val>> {
         Some(stream)
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
         Box::new(SubMonitor::new(self.clone(), history_length))
     }
 }
@@ -374,14 +374,14 @@ impl<Val: StreamData> SubMonitor<Val> {
             child_clock_senders.insert(var.clone(), watch_tx);
         }
 
-        let progress_sender = watch::channel(0).0;
+        let clock = watch::channel(0).0;
 
         SubMonitor {
             parent,
             senders,
             buffer_size,
             child_clocks: child_clock_recvs,
-            clock: progress_sender,
+            clock,
         }
         .start_monitors(child_clock_senders)
     }
@@ -416,7 +416,7 @@ impl<Val: StreamData> SubMonitor<Val> {
 
     /// Drop our internal references to senders, letting them close once all
     /// current subscribers have received all data
-    fn finish_startup(&mut self) {
+    fn finalize(&mut self) {
         self.senders = BTreeMap::new()
     }
 }
@@ -425,6 +425,10 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
         let sender = self.senders.get(var).unwrap();
 
+        if self.is_clock_started() {
+            panic!("Cannot request a stream after the clock has started");
+        }
+
         let recv: broadcast::Receiver<Val> = sender.subscribe();
         info!(?var, "SubMonitor: giving stream for var");
         let stream: OutputStream<Val> = Box::pin(BroadcastStream::new(recv).map(|x| x.unwrap()));
@@ -432,7 +436,7 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
         Some(stream)
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
         // TODO: consider if this is the right approach; creating a subcontext
         // is only used if eval is called within an eval, and it will require
         // careful thought to decide how much history should be passed down
@@ -442,18 +446,26 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
 }
 
 #[async_trait]
-impl<Val: StreamData> TimedStreamContext<Val> for SubMonitor<Val> {
-    fn start_clock(&mut self) {
-        info!("SubMonitor: finalised!");
-        self.finish_startup()
-    }
-
+impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
     fn advance_clock(&self) {
         self.clock.send_modify(|x| *x += 1);
     }
 
-    async fn clock(&self) -> usize {
+    fn clock(&self) -> usize {
         self.clock.borrow().clone()
+    }
+
+    fn start_auto_clock(&mut self) {
+        if !self.is_clock_started() {
+            self.finalize();
+            // Set the clock to the maximum value to allow all streams to
+            // progress freely
+            self.clock.send_modify(|x| *x = usize::MAX);
+        }
+    }
+
+    fn is_clock_started(&self) -> bool {
+        self.clock() == usize::MAX
     }
 
     async fn wait_till(&self, time: usize) {

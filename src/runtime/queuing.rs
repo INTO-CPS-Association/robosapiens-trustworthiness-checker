@@ -14,7 +14,7 @@ use crate::core::MonitoringSemantics;
 use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::StreamData;
-use crate::core::TimedStreamContext;
+use crate::core::SyncStreamContext;
 use crate::core::{OutputStream, StreamContext, VarName};
 use crate::dependencies::traits::DependencyManager;
 
@@ -182,7 +182,7 @@ impl<Val: StreamData> StreamContext<Val> for Arc<QueuingVarContext<Val>> {
         ))
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
         Box::new(SubMonitor::new(self.clone(), history_length))
     }
 }
@@ -218,7 +218,7 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
         Some(Box::pin(substream))
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn TimedStreamContext<Val>> {
+    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
         // TODO: consider if this is the right approach; creating a subcontext
         // is only used if eval is called within an eval, and it will require
         // careful thought to decide how much history should be passed down
@@ -228,17 +228,13 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
 }
 
 #[async_trait]
-impl<Val: StreamData> TimedStreamContext<Val> for SubMonitor<Val> {
-    async fn clock(&self) -> usize {
+impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
+    fn clock(&self) -> usize {
         *self.index.lock().unwrap()
     }
 
     fn advance_clock(&self) {
         *self.index.lock().unwrap() += 1;
-    }
-
-    fn start_clock(&mut self) {
-        // Do nothing
     }
 
     async fn wait_till(&self, time: usize) {
@@ -247,6 +243,12 @@ impl<Val: StreamData> TimedStreamContext<Val> for SubMonitor<Val> {
 
     fn upcast(&self) -> &dyn StreamContext<Val> {
         self
+    }
+
+    fn start_auto_clock(&mut self) {}
+
+    fn is_clock_started(&self) -> bool {
+        true
     }
 }
 
