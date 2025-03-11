@@ -78,6 +78,7 @@ impl PartialEq for ConstraintStore {
 }
 impl Eq for ConstraintStore {}
 
+#[derive(Debug)]
 pub enum SimplifyResult<T> {
     Resolved(Value),
     Unresolved(T),
@@ -154,10 +155,10 @@ impl ConvertToAbsolute for SExpr<VarName> {
                 Box::new(else_expr.to_absolute(base_time)),
             ),
             SExpr::Eval(_) => todo!(),
-            // If we have reached this point with defer then we know that we haven't received a
-            // property
+            // At this point with defer then we know that we haven't received a property
             SExpr::Defer(_) => SExpr::Val(Value::Unknown),
-            SExpr::Update(_, _) => todo!(),
+            // At this point with update then we know that rhs is not not solvable
+            SExpr::Update(lhs, _) => lhs.to_absolute(base_time),
             SExpr::Default(expr, default) => {
                 SExpr::Default(Box::new(expr.to_absolute(base_time)), default.clone())
             }
@@ -237,12 +238,62 @@ impl Simplifiable for SExpr<IndexedVarName> {
             },
             SExpr::Eval(_) => todo!(),
             SExpr::Defer(_) => unreachable!("Defer should not be reachable as an IndexedVarName"),
-            SExpr::Update(_, _) => todo!(),
+            SExpr::Update(_, _) => {
+                unreachable!("Update should not be reachable as an IndexedVarName")
+            }
             SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
                 Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
                 Resolved(v) => Resolved(v),
                 Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
             },
+            SExpr::Not(_) => todo!(),
+            SExpr::List(_) => todo!(),
+            SExpr::LIndex(_, _) => todo!(),
+            SExpr::LAppend(_, _) => todo!(),
+            SExpr::LConcat(_, _) => todo!(),
+            SExpr::LHead(_) => todo!(),
+            SExpr::LTail(_) => todo!(),
+        }
+    }
+}
+
+impl SExpr<VarName> {
+    fn is_solveable(&self, base_time: usize, store: &ConstraintStore) -> bool {
+        match self {
+            SExpr::Val(_) => true,
+            SExpr::BinOp(e1, e2, _) => {
+                e1.is_solveable(base_time, store) && e2.is_solveable(base_time, store)
+            }
+            SExpr::Var(name) => {
+                // NOTE: Might return false if the Var simply hasn't been resolved yet
+                // (i.e. it is in `outputs_unresolved`)
+                let val = store
+                    .get_from_outputs_resolved(&name, &base_time)
+                    .or_else(|| store.get_from_input_streams(&name, &base_time));
+                val.is_some() && val != Some(&Value::Unknown)
+            }
+            SExpr::SIndex(expr, rel_time, _) => {
+                let new_time = (base_time as isize) + *rel_time;
+                if new_time < 0 {
+                    true
+                } else {
+                    expr.is_solveable(new_time as usize, store)
+                }
+            }
+            SExpr::If(bexpr, if_expr, else_expr) => {
+                bexpr.is_solveable(base_time, store)
+                    && if_expr.is_solveable(base_time, store)
+                    && else_expr.is_solveable(base_time, store)
+            }
+            SExpr::Defer(sexpr) => sexpr.is_solveable(base_time, store),
+            SExpr::Eval(_) => todo!(),
+            SExpr::Update(_, rhs) => {
+                // Technically: (is_solveable(lhs) && is_solveable(rhs)) || is_solveable(rhs)
+                // Remember: Solveable means the it can be solved indefinitely not just at current
+                // time instant
+                rhs.is_solveable(base_time, store)
+            }
+            SExpr::Default(_, _) => true,
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),
@@ -361,7 +412,18 @@ impl Simplifiable for SExpr<VarName> {
                     .expect("Parsing the defer string resulted in an invalid expression.");
                 expr.simplify(base_time, store)
             }
-            SExpr::Update(_, _) => todo!(),
+            SExpr::Update(lhs, rhs) => {
+                if rhs.is_solveable(base_time, store) {
+                    return rhs.simplify(base_time, store);
+                }
+                match lhs.simplify(base_time, store) {
+                    Resolved(val) => Unresolved(Box::new(SExpr::Update(
+                        Box::new(SExpr::Val(val)),
+                        rhs.clone(),
+                    ))),
+                    Unresolved(sexpr) => Unresolved(Box::new(SExpr::Update(sexpr, rhs.clone()))),
+                }
+            }
             SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
                 Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
                 Resolved(v) => Resolved(v),

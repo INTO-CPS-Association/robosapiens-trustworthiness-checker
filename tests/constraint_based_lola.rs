@@ -943,4 +943,320 @@ mod tests {
             }
         }
     }
+
+    #[test(tokio::test)]
+    async fn test_update_both_init() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec!["x0".into(), "x1".into(), "x2".into()];
+            let y = vec!["y0".into(), "y1".into(), "y2".into()];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
+            let mut spec = "in x\nin y\nout z\nz = update(x, y)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 3);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), "y0".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), "y1".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), "y2".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_update_first_x_then_y() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+            let y = vec![Value::Unknown, "y1".into(), Value::Unknown, "y3".into()];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
+            let mut spec = "in x\nin y\nout z\nz = update(x, y)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 4);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), "x0".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), "y1".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), Value::Unknown)]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        3,
+                        vec![(VarName("z".into()), "y3".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_update_defer() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+            let e = vec![Value::Unknown, "x".into(), "x".into(), "x".into()];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let mut spec = "in x\nin e\nout z\nz = update(\"def\", defer(e))";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 4);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), "def".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), "x1".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), "x2".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        3,
+                        vec![(VarName("z".into()), "x3".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_defer_update() {
+        // This spec is essentially a "picker". The first input to provide a value is selected
+        // for the rest of execution
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec![Value::Unknown, "x".into(), "x_lost".into(), "x_sad".into()];
+            let y = vec![
+                Value::Unknown,
+                "y".into(),
+                "y_won!".into(),
+                "y_happy".into(),
+            ];
+            let mut input_streams =
+                new_input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
+            let mut spec = "in x\nin y\nout z\nz = defer(update(x, y))";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 4);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), Value::Unknown)]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), "y".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), "y_won!".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        3,
+                        vec![(VarName("z".into()), "y_happy".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn test_recursive_update() {
+        // This is essentially the same as z = x, but it tests recursively using update
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+            let mut input_streams = new_input_stream(BTreeMap::from([("x".into(), x)]));
+            let mut spec = "in x\nout z\nz = update(x, z)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 4);
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), "x0".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), "x1".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), "x2".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    (
+                        3,
+                        vec![(VarName("z".into()), "x3".into())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ]
+            );
+        }
+    }
+
+    // NOTE: While this test is interesting, it cannot work due to how defer is handled.
+    // When defer receives a prop stream it changes state from being a defer expression into
+    // the received prop stream. Thus, it cannot be used recursively.
+    // This is the reason why we also need eval for the constraint based runtime.
+    #[test(tokio::test)]
+    async fn test_recursive_update_defer() {
+        for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
+            let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
+            let mut input_streams = new_input_stream(BTreeMap::from([("x".into(), x)]));
+            let mut spec = "in x\nout z\nz = update(defer(x), z)";
+            let spec = lola_specification(&mut spec).unwrap();
+            let mut output_handler = output_handler(spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, Box::new(spec)),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert!(outputs.len() == 4);
+            // The outcommented are if update(defer(x), z) worked as we initially envisioned
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        vec![(VarName("z".into()), 0.into())].into_iter().collect(),
+                    ),
+                    (
+                        1,
+                        vec![(VarName("z".into()), 0.into())].into_iter().collect(),
+                        // vec![(VarName("z".into()), 1.into())].into_iter().collect(),
+                    ),
+                    (
+                        2,
+                        vec![(VarName("z".into()), 0.into())].into_iter().collect(),
+                        // vec![(VarName("z".into()), 2.into())].into_iter().collect(),
+                    ),
+                    (
+                        3,
+                        vec![(VarName("z".into()), 0.into())].into_iter().collect(),
+                        // vec![(VarName("z".into()), 3.into())].into_iter().collect(),
+                    ),
+                ]
+            );
+        }
+    }
 }
