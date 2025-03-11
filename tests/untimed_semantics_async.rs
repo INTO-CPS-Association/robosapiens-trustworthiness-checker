@@ -303,7 +303,6 @@ async fn test_defer_stream_3() {
     }
 }
 
-#[ignore = "MHK: Test fails - IMO something is broken with either SIndex or Defer"]
 #[test(tokio::test)]
 async fn test_defer_stream_4() {
     let mut input_streams = input_streams_defer_4();
@@ -318,12 +317,20 @@ async fn test_defer_stream_4() {
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    // This is actually expected behaviour (at least with a global default
+    // history_length = 10 for defer) since once e = x[-1, 0] has arrived
+    // the stream for z = defer(e) will continue until x[-1, 0] keeps producing
+    // values (making use of its history) which can continue beyond the life
+    // of the stream for e (since it does not depend on e any more once a value
+    // has been received). This differs from the behaviour of eval(e) which
+    // stops if e stops.
     let expected_outputs = vec![
         (0, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
         (1, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
         (2, BTreeMap::from([(VarName("z".into()), Value::Int(1))])),
         (3, BTreeMap::from([(VarName("z".into()), Value::Int(2))])),
         (4, BTreeMap::from([(VarName("z".into()), Value::Int(3))])),
+        (5, BTreeMap::from([(VarName("z".into()), Value::Int(4))])),
     ];
     assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
