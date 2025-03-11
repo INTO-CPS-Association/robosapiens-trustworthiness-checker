@@ -102,6 +102,7 @@ impl DepGraph {
             let (source, target) = other.graph.edge_endpoints(edge).unwrap();
             let weight = other.graph[edge].clone();
 
+            // This is the index of the node in `self` if it exists
             let source_index = node_map[&other.graph[source]];
             let target_index = node_map[&other.graph[target]];
 
@@ -114,6 +115,51 @@ impl DepGraph {
                 let edge_index = self.graph.find_edge(source_index, target_index).unwrap();
                 let existing_weight = self.graph.edge_weight_mut(edge_index).unwrap();
                 existing_weight.extend(weight);
+            }
+        }
+    }
+
+    // Similar to creating a new graph with the set difference of the edges, but this is done in-place
+    // (Not removing nodes because the variables still exist even if they are unconnected)
+    fn diff_graphs(&mut self, other: &DepGraph) {
+        let mut node_map = BTreeMap::new();
+
+        // Add all nodes from `self` into the map
+        for node in self.graph.node_indices() {
+            let node_value = self.graph[node].clone();
+            node_map.insert(node_value, node);
+        }
+
+        // Add nodes from `other` if they are not already in `self`
+        for node in other.graph.node_indices() {
+            let node_value = other.graph[node].clone();
+            node_map
+                .entry(node_value.clone())
+                .or_insert_with(|| self.graph.add_node(node_value));
+        }
+
+        // Remove weights and potentially edges from `self` that are present in `other`
+        for edge in other.graph.edge_indices() {
+            let (source, target) = other.graph.edge_endpoints(edge).unwrap();
+
+            // This is the index of the node in `self` if it exists
+            let source_index = node_map[&other.graph[source]];
+            let target_index = node_map[&other.graph[target]];
+
+            // Remove the edge if it exists in `self`
+            if let Some(edge_index) = self.graph.find_edge(source_index, target_index) {
+                // Find `other` weights:
+                let other_weight = &other.graph[edge];
+                let self_weight = self.graph.edge_weight_mut(edge_index).unwrap();
+                for weight in other_weight.iter() {
+                    if let Some(index) = self_weight.iter().position(|x| x == weight) {
+                        // Unfortunately, this becomes O(n*n). Hopefully, we have few weights
+                        self_weight.remove(index);
+                    }
+                }
+                if self_weight.is_empty() {
+                    self.graph.remove_edge(edge_index);
+                }
             }
         }
     }
@@ -283,9 +329,14 @@ impl DependencyResolver for DepGraph {
         graph
     }
 
-    fn add_dependency(&mut self, var: VarName, sexpr: &SExpr<VarName>) {
+    fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>) {
         let expr_deps = DepGraph::sexpr_dependencies(sexpr, &var);
         self.merge_graphs(&expr_deps);
+    }
+
+    fn remove_dependency(&mut self, name: &VarName, sexpr: &SExpr<VarName>) {
+        let expr_deps = DepGraph::sexpr_dependencies(sexpr, &name);
+        self.diff_graphs(&expr_deps);
     }
 
     fn longest_time_dependency(&self, name: &VarName) -> Option<usize> {
@@ -338,6 +389,7 @@ mod tests {
                 "multi_dependent_past",
                 "in a\nout x\nout y\nx = a[-1, 0]\ny = x[-1, 0]",
             ),
+            ("multi_same_dependent", "in a\nout x\nx = a + a[-1, 0]"),
         ])
     }
 
@@ -444,6 +496,20 @@ mod tests {
     }
 
     #[test]
+    fn test_graph_multi_same_dependent() {
+        let mut spec = specs()["multi_same_dependent"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let graph = DepGraph::new(Box::new(spec)).graph;
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 1);
+        let a = find_node(&graph, "a");
+        let x = find_node(&graph, "x");
+        assert!(graph.contains_edge(x, a));
+        let weight = get_weight(&graph, x, a);
+        assert_eq!(weight, vec![0, -1]);
+    }
+
+    #[test]
     fn test_time_simple() {
         let mut spec = specs()["single_no_inp"];
         let spec = lola_specification(&mut spec).unwrap();
@@ -504,11 +570,22 @@ mod tests {
     }
 
     #[test]
+    fn test_time_multi_same_dependent() {
+        let mut spec = specs()["multi_same_dependent"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let dep = DepGraph::new(Box::new(spec));
+        assert_eq!(dep.longest_time_dependency(&"x".into()), Some(0));
+        assert_eq!(dep.longest_time_dependency(&"a".into()), Some(1));
+        let expected: BTreeMap<VarName, usize> = BTreeMap::from([("x".into(), 0), ("a".into(), 1)]);
+        assert_eq!(dep.longest_time_dependencies(), expected);
+    }
+
+    #[test]
     fn test_add_dep_simple() {
         let mut spec = specs()["single_no_inp"];
         let spec = lola_specification(&mut spec).unwrap();
         let mut graph = DepGraph::new(Box::new(spec));
-        graph.add_dependency("new".into(), &SExpr::Val(42.into()));
+        graph.add_dependency(&"new".into(), &SExpr::Val(42.into()));
         assert_eq!(graph.graph.node_count(), 2);
         assert_eq!(graph.graph.edge_count(), 0);
     }
@@ -518,7 +595,7 @@ mod tests {
         let mut spec = specs()["single_no_inp"];
         let spec = lola_specification(&mut spec).unwrap();
         let mut graph = DepGraph::new(Box::new(spec));
-        graph.add_dependency("a".into(), &SExpr::Var("x".into()));
+        graph.add_dependency(&"a".into(), &SExpr::Var("x".into()));
         let graph = graph.graph;
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 1);
@@ -534,7 +611,7 @@ mod tests {
         let mut spec = specs()["multi_dependent"];
         let spec = lola_specification(&mut spec).unwrap();
         let mut graph = DepGraph::new(Box::new(spec));
-        graph.add_dependency("a".into(), &SExpr::Var("y".into()));
+        graph.add_dependency(&"a".into(), &SExpr::Var("y".into()));
         let graph = graph.graph;
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 3);
@@ -557,7 +634,7 @@ mod tests {
         let mut spec = specs()["multi_dependent"];
         let spec = lola_specification(&mut spec).unwrap();
         let mut graph = DepGraph::new(Box::new(spec));
-        graph.add_dependency("x".into(), &SExpr::Var("a".into()));
+        graph.add_dependency(&"x".into(), &SExpr::Var("a".into()));
         let graph = graph.graph;
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 2);
@@ -574,7 +651,7 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let mut graph = DepGraph::new(Box::new(spec));
         graph.add_dependency(
-            "x".into(),
+            &"x".into(),
             &SExpr::SIndex(Box::new(SExpr::Var("a".into())), -1, 0.into()),
         );
         let graph = graph.graph;
@@ -585,6 +662,42 @@ mod tests {
         assert!(graph.contains_edge(x, a));
         let weight = get_weight(&graph, x, a);
         assert_eq!(weight, vec![0, -1]); // The new weight was added correctly
+    }
+
+    #[test]
+    fn test_rm_dep_removes_edge() {
+        // Case where the last weight is removed so we remove the entire edge
+        let mut spec = specs()["multi_dependent"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let mut graph = DepGraph::new(Box::new(spec));
+        graph.remove_dependency(&"y".into(), &SExpr::Var("x".into()));
+        let graph = graph.graph;
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 1);
+        let a = find_node(&graph, "a");
+        let x = find_node(&graph, "x");
+        let y = find_node(&graph, "y");
+        assert!(graph.contains_edge(x, a));
+        assert!(!graph.contains_edge(y, x));
+        let weight = get_weight(&graph, x, a);
+        assert_eq!(weight, vec![0]);
+    }
+
+    #[test]
+    fn test_rm_dep_removes_weight() {
+        // Case where we still have a weight left after removing dependency
+        let mut spec = specs()["multi_same_dependent"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let mut graph = DepGraph::new(Box::new(spec));
+        graph.remove_dependency(&"x".into(), &SExpr::Var("a".into()));
+        let graph = graph.graph;
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 1);
+        let a = find_node(&graph, "a");
+        let x = find_node(&graph, "x");
+        assert!(graph.contains_edge(x, a));
+        let weight = get_weight(&graph, x, a);
+        assert_eq!(weight, vec![-1]);
     }
 
     // TODO: TWright: the following tests assume that we have a way to get a

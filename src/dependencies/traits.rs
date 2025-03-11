@@ -10,7 +10,8 @@ use super::{DepGraph, Empty};
 #[strum_discriminants(name(DependencyKind))]
 #[enum_inner_method (fn longest_time_dependency(&self, v: &VarName) -> Option<usize>)]
 #[enum_inner_method (fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize>)]
-#[enum_inner_method (fn add_dependency(&mut self, var: VarName, sexpr: &SExpr<VarName>))]
+#[enum_inner_method (fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>))]
+#[enum_inner_method (fn remove_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>))]
 pub enum DependencyManager {
     Empty(Empty),
     DepGraph(DepGraph),
@@ -34,7 +35,10 @@ pub trait DependencyResolver: Send + Sync {
     fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Self;
 
     // Adds a new dependency to the resolver
-    fn add_dependency(&mut self, var: VarName, sexpr: &SExpr<VarName>);
+    fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>);
+
+    // Remove dependency to the resolver
+    fn remove_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>);
 
     // Returns how long the variable needs to be saved before it can be forgotten
     fn longest_time_dependency(&self, var: &VarName) -> Option<usize>;

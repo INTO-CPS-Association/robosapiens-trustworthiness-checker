@@ -23,8 +23,13 @@ impl DependencyResolver for Empty {
         Self { names }
     }
 
-    fn add_dependency(&mut self, name: VarName, _: &SExpr<VarName>) {
-        self.names.insert(name);
+    fn add_dependency(&mut self, name: &VarName, _: &SExpr<VarName>) {
+        self.names.insert(name.clone());
+    }
+
+    fn remove_dependency(&mut self, _: &VarName, _: &SExpr<VarName>) {
+        // In principle, this should remove the Dependencies inside the SExpr from `names`.
+        // However, since we don't know if other variables are using them we can't.
     }
 
     fn longest_time_dependency(&self, _: &VarName) -> Option<usize> {
