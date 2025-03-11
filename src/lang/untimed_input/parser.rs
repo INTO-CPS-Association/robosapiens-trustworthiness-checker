@@ -79,12 +79,10 @@ mod tests {
     fn test_value_assignments() -> Result<(), ContextError> {
         assert_eq!(
             value_assignments(&mut (*"x = 42\ny = 3".to_string()).into())?,
-            vec![
+            BTreeMap::from([
                 (VarName("x".into()), Value::Int(42)),
                 (VarName("y".into()), Value::Int(3)),
-            ]
-            .into_iter()
-            .collect(),
+            ]),
         );
         assert_eq!(
             value_assignments(&mut (*"".to_string()).into())?,
@@ -97,35 +95,26 @@ mod tests {
     fn test_time_stamped_assignment() -> Result<(), ContextError> {
         assert_eq!(
             time_stamped_assignments(&mut (*"0: x = 42".to_string()).into())?,
-            (
-                0,
-                vec![(VarName("x".into()), Value::Int(42))]
-                    .into_iter()
-                    .collect()
-            ),
+            (0, BTreeMap::from([(VarName("x".into()), Value::Int(42))])),
         );
         assert_eq!(
             time_stamped_assignments(&mut (*"1: x = 42\ny = 3".to_string()).into())?,
             (
                 1,
-                vec![
+                BTreeMap::from([
                     (VarName("x".into()), Value::Int(42)),
                     (VarName("y".into()), Value::Int(3))
-                ]
-                .into_iter()
-                .collect()
+                ])
             ),
         );
         assert_eq!(
             time_stamped_assignments(&mut (*"2:\n x = 42\ny = 3".to_string()).into())?,
             (
                 2,
-                vec![
+                BTreeMap::from([
                     (VarName("x".into()), Value::Int(42)),
                     (VarName("y".into()), Value::Int(3))
-                ]
-                .into_iter()
-                .collect()
+                ])
             ),
         );
         Ok(())

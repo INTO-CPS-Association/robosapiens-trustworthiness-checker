@@ -623,16 +623,14 @@ mod tests {
         let simple_add_spec = LOLASpecification {
             input_vars: vec![VarName("x".into()), VarName("y".into())],
             output_vars: vec![VarName("z".into())],
-            exprs: vec![(
+            exprs: BTreeMap::from([(
                 VarName("z".into()),
                 SExpr::BinOp(
                     Box::new(SExpr::Var(VarName("x".into()))),
                     Box::new(SExpr::Var(VarName("y".into()))),
                     SBinOp::IOp(IntBinOp::Add),
                 ),
-            )]
-            .into_iter()
-            .collect(),
+            )]),
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
@@ -647,7 +645,7 @@ mod tests {
         let count_spec = LOLASpecification {
             input_vars: vec![],
             output_vars: vec![VarName("x".into())],
-            exprs: vec![(
+            exprs: BTreeMap::from([(
                 VarName("x".into()),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
@@ -658,9 +656,7 @@ mod tests {
                     )),
                     SBinOp::IOp(IntBinOp::Add),
                 ),
-            )]
-            .into_iter()
-            .collect(),
+            )]),
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, count_spec);
@@ -684,7 +680,7 @@ mod tests {
                 VarName("s".into()),
             ],
             output_vars: vec![VarName("z".into()), VarName("w".into())],
-            exprs: vec![
+            exprs: BTreeMap::from([
                 (
                     VarName("z".into()),
                     SExpr::BinOp(
@@ -697,9 +693,7 @@ mod tests {
                     VarName("w".into()),
                     SExpr::Eval(Box::new(SExpr::Var(VarName("s".into())))),
                 ),
-            ]
-            .into_iter()
-            .collect(),
+            ]),
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, eval_spec);

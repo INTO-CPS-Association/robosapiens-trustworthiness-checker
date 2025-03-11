@@ -32,18 +32,8 @@ async fn test_simple_add_monitor() {
     assert_eq!(
         outputs,
         vec![
-            (
-                0,
-                vec![(VarName("z".into()), Value::Int(3))]
-                    .into_iter()
-                    .collect(),
-            ),
-            (
-                1,
-                vec![(VarName("z".into()), Value::Int(7))]
-                    .into_iter()
-                    .collect(),
-            ),
+            (0, BTreeMap::from([(VarName("z".into()), Value::Int(3))]),),
+            (1, BTreeMap::from([(VarName("z".into()), Value::Int(7))]),),
         ]
     );
 }
@@ -70,15 +60,11 @@ async fn test_concat_monitor() {
         vec![
             (
                 0,
-                vec![(VarName("z".into()), Value::Str("ab".into()))]
-                    .into_iter()
-                    .collect(),
+                BTreeMap::from([(VarName("z".into()), Value::Str("ab".into()))]),
             ),
             (
                 1,
-                vec![(VarName("z".into()), Value::Str("cd".into()))]
-                    .into_iter()
-                    .collect(),
+                BTreeMap::from([(VarName("z".into()), Value::Str("cd".into()))]),
             ),
         ]
     );
@@ -103,30 +89,10 @@ async fn test_count_monitor() {
     assert_eq!(
         outputs,
         vec![
-            (
-                0,
-                vec![(VarName("x".into()), Value::Int(1))]
-                    .into_iter()
-                    .collect(),
-            ),
-            (
-                1,
-                vec![(VarName("x".into()), Value::Int(2))]
-                    .into_iter()
-                    .collect(),
-            ),
-            (
-                2,
-                vec![(VarName("x".into()), Value::Int(3))]
-                    .into_iter()
-                    .collect(),
-            ),
-            (
-                3,
-                vec![(VarName("x".into()), Value::Int(4))]
-                    .into_iter()
-                    .collect(),
-            ),
+            (0, BTreeMap::from([(VarName("x".into()), Value::Int(1))]),),
+            (1, BTreeMap::from([(VarName("x".into()), Value::Int(2))]),),
+            (2, BTreeMap::from([(VarName("x".into()), Value::Int(3))]),),
+            (3, BTreeMap::from([(VarName("x".into()), Value::Int(4))]),),
         ]
     );
 }
@@ -153,21 +119,17 @@ async fn test_eval_monitor() {
         vec![
             (
                 0,
-                vec![
+                BTreeMap::from([
                     (VarName("z".into()), Value::Int(3)),
                     (VarName("w".into()), Value::Int(3))
-                ]
-                .into_iter()
-                .collect(),
+                ]),
             ),
             (
                 1,
-                vec![
+                BTreeMap::from([
                     (VarName("z".into()), Value::Int(7)),
                     (VarName("w".into()), Value::Int(7))
-                ]
-                .into_iter()
-                .collect(),
+                ]),
             ),
         ]
     );
@@ -196,21 +158,17 @@ async fn test_multiple_parameters() {
         vec![
             (
                 0,
-                vec![
+                BTreeMap::from([
                     (VarName("r1".into()), Value::Int(3)),
                     (VarName("r2".into()), Value::Int(2)),
-                ]
-                .into_iter()
-                .collect(),
+                ]),
             ),
             (
                 1,
-                vec![
+                BTreeMap::from([
                     (VarName("r1".into()), Value::Int(7)),
                     (VarName("r2".into()), Value::Int(12)),
-                ]
-                .into_iter()
-                .collect(),
+                ]),
             ),
         ]
     );

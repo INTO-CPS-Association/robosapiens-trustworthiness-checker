@@ -59,14 +59,10 @@ mod tests {
         let mut handler: NullOutputHandler<Value> =
             NullOutputHandler::new(vec![VarName("x".to_string()), VarName("y".to_string())]);
 
-        handler.provide_streams(
-            vec![
-                (VarName("x".to_string()), x_stream),
-                (VarName("y".to_string()), y_stream),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        handler.provide_streams(BTreeMap::from([
+            (VarName("x".to_string()), x_stream),
+            (VarName("y".to_string()), y_stream),
+        ]));
 
         let task = tokio::spawn(handler.run());
 

@@ -248,25 +248,19 @@ mod tests {
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
         let xy_expected: Vec<BTreeMap<VarName, Value>> = (0..10)
             .map(|x| {
-                vec![
+                BTreeMap::from([
                     (VarName("x".to_string()), (x * 2).into()),
                     (VarName("y".to_string()), (x * 2 + 1).into()),
-                ]
-                .into_iter()
-                .collect()
+                ])
             })
             .collect();
         let mut handler: ManualOutputHandler<Value> =
             ManualOutputHandler::new(vec![VarName("x".to_string()), VarName("y".to_string())]);
 
-        handler.provide_streams(
-            vec![
-                (VarName("x".to_string()), x_stream),
-                (VarName("y".to_string()), y_stream),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        handler.provide_streams(BTreeMap::from([
+            (VarName("x".to_string()), x_stream),
+            (VarName("y".to_string()), y_stream),
+        ]));
 
         //
         let output_stream = handler.get_output();
