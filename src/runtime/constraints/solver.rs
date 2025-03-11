@@ -78,7 +78,7 @@ impl PartialEq for ConstraintStore {
 }
 impl Eq for ConstraintStore {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SimplifyResult<T> {
     Resolved(Value),
     Unresolved(T),

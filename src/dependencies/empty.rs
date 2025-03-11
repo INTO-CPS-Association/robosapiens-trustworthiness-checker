@@ -23,6 +23,10 @@ impl DependencyResolver for Empty {
         Self { names }
     }
 
+    fn add_dependency(&mut self, name: VarName, _: &SExpr<VarName>) {
+        self.names.insert(name);
+    }
+
     fn longest_time_dependency(&self, _: &VarName) -> Option<usize> {
         Some(usize::MAX)
     }
