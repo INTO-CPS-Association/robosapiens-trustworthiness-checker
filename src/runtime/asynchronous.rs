@@ -6,18 +6,15 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::future::join_all;
 use tokio::select;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 use tracing::Level;
 use tracing::debug;
 use tracing::info;
-use tracing::info_span;
 use tracing::instrument;
 use tracing::warn;
 
@@ -53,144 +50,51 @@ use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
  * - cancel: a cancellation token which is used to signal when the actor should
  *   terminate
  */
+#[instrument(name="manage_var", level=Level::DEBUG, skip(input_stream, channel_request_rx, parent_clock, child_clock, cancel))]
 async fn manage_var<V: StreamData>(
     var: VarName,
     mut input_stream: OutputStream<V>,
-    mut channel_request_rx: mpsc::Receiver<oneshot::Sender<OutputStream<V>>>,
-    mut ready: watch::Receiver<bool>,
+    mut channel_request_rx: mpsc::Receiver<(oneshot::Sender<()>, oneshot::Sender<OutputStream<V>>)>,
+    mut parent_clock: watch::Receiver<usize>,
+    child_clock: watch::Sender<usize>,
+    // mut ready: watch::Receiver<bool>,
     cancel: CancellationToken,
 ) {
     let mut senders: Vec<mpsc::Sender<V>> = vec![];
-    let mut send_requests = vec![];
-
-    // Tracing for variable manager task
-    let manage_var = info_span!("manage_var", var = format!("{:?}", var.clone()));
-    let _ = manage_var.enter();
-    let mut time = 0;
-
-    /* Stage 1. Gathering subscribers */
-    loop {
-        select! {
-            biased;
-            _ = cancel.cancelled() => {
-                info!(?var, "Ending manage_var due to cancellation");
-                return;
-            }
-            _ = ready.wait_for(|x| *x) => {
-                debug!(?var, "Moving to stage 2");
-                break;
-            }
-            channel_sender = channel_request_rx.recv() => {
-                if let Some(channel_sender) = channel_sender {
-                    debug!(?var, "Received request for var");
-                    send_requests.push(channel_sender);
-                }
-                // We don't care if we stop receiving requests
-                debug!(?var, "Channel sender went away for var");
-            }
-        }
-    }
-
-    /* Send subscriptions to everyone who has requested one */
-    if send_requests.len() == 1 {
-        /* Special case handling for a single subscription request: just send
-         * the input stream directly to the subscriber and skip stage 2 */
-        let channel_sender = send_requests.pop().unwrap();
-        if let Err(_) = channel_sender.send(input_stream) {
-            panic!("Failed to send stream for {var} to requester");
-        }
-        // We directly re-forwarded the input stream, so we are done
-        // info!(?var, "manage_var done after single subscription");
-        return;
-    } else {
-        /* Normal case: create a new channel for each subscriber and send
-         * them a stream generated from the receiving end of this channel */
-        for channel_sender in send_requests {
-            let (tx, rx) = mpsc::channel(10);
-            senders.push(tx);
-            let stream = ReceiverStream::new(rx);
-            if let Err(_) = channel_sender.send(Box::pin(stream)) {
-                // panic!("Failed to send stream for {var} to requester");
-                warn!(?var, "Failed to send stream for var to requester");
-            }
-        }
-    }
-
-    /* Stage 2. Distributing data */
-    loop {
-        select! {
-            biased;
-            _ = cancel.cancelled() => {
-                info!(?var, "Ending manage_var due to cancellation");
-                return;
-            }
-            // Bad things will happen if this is called before everyone has subscribed
-            data = input_stream.next() => {
-                if let Some(data) = data {
-                    debug!(?var, ?data, ?time, "Sending var data");
-                    // Senders can be empty if an input is not actually used
-                    // assert!(!senders.is_empty());
-                    let send_futs = senders.iter().map(|sender| sender.send(data.clone()));
-                    for res in join_all(send_futs).await {
-                        debug!(?var, ?data, "Sent var data");
-                        if let Err(err) = res {
-                            warn!(name: "Failed to send var data due to no receivers",
-                                ?data, ?var, ?err);
-                        }
-                    }
-                    time += 1;
-                } else {
-                    debug!(?var, ?time, "manage_var out of input data");
-                    return;
-                }
-            }
-        }
-    }
-}
-
-/* Task for moving data from a channel to a broadcast channel
- * with a clock used to control the rate of data distribution
- *
- * This is used alongside the monitor task to implement subcontexts
- * by buffering data from the input stream and distributing it to subscribers
- * when the clock advances (i.e. when subcontext.advance() is called)
- *
- * This has parameters:
- * - input_stream: the stream of inputs which we are distributing
- * - send: the broadcast channel to which we are sending data
- * - clock: a watch channel which is used to signal when the clock advances
- * - cancellation_token: a cancellation token which is used to signal when to
- *   terminate the task
- * - var: the name of the variable being managed
- */
-#[instrument(name="distribute", level=Level::INFO, skip(input_stream, send, parent_clock, child_clock, cancellation_token))]
-async fn distribute<V: StreamData>(
-    mut input_stream: OutputStream<V>,
-    send: broadcast::Sender<V>,
-    mut parent_clock: watch::Receiver<usize>,
-    child_clock: watch::Sender<usize>,
-    cancellation_token: CancellationToken,
-    var: VarName,
-) {
+    let mut receiving_requests = true;
     let mut clock_old = 0;
+
+    // TODO: This could be optimized to readd an additional stage where
+    // we gather up requests before sending out any streams. This would
+    // mean that manage_var would go away if there is only one subscriber
+    // since we would just send the input stream directly to the
+    // subscriber. This adds complexity, but in previous versions of the
+    // runtime could give a 2x speedup in some cases.
+
     loop {
         select! {
             biased;
-            _ = cancellation_token.cancelled() => {
+            _ = cancel.cancelled() => {
+                info!(?var, "Ending manage_var due to cancellation");
                 return;
             }
+
             clock_upd = parent_clock.changed() => {
                 if clock_upd.is_err() {
                     warn!("Distribute clock channel closed");
                     return;
                 }
                 let clock_new = *parent_clock.borrow_and_update();
+                if clock_new == usize::MAX {
+                    debug!("Closing to new subscribers since the clock is auto advancing");
+                    receiving_requests = false;
+                }
                 debug!(clock_old, clock_new, "Monitoring between clocks");
                 for clock in clock_old+1..=clock_new {
                     debug!(?clock, "Distributing single");
                     select! {
                         biased;
-                        _ = cancellation_token.cancelled() => {
+                        _ = cancel.cancelled() => {
                             debug!(?clock, "Ending distribute due to \
                             cancellation");
                             return;
@@ -200,16 +104,23 @@ async fn distribute<V: StreamData>(
                                 // Update the child clock to report our progress
                                 let _ = child_clock.send(clock);
                                 debug!(?data, "Distributing data");
-                                if let Err(_) = send.send(data) {
-                                    debug!("Failed to distribute data due to no receivers");
-                                    if clock_new == usize::MAX {
-                                        debug!(
-                                            "Stopping distributing since we currently have no subscribers \
-                                             and the clock is auto advancing so no more subscriber can \
-                                             join in the future"
-                                        );
-                                        return;
+                                let mut to_delete = vec![];
+                                for (i, child_sender) in senders.iter().enumerate() {
+                                    if let Err(_) = child_sender.send(data.clone()).await {
+                                        debug!("Failed to distribute data due to no receivers");
+                                        if clock_new == usize::MAX {
+                                            debug!(
+                                                "Stopping distributing since we currently have no subscribers \
+                                                and the clock is auto advancing so no more subscriber can \
+                                                join in the future"
+                                            );
+                                            to_delete.push(i);
+                                            return;
+                                        }
                                     }
+                                }
+                                for i in to_delete {
+                                    senders.remove(i);
                                 }
                                 debug!("Distributed data");
                             } else {
@@ -223,197 +134,155 @@ async fn distribute<V: StreamData>(
                 debug!(clock_old, clock_new, "Finished monitoring between clocks");
                 clock_old = clock_new;
             }
+
+            channel_sender = channel_request_rx.recv() => {
+                if !receiving_requests {
+                    panic!("Received request after all subscribers have been gathered");
+                }
+                if let Some((done_sender, channel_sender)) = channel_sender {
+                    debug!(?var, "Received request for var");
+                    let (tx, rx) = mpsc::channel(10);
+                    senders.push(tx);
+                    let stream = ReceiverStream::new(rx);
+                    if let Err(_) = channel_sender.send(Box::pin(stream)) {
+                        // panic!("Failed to send stream for {var} to requester");
+                        warn!(?var, "Failed to send stream for var to requester");
+                    };
+                    if let Err(_) = done_sender.send(()) {
+                        warn!(?var, "Failed to send done signal for var to requester");
+                    }
+                    // send_requests.push(channel_sender);
+                }
+                // We don't care if we stop receiving requests
+                debug!(?var, "Channel sender went away for var");
+            }
+
         }
     }
 }
 
-/* Task for moving data from an input stream to an output channel
- *
- * This is used in the implementation of subcontexts to buffer data before it
- * is sent to distribute
- *
- * This has parameters:
- * - input_stream: the stream of inputs which we are monitoring
- * - send: the channel to which we are sending data (corresponding to the
- *   other half of the channel held by distribute)
- * - cancellation_token: a cancellation token which is used to signal when to
- *   terminate the task
- */
-#[instrument(name="monitor", level=Level::INFO, skip(input_stream, send, cancellation_token))]
-async fn monitor<V: StreamData>(
-    mut input_stream: OutputStream<V>,
-    send: mpsc::Sender<V>,
-    cancellation_token: CancellationToken,
+/// Create a wrapper around an input stream which stores a history buffer of
+/// data of length history_length for retrospective monitoring
+fn store_history<V: StreamData>(
     var: VarName,
-) {
-    loop {
-        select! {
-            biased;
-            _ = cancellation_token.cancelled() => {
+    history_length: usize,
+    mut input_stream: OutputStream<V>,
+) -> OutputStream<V> {
+    if history_length == 0 {
+        return input_stream;
+    }
+
+    let (send, recv) = mpsc::channel(history_length);
+
+    tokio::spawn(async move {
+        while let Some(data) = input_stream.next().await {
+            debug!(
+                ?var,
+                ?data,
+                ?history_length,
+                "monitored history data for history"
+            );
+            if let Err(_) = send.send(data).await {
+                debug!(
+                    ?var,
+                    ?history_length,
+                    "Failed to send data due to no receivers; shutting down"
+                );
                 return;
             }
-            data = input_stream.next() => {
-                match data {
-                    Some(data) => {
-                        debug!(name: "Monitored data", ?data);
-                        if let Err(_) = send.send(data).await {
-                            info!("Failed to send data due to no receivers; shutting down");
-                            return;
-                        }
-                    }
-                    None => {
-                        debug!("Monitor out of input data");
-                        return;
-                    }
-                }
-            }
         }
-    }
+        debug!("store_history out of input data");
+    });
+
+    Box::pin(ReceiverStream::new(recv))
 }
 
-#[derive(Clone)]
-struct VarData<Val> {
-    requester: mpsc::Sender<oneshot::Sender<OutputStream<Val>>>,
-}
-
-/*
- * A StreamContext that manages subscriptions to each variable and provides
- * an asynchronous stream when requested by the monitoring semantics.
- *
- * This includes:
- * - var_data: a map from variable names to the data associated with each
- *   variable, including the requester channel used to request the stream
- * - cancellation_token: a cancellation token used to signal when any async
- *   actors we have launched should terminate
- * - drop_guard: a reference-counted drop guard associated with the
- *   cancellation token which signals to cancel all background tasks when there
- *   it is dropped (i.e. when the reference count goes to zero)
- * - vars_requested: a watch channel used to track the number of outstanding
- *   requests for subscriptions to each variable (this is used to determine
- *   when it is safe for managed_var to start distributing data)
- *
- * Most of the logic is in the manage_var actor which is launched for each
- * variable to manage subscriptions and distribute data.
- */
-struct AsyncVarExchange<Val: StreamData> {
-    var_data: BTreeMap<VarName, VarData<Val>>,
-    cancellation_token: CancellationToken,
-    #[allow(dead_code)]
-    // This is used for RAII to cancel background tasks when the async var
-    // exchange is dropped
-    drop_guard: Arc<DropGuard>,
-    vars_requested: (watch::Sender<usize>, watch::Receiver<usize>),
-}
-
-impl<Val: StreamData> AsyncVarExchange<Val> {
-    fn new(
-        var_data: BTreeMap<VarName, VarData<Val>>,
-        cancellation_token: CancellationToken,
-        drop_guard: Arc<DropGuard>,
-    ) -> Self {
-        let vars_requested = watch::channel(0);
-        AsyncVarExchange {
-            var_data,
-            cancellation_token,
-            drop_guard,
-            vars_requested,
-        }
-    }
-}
-
-impl<Val: StreamData> StreamContext<Val> for Arc<AsyncVarExchange<Val>> {
-    fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
-        // Retrieve the channel used to request the stream
-        let var_data = self.var_data.get(var)?;
-        let requester = var_data.requester.clone();
-
-        // Request the stream
-        let (tx, rx) = oneshot::channel();
-        let var = var.clone();
-
-        self.vars_requested.0.send_modify(|x| *x += 1);
-        let var_sender = self.vars_requested.0.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = requester.send(tx).await {
-                warn!(name: "Failed to request stream for var due to no receivers", ?var, err=?e);
-            }
-            var_sender.send_modify(|x| *x -= 1);
-        });
-
-        // Create a lazy typed stream from the request
-        let stream = oneshot_to_stream(rx);
-        // let stream = drop_guard_stream(stream, self.drop_guard.clone());
-        Some(stream)
-    }
-
-    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
-        Box::new(SubMonitor::new(self.clone(), history_length))
-    }
-}
-
-/* A subcontext which consumes data for a subset of the variables and makes
- * it available when evaluating a deferred expression
- *
- * This is implemented via multiple background monitor and distribute actor
- * pairs which buffer data from the input stream and distribute it to
- * each subscriber to the subcontext
- */
-struct SubMonitor<Val: StreamData> {
-    parent: Arc<AsyncVarExchange<Val>>,
-    senders: BTreeMap<VarName, broadcast::Sender<Val>>,
-    buffer_size: usize,
+/// A context which consumes data for a set of variables and makes
+/// it available when evaluating a deferred expression
+//
+/// This is implemented in the background using a combination of
+/// manage_var and store history actors
+struct Context<Val: StreamData> {
+    /// The variables which are available in the context
+    vars: Vec<VarName>,
+    /// Keeps track of the number of outstanding requests
+    /// to provide streams for variables
+    outstanding_var_requests: (watch::Sender<usize>, watch::Receiver<usize>),
+    /// The channels to request streams for each variable
+    /// (used by var)
+    senders:
+        BTreeMap<VarName, mpsc::Sender<(oneshot::Sender<()>, oneshot::Sender<OutputStream<Val>>)>>,
+    /// The amount of history stored for retrospective monitoring
+    /// of each variable (0 means no history)
+    history_length: usize,
+    /// Child clocks which are used to monitor the progress of
+    /// consumption of each variable in the context
     child_clocks: BTreeMap<VarName, watch::Receiver<usize>>,
+    /// The parent clock which is used to progress all streams
+    /// in the context
     clock: watch::Sender<usize>,
+    /// The cancellation token used to cancel all background tasks
+    cancellation_token: CancellationToken,
 }
 
-impl<Val: StreamData> SubMonitor<Val> {
-    fn new(parent: Arc<AsyncVarExchange<Val>>, buffer_size: usize) -> Self {
+impl<Val: StreamData> Context<Val> {
+    fn new(
+        input_streams: BTreeMap<VarName, OutputStream<Val>>,
+        buffer_size: usize,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         let mut senders = BTreeMap::new();
         let mut child_clock_recvs = BTreeMap::new();
         let mut child_clock_senders = BTreeMap::new();
+        let mut receivers = BTreeMap::new();
+        let mut vars = Vec::new();
+        let outstanding_var_requests = watch::channel(0);
 
-        for (var, _var_data) in parent.var_data.iter() {
-            senders.insert(var.clone(), broadcast::Sender::new(100));
+        for var in input_streams.keys() {
             let (watch_tx, watch_rx) = watch::channel(0);
+            let (req_tx, req_rx) = mpsc::channel(10);
+            vars.push(var.clone());
+            receivers.insert(var.clone(), req_rx);
+            senders.insert(var.clone(), req_tx);
             child_clock_recvs.insert(var.clone(), watch_rx);
             child_clock_senders.insert(var.clone(), watch_tx);
         }
 
         let clock = watch::channel(0).0;
 
-        SubMonitor {
-            parent,
+        Context {
+            vars,
             senders,
-            buffer_size,
+            history_length: buffer_size,
+            outstanding_var_requests,
             child_clocks: child_clock_recvs,
             clock,
+            cancellation_token,
         }
-        .start_monitors(child_clock_senders)
+        .start_monitors(input_streams, receivers, child_clock_senders)
     }
 
     fn start_monitors(
         self,
+        mut input_streams: BTreeMap<VarName, OutputStream<Val>>,
+        mut receivers: BTreeMap<
+            VarName,
+            mpsc::Receiver<(oneshot::Sender<()>, oneshot::Sender<OutputStream<Val>>)>,
+        >,
         mut child_progress_senders: BTreeMap<VarName, watch::Sender<usize>>,
     ) -> Self {
-        for var in self.parent.var_data.keys() {
-            let (send, recv) = mpsc::channel(self.buffer_size);
-            let input_stream = self.parent.var(var).unwrap();
-            let child_sender = self.senders.get(var).unwrap().clone();
+        for var in self.vars.iter() {
+            let input_stream = input_streams.remove(var).unwrap();
+            // let child_sender = self.senders.remove(var).unwrap();
+            let receiver = receivers.remove(var).unwrap();
             let clock = self.clock.subscribe();
-            tokio::spawn(distribute(
-                Box::pin(ReceiverStream::new(recv)),
-                child_sender,
+            tokio::spawn(manage_var(
+                var.clone(),
+                store_history(var.clone(), self.history_length, input_stream),
+                receiver,
                 clock,
                 child_progress_senders.remove(var).unwrap(),
-                self.parent.cancellation_token.clone(),
-                var.clone(),
-            ));
-            tokio::spawn(monitor(
-                Box::pin(input_stream),
-                send.clone(),
-                self.parent.cancellation_token.clone(),
-                var.clone(),
+                self.cancellation_token.clone(),
             ));
         }
 
@@ -427,33 +296,67 @@ impl<Val: StreamData> SubMonitor<Val> {
     }
 }
 
-impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
+impl<Val: StreamData> StreamContext<Val> for Context<Val> {
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
-        let sender = self.senders.get(var).unwrap();
+        let requester = self
+            .senders
+            .get(var)
+            .expect(&format!("Requester message for var {} should exist", var))
+            .clone();
 
         if self.is_clock_started() {
             panic!("Cannot request a stream after the clock has started");
         }
 
-        let recv: broadcast::Receiver<Val> = sender.subscribe();
-        info!(?var, "SubMonitor: giving stream for var");
-        let stream: OutputStream<Val> = Box::pin(BroadcastStream::new(recv).map(|x| x.unwrap()));
+        // Request the stream
+        let (tx, rx) = oneshot::channel();
+        let var = var.clone();
+
+        self.outstanding_var_requests.0.send_modify(|x| *x += 1);
+
+        let out_standing = self.outstanding_var_requests.0.clone();
+
+        tokio::spawn(async move {
+            let (done_tx, done_rx) = oneshot::channel();
+
+            if let Err(e) = requester.send((done_tx, tx)).await {
+                warn!(name: "Failed to request stream for var due to no receivers", ?var, err=?e);
+            }
+
+            done_rx.await.unwrap();
+            out_standing.send_modify(|x| *x -= 1);
+        });
+
+        // Create a lazy typed stream from the request
+        let stream = oneshot_to_stream(rx);
 
         Some(stream)
     }
 
     fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
-        // TODO: consider if this is the right approach; creating a subcontext
-        // is only used if eval is called within an eval, and it will require
-        // careful thought to decide how much history should be passed down
-        // (the current implementation passes down none)
-        self.parent.subcontext(history_length)
+        let input_streams = self
+            .vars
+            .iter()
+            .map(|var| (var.clone(), self.var(var).unwrap()))
+            .collect();
+
+        // Recursively create a new context based on ourself
+        Box::new(Context::new(
+            input_streams,
+            history_length,
+            self.cancellation_token.clone(),
+        ))
     }
 }
 
 #[async_trait]
-impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
-    fn advance_clock(&self) {
+impl<Val: StreamData> SyncStreamContext<Val> for Context<Val> {
+    async fn advance_clock(&mut self) {
+        self.outstanding_var_requests
+            .1
+            .wait_for(|x| *x == 0)
+            .await
+            .unwrap();
         self.clock.send_modify(|x| *x += 1);
     }
 
@@ -461,9 +364,14 @@ impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
         self.clock.borrow().clone()
     }
 
-    fn start_auto_clock(&mut self) {
+    async fn start_auto_clock(&mut self) {
         if !self.is_clock_started() {
             self.finalize();
+            self.outstanding_var_requests
+                .1
+                .wait_for(|x| *x == 0)
+                .await
+                .unwrap();
             // Set the clock to the maximum value to allow all streams to
             // progress freely
             self.clock.send_modify(|x| *x = usize::MAX);
@@ -489,20 +397,18 @@ impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
     }
 }
 
-/*
- * A Monitor instance implementing the Async Runtime.
- *
- * This runtime uses async actors to keep track of dependencies between
- * channels and to distribute data between them, pass data around via async
- * streams, and automatically perform garbage collection of the data contained
- * in the streams.
- *
- * - The Expr type parameter is the type of the expressions in the model.
- * - The Val type parameter is the type of the values used in the channels.
- * - The S type parameter is the monitoring semantics used to evaluate the
- *   expressions as streams.
- * - The M type parameter is the model/specification being monitored.
- */
+/// A Monitor instance implementing the Async Runtime.
+///
+/// This runtime uses async actors to keep track of dependencies between
+/// channels and to distribute data between them, pass data around via async
+/// streams, and automatically perform garbage collection of the data contained
+/// in the streams.
+///
+///  - The Expr type parameter is the type of the expressions in the model.
+///  - The Val type parameter is the type of the values used in the channels.
+///  - The S type parameter is the monitoring semantics used to evaluate the
+///    expressions as streams.
+///  - The M type parameter is the model/specification being monitored.
 pub struct AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
@@ -537,76 +443,69 @@ where
         let cancellation_token = CancellationToken::new();
         let cancellation_guard = Arc::new(cancellation_token.clone().drop_guard());
 
-        let mut var_data = BTreeMap::new();
-        let mut to_launch_in = vec![];
-        let (var_exchange_ready, watch_rx) = watch::channel(false);
+        let input_vars = model.input_vars().clone();
+        let output_vars = model.output_vars().clone();
 
-        // Launch monitors for each input variable
-        for var in model.input_vars().iter() {
-            // let typ = model.type_of_var(var).unwrap();
-            let (tx1, rx1) = mpsc::channel(100000);
-            let input_stream = input_streams.input_stream(var).unwrap();
-            var_data.insert(var.clone(), VarData { requester: tx1 });
-            to_launch_in.push((var.clone(), input_stream, rx1));
-        }
+        let input_streams = input_vars.iter().map(|var| {
+            let stream = input_streams.input_stream(var).unwrap();
+            (var.clone(), stream)
+        });
 
-        let mut to_launch_out = vec![];
+        // Create deferred streams based on each of the output variables
+        let output_oneshots: Vec<_> = output_vars
+            .iter()
+            .cloned()
+            .map(|_| oneshot::channel::<OutputStream<Val>>())
+            .collect();
+        let (output_txs, output_rxs): (Vec<_>, Vec<_>) = output_oneshots.into_iter().unzip();
+        let output_txs: BTreeMap<_, _> = output_vars
+            .iter()
+            .cloned()
+            .zip(output_txs.into_iter())
+            .collect();
+        let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
+        let output_streams = output_vars.iter().cloned().zip(output_streams.into_iter());
 
-        // Create tasks for each output variable
-        for var in model.output_vars().iter() {
-            let (tx1, rx1) = mpsc::channel(100000);
-            to_launch_out.push((var.clone(), rx1));
-            var_data.insert(var.clone(), VarData { requester: tx1 });
-        }
+        // Combine the input and output streams into a single map
+        let streams = input_streams.chain(output_streams.into_iter()).collect();
 
-        let var_exchange = Arc::new(AsyncVarExchange::new(
-            var_data,
-            cancellation_token.clone(),
-            cancellation_guard.clone(),
-        ));
+        let mut context = Context::new(streams, 0, cancellation_token.clone());
 
-        // Launch monitors for each output variable as returned by the monitor
+        // Create a map of the output variables to their streams
+        // based on using the context
         let output_streams = model
             .output_vars()
             .iter()
-            .map(|var| (var.clone(), var_exchange.var(var).unwrap()))
+            .map(|var| {
+                (
+                    var.clone(),
+                    // Add a guard to the stream to cancel background
+                    // tasks whenever all the outputs are dropped
+                    drop_guard_stream(
+                        context.var(var).expect(
+                            format!("Failed to find expression for var {}", var.0.as_str())
+                                .as_str(),
+                        ),
+                        cancellation_guard.clone(),
+                    ),
+                )
+            })
             .collect();
-        let mut async_streams = vec![];
-        for (var, _) in to_launch_out.iter() {
+
+        // Send outputs computed based on the context to the
+        // output handler
+        for (var, tx) in output_txs {
             let expr = model
                 .var_expr(&var)
                 .expect(format!("Failed to find expression for var {}", var.0.as_str()).as_str());
-            let stream = Box::pin(S::to_async_stream(expr, &var_exchange));
-            let stream = drop_guard_stream(stream, cancellation_guard.clone());
-            async_streams.push(stream);
-        }
-
-        for ((var, rx1), stream) in to_launch_out.into_iter().zip(async_streams) {
-            tokio::spawn(manage_var(
-                var,
-                Box::pin(stream),
-                rx1,
-                watch_rx.clone(),
-                cancellation_token.clone(),
-            ));
-        }
-        for (var, input_stream, rx1) in to_launch_in {
-            tokio::spawn(manage_var(
-                var,
-                Box::pin(input_stream),
-                rx1,
-                watch_rx.clone(),
-                cancellation_token.clone(),
-            ));
-        }
-
-        // Don't start producing until we have requested all subscriptions
-        let mut num_requested = var_exchange.vars_requested.1.clone();
-        tokio::spawn(async move {
-            if let Err(e) = num_requested.wait_for(|x| *x == 0).await {
-                panic!("Failed to wait for all vars to be requested: {:?}", e);
+            let stream = S::to_async_stream(expr, &context);
+            if let Err(_) = tx.send(stream) {
+                warn!(?var, "Failed to send stream for var to requester");
             }
-            var_exchange_ready.send(true).unwrap();
+        }
+
+        tokio::spawn(async move {
+            context.start_auto_clock().await;
         });
 
         Self {

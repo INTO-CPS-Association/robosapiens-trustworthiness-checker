@@ -181,11 +181,11 @@ pub trait StreamContext<Val: StreamData>: Send + 'static {
 pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + Send + 'static {
     /// Advance the clock used by the context by one step, letting all
     /// streams to progress
-    fn advance_clock(&self);
+    async fn advance_clock(&mut self);
 
     /// Set the clock to automatically advance, allowing all substreams
     /// to progress freely (limited only by buffering)
-    fn start_auto_clock(&mut self);
+    async fn start_auto_clock(&mut self);
 
     /// Check if the clock is currently started
     fn is_clock_started(&self) -> bool;

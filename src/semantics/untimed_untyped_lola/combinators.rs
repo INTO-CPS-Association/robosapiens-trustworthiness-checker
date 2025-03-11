@@ -219,7 +219,7 @@ pub fn eval(
     history_length: usize,
 ) -> OutputStream<Value> {
     // Create a subcontext with a history window length
-    let subcontext = ctx.subcontext(history_length);
+    let mut subcontext = ctx.subcontext(history_length);
 
     // Build an output stream for eval of x over the subcontext
     Box::pin(stream! {
@@ -240,7 +240,7 @@ pub fn eval(
                 if prev_data.eval_val == current || current == Value::Unknown {
                     // Advance the subcontext to make a new set of input values
                     // available for the eval stream
-                    subcontext.advance_clock();
+                    subcontext.advance_clock().await;
                     if let Some(eval_res) = prev_data.eval_output_stream.next().await {
                         yield eval_res;
                         continue;
@@ -252,7 +252,7 @@ pub fn eval(
             match current {
                 Value::Unknown => {
                     // Consume a sample from the subcontext but return Unknown (aka. Waiting)
-                    subcontext.advance_clock();
+                    subcontext.advance_clock().await;
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
@@ -261,7 +261,7 @@ pub fn eval(
                     let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast());
                     // Advance the subcontext to make a new set of input values
                     // available for the eval stream
-                    subcontext.advance_clock();
+                    subcontext.advance_clock().await;
                     if let Some(eval_res) = eval_output_stream.next().await {
                         yield eval_res;
                     } else {
@@ -314,7 +314,7 @@ pub fn defer(
                         .expect("Invalid eval str");
                     eval_output_stream = Some(UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()));
                     debug!(defer_s, "Evaluated defer string");
-                    subcontext.start_auto_clock();
+                    subcontext.start_auto_clock().await;
                     break;
                 }
                 Value::Unknown => {
@@ -322,7 +322,7 @@ pub fn defer(
                     info!("Defer waiting on unknown");
                     if i >= history_length {
                         info!(?i, ?history_length, "Advancing subcontext to clean history");
-                        subcontext.advance_clock();
+                        subcontext.advance_clock().await;
                         info!("Waiting until consumption has caught up");
                         subcontext.wait_till(1 + i - history_length).await;
                         info!("Done waiting until consumption has caught up");
@@ -558,7 +558,7 @@ mod tests {
 
     #[async_trait]
     impl SyncStreamContext<Value> for MockContext {
-        fn advance_clock(&self) {
+        async fn advance_clock(&mut self) {
             // Remove the first element from each Vec (the oldest value)
             for (_, vec_mutex) in self.xs.iter() {
                 if let Ok(mut vec) = vec_mutex.lock() {
@@ -580,7 +580,7 @@ mod tests {
             true
         }
 
-        fn start_auto_clock(&mut self) {
+        async fn start_auto_clock(&mut self) {
             // Do nothing
         }
 

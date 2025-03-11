@@ -233,7 +233,7 @@ impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
         *self.index.lock().unwrap()
     }
 
-    fn advance_clock(&self) {
+    async fn advance_clock(&mut self) {
         *self.index.lock().unwrap() += 1;
     }
 
@@ -245,7 +245,7 @@ impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
         self
     }
 
-    fn start_auto_clock(&mut self) {}
+    async fn start_auto_clock(&mut self) {}
 
     fn is_clock_started(&self) -> bool {
         true

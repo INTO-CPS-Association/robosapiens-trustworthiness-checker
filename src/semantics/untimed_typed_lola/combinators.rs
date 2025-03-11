@@ -113,7 +113,7 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
     /*unfold() creates a Stream from a seed value.*/
     Box::pin(stream::unfold(
         (subcontext, x, None::<(String, OutputStream<T>)>),
-        |(subcontext, mut x, last)| async move {
+        |(mut subcontext, mut x, last)| async move {
             /* x.next() returns None if we are done unfolding. Return in that case.*/
             let current = x.next().await?;
 
@@ -122,7 +122,7 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
             if let Some((prev, mut es)) = last {
                 if prev == current {
                     // println!("prev == current == {:?}", current);
-                    subcontext.advance_clock();
+                    subcontext.advance_clock().await;
                     let eval_res = es.next().await;
                     // println!("returning val from existing stream: {:?}", eval_res);
                     return match eval_res {
@@ -146,7 +146,7 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
             let es = { UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()) };
             let mut es = to_typed_stream(es);
             // println!("new eval stream");
-            subcontext.advance_clock();
+            subcontext.advance_clock().await;
             let eval_res = es.next().await?;
             // println!("eval producing {:?}", eval_res);
             return Some((eval_res, (subcontext, x, Some((current, es)))));
