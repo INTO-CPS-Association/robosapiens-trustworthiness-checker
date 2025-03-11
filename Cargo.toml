@@ -29,7 +29,7 @@ serde_json = "1.0.139"
 paho-mqtt = {version = "0.13.1", default-features=false, features=["bundled", "ssl"]}
 async-trait = "0.1.86"
 async-once-cell = "0.5.4"
-tracing = {version = "0.1.41", features = ["attributes", "std", "tracing-attributes", "async-await"]}
+tracing = {version = "0.1.41", features = ["attributes", "std", "tracing-attributes", "async-await", "release_max_level_warn"]}
 tracing-subscriber = {version="0.3.19", features=["env-filter", "fmt"]}
 uuid = {version = "1.14.0", features = [
     "v4",                # Lets you generate random UUIDs
