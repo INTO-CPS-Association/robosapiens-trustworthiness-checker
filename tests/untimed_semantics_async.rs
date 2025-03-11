@@ -317,13 +317,15 @@ async fn test_defer_stream_4() {
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
-    // This is actually expected behaviour (at least with a global default
+    // Notice one output "too many". This is expected behaviour (at least with a global default
     // history_length = 10 for defer) since once e = x[-1, 0] has arrived
     // the stream for z = defer(e) will continue as long as x[-1, 0] keeps
     // producing values (making use of its history) which can continue beyond
     // the life/ of the stream for e (since it does not depend on e any more
     // once a value has been received). This differs from the behaviour of
     // eval(e) which stops if e stops.
+    //
+    // See also: Comment on sindex combinator.
     let expected_outputs = vec![
         (0, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
         (1, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
