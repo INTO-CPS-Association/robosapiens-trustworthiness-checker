@@ -158,7 +158,6 @@ async fn test_multiple_parameters() {
     );
 }
 
-#[ignore = "currently broken"]
 #[test(tokio::test)]
 async fn test_maple_sequence() {
     let mut input_streams = maple_valid_input_stream(10);
