@@ -62,7 +62,9 @@ async fn publish_stream(
 }
 
 #[async_trait]
-impl OutputHandler<Value> for MQTTOutputHandler {
+impl OutputHandler for MQTTOutputHandler {
+    type Val = Value;
+
     fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
         for (var, stream) in streams.into_iter() {
             let var_data = self.var_map.get_mut(&var).expect("Variable not found");

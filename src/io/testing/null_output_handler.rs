@@ -25,7 +25,9 @@ impl<V: StreamData> NullOutputHandler<V> {
 }
 
 #[async_trait]
-impl<V: StreamData> OutputHandler<V> for NullOutputHandler<V> {
+impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
+    type Val = V;
+
     fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
         self.manual_output_handler.provide_streams(streams);
     }

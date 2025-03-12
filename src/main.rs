@@ -176,7 +176,7 @@ async fn main() {
         }
     };
 
-    let output_handler: Box<dyn OutputHandler<Value>> = match cli.output_mode {
+    let output_handler: Box<dyn OutputHandler<Val = Value>> = match cli.output_mode {
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: true,
             output_mqtt_topics: None,

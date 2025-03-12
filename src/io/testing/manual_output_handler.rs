@@ -46,7 +46,9 @@ impl<V: StreamData> ManualOutputHandler<V> {
 }
 
 #[async_trait]
-impl<V: StreamData> OutputHandler<V> for ManualOutputHandler<V> {
+impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
+    type Val = V;
+
     #[instrument(skip(self, streams))]
     fn provide_streams(&mut self, mut streams: BTreeMap<VarName, OutputStream<V>>) {
         debug!(name: "Providing streams",
@@ -121,7 +123,9 @@ pub struct AsyncManualOutputHandler<V: StreamData> {
 }
 
 #[async_trait]
-impl<V: StreamData> OutputHandler<V> for AsyncManualOutputHandler<V> {
+impl<V: StreamData> OutputHandler for AsyncManualOutputHandler<V> {
+    type Val = V;
+
     fn provide_streams(&mut self, mut streams: BTreeMap<VarName, OutputStream<V>>) {
         for (var_name, sender) in self
             .var_names

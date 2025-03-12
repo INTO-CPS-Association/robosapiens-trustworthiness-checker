@@ -275,7 +275,7 @@ where
     var_exchange: Arc<QueuingVarContext<Val>>,
     semantics_t: PhantomData<S>,
     expr_t: PhantomData<Expr>,
-    output_handler: Box<dyn OutputHandler<Val>>,
+    output_handler: Box<dyn OutputHandler<Val = Val>>,
 }
 
 #[async_trait]
@@ -285,7 +285,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
     fn new(
         model: M,
         input_streams: &mut dyn InputProvider<Val>,
-        output: Box<dyn OutputHandler<Val>>,
+        output: Box<dyn OutputHandler<Val = Val>>,
         _dependencies: DependencyManager,
     ) -> Self {
         let var_names: Vec<VarName> = model

@@ -224,10 +224,12 @@ pub trait Specification: Sync + Send {
 // finish the setup of the output handler by providing the streams to be output,
 // and finally run is called to start the output handler.
 #[async_trait]
-pub trait OutputHandler<V: StreamData>: Send {
+pub trait OutputHandler: Send {
+    type Val: StreamData;
+
     // async fn handle_output(&mut self, var: &VarName, value: V);
     // This should only be called once by the runtime to provide the streams
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>);
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Self::Val>>);
 
     // Essentially this is of type
     // async fn run(&mut self);
@@ -248,7 +250,7 @@ pub trait Monitor<M, V: StreamData>: Send {
     fn new(
         model: M,
         input: &mut dyn InputProvider<V>,
-        output: Box<dyn OutputHandler<V>>,
+        output: Box<dyn OutputHandler<Val = V>>,
         dependencies: DependencyManager,
     ) -> Self;
 

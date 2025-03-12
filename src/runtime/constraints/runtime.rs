@@ -206,7 +206,7 @@ pub struct ConstraintBasedMonitor {
     input_producer: InputProducer,
     stream_collection: ValStreamCollection,
     model: LOLASpecification,
-    output_handler: Box<dyn OutputHandler<Value>>,
+    output_handler: Box<dyn OutputHandler<Val = Value>>,
     has_inputs: bool,
     dependencies: DependencyManager,
 }
@@ -216,7 +216,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
     fn new(
         model: LOLASpecification,
         input: &mut dyn InputProvider<Value>,
-        output: Box<dyn OutputHandler<Value>>,
+        output: Box<dyn OutputHandler<Val = Value>>,
         dependencies: DependencyManager,
     ) -> Self {
         let input_streams = model

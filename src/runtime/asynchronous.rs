@@ -496,7 +496,7 @@ where
     Expr: Sync + Send,
 {
     model: M,
-    output_handler: Box<dyn OutputHandler<Val>>,
+    output_handler: Box<dyn OutputHandler<Val = Val>>,
     output_streams: BTreeMap<VarName, OutputStream<Val>>,
     #[allow(dead_code)]
     // This is used for RAII to cancel background tasks when the async var
@@ -516,7 +516,7 @@ where
     fn new(
         model: M,
         input_streams: &mut dyn InputProvider<Val>,
-        output: Box<dyn OutputHandler<Val>>,
+        output: Box<dyn OutputHandler<Val = Val>>,
         _dependencies: DependencyManager,
     ) -> Self {
         let cancellation_token = CancellationToken::new();
