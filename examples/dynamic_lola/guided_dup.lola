@@ -1,0 +1,7 @@
+// Use input file `defer.input`
+in x
+in e
+out z
+// Guided adaptation
+// TODO: Replace 42 with x when default accepts exprs
+z = update(x, default(defer(e), 42))
