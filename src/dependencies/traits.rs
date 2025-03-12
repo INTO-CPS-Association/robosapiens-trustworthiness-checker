@@ -3,11 +3,12 @@ use enum_inner_method::enum_inner_method;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use strum_macros::EnumDiscriminants;
+use strum_macros::EnumIter;
 
 use super::{DepGraph, Empty};
 
 #[derive(Clone, Debug, EnumDiscriminants)]
-#[strum_discriminants(name(DependencyKind))]
+#[strum_discriminants(name(DependencyKind), derive(EnumIter))]
 #[enum_inner_method (fn longest_time_dependency(&self, v: &VarName) -> Option<usize>)]
 #[enum_inner_method (fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize>)]
 #[enum_inner_method (fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>))]
