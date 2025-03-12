@@ -49,35 +49,51 @@ async fn handle_subscription_request<V: StreamData>(
     }
 }
 
+/// Track the stage of the context determining the lifecycle of all variables
+/// managed by it
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
 enum ContextStage {
-    Gathering, // Only waiting for new subscriptions - no values can be received
-    Open,      // Can grant new subs to the variable or provide values in a time sync'd manner
-    Closed, // No new subs can be granted, but values can still be provided (not necessarily time sync'd)
+    /// Only waiting for new subscriptions - no values can be received
+    Gathering,
+    /// Can grant new subs to the variable or provide values in a time
+    /// synchronised manner
+    Open,
+    /// No new subs can be granted, but values can still be provided (not
+    /// necessarily time synchronised)
+    Closed,
 }
 
-/* An actor which manages access to a stream variable by tracking the
- * subscribers to the variable and creating independent output streams to
- * forwards new data to each subscribers.
- *
- * This actor goes through two stages:
- *  1. Gathering subscribers: In this stage, the actor waits for all subscribers
- *     to request output streams
- *  2. Distributing data: In this stage, the actor forwards data from the input
- *     stream to all subscribers.
- *
- * This has parameters:
- * - var: the name of the variable being managed
- * - input_stream: the stream of inputs which we are distributing
- * - channel_request_rx: a mpsc channel on which we receive requests for a
- *   new subscription to the variable. We are passed a oneshot channel which
- *   we can used to send the output stream to the requester.
- * - ready: a watch channel which is used to signal when all subscribers have
- *   requested the stream and determines when we move to stage 2 to start
- *   distributing data
- * - cancel: a cancellation token which is used to signal when the actor should
- *   terminate
- */
+/// An actor which manages access to and retention of a stream variable
+/// throughout its lifecycle by tracking the subscribers to the variable
+/// and creating independent output streams to forward new data to each
+/// subscriber.
+///
+/// This actor goes through three stages of lifecycle determined by the
+/// `ContextStage` enum:
+/// 1. Gathering: In this stage, the actor waits for all subscribers to request
+///    output streams.
+/// 2. Open: In this stage, the actor forwards data from the input stream to all
+///    subscribers but can also still grant new subscriptions.
+/// 3. Closed: In this stage, the actor stops granting new subscriptions but
+///    continues to forward data to all subscribers. Moreover, the actor may
+///    stop running or directly forward the input stream if there is only one
+///    subscriber.
+///
+/// This actor has the following parameters:
+///  - var: The name of the variable being managed.
+///  - input_stream: The stream of inputs which we are distributing.
+///  - channel_request_rx: A mpsc channel on which we receive requests for a new
+///    subscription to the variable. We are passed a oneshot channel which we
+///    can use to send the output stream to the requester and a oneshot channel
+///    to separately indicate when we are done.
+///  - ctx_stage: A watch channel which is used to which stage of the variable's
+///    lifecycle we are in.
+///  - parent_clock: A watch channel which is used to monitor the progress of
+///    synchronised time in the parent context.
+///  - child_clock: A watch channel which is used to signal the progress of
+///    time for the managed variable.
+///  - cancel: A cancellation token which is used to signal when the actor
+///    should terminate.
 #[instrument(name="manage_var", level=Level::DEBUG, skip(input_stream, channel_request_rx, ctx_stage, parent_clock, child_clock, cancel))]
 async fn manage_var<V: StreamData>(
     var: VarName,
