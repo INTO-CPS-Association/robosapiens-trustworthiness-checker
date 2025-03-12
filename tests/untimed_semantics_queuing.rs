@@ -34,6 +34,23 @@ async fn test_simple_add_monitor() {
 }
 
 #[test(tokio::test)]
+async fn test_simple_add_monitor_large_input() {
+    let mut input_streams = input_streams_simple_add_untyped(100);
+    let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+    let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
+    let outputs = output_handler.get_output();
+    let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        spec.clone(),
+        &mut input_streams,
+        output_handler,
+        create_dependency_manager(DependencyKind::Empty, spec),
+    );
+    tokio::spawn(async_monitor.run());
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    assert_eq!(outputs.len(), 100);
+}
+
+#[test(tokio::test)]
 async fn test_count_monitor() {
     let mut input_streams: BTreeMap<VarName, BoxStream<'static, Value>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();

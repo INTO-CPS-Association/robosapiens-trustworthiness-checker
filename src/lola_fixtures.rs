@@ -429,3 +429,35 @@ pub fn input_streams_indexing() -> impl InputProvider<Val = Value> {
 
     input_streams
 }
+
+pub fn input_streams_simple_add_untyped(
+    size: usize,
+) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+    let size = size as i64;
+    let mut input_streams = BTreeMap::new();
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(stream::iter((0..size).map(|x| Value::Int(2 * x))))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+    input_streams.insert(
+        VarName("y".into()),
+        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1))))
+            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+    );
+    input_streams
+}
+
+pub fn input_streams_simple_add_typed(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
+    let mut input_streams = BTreeMap::new();
+    let size = size as i64;
+    input_streams.insert(
+        VarName("x".into()),
+        Box::pin(stream::iter((0..size).map(|x| Value::Int(2 * x)))) as OutputStream<Value>,
+    );
+    input_streams.insert(
+        VarName("y".into()),
+        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))),
+    );
+    input_streams
+}

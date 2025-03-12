@@ -1,18 +1,13 @@
-use std::{collections::BTreeMap, pin::Pin};
-
-// use criterion::async_executor::TokioExecutor;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::SamplingMode;
 use criterion::{criterion_group, criterion_main};
-use futures::stream::{self, BoxStream};
-use trustworthiness_checker::OutputStream;
+use trustworthiness_checker::Monitor;
 use trustworthiness_checker::dep_manage::interface::DependencyKind;
 use trustworthiness_checker::dep_manage::interface::create_dependency_manager;
 use trustworthiness_checker::io::testing::null_output_handler::NullOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::lola_fixtures::{maple_valid_input_stream, spec_maple_sequence};
-use trustworthiness_checker::{Monitor, Value, VarName};
 
 async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
     let mut input_streams = maple_valid_input_stream(num_outputs);

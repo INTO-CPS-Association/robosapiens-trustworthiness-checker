@@ -55,7 +55,8 @@ mod tests {
         DependencyKind, create_dependency_manager,
     };
     use trustworthiness_checker::lola_fixtures::{
-        input_empty, input_streams4, input_streams5, spec_empty, spec_simple_add_monitor,
+        input_empty, input_streams_simple_add_untyped, input_streams4, input_streams5, spec_empty,
+        spec_simple_add_monitor,
     };
 
     #[test(tokio::test)]
@@ -82,6 +83,27 @@ mod tests {
                     (2, BTreeMap::from([(VarName("z".into()), 11.into())]),),
                 ]
             );
+        }
+    }
+
+    #[ignore = "Currently fails"]
+    #[test(tokio::test)]
+    async fn test_simple_add_monitor_large_input() {
+        for kind in DependencyKind::iter() {
+            let mut input_streams = input_streams_simple_add_untyped(100);
+            let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+            let mut output_handler = Box::new(ManualOutputHandler::new(spec.output_vars.clone()));
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, spec),
+            );
+            tokio::spawn(monitor.run());
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+                outputs.enumerate().collect().await;
+            assert_eq!(outputs.len(), 100);
         }
     }
 
