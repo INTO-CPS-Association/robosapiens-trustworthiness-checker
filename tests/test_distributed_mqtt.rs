@@ -162,14 +162,14 @@ async fn manually_decomposed_monitor_test() {
         model1.clone(),
         &mut input_provider_1,
         Box::new(output_handler_1),
-        create_dependency_manager(DependencyKind::Empty, Box::new(model1)),
+        create_dependency_manager(DependencyKind::Empty, model1),
     );
 
     let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
         model2.clone(),
         &mut input_provider_2,
         Box::new(output_handler_2),
-        create_dependency_manager(DependencyKind::Empty, Box::new(model2)),
+        create_dependency_manager(DependencyKind::Empty, model2),
     );
 
     tokio::spawn(runner_1.run());
@@ -278,14 +278,14 @@ async fn localisation_distribution_test() {
         model1.clone(),
         &mut input_provider_1,
         Box::new(output_handler_1),
-        create_dependency_manager(DependencyKind::Empty, Box::new(model1)),
+        create_dependency_manager(DependencyKind::Empty, model1),
     );
 
     let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
         model2.clone(),
         &mut input_provider_2,
         Box::new(output_handler_2),
-        create_dependency_manager(DependencyKind::Empty, Box::new(model2)),
+        create_dependency_manager(DependencyKind::Empty, model2),
     );
 
     tokio::spawn(runner_1.run());
@@ -395,14 +395,14 @@ async fn localisation_distribution_graphs_test() -> Result<(), Box<dyn std::erro
         model1.clone(),
         &mut input_provider_1,
         Box::new(output_handler_1),
-        create_dependency_manager(DependencyKind::Empty, Box::new(model1)),
+        create_dependency_manager(DependencyKind::Empty, model1),
     );
 
     let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
         model2.clone(),
         &mut input_provider_2,
         Box::new(output_handler_2),
-        create_dependency_manager(DependencyKind::Empty, Box::new(model2)),
+        create_dependency_manager(DependencyKind::Empty, model2),
     );
 
     tokio::spawn(runner_1.run());

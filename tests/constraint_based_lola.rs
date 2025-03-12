@@ -69,7 +69,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -97,7 +97,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<BTreeMap<VarName, Value>> = outputs.collect().await;
@@ -117,7 +117,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -146,7 +146,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -175,7 +175,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -204,7 +204,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -242,7 +242,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -284,7 +284,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -340,7 +340,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -372,7 +372,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -410,7 +410,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -444,7 +444,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -495,7 +495,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -525,7 +525,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -555,7 +555,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -584,7 +584,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -617,7 +617,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -650,7 +650,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -683,7 +683,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -719,7 +719,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -759,7 +759,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -803,7 +803,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -844,7 +844,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -889,7 +889,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -941,7 +941,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -985,7 +985,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1032,7 +1032,7 @@ mod tests {
                 spec.clone(),
                 &mut input_streams,
                 output_handler,
-                create_dependency_manager(kind, Box::new(spec)),
+                create_dependency_manager(kind, spec),
             );
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =

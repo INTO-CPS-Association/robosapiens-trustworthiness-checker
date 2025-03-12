@@ -21,7 +21,7 @@ async fn test_simple_add_monitor() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -45,7 +45,7 @@ async fn test_simple_add_monitor_does_not_go_away() {
             spec.clone(),
             &mut input_streams,
             output_handler,
-            create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+            create_dependency_manager(DependencyKind::Empty, spec),
         );
         tokio::spawn(async_monitor.run());
         outputs
@@ -70,7 +70,7 @@ async fn test_count_monitor() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -96,7 +96,7 @@ async fn test_eval_monitor() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -132,7 +132,7 @@ async fn test_multiple_parameters() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -169,7 +169,7 @@ async fn test_maple_sequence() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -202,7 +202,7 @@ async fn test_defer_stream_1() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -239,7 +239,7 @@ async fn test_defer_stream_2() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -276,7 +276,7 @@ async fn test_defer_stream_3() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -313,7 +313,7 @@ async fn test_defer_stream_4() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -350,7 +350,7 @@ async fn test_future_indexing() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -412,7 +412,7 @@ async fn test_past_indexing() {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;

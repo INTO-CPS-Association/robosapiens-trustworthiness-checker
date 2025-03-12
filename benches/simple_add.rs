@@ -65,7 +65,7 @@ async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     async_monitor.run().await;
 }
@@ -83,7 +83,7 @@ async fn monitor_outputs_untyped_async(num_outputs: usize) {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     async_monitor.run().await;
 }
@@ -103,7 +103,7 @@ async fn monitor_outputs_typed_async(num_outputs: usize) {
         spec,
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     async_monitor.run().await;
 }
@@ -121,7 +121,7 @@ async fn monitor_outputs_untyped_queuing(num_outputs: usize) {
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+        create_dependency_manager(DependencyKind::Empty, spec),
     );
     async_monitor.run().await;
 }
@@ -141,7 +141,7 @@ async fn monitor_outputs_typed_queuing(num_outputs: usize) {
         spec,
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     async_monitor.run().await;
 }

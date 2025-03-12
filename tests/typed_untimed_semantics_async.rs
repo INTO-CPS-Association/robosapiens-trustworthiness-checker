@@ -25,7 +25,7 @@ async fn test_simple_add_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -51,7 +51,7 @@ async fn test_concat_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -81,7 +81,7 @@ async fn test_count_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -110,7 +110,7 @@ async fn test_eval_monitor() {
         spec,
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
@@ -148,7 +148,7 @@ async fn test_multiple_parameters() {
         spec,
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, Box::new(spec_untyped)),
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     tokio::spawn(async_monitor.run());
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;

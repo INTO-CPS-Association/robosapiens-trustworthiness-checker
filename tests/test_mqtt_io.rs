@@ -168,7 +168,7 @@ mod tests {
             spec.clone(),
             &mut input_streams,
             output_handler,
-            create_dependency_manager(DependencyKind::Empty, Box::new(spec)),
+            create_dependency_manager(DependencyKind::Empty, spec),
         );
         tokio::spawn(async_monitor.run());
         // Test the outputs
@@ -221,7 +221,7 @@ mod tests {
             model.clone(),
             &mut input_provider,
             Box::new(output_handler),
-            create_dependency_manager(DependencyKind::Empty, Box::new(model)),
+            create_dependency_manager(DependencyKind::Empty, model),
         );
 
         tokio::spawn(runner.run());

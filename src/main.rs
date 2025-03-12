@@ -243,7 +243,7 @@ async fn main() {
                 model.clone(),
                 &mut *input_streams,
                 output_handler,
-                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, model),
             ));
             tokio::spawn(runner.run())
         }
@@ -257,7 +257,7 @@ async fn main() {
                 model.clone(),
                 &mut *input_streams,
                 output_handler,
-                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, model),
             );
             tokio::spawn(runner.run())
         }
@@ -273,7 +273,7 @@ async fn main() {
                 typed_model,
                 &mut *input_streams,
                 output_handler,
-                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, model),
             );
             tokio::spawn(runner.run())
         }
@@ -289,7 +289,7 @@ async fn main() {
                 typed_model,
                 &mut *input_streams,
                 output_handler,
-                create_dependency_manager(DependencyKind::Empty, Box::new(model)),
+                create_dependency_manager(DependencyKind::Empty, model),
             );
             tokio::spawn(runner.run())
         }
@@ -298,7 +298,7 @@ async fn main() {
                 model.clone(),
                 &mut *input_streams,
                 output_handler,
-                create_dependency_manager(DependencyKind::DepGraph, Box::new(model)),
+                create_dependency_manager(DependencyKind::DepGraph, model),
             );
             tokio::spawn(runner.run())
         }
