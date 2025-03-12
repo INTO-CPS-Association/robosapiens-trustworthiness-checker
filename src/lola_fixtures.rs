@@ -279,7 +279,7 @@ pub fn spec_simple_add_decomposable() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn input_streams_defer_1() -> impl InputProvider<Value> {
+pub fn input_streams_defer_1() -> impl InputProvider<Val = Value> {
     let mut input_streams = BTreeMap::new();
 
     // Create x stream with values 1 through 15
@@ -305,7 +305,7 @@ pub fn input_streams_defer_1() -> impl InputProvider<Value> {
 }
 
 #[allow(dead_code)]
-pub fn input_streams_defer_2() -> impl InputProvider<Value> {
+pub fn input_streams_defer_2() -> impl InputProvider<Val = Value> {
     let mut input_streams = BTreeMap::new();
 
     // Create x stream with values 1 through 15
@@ -331,7 +331,7 @@ pub fn input_streams_defer_2() -> impl InputProvider<Value> {
 }
 
 #[allow(dead_code)]
-pub fn input_streams_defer_3() -> impl InputProvider<Value> {
+pub fn input_streams_defer_3() -> impl InputProvider<Val = Value> {
     let mut input_streams = BTreeMap::new();
 
     // Create x stream with values 1 through 15
@@ -358,7 +358,7 @@ pub fn input_streams_defer_3() -> impl InputProvider<Value> {
 
 // Example where defer needs to use the history
 #[allow(dead_code)]
-pub fn input_streams_defer_4() -> impl InputProvider<Value> {
+pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
     let mut input_streams = BTreeMap::new();
 
     // Create x stream with values 1 through 5
@@ -410,7 +410,7 @@ pub fn spec_past_indexing() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn input_streams_indexing() -> impl InputProvider<Value> {
+pub fn input_streams_indexing() -> impl InputProvider<Val = Value> {
     let mut input_streams = BTreeMap::new();
 
     // Create x stream with values 1 through 6

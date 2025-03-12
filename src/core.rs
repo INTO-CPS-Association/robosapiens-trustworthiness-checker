@@ -159,14 +159,18 @@ pub struct IndexedVarName(pub String, pub usize);
 
 pub type OutputStream<T> = BoxStream<'static, T>;
 
-pub trait InputProvider<V> {
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<V>>;
+pub trait InputProvider {
+    type Val;
+
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
 }
 
-impl<V> InputProvider<V> for BTreeMap<VarName, OutputStream<V>> {
+impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
+    type Val = V;
+
     // We are consuming the input stream from the map when
     // we return it to ensure single ownership and static lifetime
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<V>> {
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
         self.remove(var)
     }
 }
@@ -249,7 +253,7 @@ pub trait OutputHandler: Send {
 pub trait Monitor<M, V: StreamData>: Send {
     fn new(
         model: M,
-        input: &mut dyn InputProvider<V>,
+        input: &mut dyn InputProvider<Val = V>,
         output: Box<dyn OutputHandler<Val = V>>,
         dependencies: DependencyManager,
     ) -> Self;

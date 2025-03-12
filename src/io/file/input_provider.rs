@@ -19,7 +19,9 @@ fn input_file_data_iter(
     })
 }
 
-impl InputProvider<Value> for UntimedInputFileData {
+impl InputProvider for UntimedInputFileData {
+    type Val = Value;
+
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         Some(Box::pin(stream::iter(input_file_data_iter(
             self.clone(),

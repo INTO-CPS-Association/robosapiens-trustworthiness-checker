@@ -284,7 +284,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
 {
     fn new(
         model: M,
-        input_streams: &mut dyn InputProvider<Val>,
+        input_streams: &mut dyn InputProvider<Val = Val>,
         output: Box<dyn OutputHandler<Val = Val>>,
         _dependencies: DependencyManager,
     ) -> Self {

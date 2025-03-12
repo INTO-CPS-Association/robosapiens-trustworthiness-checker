@@ -146,7 +146,9 @@ impl MQTTInputProvider {
     }
 }
 
-impl InputProvider<Value> for MQTTInputProvider {
+impl InputProvider for MQTTInputProvider {
+    type Val = Value;
+
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         let var_data = self.var_map.get_mut(var)?;
         let stream = var_data.stream.take()?;

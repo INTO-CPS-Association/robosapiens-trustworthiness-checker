@@ -115,7 +115,7 @@ async fn main() {
         None => model,
     };
 
-    let mut input_streams: Box<dyn InputProvider<tc::Value>> = {
+    let mut input_streams: Box<dyn InputProvider<Val = tc::Value>> = {
         if let Some(input_file) = input_mode.input_file {
             let input_file_parser = match language {
                 Language::Lola => tc::lang::untimed_input::untimed_input_file,

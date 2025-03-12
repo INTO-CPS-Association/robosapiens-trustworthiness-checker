@@ -215,7 +215,7 @@ pub struct ConstraintBasedMonitor {
 impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
     fn new(
         model: LOLASpecification,
-        input: &mut dyn InputProvider<Value>,
+        input: &mut dyn InputProvider<Val = Value>,
         output: Box<dyn OutputHandler<Val = Value>>,
         dependencies: DependencyManager,
     ) -> Self {
