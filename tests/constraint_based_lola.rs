@@ -51,7 +51,7 @@ mod tests {
     use super::*;
     use strum::IntoEnumIterator;
     use test_log::test;
-    use trustworthiness_checker::dependencies::interface::{
+    use trustworthiness_checker::dep_manage::interface::{
         DependencyKind, create_dependency_manager,
     };
     use trustworthiness_checker::lola_fixtures::{

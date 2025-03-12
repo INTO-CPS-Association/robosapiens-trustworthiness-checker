@@ -3,7 +3,7 @@
 use futures::stream::{BoxStream, StreamExt};
 use std::collections::BTreeMap;
 use test_log::test;
-use trustworthiness_checker::dependencies::interface::{DependencyKind, create_dependency_manager};
+use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::lola_fixtures::*;
 use trustworthiness_checker::semantics::UntimedLolaSemantics;

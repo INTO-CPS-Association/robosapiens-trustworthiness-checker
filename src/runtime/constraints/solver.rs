@@ -3,7 +3,7 @@ use std::fmt::Debug;
 
 use crate::core::Value;
 use crate::core::{IndexedVarName, VarName};
-use crate::dependencies::interface::DependencyManager;
+use crate::dep_manage::interface::DependencyManager;
 use crate::lang::dynamic_lola::ast::*;
 use crate::lang::dynamic_lola::parser::lola_expression;
 
