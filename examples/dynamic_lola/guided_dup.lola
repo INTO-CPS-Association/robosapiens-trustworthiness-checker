@@ -1,7 +1,14 @@
-// Use input file `defer.input`
+// Notation follows "Using temporal logic to specify adaptive program semantics" paper
 in x
-in e
-out z
-// Guided adaptation
-// TODO: Replace 42 with x when default accepts exprs
-z = update(x, default(defer(e), 42))
+in T
+out R
+out S
+out result
+// Guided adaptation:
+// Old spec is just S = x
+S = x
+// R is Rcond, where the cond is "x == 3"
+R = when(T) && (x == 3 || R[-1, false]) // Eventually, after T was not Unknown
+// When we haven't received a new spec T, and R is not true, yield from old spec
+// Note: the when below is technically redundant
+result = if !(when(T) && R) then S else defer(T)
