@@ -58,6 +58,6 @@ name = "work_scheduler"
 name = "simple_add"
 harness = false
 
-# [[bench]]
-# name = "maple_sequence"
-# harness = false
+[[bench]]
+name = "maple_sequence"
+harness = false

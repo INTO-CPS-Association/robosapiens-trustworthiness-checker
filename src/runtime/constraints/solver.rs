@@ -111,6 +111,12 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
                 }
             }
         }
+        (Str(s1), Str(s2), COp(sop)) => {
+            match sop {
+                CompBinOp::Eq => Bool(s1 == s2),
+                CompBinOp::Le => Bool(s1 <= s2),
+            }
+        },
         (v1, v2, op) => {
             unreachable!(
                 "Trying to solve BinOp with incorrect Value types. v1: {:?}. op: {:?}. v2: {:?}",
