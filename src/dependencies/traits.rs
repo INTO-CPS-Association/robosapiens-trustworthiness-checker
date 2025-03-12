@@ -30,8 +30,6 @@ pub fn create_dependency_manager(
 
 // Interface for resolving dependencies.
 pub trait DependencyResolver: Send + Sync {
-    // TODO: Remove dependency
-
     // Generates the dependency structure from the given expressions
     fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Self;
 
