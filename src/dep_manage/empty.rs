@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{SExpr, VarName};
+use crate::{SExpr, Specification, VarName};
 
 use super::interface::DependencyResolver;
 
@@ -12,7 +12,7 @@ pub struct Empty {
 // A DependencyStore that simply saves the VarNames.
 // It always returns time infinity for all dependencies.
 impl DependencyResolver for Empty {
-    fn new(spec: Box<dyn crate::Specification<SExpr<VarName>>>) -> Self {
+    fn new(spec: Box<dyn Specification<Expr = SExpr<VarName>>>) -> Self {
         let mut names = BTreeSet::new();
         spec.output_vars().iter().for_each(|name| {
             names.insert(name.clone());

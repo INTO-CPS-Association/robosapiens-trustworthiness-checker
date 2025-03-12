@@ -154,7 +154,9 @@ pub struct TypedLOLASpecification {
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
-impl Specification<SExprTE> for TypedLOLASpecification {
+impl Specification for TypedLOLASpecification {
+    type Expr = SExprTE;
+
     fn input_vars(&self) -> Vec<VarName> {
         self.input_vars.clone()
     }

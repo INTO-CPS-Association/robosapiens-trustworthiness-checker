@@ -492,7 +492,7 @@ pub struct AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
-    M: Specification<Expr>,
+    M: Specification<Expr = Expr>,
     Expr: Sync + Send,
 {
     model: M,
@@ -511,7 +511,7 @@ impl<Expr: Sync + Send, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, 
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
-    M: Specification<Expr>,
+    M: Specification<Expr = Expr>,
 {
     fn new(
         model: M,

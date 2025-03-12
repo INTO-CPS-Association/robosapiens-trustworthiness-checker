@@ -306,7 +306,7 @@ impl DepGraph {
     // Takes a spec and creates a Map of VarName to SExpr<VarName>
     // I.e., all the assignment states in the spec (because we only support assignment statements)
     fn spec_to_map(
-        spec: Box<dyn Specification<SExpr<VarName>>>,
+        spec: Box<dyn Specification<Expr = SExpr<VarName>>>,
     ) -> BTreeMap<VarName, SExpr<VarName>> {
         let mut map = BTreeMap::new();
         for var in spec.output_vars() {
@@ -319,7 +319,7 @@ impl DepGraph {
 }
 
 impl DependencyResolver for DepGraph {
-    fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Self {
+    fn new(spec: Box<dyn Specification<Expr = SExpr<VarName>>>) -> Self {
         let mut graph = DepGraph::empty_graph();
         for (name, expr) in Self::spec_to_map(spec) {
             let expr_deps = Self::sexpr_dependencies_impl(&expr, &name);

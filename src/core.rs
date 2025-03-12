@@ -207,12 +207,14 @@ pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Sync + Send + 'sta
     fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
 }
 
-pub trait Specification<Expr>: Sync + Send {
+pub trait Specification: Sync + Send {
+    type Expr;
+
     fn input_vars(&self) -> Vec<VarName>;
 
     fn output_vars(&self) -> Vec<VarName>;
 
-    fn var_expr(&self, var: &VarName) -> Option<Expr>;
+    fn var_expr(&self, var: &VarName) -> Option<Self::Expr>;
 }
 
 // This could alternatively implement Sink

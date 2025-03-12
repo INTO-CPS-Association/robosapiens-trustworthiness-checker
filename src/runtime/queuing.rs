@@ -269,7 +269,7 @@ pub struct QueuingMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
-    M: Specification<Expr>,
+    M: Specification<Expr = Expr>,
 {
     model: M,
     var_exchange: Arc<QueuingVarContext<Val>>,
@@ -279,7 +279,7 @@ where
 }
 
 #[async_trait]
-impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
+impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr = Expr>>
     Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn new(
@@ -352,7 +352,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
     }
 }
 
-impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr>>
+impl<Val: StreamData, Expr, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr = Expr>>
     QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn output_stream(&self, var: VarName) -> OutputStream<Val> {

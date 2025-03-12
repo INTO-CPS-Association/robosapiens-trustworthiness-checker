@@ -20,7 +20,7 @@ pub enum DependencyManager {
 
 pub fn create_dependency_manager(
     kind: DependencyKind,
-    spec: Box<dyn Specification<SExpr<VarName>>>,
+    spec: Box<dyn Specification<Expr = SExpr<VarName>>>,
 ) -> DependencyManager {
     match kind {
         DependencyKind::Empty => DependencyManager::Empty(Empty::new(spec)),
@@ -31,7 +31,7 @@ pub fn create_dependency_manager(
 // Interface for resolving dependencies.
 pub trait DependencyResolver: Send + Sync {
     // Generates the dependency structure from the given expressions
-    fn new(spec: Box<dyn Specification<SExpr<VarName>>>) -> Self;
+    fn new(spec: Box<dyn Specification<Expr = SExpr<VarName>>>) -> Self;
 
     // Adds a new dependency to the resolver
     fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>);
