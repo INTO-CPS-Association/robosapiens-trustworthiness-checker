@@ -378,6 +378,22 @@ pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<V
     Box::pin(xs) as BoxStream<'static, Value>
 }
 
+pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let Some(x_val) = x.next().await {
+            if x_val == Value::Unknown {
+                yield Value::Bool(false);
+            } else {
+                yield Value::Bool(true);
+                break;
+            }
+        }
+        while let Some(_) = x.next().await {
+            yield Value::Bool(true);
+        }
+    })
+}
+
 pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     Box::pin(stream! {
         loop {

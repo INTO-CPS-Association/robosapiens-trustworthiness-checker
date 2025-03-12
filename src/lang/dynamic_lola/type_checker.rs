@@ -462,6 +462,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::When(_) => todo!(),
         }
     }
 }

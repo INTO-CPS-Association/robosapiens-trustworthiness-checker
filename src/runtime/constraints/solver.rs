@@ -156,9 +156,7 @@ impl ConvertToAbsolute for SExpr<VarName> {
                 Box::new(else_expr.to_absolute(base_time)),
             ),
             SExpr::Eval(_) => todo!(),
-            // At this point with defer then we know that we haven't received a property
             SExpr::Defer(_) => SExpr::Val(Value::Unknown),
-            // At this point with update then we know that rhs is not not solvable
             SExpr::Update(lhs, _) => lhs.to_absolute(base_time),
             SExpr::Default(expr, default) => SExpr::Default(
                 Box::new(expr.to_absolute(base_time)),
@@ -171,6 +169,7 @@ impl ConvertToAbsolute for SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::When(_) => todo!(),
         }
     }
 }
@@ -272,6 +271,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::When(_) => todo!(),
         }
     }
 }
@@ -320,6 +320,7 @@ impl SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::When(_) => todo!(),
         }
     }
 }
@@ -478,6 +479,7 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::When(_) => todo!(),
         }
     }
 }

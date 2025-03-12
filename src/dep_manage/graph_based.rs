@@ -232,6 +232,7 @@ impl DepGraph {
                 | SExpr::Not(sexpr)
                 | SExpr::LHead(sexpr)
                 | SExpr::LTail(sexpr)
+                | SExpr::When(sexpr)
                 | SExpr::Defer(sexpr) => deps_impl(sexpr, steps, map, current_node),
                 SExpr::BinOp(sexpr1, sexpr2, _)
                 | SExpr::Default(sexpr1, sexpr2)

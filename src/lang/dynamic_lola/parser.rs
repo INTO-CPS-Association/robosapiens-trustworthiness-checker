@@ -118,6 +118,21 @@ fn update(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
+fn when(s: &mut &str) -> Result<SExpr<VarName>> {
+    seq!((
+        _: whitespace,
+        _: literal("when"),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    ))
+    .map(|(e,)| SExpr::When(Box::new(e)))
+    .parse_next(s)
+}
+
 fn eval(s: &mut &str) -> Result<SExpr<VarName>> {
     seq!((
         _: whitespace,
@@ -259,7 +274,7 @@ fn atom(s: &mut &str) -> Result<SExpr<VarName>> {
         whitespace,
         alt((
             sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
-            default, sexpr_list, var, paren,
+            default, when, sexpr_list, var, paren,
         )),
         whitespace,
     )
