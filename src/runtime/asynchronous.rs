@@ -51,9 +51,9 @@ async fn handle_subscription_request<V: StreamData>(
 
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
 enum ContextStage {
-    Gathering,
-    Open,
-    Closed,
+    Gathering, // Only waiting for new subscriptions - no values can be received
+    Open,      // Can grant new subs to the variable or provide values in a time sync'd manner
+    Closed, // No new subs can be granted, but values can still be provided (not necessarily time sync'd)
 }
 
 /* An actor which manages access to a stream variable by tracking the
