@@ -160,9 +160,10 @@ impl ConvertToAbsolute for SExpr<VarName> {
             SExpr::Defer(_) => SExpr::Val(Value::Unknown),
             // At this point with update then we know that rhs is not not solvable
             SExpr::Update(lhs, _) => lhs.to_absolute(base_time),
-            SExpr::Default(expr, default) => {
-                SExpr::Default(Box::new(expr.to_absolute(base_time)), default.clone())
-            }
+            SExpr::Default(expr, default) => SExpr::Default(
+                Box::new(expr.to_absolute(base_time)),
+                Box::new(default.to_absolute(base_time)),
+            ),
             SExpr::Not(_) => todo!(),
             SExpr::List(_) => todo!(),
             SExpr::LIndex(_, _) => todo!(),
@@ -260,7 +261,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
                 unreachable!("Update should not be reachable as an IndexedVarName")
             }
             SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store, var, deps) {
-                Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
+                Resolved(v) if v == Value::Unknown => default.simplify(base_time, store, var, deps),
                 Resolved(v) => Resolved(v),
                 Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
             },
@@ -466,7 +467,7 @@ impl Simplifiable for SExpr<VarName> {
                 }
             }
             SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store, var, deps) {
-                Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
+                Resolved(v) if v == Value::Unknown => default.simplify(base_time, store, var, deps),
                 Resolved(v) => Resolved(v),
                 Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
             },

@@ -87,7 +87,7 @@ pub enum SExpr<VarT: Debug> {
     Eval(Box<Self>),
     Defer(Box<Self>),
     Update(Box<Self>, Box<Self>),
-    Default(Box<Self>, Value),
+    Default(Box<Self>, Box<Self>),
 
     // Unary expressions (refactor if more are added...)
     Not(Box<Self>),

@@ -371,19 +371,11 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
     });
 }
 
-pub fn default(mut x: OutputStream<Value>, c: Value) -> OutputStream<Value> {
-    return Box::pin(stream! {
-        while let Some(x_val) = x.next().await {
-            match x_val {
-                Value::Unknown => {
-                    yield c.clone();
-                }
-                x_val => {
-                    yield x_val;
-                }
-            }
-        }
-    });
+pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<Value> {
+    let xs = x
+        .zip(d)
+        .map(|(x, d)| if x == Value::Unknown { d } else { x });
+    Box::pin(xs) as BoxStream<'static, Value>
 }
 
 pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
@@ -763,8 +755,8 @@ mod tests {
     async fn test_default_no_unknown() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
-        let c = "c".into();
-        let res: Vec<Value> = default(x, c).collect().await;
+        let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
+        let res: Vec<Value> = default(x, d).collect().await;
         let exp: Vec<Value> = vec!["x0".into(), "x1".into(), "x2".into()];
         assert_eq!(res, exp)
     }
@@ -776,9 +768,9 @@ mod tests {
             Value::Unknown,
             Value::Unknown,
         ]));
-        let c = "c".into();
-        let res: Vec<Value> = default(x, c).collect().await;
-        let exp: Vec<Value> = vec!["c".into(), "c".into(), "c".into()];
+        let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
+        let res: Vec<Value> = default(x, d).collect().await;
+        let exp: Vec<Value> = vec!["d".into(), "d".into(), "d".into()];
         assert_eq!(res, exp)
     }
 
@@ -786,9 +778,9 @@ mod tests {
     async fn test_default_one_unknown() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), Value::Unknown, "x2".into()]));
-        let c = "c".into();
-        let res: Vec<Value> = default(x, c).collect().await;
-        let exp: Vec<Value> = vec!["x0".into(), "c".into(), "x2".into()];
+        let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
+        let res: Vec<Value> = default(x, d).collect().await;
+        let exp: Vec<Value> = vec!["x0".into(), "d".into(), "x2".into()];
         assert_eq!(res, exp)
     }
 

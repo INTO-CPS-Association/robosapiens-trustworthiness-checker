@@ -144,11 +144,11 @@ fn default(s: &mut &str) -> Result<SExpr<VarName>> {
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        val,
+        sexpr,
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Default(Box::new(lhs), rhs))
+    .map(|(lhs, rhs)| SExpr::Default(Box::new(lhs), Box::new(rhs)))
     .parse_next(s)
 }
 
@@ -969,14 +969,13 @@ mod tests {
     fn test_parse_default() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"default(x, 0)"#)),
-            r#"Ok(Default(Var(VarName("x")), Int(0)))"#
+            r#"Ok(Default(Var(VarName("x")), Val(Int(0))))"#
         )
     }
 
     #[test]
     fn test_parse_default_sexpr() {
-        // Negative test - should not parse into Default expression
-        assert_ne!(
+        assert_eq!(
             presult_to_string(&sexpr(&mut r#"default(x, y)"#)),
             r#"Ok(Default(Var(VarName("x")), Var(VarName("y"))))"#
         )
