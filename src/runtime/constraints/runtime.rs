@@ -83,7 +83,7 @@ impl ConstraintBasedRuntime {
                     continue;
                 }
 
-                match expr.simplify(self.time, &self.store, &mut self.dependencies) {
+                match expr.simplify(self.time, &self.store, name, &mut self.dependencies) {
                     SimplifyResult::Resolved(v) => {
                         changed = true;
                         new_exprs.insert(name.clone(), SExpr::Val(v));
@@ -118,7 +118,7 @@ impl ConstraintBasedRuntime {
             // Note: Intentionally does not borrow outputs_unresolved here as it is needed for expr.simplify
             for (name, map) in &self.store.outputs_unresolved {
                 for (idx_time, expr) in map {
-                    match expr.simplify(self.time, &self.store, &mut self.dependencies) {
+                    match expr.simplify(self.time, &self.store, name, &mut self.dependencies) {
                         SimplifyResult::Resolved(v) => {
                             changed = true;
                             self.store

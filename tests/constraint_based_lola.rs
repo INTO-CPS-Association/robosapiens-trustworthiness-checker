@@ -741,8 +741,13 @@ mod tests {
     #[test(tokio::test)]
     async fn test_defer_dependency() {
         for kind in [DependencyKind::Empty, DependencyKind::DepGraph] {
-            let x = vec![0.into(), 1.into(), 2.into()];
-            let e = vec![Value::Unknown, "x[-1, 42]".into(), Value::Unknown];
+            let x = vec![0.into(), 1.into(), 2.into(), 3.into()];
+            let e = vec![
+                Value::Unknown,
+                "x[-1, 42]".into(),
+                Value::Unknown,
+                Value::Unknown,
+            ];
             let mut input_streams =
                 new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
             let mut spec = "in x\nin e\nout z\nz = defer(e)";
@@ -758,44 +763,28 @@ mod tests {
             tokio::spawn(monitor.run());
             let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
                 outputs.enumerate().collect().await;
-            assert!(outputs.len() == 3);
-            if kind == DependencyKind::Empty {
-                assert_eq!(
-                    outputs,
-                    vec![
-                        (
-                            0,
-                            BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                        ),
-                        (1, BTreeMap::from([(VarName("z".into()), 0.into())]),),
-                        (2, BTreeMap::from([(VarName("z".into()), 1.into())]),),
-                    ]
-                );
+            assert!(outputs.len() == 4);
+            let sample_1 = if kind == DependencyKind::Empty {
+                (1, BTreeMap::from([(VarName("z".into()), 0.into())]))
+            } else if kind == DependencyKind::DepGraph {
+                // Because the new dependency is added at time idx 1 and requires knowledge
+                // of cleaned memory, it is not solved at this time index.
+                (1, BTreeMap::from([(VarName("z".into()), Value::Unknown)]))
             } else {
-                // NOTE: This is because we currently don't update the dependency graph dynamically
-                // eventually the expected outcome should be [Unknown, Unknown, 1]
-                // because we add the dependency at time idx 1, which is then solveable at time idx
-                // 2.
-                // NOTE: Perhaps the Unknown's here should be the SIndex' default instead. Easy to
-                // add with a conditional in SIndex
-                assert_eq!(
-                    outputs,
-                    vec![
-                        (
-                            0,
-                            BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                        ),
-                        (
-                            1,
-                            BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                        ),
-                        (
-                            2,
-                            BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                        ),
-                    ]
-                );
-            }
+                panic!("Unknown dependency kind - add a case for it");
+            };
+            assert_eq!(
+                outputs,
+                vec![
+                    (
+                        0,
+                        BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
+                    ),
+                    sample_1,
+                    (2, BTreeMap::from([(VarName("z".into()), 1.into())]),),
+                    (3, BTreeMap::from([(VarName("z".into()), 2.into())]),),
+                ]
+            );
         }
     }
 
