@@ -29,7 +29,7 @@ use tokio::time::sleep;
 use tracing::info_span;
 use trustworthiness_checker::{
     Monitor, VarName,
-    dependencies::traits::{DependencyKind, create_dependency_manager},
+    dependencies::interface::{DependencyKind, create_dependency_manager},
     io::{
         mqtt::{MQTTInputProvider, MQTTOutputHandler},
         testing::manual_output_handler::ManualOutputHandler,

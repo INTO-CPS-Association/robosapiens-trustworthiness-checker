@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
-use crate::dependencies::traits::DependencyManager;
+use crate::dependencies::interface::DependencyManager;
 
 // use serde_json::{Deserializer, Sserializer};
 

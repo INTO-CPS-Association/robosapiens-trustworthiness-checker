@@ -25,7 +25,7 @@ use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::SyncStreamContext;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
-use crate::dependencies::traits::DependencyManager;
+use crate::dependencies::interface::DependencyManager;
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
 /* An actor which manages access to a stream variable by tracking the

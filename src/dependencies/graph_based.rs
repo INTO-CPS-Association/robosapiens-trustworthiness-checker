@@ -7,7 +7,7 @@ use petgraph::visit::{EdgeFiltered, EdgeRef, FilterEdge, IntoNodeReferences};
 
 use crate::{SExpr, Specification, VarName};
 
-use super::traits::DependencyResolver;
+use super::interface::DependencyResolver;
 
 // Graph weights are Vecs of time indices
 // (we want a container with duplicates for DUPs)

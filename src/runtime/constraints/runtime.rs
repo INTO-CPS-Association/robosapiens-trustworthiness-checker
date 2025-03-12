@@ -4,7 +4,7 @@ use crate::core::OutputHandler;
 use crate::core::Specification;
 use crate::core::Value;
 use crate::core::VarName;
-use crate::dependencies::traits::DependencyManager;
+use crate::dependencies::interface::DependencyManager;
 use crate::is_enum_variant;
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 use crate::lang::dynamic_lola::ast::SExpr;

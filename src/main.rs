@@ -6,7 +6,7 @@ use tracing::{info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
-use trustworthiness_checker::dependencies::traits::{DependencyKind, create_dependency_manager};
+use trustworthiness_checker::dependencies::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledConcDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;

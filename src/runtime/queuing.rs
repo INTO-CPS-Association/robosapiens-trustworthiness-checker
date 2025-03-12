@@ -16,7 +16,7 @@ use crate::core::Specification;
 use crate::core::StreamData;
 use crate::core::SyncStreamContext;
 use crate::core::{OutputStream, StreamContext, VarName};
-use crate::dependencies::traits::DependencyManager;
+use crate::dependencies::interface::DependencyManager;
 
 /*
  * A StreamContext that track the history of each of the variables as a queue

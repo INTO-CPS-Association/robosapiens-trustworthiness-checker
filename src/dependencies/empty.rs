@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{SExpr, VarName};
 
-use super::traits::DependencyResolver;
+use super::interface::DependencyResolver;
 
 #[derive(Clone, Debug)]
 pub struct Empty {
