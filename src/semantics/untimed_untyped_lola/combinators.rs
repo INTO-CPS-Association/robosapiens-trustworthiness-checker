@@ -241,6 +241,7 @@ pub fn eval(
                     // Advance the subcontext to make a new set of input values
                     // available for the eval stream
                     subcontext.advance_clock().await;
+
                     if let Some(eval_res) = prev_data.eval_output_stream.next().await {
                         yield eval_res;
                         continue;

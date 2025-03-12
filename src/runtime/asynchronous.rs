@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
+use futures::TryFutureExt;
+use futures::future::BoxFuture;
 use futures::future::join_all;
+use futures::future::pending;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -50,11 +53,13 @@ use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
  * - cancel: a cancellation token which is used to signal when the actor should
  *   terminate
  */
-#[instrument(name="manage_var", level=Level::DEBUG, skip(input_stream, channel_request_rx, parent_clock, child_clock, cancel))]
+#[instrument(name="manage_var", level=Level::DEBUG, skip(input_stream, channel_request_rx, finalize, parent_clock, child_clock, cancel))]
 async fn manage_var<V: StreamData>(
     var: VarName,
     mut input_stream: OutputStream<V>,
     mut channel_request_rx: mpsc::Receiver<(oneshot::Sender<()>, oneshot::Sender<OutputStream<V>>)>,
+    mut finalize: watch::Receiver<bool>,
+    sync_stage: bool,
     mut parent_clock: watch::Receiver<usize>,
     child_clock: watch::Sender<usize>,
     // mut ready: watch::Receiver<bool>,
@@ -63,20 +68,48 @@ async fn manage_var<V: StreamData>(
     let mut senders: Vec<mpsc::Sender<V>> = vec![];
     let mut receiving_requests = true;
     let mut clock_old = 0;
-
-    // TODO: This could be optimized to readd an additional stage where
-    // we gather up requests before sending out any streams. This would
-    // mean that manage_var would go away if there is only one subscriber
-    // since we would just send the input stream directly to the
-    // subscriber. This adds complexity, but in previous versions of the
-    // runtime could give a 2x speedup in some cases.
+    let mut subscription_requests: Vec<(oneshot::Sender<()>, oneshot::Sender<OutputStream<V>>)> =
+        vec![];
 
     loop {
+        let channel_request_rx: BoxFuture<
+            Option<(oneshot::Sender<()>, oneshot::Sender<OutputStream<V>>)>,
+        > = if receiving_requests {
+            Box::pin(channel_request_rx.recv())
+        } else {
+            Box::pin(pending::<
+                Option<(oneshot::Sender<()>, oneshot::Sender<OutputStream<V>>)>,
+            >())
+        };
+
         select! {
             biased;
             _ = cancel.cancelled() => {
                 info!(?var, "Ending manage_var due to cancellation");
                 return;
+            }
+
+            channel_sender = channel_request_rx => {
+                if let Some((done_sender, channel_sender)) = channel_sender {
+                    if sync_stage {
+                        debug!(?var, "Received request for var");
+                        debug!(?var, "Handing out a subscription to var");
+                        let (tx, rx) = mpsc::channel(10);
+                        senders.push(tx);
+                        let stream = ReceiverStream::new(rx);
+                        if let Err(_) = channel_sender.send(Box::pin(stream)) {
+                            // panic!("Failed to send stream for {var} to requester");
+                            info!(?var, "Failed to send stream for var to requester");
+                        };
+                        if let Err(_) = done_sender.send(()) {
+                            info!(?var, "Failed to send done signal for var to requester");
+                        }
+                    } else {
+                        subscription_requests.push((done_sender, channel_sender));
+                    }
+                }
+                // We don't care if we stop receiving requests
+                debug!(?var, "Channel sender went away for var");
             }
 
             clock_upd = parent_clock.changed() => {
@@ -85,12 +118,9 @@ async fn manage_var<V: StreamData>(
                     return;
                 }
                 let clock_new = *parent_clock.borrow_and_update();
-                if clock_new == usize::MAX {
-                    debug!("Closing to new subscribers since the clock is auto advancing");
-                    receiving_requests = false;
-                }
                 debug!(clock_old, clock_new, "Monitoring between clocks");
                 for clock in clock_old+1..=clock_new {
+                    // Distributing data
                     debug!(?clock, "Distributing single");
                     select! {
                         biased;
@@ -102,13 +132,15 @@ async fn manage_var<V: StreamData>(
                         data = input_stream.next() => {
                             if let Some(data) = data {
                                 // Update the child clock to report our progress
-                                let _ = child_clock.send(clock);
+                                if sync_stage {
+                                    let _ = child_clock.send(clock);
+                                }
                                 debug!(?data, "Distributing data");
                                 let mut to_delete = vec![];
                                 for (i, child_sender) in senders.iter().enumerate() {
                                     if let Err(_) = child_sender.send(data.clone()).await {
                                         debug!("Failed to distribute data due to no receivers");
-                                        if clock_new == usize::MAX {
+                                        if !receiving_requests {
                                             debug!(
                                                 "Stopping distributing since we currently have no subscribers \
                                                 and the clock is auto advancing so no more subscriber can \
@@ -135,28 +167,41 @@ async fn manage_var<V: StreamData>(
                 clock_old = clock_new;
             }
 
-            channel_sender = channel_request_rx.recv() => {
-                if !receiving_requests {
-                    panic!("Received request after all subscribers have been gathered");
-                }
-                if let Some((done_sender, channel_sender)) = channel_sender {
-                    debug!(?var, "Received request for var");
-                    let (tx, rx) = mpsc::channel(10);
-                    senders.push(tx);
-                    let stream = ReceiverStream::new(rx);
-                    if let Err(_) = channel_sender.send(Box::pin(stream)) {
-                        // panic!("Failed to send stream for {var} to requester");
-                        warn!(?var, "Failed to send stream for var to requester");
-                    };
-                    if let Err(_) = done_sender.send(()) {
-                        warn!(?var, "Failed to send done signal for var to requester");
-                    }
-                    // send_requests.push(channel_sender);
-                }
-                // We don't care if we stop receiving requests
-                debug!(?var, "Channel sender went away for var");
-            }
+            res = finalize.changed() => {
+                match res {
+                    Ok(_) => {
+                        debug!(?var, "Finalizing subscribe stage of manage_var");
+                        if !sync_stage && subscription_requests.len() == 0 {
+                            debug!("No subscribers; ending manage_var");
+                            return;
+                        } else if !sync_stage && subscription_requests.len() == 1 {
+                            debug!("Only one subscriber; sending input stream directly and shutting down");
+                            let (done_sender, channel_sender) = subscription_requests.pop().unwrap();
 
+                            let _ = channel_sender.send(Box::pin(input_stream));
+                            let _ = done_sender.send(());
+                            return
+                        } else {
+                            for (done_sender, channel_sender) in subscription_requests.drain(..) {
+                                let (tx, rx) = mpsc::channel(10);
+                                senders.push(tx);
+                                let stream = ReceiverStream::new(rx);
+                                if let Err(_) = channel_sender.send(Box::pin(stream)) {
+                                // panic!("Failed to send stream for {var} to requester");
+                                    info!(?var, "Failed to send stream for var to requester");
+                                };
+                                if let Err(_) = done_sender.send(()) {
+                                    info!(?var, "Failed to send done signal for var to requester");
+                                }
+                            }
+                        }
+                        receiving_requests = false;
+                    }
+                    Err(_) => {
+                        warn!(?var, "Failed to finalize manage_var");
+                    }
+                }
+            }
         }
     }
 }
@@ -218,6 +263,8 @@ struct Context<Val: StreamData> {
     /// Child clocks which are used to monitor the progress of
     /// consumption of each variable in the context
     child_clocks: BTreeMap<VarName, watch::Receiver<usize>>,
+    /// The channel to signal when all variable subscription have been made
+    finalize_requested: watch::Sender<bool>,
     /// The parent clock which is used to progress all streams
     /// in the context
     clock: watch::Sender<usize>,
@@ -237,6 +284,7 @@ impl<Val: StreamData> Context<Val> {
         let mut receivers = BTreeMap::new();
         let mut vars = Vec::new();
         let outstanding_var_requests = watch::channel(0);
+        let finalize = watch::channel(false);
 
         for var in input_streams.keys() {
             let (watch_tx, watch_rx) = watch::channel(0);
@@ -256,10 +304,11 @@ impl<Val: StreamData> Context<Val> {
             history_length: buffer_size,
             outstanding_var_requests,
             child_clocks: child_clock_recvs,
+            finalize_requested: finalize.0,
             clock,
             cancellation_token,
         }
-        .start_monitors(input_streams, receivers, child_clock_senders)
+        .start_monitors(input_streams, receivers, finalize.1, child_clock_senders)
     }
 
     fn start_monitors(
@@ -269,6 +318,7 @@ impl<Val: StreamData> Context<Val> {
             VarName,
             mpsc::Receiver<(oneshot::Sender<()>, oneshot::Sender<OutputStream<Val>>)>,
         >,
+        finalize_requested: watch::Receiver<bool>,
         mut child_progress_senders: BTreeMap<VarName, watch::Sender<usize>>,
     ) -> Self {
         for var in self.vars.iter() {
@@ -276,10 +326,13 @@ impl<Val: StreamData> Context<Val> {
             // let child_sender = self.senders.remove(var).unwrap();
             let receiver = receivers.remove(var).unwrap();
             let clock = self.clock.subscribe();
+            // let finalize_requested: watch::Receiver<bool> = self.finalize_requested.subscribe();
             tokio::spawn(manage_var(
                 var.clone(),
                 store_history(var.clone(), self.history_length, input_stream),
                 receiver,
+                finalize_requested.clone(),
+                self.history_length != 0,
                 clock,
                 child_progress_senders.remove(var).unwrap(),
                 self.cancellation_token.clone(),
@@ -366,14 +419,15 @@ impl<Val: StreamData> SyncStreamContext<Val> for Context<Val> {
 
     async fn start_auto_clock(&mut self) {
         if !self.is_clock_started() {
-            self.finalize();
+            self.finalize_requested.send(true).unwrap();
+            // Set the clock to the maximum value to allow all streams to
+            // progress freely
             self.outstanding_var_requests
                 .1
                 .wait_for(|x| *x == 0)
                 .await
                 .unwrap();
-            // Set the clock to the maximum value to allow all streams to
-            // progress freely
+            self.finalize();
             self.clock.send_modify(|x| *x = usize::MAX);
         }
     }
@@ -383,6 +437,7 @@ impl<Val: StreamData> SyncStreamContext<Val> for Context<Val> {
     }
 
     async fn wait_till(&self, time: usize) {
+        debug!(?time, "Waiting till time");
         let futs = self.child_clocks.values().map(|x| {
             let mut x = x.clone();
             async move {
@@ -390,6 +445,7 @@ impl<Val: StreamData> SyncStreamContext<Val> for Context<Val> {
             }
         });
         join_all(futs).await;
+        debug!(?time, "Finished waiting till time");
     }
 
     fn upcast(&self) -> &dyn StreamContext<Val> {
