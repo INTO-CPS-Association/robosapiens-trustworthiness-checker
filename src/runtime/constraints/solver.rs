@@ -3,6 +3,7 @@ use std::fmt::Debug;
 
 use crate::core::Value;
 use crate::core::{IndexedVarName, VarName};
+use crate::dependencies::traits::DependencyManager;
 use crate::lang::dynamic_lola::ast::*;
 use crate::lang::dynamic_lola::parser::lola_expression;
 
@@ -174,16 +175,29 @@ impl ConvertToAbsolute for SExpr<VarName> {
 }
 
 pub trait Simplifiable {
-    fn simplify(&self, base_time: usize, store: &ConstraintStore) -> SimplifyResult<Box<Self>>;
+    fn simplify(
+        &self,
+        base_time: usize,
+        store: &ConstraintStore,
+        deps: &mut DependencyManager,
+    ) -> SimplifyResult<Box<Self>>;
 }
 
 // SExprA
 impl Simplifiable for SExpr<IndexedVarName> {
-    fn simplify(&self, base_time: usize, store: &ConstraintStore) -> SimplifyResult<Box<Self>> {
+    fn simplify(
+        &self,
+        base_time: usize,
+        store: &ConstraintStore,
+        deps: &mut DependencyManager,
+    ) -> SimplifyResult<Box<Self>> {
         match self {
             SExpr::Val(i) => Resolved(i.clone()),
             SExpr::BinOp(e1, e2, op) => {
-                match (e1.simplify(base_time, store), e2.simplify(base_time, store)) {
+                match (
+                    e1.simplify(base_time, store, deps),
+                    e2.simplify(base_time, store, deps),
+                ) {
                     (Resolved(e1), Resolved(e2)) => Resolved(binop_table(e1, e2, op.clone())),
                     // Does not reuse the previous e1 and e2s as the subexpressions may have been simplified
                     (Unresolved(ue), Resolved(re)) | (Resolved(re), Unresolved(ue)) => Unresolved(
@@ -214,7 +228,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
                 // Should not be negative at this stage since it was indexed...
                 let uidx_time = *idx_time as usize;
                 if uidx_time <= base_time {
-                    expr.simplify(uidx_time, store)
+                    expr.simplify(uidx_time, store, deps)
                 } else {
                     Unresolved(Box::new(SExpr::SIndex(
                         expr.clone(),
@@ -223,9 +237,9 @@ impl Simplifiable for SExpr<IndexedVarName> {
                     )))
                 }
             }
-            SExpr::If(bexpr, if_expr, else_expr) => match bexpr.simplify(base_time, store) {
-                Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store),
-                Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store),
+            SExpr::If(bexpr, if_expr, else_expr) => match bexpr.simplify(base_time, store, deps) {
+                Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store, deps),
+                Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store, deps),
                 Unresolved(expr) => Unresolved(Box::new(SExpr::If(
                     expr,
                     if_expr.clone(),
@@ -241,7 +255,7 @@ impl Simplifiable for SExpr<IndexedVarName> {
             SExpr::Update(_, _) => {
                 unreachable!("Update should not be reachable as an IndexedVarName")
             }
-            SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
+            SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store, deps) {
                 Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
                 Resolved(v) => Resolved(v),
                 Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
@@ -307,11 +321,19 @@ impl SExpr<VarName> {
 
 // SExprR
 impl Simplifiable for SExpr<VarName> {
-    fn simplify(&self, base_time: usize, store: &ConstraintStore) -> SimplifyResult<Box<Self>> {
+    fn simplify(
+        &self,
+        base_time: usize,
+        store: &ConstraintStore,
+        deps: &mut DependencyManager,
+    ) -> SimplifyResult<Box<Self>> {
         match self {
             SExpr::Val(i) => Resolved(i.clone()),
             SExpr::BinOp(e1, e2, op) => {
-                match (e1.simplify(base_time, store), e2.simplify(base_time, store)) {
+                match (
+                    e1.simplify(base_time, store, deps),
+                    e2.simplify(base_time, store, deps),
+                ) {
                     (Resolved(e1), Resolved(e2)) => Resolved(binop_table(e1, e2, op.clone())),
                     // Does not reuse the previous e1 and e2s as the subexpressions may have been simplified
                     (Unresolved(ue), Resolved(re)) | (Resolved(re), Unresolved(ue)) => Unresolved(
@@ -325,10 +347,10 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::Var(name) => Unresolved(Box::new(SExpr::Var(name.clone()))),
             SExpr::SIndex(expr, rel_time, default) => {
                 if *rel_time == 0 {
-                    expr.simplify(base_time, store)
+                    expr.simplify(base_time, store, deps)
                 } else {
                     // Attempt to partially solve the expression and return unresolved
-                    match expr.simplify(base_time, store) {
+                    match expr.simplify(base_time, store, deps) {
                         Unresolved(expr) => Unresolved(Box::new(SExpr::SIndex(
                             expr.clone(),
                             *rel_time,
@@ -342,9 +364,9 @@ impl Simplifiable for SExpr<VarName> {
                     }
                 }
             }
-            SExpr::If(bexpr, if_expr, else_expr) => match bexpr.simplify(base_time, store) {
-                Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store),
-                Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store),
+            SExpr::If(bexpr, if_expr, else_expr) => match bexpr.simplify(base_time, store, deps) {
+                Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store, deps),
+                Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store, deps),
                 Unresolved(expr) => Unresolved(Box::new(SExpr::If(
                     expr,
                     if_expr.clone(),
@@ -361,7 +383,7 @@ impl Simplifiable for SExpr<VarName> {
                 // defer in `output_exprs`.
                 //
                 // Find the defer str - a bit ugly with all the edge cases
-                let defer_s = match expr.simplify(base_time, store) {
+                let defer_s = match expr.simplify(base_time, store, deps) {
                     // Resolved: Only if the defer property is a string
                     Resolved(v) => match v {
                         Value::Str(defer_s) => defer_s,
@@ -392,8 +414,9 @@ impl Simplifiable for SExpr<VarName> {
                         simplified => {
                             // Last chance - try to manually solve it.
                             // Needed in case we are wrapped in e.g., Default or TimeIndex
-                            let expr_abs =
-                                simplified.to_absolute(base_time).simplify(base_time, store);
+                            let expr_abs = simplified
+                                .to_absolute(base_time)
+                                .simplify(base_time, store, deps);
                             match expr_abs {
                                 Resolved(Value::Str(defer_s)) => defer_s,
                                 Resolved(Value::Unknown) | Unresolved(_) => {
@@ -410,13 +433,13 @@ impl Simplifiable for SExpr<VarName> {
                 let expr = lola_expression
                     .parse_next(defer_parse)
                     .expect("Parsing the defer string resulted in an invalid expression.");
-                expr.simplify(base_time, store)
+                expr.simplify(base_time, store, deps)
             }
             SExpr::Update(lhs, rhs) => {
                 if rhs.is_solveable(base_time, store) {
-                    return rhs.simplify(base_time, store);
+                    return rhs.simplify(base_time, store, deps);
                 }
-                match lhs.simplify(base_time, store) {
+                match lhs.simplify(base_time, store, deps) {
                     Resolved(val) => Unresolved(Box::new(SExpr::Update(
                         Box::new(SExpr::Val(val)),
                         rhs.clone(),
@@ -424,7 +447,7 @@ impl Simplifiable for SExpr<VarName> {
                     Unresolved(sexpr) => Unresolved(Box::new(SExpr::Update(sexpr, rhs.clone()))),
                 }
             }
-            SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store) {
+            SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store, deps) {
                 Resolved(v) if v == Value::Unknown => Resolved(default.clone()),
                 Resolved(v) => Resolved(v),
                 Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
