@@ -20,6 +20,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::BTreeMap;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::info;
 
@@ -177,28 +178,62 @@ pub enum ProducerMessage<T> {
 }
 
 struct InputProducer {
-    sender: broadcast::Sender<ProducerMessage<BTreeMap<VarName, Value>>>,
+    mpsc_sender: mpsc::Sender<ProducerMessage<BTreeMap<VarName, Value>>>,
+    mpsc_receiver: Option<mpsc::Receiver<ProducerMessage<BTreeMap<VarName, Value>>>>,
+    broad_sender: broadcast::Sender<ProducerMessage<BTreeMap<VarName, Value>>>,
 }
 
 impl InputProducer {
+    const BUFFER_SIZE: usize = 10;
+
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(10);
-        Self { sender }
+        let (mpsc_sender, mpsc_receiver) = mpsc::channel(Self::BUFFER_SIZE);
+        let (broad_sender, _) = broadcast::channel(Self::BUFFER_SIZE);
+        let mpsc_receiver = Some(mpsc_receiver);
+        Self {
+            broad_sender,
+            mpsc_sender,
+            mpsc_receiver,
+        }
     }
-    pub fn run(&self, stream_collection: ValStreamCollection) {
-        let task_sender = self.sender.clone();
-        tokio::spawn(async move {
-            let mut inputs_stream = stream_collection.into_stream();
-            while let Some(inputs) = inputs_stream.next().await {
-                let data = ProducerMessage::Data(inputs);
-                task_sender.send(data).unwrap();
-            }
-            task_sender.send(ProducerMessage::Done).unwrap();
-        });
+
+    pub fn run(&mut self, stream_collection: ValStreamCollection) {
+        let mpsc_task_sender = self.mpsc_sender.clone();
+        let receiver = self.mpsc_receiver.take();
+
+        if let Some(mut mpsc_receiver) = receiver {
+            let broad_sender = self.broad_sender.clone();
+            // Take messages from inputs with MPSC channel and forward it to broadcast channel
+            // (This enforces backpressure on consumers instead of lagging behavior)
+            tokio::spawn(async move {
+                let mut inputs_stream = stream_collection.into_stream();
+                while let Some(inputs) = inputs_stream.next().await {
+                    let data = ProducerMessage::Data(inputs);
+                    if mpsc_task_sender.send(data).await.is_err() {
+                        break; // Stop if no receiver exists
+                    }
+                }
+                let _ = mpsc_task_sender.send(ProducerMessage::Done).await;
+            });
+
+            // Forward messages from MPSC to Broadcast
+            tokio::spawn(async move {
+                while let Some(msg) = mpsc_receiver.recv().await {
+                    // Wait for there to be room - this is safe since we are the only one sending
+                    // to the broadcast channel
+                    while broad_sender.len() >= Self::BUFFER_SIZE {
+                        tokio::task::yield_now().await;
+                    }
+                    let _ = broad_sender.send(msg);
+                }
+            });
+        } else {
+            panic!("run() called where mpsc_receiver = None. Most likely called twice.");
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ProducerMessage<BTreeMap<VarName, Value>>> {
-        self.sender.subscribe()
+        self.broad_sender.subscribe()
     }
 }
 

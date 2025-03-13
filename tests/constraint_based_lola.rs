@@ -86,7 +86,6 @@ mod tests {
         }
     }
 
-    #[ignore = "Currently fails"]
     #[test(tokio::test)]
     async fn test_simple_add_monitor_large_input() {
         for kind in DependencyKind::iter() {
