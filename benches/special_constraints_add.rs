@@ -15,15 +15,13 @@ pub fn spec_simple_add_monitor() -> &'static str {
      z = x + y"
 }
 
-async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
+async fn monitor_outputs_untyped_constraints(num_outputs: usize, dependency_kind: DependencyKind) {
     let size = num_outputs as i64;
     let mut xs = (0..size).map(|i| Value::Int(i * 2));
     let mut ys = (0..size).map(|i| Value::Int(i * 2 + 1));
     let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
-    let mut runtime = ConstraintBasedRuntime::new(create_dependency_manager(
-        DependencyKind::DepGraph,
-        spec.clone(),
-    ));
+    let mut runtime =
+        ConstraintBasedRuntime::new(create_dependency_manager(dependency_kind, spec.clone()));
     runtime.store_from_spec(spec);
 
     for _ in 0..size {
@@ -54,11 +52,20 @@ fn from_elem(c: &mut Criterion) {
 
         for size in sizes {
             group.bench_with_input(
-                BenchmarkId::new("special_constraints_add", size),
+                BenchmarkId::new("special_constraints_add_dep_empty", size),
                 &size,
                 |b, &size| {
                     b.to_async(&tokio_rt)
-                        .iter(|| monitor_outputs_untyped_constraints(size))
+                        .iter(|| monitor_outputs_untyped_constraints(size, DependencyKind::Empty))
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new("special_constraints_add_dep_graph", size),
+                &size,
+                |b, &size| {
+                    b.to_async(&tokio_rt).iter(|| {
+                        monitor_outputs_untyped_constraints(size, DependencyKind::DepGraph)
+                    })
                 },
             );
         }
