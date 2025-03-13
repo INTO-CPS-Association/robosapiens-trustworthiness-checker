@@ -44,6 +44,7 @@ enum_inner_method = { git = "https://github.com/mortenhaahr/enum_inner_method", 
 [features]
 ros = ["dep:r2r"]
 testcontainers = []
+bench-full = []
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
@@ -56,6 +57,10 @@ name = "work_scheduler"
 
 [[bench]]
 name = "simple_add"
+harness = false
+
+[[bench]]
+name = "special_constraints_add"
 harness = false
 
 [[bench]]

@@ -32,12 +32,16 @@ pub struct ConstraintBasedRuntime {
 }
 
 impl ConstraintBasedRuntime {
-    fn new(dependencies: DependencyManager) -> Self {
+    pub fn new(dependencies: DependencyManager) -> Self {
         Self {
             store: ConstraintStore::default(),
             time: 0,
             dependencies,
         }
+    }
+
+    pub fn store_from_spec(&mut self, spec: LOLASpecification) {
+        self.store = model_constraints(spec);
     }
 
     fn receive_inputs<'a, Iter>(&mut self, inputs: Iter)
