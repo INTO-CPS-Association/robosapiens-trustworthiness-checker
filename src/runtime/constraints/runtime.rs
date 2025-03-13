@@ -20,32 +20,9 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::BTreeMap;
 use std::mem;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::info;
-
-#[derive(Default)]
-pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);
-
-impl ValStreamCollection {
-    fn into_stream(mut self) -> BoxStream<'static, BTreeMap<VarName, Value>> {
-        Box::pin(stream!(loop {
-            let mut res = BTreeMap::new();
-            for (name, stream) in self.0.iter_mut() {
-                match stream.next().await {
-                    Some(val) => {
-                        res.insert(name.clone(), val);
-                    }
-                    None => {
-                        return;
-                    }
-                }
-            }
-            yield res;
-        }))
-    }
-}
 
 #[derive(Debug)]
 pub struct ConstraintBasedRuntime {
@@ -63,7 +40,10 @@ impl ConstraintBasedRuntime {
         }
     }
 
-    fn receive_inputs(&mut self, inputs: &BTreeMap<VarName, Value>) {
+    fn receive_inputs<'a, Iter>(&mut self, inputs: Iter)
+    where
+        Iter: Iterator<Item = (&'a VarName, &'a Value)>,
+    {
         // Add new input values
         for (name, val) in inputs {
             self.store
@@ -164,11 +144,36 @@ impl ConstraintBasedRuntime {
         }
     }
 
-    pub fn step(&mut self, inputs: &BTreeMap<VarName, Value>) {
+    pub fn step<'a, Iter>(&mut self, inputs: Iter)
+    where
+        Iter: Iterator<Item = (&'a VarName, &'a Value)>,
+    {
         info!("Runtime step at time: {}", self.time);
         self.receive_inputs(inputs);
         self.resolve_possible();
         self.time += 1;
+    }
+}
+
+#[derive(Default)]
+pub struct ValStreamCollection(pub BTreeMap<VarName, BoxStream<'static, Value>>);
+
+impl ValStreamCollection {
+    fn into_stream(mut self) -> BoxStream<'static, BTreeMap<VarName, Value>> {
+        Box::pin(stream!(loop {
+            let mut res = BTreeMap::new();
+            for (name, stream) in self.0.iter_mut() {
+                match stream.next().await {
+                    Some(val) => {
+                        res.insert(name.clone(), val);
+                    }
+                    None => {
+                        return;
+                    }
+                }
+            }
+            yield res;
+        }))
     }
 }
 
@@ -183,55 +188,27 @@ struct InputProducer {
 }
 
 impl InputProducer {
-    const BUFFER_SIZE: usize = 10;
+    const BUFFER_SIZE: usize = 1;
 
     pub fn new() -> Self {
         let mpsc_sender = Vec::new();
         Self { mpsc_sender }
     }
 
-    // pub fn run(&mut self, stream_collection: ValStreamCollection) {
-    //     let task_sender = mem::take(&mut self.mpsc_sender);
-    //
-    //     let broad_sender = self.broad_sender.clone();
-    //     // Take messages from inputs with MPSC channel and forward it to broadcast channel
-    //     // (This enforces backpressure on consumers instead of lagging behavior)
-    //     tokio::spawn(async move {
-    //         let mut inputs_stream = stream_collection.into_stream();
-    //         while let Some(inputs) = inputs_stream.next().await {
-    //             let data = ProducerMessage::Data(inputs);
-    //             if mpsc_task_sender.send(data).await.is_err() {
-    //                 break; // Stop if no receiver exists
-    //             }
-    //         }
-    //         let _ = mpsc_task_sender.send(ProducerMessage::Done).await;
-    //     });
-    //
-    //     // Forward messages from MPSC to Broadcast
-    //     tokio::spawn(async move {
-    //         while let Some(msg) = mpsc_receiver.recv().await {
-    //             // Wait for there to be room - this is safe since we are the only one sending
-    //             // to the broadcast channel
-    //             while broad_sender.len() >= Self::BUFFER_SIZE {
-    //                 tokio::task::yield_now().await;
-    //             }
-    //             let _ = broad_sender.send(msg);
-    //         }
-    //     });
-    // }
-
     pub fn run(&mut self, stream_collection: ValStreamCollection) {
         let task_sender = mem::take(&mut self.mpsc_sender);
         tokio::spawn(async move {
-            let mut inputs_stream = stream_collection.into_stream();
-            while let Some(inputs) = inputs_stream.next().await {
-                let data = ProducerMessage::Data(inputs);
-                for sender in &task_sender {
-                    let _ = sender.send(data.clone()).await;
+            if !task_sender.is_empty() {
+                let mut inputs_stream = stream_collection.into_stream();
+                while let Some(inputs) = inputs_stream.next().await {
+                    let data = ProducerMessage::Data(inputs);
+                    for sender in &task_sender {
+                        let _ = sender.send(data.clone()).await;
+                    }
                 }
-            }
-            for sender in &task_sender {
-                let _ = sender.send(ProducerMessage::Done).await;
+                for sender in &task_sender {
+                    let _ = sender.send(ProducerMessage::Done).await;
+                }
             }
         });
     }
@@ -314,7 +291,7 @@ impl ConstraintBasedMonitor {
                 while let Some(inputs) = input_receiver.recv().await {
                     match inputs {
                         ProducerMessage::Data(inputs) => {
-                            runtime.step(&inputs);
+                            runtime.step(inputs.iter());
                             yield runtime.store.clone();
                             debug!("Store before clean: {:#?}", runtime.store);
                             runtime.cleanup();
@@ -328,7 +305,7 @@ impl ConstraintBasedMonitor {
             }
             else {
                 loop {
-                    runtime.step(&BTreeMap::new());
+                    runtime.step(BTreeMap::new().iter());
                     yield runtime.store.clone();
                     runtime.cleanup();
                 }
