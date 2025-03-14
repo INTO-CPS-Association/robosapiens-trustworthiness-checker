@@ -5,7 +5,7 @@ use crate::lang::dynamic_lola::type_checker::{SExprBool, SExprInt, SExprStr, SEx
 // use crate::semantics::typed_monitoring_semantics as mc;
 mod combinators;
 use combinators as mc;
-use combinators::{from_typed_stream, to_typed_stream};
+pub use combinators::{from_typed_stream, to_typed_stream};
 
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;
