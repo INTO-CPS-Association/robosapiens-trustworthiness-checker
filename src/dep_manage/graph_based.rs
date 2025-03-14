@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use petgraph::algo::{find_negative_cycle, is_cyclic_directed};
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, EdgeReference, NodeIndex};
+use petgraph::prelude::EdgeIndex;
 use petgraph::visit::{EdgeFiltered, EdgeRef, FilterEdge, IntoNodeReferences};
 
 use crate::{SExpr, Specification, VarName};
@@ -11,10 +12,8 @@ use super::interface::DependencyResolver;
 
 // Graph weights are Vecs of time indices
 // (we want a container with duplicates for DUPs)
-type Weight = Vec<isize>;
+type Weight = isize;
 type Node = VarName;
-// Edges are represented as triplets. .0 = from, .1 = to, .2 = weight
-type Edge = (Node, Node, Weight);
 // Graphs are directed
 type GraphType = DiGraph<Node, Weight>;
 
@@ -34,48 +33,21 @@ impl DepGraph {
         Dot::with_config(&self.graph, config)
     }
 
-    #[allow(dead_code)]
-    fn extend_nodes_from_iter<'a, I>(&mut self, nodes: I)
-    where
-        I: IntoIterator<Item = &'a Node>,
-    {
-        for node in nodes {
-            self.graph.add_node(node.clone());
-        }
+    fn find_edges(&self, from: NodeIndex, to: NodeIndex) -> impl Iterator<Item = EdgeIndex> {
+        self.graph.edge_indices().filter(move |x| {
+            let edge = self.graph.edge_endpoints(*x).unwrap();
+            edge.0 == from && edge.1 == to
+        })
     }
 
-    #[allow(dead_code)]
-    fn extend_edges_from_iter<'a, I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = &'a Edge>,
-    {
-        for (from, to, weight) in iter {
-            let from_node = self
-                .graph
-                .node_indices()
-                .find(|node| self.graph[*node] == *from);
-            let to_node = self
-                .graph
-                .node_indices()
-                .find(|node| self.graph[*node] == *to);
-            if let (Some(from_node), Some(to_node)) = (from_node, to_node) {
-                self.graph.add_edge(from_node, to_node, weight.clone());
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn edges_into_set(&self) -> BTreeSet<Edge> {
-        self.graph
-            .edge_references()
-            .map(|edge| {
-                (
-                    self.graph[edge.source()].clone(),
-                    self.graph[edge.target()].clone(),
-                    edge.weight().clone(),
-                )
-            })
-            .collect()
+    fn find_edge_with_weight(
+        &self,
+        from: NodeIndex,
+        to: NodeIndex,
+        weight: Weight,
+    ) -> Option<EdgeIndex> {
+        self.find_edges(from, to)
+            .find(|x| self.graph.edge_weight(*x).unwrap() == &weight)
     }
 
     // Similar to creating a new graph with the union of the nodes and edges,
@@ -90,37 +62,21 @@ impl DepGraph {
         }
 
         // Add nodes from `other` if they are not already in `self`
-        for node in other.graph.node_indices() {
-            let node_value = other.graph[node].clone();
+        for (_, name) in other.graph.node_references() {
             node_map
-                .entry(node_value.clone())
-                .or_insert_with(|| self.graph.add_node(node_value));
+                .entry(name.clone())
+                .or_insert_with(|| self.graph.add_node(name.clone()));
         }
 
-        // Merge edges from `other`
-        for edge in other.graph.edge_indices() {
-            let (source, target) = other.graph.edge_endpoints(edge).unwrap();
-            let weight = other.graph[edge].clone();
-
-            // This is the index of the node in `self` if it exists
-            let source_index = node_map[&other.graph[source]];
-            let target_index = node_map[&other.graph[target]];
-
-            // Ensure the edge does not already exist before adding
-            if !self.graph.contains_edge(source_index, target_index) {
-                self.graph.add_edge(source_index, target_index, weight);
-            }
-            // If it exists then add a copy of the weights
-            else {
-                let edge_index = self.graph.find_edge(source_index, target_index).unwrap();
-                let existing_weight = self.graph.edge_weight_mut(edge_index).unwrap();
-                existing_weight.extend(weight);
-            }
+        // Add the edges:
+        for edge in other.graph.edge_references() {
+            let source_index = node_map[&other.graph[edge.source()]];
+            let target_index = node_map[&other.graph[edge.target()]];
+            self.graph
+                .add_edge(source_index, target_index, *edge.weight());
         }
     }
 
-    // Similar to creating a new graph with the set difference of the edges, but this is done in-place
-    // (Not removing nodes because the variables still exist even if they are unconnected)
     fn diff_graphs(&mut self, other: &DepGraph) {
         let mut node_map = BTreeMap::new();
 
@@ -131,66 +87,23 @@ impl DepGraph {
         }
 
         // Add nodes from `other` if they are not already in `self`
-        for node in other.graph.node_indices() {
-            let node_value = other.graph[node].clone();
+        for (_, name) in other.graph.node_references() {
             node_map
-                .entry(node_value.clone())
-                .or_insert_with(|| self.graph.add_node(node_value));
+                .entry(name.clone())
+                .or_insert_with(|| self.graph.add_node(name.clone()));
         }
 
-        // Remove weights and potentially edges from `self` that are present in `other`
-        for edge in other.graph.edge_indices() {
-            let (source, target) = other.graph.edge_endpoints(edge).unwrap();
-
+        // Remove the edge if it exists in `self`
+        for edge in other.graph.edge_references() {
             // This is the index of the node in `self` if it exists
-            let source_index = node_map[&other.graph[source]];
-            let target_index = node_map[&other.graph[target]];
+            let source_index = node_map[&other.graph[edge.source()]];
+            let target_index = node_map[&other.graph[edge.target()]];
+            let weight = *edge.weight();
 
             // Remove the edge if it exists in `self`
-            if let Some(edge_index) = self.graph.find_edge(source_index, target_index) {
-                // Find `other` weights:
-                let other_weight = &other.graph[edge];
-                let self_weight = self.graph.edge_weight_mut(edge_index).unwrap();
-                for weight in other_weight.iter() {
-                    if let Some(index) = self_weight.iter().position(|x| x == weight) {
-                        // Unfortunately, this becomes O(n*n). Hopefully, we have few weights
-                        self_weight.remove(index);
-                    }
-                }
-                if self_weight.is_empty() {
-                    self.graph.remove_edge(edge_index);
-                }
+            if let Some(edge_idx) = self.find_edge_with_weight(source_index, target_index, weight) {
+                self.graph.remove_edge(edge_idx);
             }
-        }
-    }
-
-    fn combine_edges(&mut self) {
-        // A HashMap to store edges by (source, target) as keys
-        let mut edge_map: BTreeMap<(usize, usize), Vec<isize>> = BTreeMap::new();
-
-        // Iterate over all edges in the graph
-        for edge in self.graph.edge_references() {
-            let source = edge.source().index();
-            let target = edge.target().index();
-            let weight = edge.weight().clone();
-
-            // Combine the weights if there are multiple edges between the same nodes
-            edge_map
-                .entry((source, target))
-                .or_insert_with(Vec::new)
-                .extend(weight);
-        }
-
-        // Clear all the edges in the graph to re-add combined edges
-        self.graph.clear_edges();
-
-        // Re-add the combined edges to the graph
-        for ((source, target), weights) in edge_map {
-            self.graph.add_edge(
-                self.graph.node_indices().nth(source).unwrap(),
-                self.graph.node_indices().nth(target).unwrap(),
-                weights,
-            );
         }
     }
 
@@ -200,7 +113,7 @@ impl DepGraph {
     fn sexpr_dependencies_impl(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
         fn deps_impl(
             sexpr: &SExpr<Node>,
-            steps: &Weight,
+            steps: &mut Vec<Weight>,
             map: &mut DepGraph,
             current_node: &NodeIndex,
         ) {
@@ -208,15 +121,16 @@ impl DepGraph {
                 SExpr::Var(name) => {
                     let node = map.graph.add_node(name.clone());
                     if steps.is_empty() {
-                        map.graph.add_edge(*current_node, node, vec![0]);
+                        map.graph.add_edge(*current_node, node, 0);
                     } else {
-                        map.graph.add_edge(*current_node, node, steps.clone());
+                        steps.iter().for_each(|w| {
+                            map.graph.add_edge(*current_node, node, *w);
+                        });
                     }
                 }
                 SExpr::SIndex(sexpr, idx, _) => {
-                    let mut steps = steps.clone();
                     steps.push(*idx);
-                    deps_impl(sexpr, &steps, map, current_node);
+                    deps_impl(sexpr, steps, map, current_node);
                 }
                 SExpr::If(iff, then, els) => {
                     deps_impl(iff, steps, map, current_node);
@@ -248,14 +162,13 @@ impl DepGraph {
 
         let mut graph = DepGraph::empty_graph();
         let root_node = graph.graph.add_node(root_name.clone());
-        deps_impl(sexpr, &vec![], &mut graph, &root_node);
+        deps_impl(sexpr, &mut vec![], &mut graph, &root_node);
         graph
     }
 
     // Traverses the sexpr and returns a map of its dependencies to other variables
     pub fn sexpr_dependencies(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
-        let mut graph = DepGraph::sexpr_dependencies_impl(sexpr, &root_name);
-        graph.combine_edges();
+        let graph = DepGraph::sexpr_dependencies_impl(sexpr, &root_name);
         graph
     }
 
@@ -264,12 +177,7 @@ impl DepGraph {
     fn instantaneous_dependencies(
         &self,
     ) -> EdgeFiltered<&GraphType, impl FilterEdge<EdgeReference<'_, Weight>>> {
-        EdgeFiltered::from_fn(&self.graph, |edge| {
-            // TODO: I don't know how this will work when we genuinely have
-            // a vector of different indices; for now we just use the first one
-            let weight = edge.weight().get(0).unwrap_or(&0);
-            *weight == 0
-        })
+        EdgeFiltered::from_fn(&self.graph, |edge| *edge.weight() == 0)
     }
 
     #[allow(dead_code)]
@@ -286,11 +194,7 @@ impl DepGraph {
     pub fn is_effectively_monitorable(&self) -> bool {
         // Quite inefficient, but should be good enough for now, given we mostly
         // need this function for testing
-        // TODO: I don't know how this will work when we genuinely have
-        // a vector of different indices; for now we just use the first one
-        let neg_graph = self
-            .graph
-            .map(|_, n| n.clone(), |_, e| (-e.get(0).unwrap_or(&0)) as f64);
+        let neg_graph = self.graph.map(|_, n| n.clone(), |_, e| -e as f64);
         self.graph
             .node_indices()
             .all(|node| find_negative_cycle(&neg_graph, node).is_none())
@@ -326,7 +230,6 @@ impl DependencyResolver for DepGraph {
             let expr_deps = Self::sexpr_dependencies_impl(&expr, &name);
             graph.merge_graphs(&expr_deps);
         }
-        graph.combine_edges();
         graph
     }
 
@@ -348,7 +251,7 @@ impl DependencyResolver for DepGraph {
         let longest_dep = self
             .graph
             .edges_directed(node, petgraph::Direction::Incoming)
-            .filter_map(|edge| edge.weight().iter().map(|&w| w.unsigned_abs()).max()) // Take max of abs values
+            .map(|edge| edge.weight().unsigned_abs())
             .max()
             .unwrap_or(0);
         Some(longest_dep)
@@ -360,7 +263,7 @@ impl DependencyResolver for DepGraph {
             let longest_dep = self
                 .graph
                 .edges_directed(node, petgraph::Direction::Incoming)
-                .filter_map(|edge| edge.weight().iter().map(|&w| w.unsigned_abs()).max()) // Take max of abs values
+                .map(|edge| edge.weight().unsigned_abs())
                 .max()
                 .unwrap_or(0);
             map.insert(name.clone(), longest_dep);
@@ -401,15 +304,12 @@ mod tests {
             .unwrap()
     }
 
-    fn get_edge(graph: &GraphType, from: NodeIndex, to: NodeIndex) -> Edge {
-        let edge_index = graph.find_edge(from, to).unwrap();
-        let weight = graph.edge_weight(edge_index).unwrap();
-        (graph[from].clone(), graph[to].clone(), weight.clone())
-    }
-
-    fn get_weight(graph: &GraphType, from: NodeIndex, to: NodeIndex) -> Weight {
-        let (_, _, weight) = get_edge(graph, from, to);
-        weight
+    fn get_weights(graph: &GraphType, from: NodeIndex, to: NodeIndex) -> Vec<Weight> {
+        graph
+            .edges_directed(from, petgraph::Direction::Outgoing)
+            .filter(|edge| edge.target() == to)
+            .map(|edge| *edge.weight())
+            .collect()
     }
 
     #[test]
@@ -438,7 +338,7 @@ mod tests {
         let a = find_node(&graph, "a");
         let x = find_node(&graph, "x");
         assert!(graph.contains_edge(x, a));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![-1]);
     }
 
@@ -454,9 +354,9 @@ mod tests {
         let y = find_node(&graph, "y");
         assert!(graph.contains_edge(x, a));
         assert!(graph.contains_edge(y, a));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![0]);
-        let weight = get_weight(&graph, y, a);
+        let weight = get_weights(&graph, y, a);
         assert_eq!(weight, vec![-1]);
     }
 
@@ -472,9 +372,9 @@ mod tests {
         let y = find_node(&graph, "y");
         assert!(graph.contains_edge(x, a));
         assert!(graph.contains_edge(y, x));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![0]);
-        let weight = get_weight(&graph, y, x);
+        let weight = get_weights(&graph, y, x);
         assert_eq!(weight, vec![0]);
     }
 
@@ -490,9 +390,9 @@ mod tests {
         let y = find_node(&graph, "y");
         assert!(graph.contains_edge(x, a));
         assert!(graph.contains_edge(y, x));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![-1]);
-        let weight = get_weight(&graph, y, x);
+        let weight = get_weights(&graph, y, x);
         assert_eq!(weight, vec![-1]);
     }
 
@@ -502,12 +402,12 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
         let graph = DepGraph::new(spec).graph;
         assert_eq!(graph.node_count(), 2);
-        assert_eq!(graph.edge_count(), 1);
+        assert_eq!(graph.edge_count(), 2);
         let a = find_node(&graph, "a");
         let x = find_node(&graph, "x");
         assert!(graph.contains_edge(x, a));
-        let weight = get_weight(&graph, x, a);
-        assert_eq!(weight, vec![0, -1]);
+        let weight = get_weights(&graph, x, a);
+        assert_eq!(weight, vec![-1, 0]);
     }
 
     #[test]
@@ -603,7 +503,7 @@ mod tests {
         let a = find_node(&graph, "a");
         let x = find_node(&graph, "x");
         assert!(graph.contains_edge(a, x));
-        let weight = get_weight(&graph, a, x);
+        let weight = get_weights(&graph, a, x);
         assert_eq!(weight, vec![0]);
     }
 
@@ -622,11 +522,11 @@ mod tests {
         assert!(graph.contains_edge(x, a));
         assert!(graph.contains_edge(y, x));
         assert!(graph.contains_edge(a, y));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![0]);
-        let weight = get_weight(&graph, y, x);
+        let weight = get_weights(&graph, y, x);
         assert_eq!(weight, vec![0]);
-        let weight = get_weight(&graph, a, y);
+        let weight = get_weights(&graph, a, y);
         assert_eq!(weight, vec![0]);
     }
 
@@ -638,11 +538,11 @@ mod tests {
         graph.add_dependency(&"x".into(), &SExpr::Var("a".into()));
         let graph = graph.graph;
         assert_eq!(graph.node_count(), 3);
-        assert_eq!(graph.edge_count(), 2);
+        assert_eq!(graph.edge_count(), 3);
         let a = find_node(&graph, "a");
         let x = find_node(&graph, "x");
         assert!(graph.contains_edge(x, a));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![0, 0]); // The new weight was added correctly
     }
 
@@ -657,12 +557,12 @@ mod tests {
         );
         let graph = graph.graph;
         assert_eq!(graph.node_count(), 3);
-        assert_eq!(graph.edge_count(), 2);
+        assert_eq!(graph.edge_count(), 3);
         let a = find_node(&graph, "a");
         let x = find_node(&graph, "x");
         assert!(graph.contains_edge(x, a));
-        let weight = get_weight(&graph, x, a);
-        assert_eq!(weight, vec![0, -1]); // The new weight was added correctly
+        let weight = get_weights(&graph, x, a);
+        assert_eq!(weight, vec![-1, 0]); // The new weight was added correctly
     }
 
     #[test]
@@ -680,7 +580,7 @@ mod tests {
         let y = find_node(&graph, "y");
         assert!(graph.contains_edge(x, a));
         assert!(!graph.contains_edge(y, x));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![0]);
     }
 
@@ -697,7 +597,7 @@ mod tests {
         let a = find_node(&graph, "a");
         let x = find_node(&graph, "x");
         assert!(graph.contains_edge(x, a));
-        let weight = get_weight(&graph, x, a);
+        let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![-1]);
     }
 
@@ -711,9 +611,9 @@ mod tests {
         let a = graph.graph.add_node("a".into());
         let b = graph.graph.add_node("b".into());
         let c = graph.graph.add_node("c".into());
-        graph.graph.add_edge(a, b, vec![0]);
-        graph.graph.add_edge(b, c, vec![0]);
-        graph.graph.add_edge(c, a, vec![1]);
+        graph.graph.add_edge(a, b, 0);
+        graph.graph.add_edge(b, c, 0);
+        graph.graph.add_edge(c, a, 1);
         assert!(graph.is_productive());
     }
 
@@ -723,9 +623,9 @@ mod tests {
         let a = graph.graph.add_node("a".into());
         let b = graph.graph.add_node("b".into());
         let c = graph.graph.add_node("c".into());
-        graph.graph.add_edge(a, b, vec![0]);
-        graph.graph.add_edge(b, c, vec![0]);
-        graph.graph.add_edge(c, a, vec![0]);
+        graph.graph.add_edge(a, b, 0);
+        graph.graph.add_edge(b, c, 0);
+        graph.graph.add_edge(c, a, 0);
         assert!(!graph.is_productive());
     }
 
@@ -735,9 +635,9 @@ mod tests {
         let a = graph.graph.add_node("a".into());
         let b = graph.graph.add_node("b".into());
         let c = graph.graph.add_node("c".into());
-        graph.graph.add_edge(a, b, vec![1]);
-        graph.graph.add_edge(b, c, vec![-1]);
-        graph.graph.add_edge(c, a, vec![-1]);
+        graph.graph.add_edge(a, b, 1);
+        graph.graph.add_edge(b, c, -1);
+        graph.graph.add_edge(c, a, -1);
         assert!(graph.is_effectively_monitorable());
     }
 
@@ -747,9 +647,9 @@ mod tests {
         let a = graph.graph.add_node("a".into());
         let b = graph.graph.add_node("b".into());
         let c = graph.graph.add_node("c".into());
-        graph.graph.add_edge(a, b, vec![-1]);
-        graph.graph.add_edge(b, c, vec![1]);
-        graph.graph.add_edge(c, a, vec![1]);
+        graph.graph.add_edge(a, b, -1);
+        graph.graph.add_edge(b, c, 1);
+        graph.graph.add_edge(c, a, 1);
         assert!(!graph.is_effectively_monitorable());
     }
 
@@ -772,7 +672,7 @@ mod tests {
                 assert!(*node_name == "ROOT".into() || inputs.contains(&graph.graph[node]));
             }
             for edge in graph.graph.edge_references() {
-                assert!(*edge.weight() == vec![0]);
+                assert!(*edge.weight() == 0);
             }
         }
 
@@ -842,7 +742,7 @@ mod generation {
                 for (src_idx, dst_idx, weight) in edges {
                     let src = graph.graph.node_indices().nth(src_idx).unwrap();
                     let dst = graph.graph.node_indices().nth(dst_idx).unwrap();
-                    graph.graph.add_edge(src, dst, vec![weight]);
+                    graph.graph.add_edge(src, dst, weight);
                 }
 
                 graph
