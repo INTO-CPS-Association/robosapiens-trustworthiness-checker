@@ -5,7 +5,6 @@ use criterion::{criterion_group, criterion_main};
 use futures::StreamExt;
 use trustworthiness_checker::LOLASpecification;
 use trustworthiness_checker::Monitor;
-use trustworthiness_checker::dep_manage;
 use trustworthiness_checker::dep_manage::interface::DependencyKind;
 use trustworthiness_checker::dep_manage::interface::DependencyManager;
 use trustworthiness_checker::dep_manage::interface::create_dependency_manager;
@@ -158,16 +157,16 @@ fn from_elem(c: &mut Criterion) {
                     })
                 },
             );
-            group.bench_with_input(
-                BenchmarkId::new("simple_add_constraints_gc", size),
-                &(size, &spec, &dep_manager_graph),
-                |b, &(size, spec, dep_manager_graph)| {
-                    b.to_async(&tokio_rt).iter(|| {
-                        monitor_outputs_untyped_constraints(spec.clone(), dep_manager_graph.clone(), size)
-                    })
-                },
-            );
         }
+        group.bench_with_input(
+            BenchmarkId::new("simple_add_constraints_gc", size),
+            &(size, &spec, &dep_manager_graph),
+            |b, &(size, spec, dep_manager_graph)| {
+                b.to_async(&tokio_rt).iter(|| {
+                    monitor_outputs_untyped_constraints(spec.clone(), dep_manager_graph.clone(), size)
+                })
+            },
+        );
         group.bench_with_input(
             BenchmarkId::new("simple_add_untyped_async", size),
             &(size, &spec, &dep_manager),
