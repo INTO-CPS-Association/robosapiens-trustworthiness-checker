@@ -10,7 +10,6 @@ use crate::is_enum_variant;
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 use crate::lang::dynamic_lola::ast::SExpr;
 use crate::runtime::constraints::solver::ConstraintStore;
-use crate::runtime::constraints::solver::ConvertToAbsolute;
 use crate::runtime::constraints::solver::SExprStream;
 use crate::runtime::constraints::solver::Simplifiable;
 use crate::runtime::constraints::solver::SimplifyResult;

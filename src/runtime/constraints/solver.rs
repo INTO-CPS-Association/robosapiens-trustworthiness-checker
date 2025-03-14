@@ -2,14 +2,56 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use crate::core::Value;
-use crate::core::{IndexedVarName, VarName};
+use crate::core::VarName;
 use crate::dep_manage::interface::DependencyManager;
 use crate::lang::dynamic_lola::ast::*;
 use crate::lang::dynamic_lola::parser::lola_expression;
 
+// An SExpr with an absolute time
+// Identical to SExpr except SIndex is unsigned, Var has a time index and certain DUP functions are
+// removed (because they are not needed)
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SExprAbs {
+    // if-then-else
+    If(Box<Self>, Box<Self>, Box<Self>),
+
+    // Stream indexing
+    SIndex(
+        // Inner SExpr e
+        Box<Self>,
+        // Index i
+        usize,
+        // Default c
+        Value,
+    ),
+
+    // Arithmetic Stream expression
+    Val(Value),
+
+    BinOp(Box<Self>, Box<Self>, SBinOp),
+
+    Var(usize, VarName),
+
+    // Eval
+    Eval(Box<Self>),
+    Default(Box<Self>, Box<Self>),
+    When(Box<Self>), // Becomes true after the first time .0 is not Unknown
+
+    // Unary expressions (refactor if more are added...)
+    Not(Box<Self>),
+
+    // List and list expressions
+    List(Vec<Self>),
+    LIndex(Box<Self>, Box<Self>), // List index: First is list, second is index
+    LAppend(Box<Self>, Box<Self>), // List append -- First is list, second is el to add
+    LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
+    LHead(Box<Self>),             // List head -- get first element of list
+    LTail(Box<Self>),             // List tail -- get all but first element of list
+}
+
 pub type SyncStream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
 pub type ValStream = SyncStream<Value>;
-pub type SExprStream = SyncStream<SExpr<IndexedVarName>>;
+pub type SExprStream = SyncStream<SExprAbs>;
 
 #[derive(Debug, Clone)]
 // A ConstraintStore is the environment for the streams
@@ -60,11 +102,7 @@ impl ConstraintStore {
         Self::get_value_from_stream(name, idx, &self.outputs_resolved)
     }
 
-    pub fn get_from_outputs_unresolved(
-        &self,
-        name: &VarName,
-        idx: &usize,
-    ) -> Option<&SExpr<IndexedVarName>> {
+    pub fn get_from_outputs_unresolved(&self, name: &VarName, idx: &usize) -> Option<&SExprAbs> {
         Self::get_value_from_stream(name, idx, &self.outputs_unresolved)
     }
 }
@@ -124,45 +162,38 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
     }
 }
 
-pub trait ConvertToAbsolute {
-    type Output;
-    fn to_absolute(&self, base_time: usize) -> Self::Output;
-}
-
-impl ConvertToAbsolute for SExpr<VarName> {
-    type Output = SExpr<IndexedVarName>;
-
-    fn to_absolute(&self, base_time: usize) -> Self::Output {
+impl SExpr<VarName> {
+    pub fn to_absolute(&self, base_time: usize) -> SExprAbs {
         match self {
-            SExpr::Val(val) => SExpr::Val(val.clone()),
-            SExpr::BinOp(lhs, rhs, op) => SExpr::BinOp(
+            SExpr::Val(val) => SExprAbs::Val(val.clone()),
+            SExpr::BinOp(lhs, rhs, op) => SExprAbs::BinOp(
                 Box::new(lhs.to_absolute(base_time)),
                 Box::new(rhs.to_absolute(base_time)),
                 op.clone(),
             ),
-            SExpr::Var(name) => SExpr::Var(IndexedVarName(name.0.clone(), base_time)),
+            SExpr::Var(name) => SExprAbs::Var(base_time, name.clone()),
             SExpr::SIndex(expr, offset, default) => {
                 // Determine if it is something that can eventually be solved. If not, transform it to a lit
                 let absolute_time = base_time as isize + offset;
                 if absolute_time < 0 {
-                    SExpr::Val(default.clone())
+                    SExprAbs::Val(default.clone())
                 } else {
-                    SExpr::SIndex(
+                    SExprAbs::SIndex(
                         Box::new(expr.to_absolute(base_time)),
-                        absolute_time,
+                        absolute_time.abs() as usize,
                         default.clone(),
                     )
                 }
             }
-            SExpr::If(bexpr, if_expr, else_expr) => SExpr::If(
+            SExpr::If(bexpr, if_expr, else_expr) => SExprAbs::If(
                 Box::new(bexpr.to_absolute(base_time)),
                 Box::new(if_expr.to_absolute(base_time)),
                 Box::new(else_expr.to_absolute(base_time)),
             ),
             SExpr::Eval(_) => todo!(),
-            SExpr::Defer(_) => SExpr::Val(Value::Unknown),
+            SExpr::Defer(_) => SExprAbs::Val(Value::Unknown),
             SExpr::Update(lhs, _) => lhs.to_absolute(base_time),
-            SExpr::Default(expr, default) => SExpr::Default(
+            SExpr::Default(expr, default) => SExprAbs::Default(
                 Box::new(expr.to_absolute(base_time)),
                 Box::new(default.to_absolute(base_time)),
             ),
@@ -188,8 +219,7 @@ pub trait Simplifiable {
     ) -> SimplifyResult<Box<Self>>;
 }
 
-// SExprA
-impl Simplifiable for SExpr<IndexedVarName> {
+impl Simplifiable for SExprAbs {
     fn simplify(
         &self,
         base_time: usize,
@@ -198,8 +228,8 @@ impl Simplifiable for SExpr<IndexedVarName> {
         deps: &mut DependencyManager,
     ) -> SimplifyResult<Box<Self>> {
         match self {
-            SExpr::Val(i) => Resolved(i.clone()),
-            SExpr::BinOp(e1, e2, op) => {
+            SExprAbs::Val(i) => Resolved(i.clone()),
+            SExprAbs::BinOp(e1, e2, op) => {
                 match (
                     e1.simplify(base_time, store, var, deps),
                     e2.simplify(base_time, store, var, deps),
@@ -207,15 +237,14 @@ impl Simplifiable for SExpr<IndexedVarName> {
                     (Resolved(e1), Resolved(e2)) => Resolved(binop_table(e1, e2, op.clone())),
                     // Does not reuse the previous e1 and e2s as the subexpressions may have been simplified
                     (Unresolved(ue), Resolved(re)) | (Resolved(re), Unresolved(ue)) => Unresolved(
-                        Box::new(SExpr::BinOp(ue, Box::new(SExpr::Val(re)), op.clone())),
+                        Box::new(SExprAbs::BinOp(ue, Box::new(SExprAbs::Val(re)), op.clone())),
                     ),
                     (Unresolved(e1), Unresolved(e2)) => {
-                        Unresolved(Box::new(SExpr::BinOp(e1, e2, op.clone())))
+                        Unresolved(Box::new(SExprAbs::BinOp(e1, e2, op.clone())))
                     }
                 }
             }
-            SExpr::Var(idx_var_name) => {
-                let var_name = VarName(idx_var_name.0.clone());
+            SExprAbs::Var(_, var_name) => {
                 // Check if we have a value inside resolved or input values
                 if let Some(v) = store
                     .get_from_outputs_resolved(&var_name, &base_time)
@@ -230,52 +259,54 @@ impl Simplifiable for SExpr<IndexedVarName> {
                     Resolved(Value::Unknown)
                 }
             }
-            SExpr::SIndex(expr, idx_time, default) => {
+            SExprAbs::SIndex(expr, idx_time, default) => {
                 // Should not be negative at this stage since it was indexed...
                 let uidx_time = *idx_time as usize;
                 if uidx_time <= base_time {
                     expr.simplify(uidx_time, store, var, deps)
                 } else {
-                    Unresolved(Box::new(SExpr::SIndex(
+                    Unresolved(Box::new(SExprAbs::SIndex(
                         expr.clone(),
                         *idx_time,
                         default.clone(),
                     )))
                 }
             }
-            SExpr::If(bexpr, if_expr, else_expr) => {
+            SExprAbs::If(bexpr, if_expr, else_expr) => {
                 match bexpr.simplify(base_time, store, var, deps) {
                     Resolved(Value::Bool(true)) => if_expr.simplify(base_time, store, var, deps),
                     Resolved(Value::Bool(false)) => else_expr.simplify(base_time, store, var, deps),
-                    Unresolved(expr) => Unresolved(Box::new(SExpr::If(
+                    Unresolved(expr) => Unresolved(Box::new(SExprAbs::If(
                         expr,
                         if_expr.clone(),
                         else_expr.clone(),
                     ))),
                     Resolved(v) => unreachable!(
-                        "Solving SExprA did not yield a boolean as the conditional to if-statement: v={:?}",
+                        "Solving SExprAbs did not yield a boolean as the conditional to if-statement: v={:?}",
                         v
                     ),
                 }
             }
-            SExpr::Eval(_) => todo!(),
-            SExpr::Defer(_) => unreachable!("Defer should not be reachable as an IndexedVarName"),
-            SExpr::Update(_, _) => {
-                unreachable!("Update should not be reachable as an IndexedVarName")
+            SExprAbs::Eval(_) => todo!(),
+            SExprAbs::Default(sexpr, default) => {
+                match sexpr.simplify(base_time, store, var, deps) {
+                    Resolved(v) if v == Value::Unknown => {
+                        default.simplify(base_time, store, var, deps)
+                    }
+                    Resolved(v) => Resolved(v),
+                    Unresolved(sexpr) => {
+                        Unresolved(Box::new(SExprAbs::Default(sexpr, default.clone())))
+                    }
+                }
             }
-            SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store, var, deps) {
-                Resolved(v) if v == Value::Unknown => default.simplify(base_time, store, var, deps),
-                Resolved(v) => Resolved(v),
-                Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
-            },
-            SExpr::Not(_) => todo!(),
-            SExpr::List(_) => todo!(),
-            SExpr::LIndex(_, _) => todo!(),
-            SExpr::LAppend(_, _) => todo!(),
-            SExpr::LConcat(_, _) => todo!(),
-            SExpr::LHead(_) => todo!(),
-            SExpr::LTail(_) => todo!(),
-            SExpr::When(_) => todo!(),
+            SExprAbs::Not(_) => todo!(),
+            SExprAbs::List(_) => todo!(),
+            SExprAbs::LIndex(_, _) => todo!(),
+            SExprAbs::LAppend(_, _) => todo!(),
+            SExprAbs::LConcat(_, _) => todo!(),
+            SExprAbs::LHead(_) => todo!(),
+            SExprAbs::LTail(_) => todo!(),
+            SExprAbs::When(_) => todo!(),
         }
     }
 }
