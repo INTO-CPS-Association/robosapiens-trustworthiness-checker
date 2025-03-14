@@ -1,3 +1,4 @@
+use crate::OutputStream;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::OutputHandler;
@@ -14,13 +15,17 @@ use crate::runtime::constraints::solver::SExprStream;
 use crate::runtime::constraints::solver::Simplifiable;
 use crate::runtime::constraints::solver::SimplifyResult;
 use crate::runtime::constraints::solver::model_constraints;
+use crate::stream_utils::oneshot_to_stream;
 use async_stream::stream;
 use async_trait::async_trait;
+use core::panic;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::BTreeMap;
 use std::mem;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::debug;
 use tracing::info;
 
@@ -188,39 +193,35 @@ pub enum ProducerMessage<T> {
 }
 
 struct InputProducer {
-    mpsc_sender: Vec<mpsc::Sender<ProducerMessage<BTreeMap<VarName, Value>>>>,
+    // mpsc_sender: Vec<mpsc::Sender<ProducerMessage<BTreeMap<VarName, Value>>>>,
+    stream_rx: Option<oneshot::Receiver<BoxStream<'static, BTreeMap<VarName, Value>>>>,
+    stream_tx: Option<oneshot::Sender<BoxStream<'static, BTreeMap<VarName, Value>>>>,
 }
 
 impl InputProducer {
-    const BUFFER_SIZE: usize = 1;
+    // const BUFFER_SIZE: usize = 1000;
 
     pub fn new() -> Self {
-        let mpsc_sender = Vec::new();
-        Self { mpsc_sender }
+        // let mpsc_sender = Vec::new();
+        let (stream_tx, stream_rx) = oneshot::channel();
+        Self {
+            stream_rx: Some(stream_rx),
+            stream_tx: Some(stream_tx),
+        }
     }
 
     pub fn run(&mut self, stream_collection: ValStreamCollection) {
-        let task_sender = mem::take(&mut self.mpsc_sender);
-        tokio::spawn(async move {
-            if !task_sender.is_empty() {
-                let mut inputs_stream = stream_collection.into_stream();
-                while let Some(inputs) = inputs_stream.next().await {
-                    let data = ProducerMessage::Data(inputs);
-                    for sender in &task_sender {
-                        let _ = sender.send(data.clone()).await;
-                    }
-                }
-                for sender in &task_sender {
-                    let _ = sender.send(ProducerMessage::Done).await;
-                }
-            }
-        });
+        if let Some(stream_tx) = mem::take(&mut self.stream_tx) {
+            let _ = stream_tx.send(stream_collection.into_stream());
+        }
     }
 
-    pub fn subscribe(&mut self) -> mpsc::Receiver<ProducerMessage<BTreeMap<VarName, Value>>> {
-        let (sender, receiver) = mpsc::channel(Self::BUFFER_SIZE);
-        self.mpsc_sender.push(sender);
-        receiver
+    pub fn subscribe(&mut self) -> BoxStream<'static, BTreeMap<VarName, Value>> {
+        if let Some(stream_rx) = mem::take(&mut self.stream_rx) {
+            oneshot_to_stream(stream_rx)
+        } else {
+            panic!("InputProducer already subscribed to");
+        }
     }
 }
 
@@ -268,12 +269,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
     }
 
     async fn run(mut self) {
-        let outputs = self
-            .model
-            .output_vars()
-            .into_iter()
-            .map(|var| (var.clone(), self.output_stream(&var)))
-            .collect();
+        let outputs = self.output_streams();
         self.output_handler.provide_streams(outputs);
         if self.has_inputs {
             self.input_producer.run(self.stream_collection);
@@ -283,52 +279,61 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 }
 
 impl ConstraintBasedMonitor {
-    fn stream_output_constraints(&mut self) -> BoxStream<'static, ConstraintStore> {
-        let input_receiver = self.input_producer.subscribe();
+    fn output_streams(&mut self) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+        let (output_senders, output_streams): (Vec<_>, Vec<_>) = self
+            .model
+            .output_vars()
+            .iter()
+            .map(|var| {
+                let (sender, receiver) = mpsc::channel(10);
+                let stream: OutputStream<Value> = Box::pin(ReceiverStream::new(receiver));
+                ((var.clone(), sender), (var.clone(), stream))
+            })
+            .unzip();
+        let output_senders = output_senders.into_iter().collect::<BTreeMap<_, _>>();
+        let output_streams = output_streams.into_iter().collect::<BTreeMap<_, _>>();
+        let mut var_indexes = self
+            .model
+            .output_vars()
+            .into_iter()
+            .zip(std::iter::repeat(0))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut input_stream = self.input_producer.subscribe();
         let mut runtime_initial = ConstraintBasedRuntime::new(self.dependencies.clone());
         runtime_initial.store = model_constraints(self.model.clone());
         let has_inputs = self.has_inputs.clone();
-        Box::pin(stream!(
+        tokio::spawn(async move {
             let mut runtime = runtime_initial;
             if has_inputs {
-                let mut input_receiver = input_receiver;
-                while let Some(inputs) = input_receiver.recv().await {
-                    match inputs {
-                        ProducerMessage::Data(inputs) => {
-                            runtime.step(inputs.iter());
-                            yield runtime.store.clone();
-                            debug!("Store before clean: {:#?}", runtime.store);
-                            runtime.cleanup();
-                            debug!("Store after clean: {:#?}", runtime.store);
-                        }
-                        ProducerMessage::Done => {
-                            break;
+                while let Some(inputs) = input_stream.next().await {
+                    runtime.step(inputs.iter());
+                    for (var, sender) in &output_senders {
+                        let idx = var_indexes.get_mut(var).unwrap();
+                        if let Some(val) = runtime.store.get_from_outputs_resolved(var, idx) {
+                            let _ = sender.send(val.clone()).await;
+                            *idx += 1;
                         }
                     }
+                    debug!("Store before clean: {:#?}", runtime.store);
+                    runtime.cleanup();
+                    debug!("Store after clean: {:#?}", runtime.store);
                 }
-            }
-            else {
+            } else {
                 loop {
                     runtime.step(BTreeMap::new().iter());
-                    yield runtime.store.clone();
+                    for (var, sender) in &output_senders {
+                        let idx = var_indexes.get_mut(var).unwrap();
+                        if let Some(val) = runtime.store.get_from_outputs_resolved(var, idx) {
+                            let _ = sender.send(val.clone()).await;
+                            *idx += 1;
+                        }
+                    }
                     runtime.cleanup();
                 }
             }
-        ))
-    }
+        });
 
-    fn output_stream(&mut self, var: &VarName) -> BoxStream<'static, Value> {
-        let var_name = var.clone();
-        let mut constraints = self.stream_output_constraints();
-
-        Box::pin(stream! {
-            let mut index = 0;
-            while let Some(cs) = constraints.next().await {
-                if let Some(resolved) = cs.get_from_outputs_resolved(&var_name, &index).cloned(){
-                    index += 1;
-                    yield resolved;
-                }
-            }
-        })
+        output_streams
     }
 }
