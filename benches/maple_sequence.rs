@@ -2,99 +2,93 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::SamplingMode;
 use criterion::{criterion_group, criterion_main};
+use trustworthiness_checker::LOLASpecification;
 use trustworthiness_checker::Monitor;
 use trustworthiness_checker::dep_manage::interface::DependencyKind;
+use trustworthiness_checker::dep_manage::interface::DependencyManager;
 use trustworthiness_checker::dep_manage::interface::create_dependency_manager;
 use trustworthiness_checker::io::testing::null_output_handler::NullOutputHandler;
+use trustworthiness_checker::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::lola_fixtures::{maple_valid_input_stream, spec_maple_sequence};
 
-async fn monitor_outputs_untyped_constraints(num_outputs: usize) {
+async fn monitor_outputs_untyped_constraints(
+    spec: LOLASpecification,
+    dep_manager: DependencyManager,
+    num_outputs: usize,
+) {
     let mut input_streams = maple_valid_input_stream(num_outputs);
-    let spec = trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::constraints::ConstraintBasedMonitor::new(
         spec.clone(),
         &mut input_streams,
         output_handler,
-        create_dependency_manager(DependencyKind::Empty, spec),
+        dep_manager,
     );
     async_monitor.run().await;
 }
 
-async fn monitor_outputs_untyped_async(num_outputs: usize) {
+async fn monitor_outputs_untyped_async(
+    spec: LOLASpecification,
+    dep_manager: DependencyManager,
+    num_outputs: usize,
+) {
     let mut input_streams = maple_valid_input_stream(num_outputs);
-    let spec = trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::asynchronous::AsyncMonitorRunner::<
         _,
         _,
         trustworthiness_checker::semantics::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
-    >::new(
-        spec.clone(),
-        &mut input_streams,
-        output_handler,
-        create_dependency_manager(DependencyKind::Empty, spec),
-    );
+    >::new(spec, &mut input_streams, output_handler, dep_manager);
     async_monitor.run().await;
 }
 
-async fn monitor_outputs_typed_async(num_outputs: usize) {
+async fn monitor_outputs_typed_async(
+    spec: TypedLOLASpecification,
+    dep_manager: DependencyManager,
+    num_outputs: usize,
+) {
     let mut input_streams = maple_valid_input_stream(num_outputs);
-    let spec_untyped =
-        trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
-    let spec = type_check(spec_untyped.clone()).expect("Type check failed");
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::asynchronous::AsyncMonitorRunner::<
         _,
         _,
         trustworthiness_checker::semantics::TypedUntimedLolaSemantics,
         _,
-    >::new(
-        spec,
-        &mut input_streams,
-        output_handler,
-        create_dependency_manager(DependencyKind::Empty, spec_untyped),
-    );
+    >::new(spec, &mut input_streams, output_handler, dep_manager);
     async_monitor.run().await;
 }
 
-async fn monitor_outputs_untyped_queuing(num_outputs: usize) {
+async fn monitor_outputs_untyped_queuing(
+    spec: LOLASpecification,
+    dep_manager: DependencyManager,
+    num_outputs: usize,
+) {
     let mut input_streams = maple_valid_input_stream(num_outputs);
-    let spec = trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::queuing::QueuingMonitorRunner::<
         _,
         _,
         trustworthiness_checker::semantics::UntimedLolaSemantics,
         trustworthiness_checker::LOLASpecification,
-    >::new(
-        spec.clone(),
-        &mut input_streams,
-        output_handler,
-        create_dependency_manager(DependencyKind::Empty, spec),
-    );
+    >::new(spec, &mut input_streams, output_handler, dep_manager);
     async_monitor.run().await;
 }
 
-async fn monitor_outputs_typed_queuing(num_outputs: usize) {
+async fn monitor_outputs_typed_queuing(
+    spec: TypedLOLASpecification,
+    dep_manager: DependencyManager,
+    num_outputs: usize,
+) {
     let mut input_streams = maple_valid_input_stream(num_outputs);
-    let spec_untyped =
-        trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
-    let spec = type_check(spec_untyped.clone()).expect("Type check failed");
     let output_handler = Box::new(NullOutputHandler::new(spec.output_vars.clone()));
     let async_monitor = trustworthiness_checker::runtime::queuing::QueuingMonitorRunner::<
         _,
         _,
         trustworthiness_checker::semantics::TypedUntimedLolaSemantics,
         _,
-    >::new(
-        spec,
-        &mut input_streams,
-        output_handler,
-        create_dependency_manager(DependencyKind::Empty, spec_untyped),
-    );
+    >::new(spec, &mut input_streams, output_handler, dep_manager);
     async_monitor.run().await;
 }
 
@@ -108,6 +102,12 @@ fn from_elem(c: &mut Criterion) {
         .build()
         .unwrap();
 
+    // Parse specifications and create dependency managers once
+    let spec = trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
+    let dep_manager_empty = create_dependency_manager(DependencyKind::Empty, spec.clone());
+    let dep_manager_graph = create_dependency_manager(DependencyKind::DepGraph, spec.clone());
+    let spec_typed = type_check(spec.clone()).expect("Type check failed");
+
     let mut group = c.benchmark_group("maple_sequence");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
@@ -117,43 +117,54 @@ fn from_elem(c: &mut Criterion) {
         if size <= 5000 {
             group.bench_with_input(
                 BenchmarkId::new("maple_sequence_constraints", size),
-                &size,
-                |b, &size| {
-                    b.to_async(&tokio_rt)
-                        .iter(|| monitor_outputs_untyped_constraints(size))
+                &(size, &spec, &dep_manager_empty),
+                |b, &(size, spec, dep_manager)| {
+                    b.to_async(&tokio_rt).iter(|| {
+                        monitor_outputs_untyped_constraints(spec.clone(), dep_manager.clone(), size)
+                    })
                 },
             );
         }
         group.bench_with_input(
+            BenchmarkId::new("maple_sequence_constraints_graph", size),
+            &(size, &spec, &dep_manager_graph),
+            |b, &(size, spec, dep_manager)| {
+                b.to_async(&tokio_rt).iter(|| {
+                    monitor_outputs_untyped_constraints(spec.clone(), dep_manager.clone(), size)
+                })
+            },
+        );
+        group.bench_with_input(
             BenchmarkId::new("maple_sequence_untyped_async", size),
-            &size,
-            |b, &size| {
+            &(size, &spec, &dep_manager_empty),
+            |b, &(size, spec, dep_manager)| {
                 b.to_async(&tokio_rt)
-                    .iter(|| monitor_outputs_untyped_async(size))
+                    .iter(|| monitor_outputs_untyped_async(spec.clone(), dep_manager.clone(), size))
             },
         );
         group.bench_with_input(
             BenchmarkId::new("maple_sequence_typed_async", size),
-            &size,
-            |b, &size| {
+            &(size, &spec_typed, &dep_manager_empty),
+            |b, &(size, spec, dep_manager)| {
                 b.to_async(&tokio_rt)
-                    .iter(|| monitor_outputs_typed_async(size))
+                    .iter(|| monitor_outputs_typed_async(spec.clone(), dep_manager.clone(), size))
             },
         );
         group.bench_with_input(
             BenchmarkId::new("maple_sequence_untyped_queuing", size),
-            &size,
-            |b, &size| {
-                b.to_async(&tokio_rt)
-                    .iter(|| monitor_outputs_untyped_queuing(size))
+            &(size, &spec, &dep_manager_empty),
+            |b, &(size, spec, dep_manager)| {
+                b.to_async(&tokio_rt).iter(|| {
+                    monitor_outputs_untyped_queuing(spec.clone(), dep_manager.clone(), size)
+                })
             },
         );
         group.bench_with_input(
             BenchmarkId::new("maple_sequence_typed_queuing", size),
-            &size,
-            |b, &size| {
+            &(size, &spec_typed, &dep_manager_empty),
+            |b, &(size, spec, dep_manager)| {
                 b.to_async(&tokio_rt)
-                    .iter(|| monitor_outputs_typed_queuing(size))
+                    .iter(|| monitor_outputs_typed_queuing(spec.clone(), dep_manager.clone(), size))
             },
         );
     }
