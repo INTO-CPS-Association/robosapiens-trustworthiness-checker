@@ -186,23 +186,14 @@ impl ValStreamCollection {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ProducerMessage<T> {
-    Data(T),
-    Done,
-}
-
 struct InputProducer {
-    // mpsc_sender: Vec<mpsc::Sender<ProducerMessage<BTreeMap<VarName, Value>>>>,
     stream_rx: Option<oneshot::Receiver<BoxStream<'static, BTreeMap<VarName, Value>>>>,
     stream_tx: Option<oneshot::Sender<BoxStream<'static, BTreeMap<VarName, Value>>>>,
 }
 
 impl InputProducer {
-    // const BUFFER_SIZE: usize = 1000;
-
+    // TODO: TW comment here
     pub fn new() -> Self {
-        // let mpsc_sender = Vec::new();
         let (stream_tx, stream_rx) = oneshot::channel();
         Self {
             stream_rx: Some(stream_rx),
@@ -213,6 +204,8 @@ impl InputProducer {
     pub fn run(&mut self, stream_collection: ValStreamCollection) {
         if let Some(stream_tx) = mem::take(&mut self.stream_tx) {
             let _ = stream_tx.send(stream_collection.into_stream());
+        } else {
+            panic!("InputProducer already run");
         }
     }
 
@@ -280,6 +273,7 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 
 impl ConstraintBasedMonitor {
     fn output_streams(&mut self) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+        // TODO: TW split initial part into fn and comment on it
         let (output_senders, output_streams): (Vec<_>, Vec<_>) = self
             .model
             .output_vars()
