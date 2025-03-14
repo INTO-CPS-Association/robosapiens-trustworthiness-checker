@@ -235,8 +235,9 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 impl ConstraintBasedMonitor {
     fn output_streams(&mut self) -> BTreeMap<VarName, BoxStream<'static, Value>> {
         // Create senders and streams for each output variable
-        let (output_senders, output_streams) = var_senders_and_streams(self.model.output_vars().into_iter());
-        // Keep track of the index of the next variable to be sent for each 
+        let (output_senders, output_streams) =
+            var_senders_and_streams(self.model.output_vars().into_iter());
+        // Keep track of the index of the next variable to be sent for each
         // variable (initialize with 0)
         let mut var_indexes = self
             .model
@@ -244,7 +245,7 @@ impl ConstraintBasedMonitor {
             .into_iter()
             .zip(std::iter::repeat(0))
             .collect::<BTreeMap<_, _>>();
-        // Either get the input stream or create an infinite stream of empty 
+        // Either get the input stream or create an infinite stream of empty
         // input maps if there isn't any
         let mut input_stream = if self.has_inputs {
             mem::take(&mut self.stream_collection).into_stream()
@@ -283,7 +284,12 @@ impl ConstraintBasedMonitor {
 /// Create a set of senders and streams for the given variables where sending
 /// on the sender for a variable will result in the value being received on the
 /// stream for the corresponding variable.
-fn var_senders_and_streams(vars: impl Iterator<Item=VarName>) -> (BTreeMap<VarName, mpsc::Sender<Value>>, BTreeMap<VarName, OutputStream<Value>>) {
+fn var_senders_and_streams(
+    vars: impl Iterator<Item = VarName>,
+) -> (
+    BTreeMap<VarName, mpsc::Sender<Value>>,
+    BTreeMap<VarName, OutputStream<Value>>,
+) {
     let (output_senders, output_streams): (Vec<_>, Vec<_>) = vars
         .map(|var| {
             let (sender, receiver) = mpsc::channel(10);
