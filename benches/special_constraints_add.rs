@@ -30,6 +30,7 @@ async fn monitor_outputs_untyped_constraints(num_outputs: usize, dependency_kind
             ("y".into(), ys.next().unwrap()),
         ]);
         runtime.step(inputs.iter());
+        runtime.cleanup();
     }
 }
 

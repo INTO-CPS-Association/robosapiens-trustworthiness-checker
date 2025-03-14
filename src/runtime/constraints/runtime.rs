@@ -128,7 +128,7 @@ impl ConstraintBasedRuntime {
     }
 
     // Remove unused input values and resolved outputs
-    fn cleanup(&mut self) {
+    pub fn cleanup(&mut self) {
         let longest_times = self.dependencies.longest_time_dependencies();
         for collection in [
             &mut self.store.input_streams,
