@@ -5,10 +5,11 @@ use crate::semantics::untimed_untyped_lola::UntimedLolaSemantics;
 use crate::{MonitoringSemantics, OutputStream, StreamContext, VarName};
 use async_stream::stream;
 use core::panic;
+use futures::stream::LocalBoxStream;
 use futures::{
     StreamExt,
     future::join_all,
-    stream::{self, BoxStream},
+    stream::{self},
 };
 use tokio::join;
 use tracing::debug;
@@ -16,14 +17,8 @@ use tracing::info;
 use tracing::instrument;
 use winnow::Parser;
 
-pub trait CloneFn1<T: StreamData, S: StreamData>:
-    Fn(T) -> S + Clone + Sync + Send + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where
-    T: Fn(S) -> R + Sync + Send + Clone + 'static
-{
-}
+pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
+impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 
 pub fn lift1<S: StreamData, R: StreamData>(
     f: impl CloneFn1<S, R>,
@@ -35,11 +30,11 @@ pub fn lift1<S: StreamData, R: StreamData>(
 }
 
 pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
-    Fn(S, R) -> U + Clone + Sync + Send + 'static
+    Fn(S, R) -> U + Clone + 'static
 {
 }
 impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T where
-    T: Fn(S, R) -> U + Clone + Sync + Send + 'static
+    T: Fn(S, R) -> U + Clone + 'static
 {
 }
 
@@ -53,11 +48,11 @@ pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
 }
 
 pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
-    Fn(S, R, U) -> V + Clone + Sync + Send + 'static
+    Fn(S, R, U) -> V + Clone + 'static
 {
 }
 impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T where
-    T: Fn(S, R, U) -> V + Clone + Sync + Send + 'static
+    T: Fn(S, R, U) -> V + Clone + 'static
 {
 }
 
@@ -74,7 +69,7 @@ pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
             .zip(y_mon)
             .zip(z_mon)
             .map(move |((x, y), z)| f(x, y, z)),
-    ) as BoxStream<'static, U>
+    ) as LocalBoxStream<'static, U>
 }
 
 pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
@@ -149,9 +144,9 @@ pub fn sindex(x: OutputStream<Value>, i: isize, c: Value) -> OutputStream<Value>
     let n = i.abs() as usize;
     let cs = stream::repeat(c).take(n);
     if i < 0 {
-        Box::pin(cs.chain(x)) as BoxStream<'static, Value>
+        Box::pin(cs.chain(x)) as LocalBoxStream<'static, Value>
     } else {
-        Box::pin(x.skip(n).chain(cs)) as BoxStream<'static, Value>
+        Box::pin(x.skip(n).chain(cs)) as LocalBoxStream<'static, Value>
     }
 }
 
@@ -240,7 +235,8 @@ pub fn eval(
                 if prev_data.eval_val == current || current == Value::Unknown {
                     // Advance the subcontext to make a new set of input values
                     // available for the eval stream
-                    subcontext.advance_clock().await;
+                    // info!("advancing eval clock");
+                    subcontext.lazy_advance_clock().await;
 
                     if let Some(eval_res) = prev_data.eval_output_stream.next().await {
                         yield eval_res;
@@ -253,7 +249,7 @@ pub fn eval(
             match current {
                 Value::Unknown => {
                     // Consume a sample from the subcontext but return Unknown (aka. Waiting)
-                    subcontext.advance_clock().await;
+                    subcontext.lazy_advance_clock().await;
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
@@ -262,7 +258,7 @@ pub fn eval(
                     let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast());
                     // Advance the subcontext to make a new set of input values
                     // available for the eval stream
-                    subcontext.advance_clock().await;
+                    subcontext.lazy_advance_clock().await;
                     if let Some(eval_res) = eval_output_stream.next().await {
                         yield eval_res;
                     } else {
@@ -324,9 +320,6 @@ pub fn defer(
                     if i >= history_length {
                         info!(?i, ?history_length, "Advancing subcontext to clean history");
                         subcontext.advance_clock().await;
-                        info!("Waiting until consumption has caught up");
-                        subcontext.wait_till(1 + i - history_length).await;
-                        info!("Done waiting until consumption has caught up");
                     }
                     i += 1;
                     yield Value::Unknown;
@@ -375,7 +368,7 @@ pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<V
     let xs = x
         .zip(d)
         .map(|(x, d)| if x == Value::Unknown { d } else { x });
-    Box::pin(xs) as BoxStream<'static, Value>
+    Box::pin(xs) as LocalBoxStream<'static, Value>
 }
 
 pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
@@ -497,6 +490,8 @@ mod tests {
     use crate::core::{SyncStreamContext, Value, VarName};
     use async_trait::async_trait;
     use futures::stream;
+    use macro_rules_attribute::apply;
+    use smol_macros::test as smol_test;
     use std::collections::BTreeMap;
     use std::iter::FromIterator;
     use std::ops::{Deref, DerefMut};
@@ -565,7 +560,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl SyncStreamContext<Value> for MockContext {
         async fn advance_clock(&mut self) {
             // Remove the first element from each Vec (the oldest value)
@@ -581,6 +576,10 @@ mod tests {
             return;
         }
 
+        async fn lazy_advance_clock(&mut self) {
+            self.advance_clock().await;
+        }
+
         fn clock(&self) -> usize {
             0
         }
@@ -593,16 +592,12 @@ mod tests {
             // Do nothing
         }
 
-        async fn wait_till(&self, _time: usize) {
-            // Do nothing
-        }
-
         fn upcast(&self) -> &dyn StreamContext<Value> {
             self
         }
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_mock_subcontext() {
         let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into(), 3.into()]).into()]
             .into_iter()
@@ -616,7 +611,7 @@ mod tests {
         assert_eq!(res, vec![3.into()]);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_not() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Bool(true), false.into()]));
         let res: Vec<Value> = not(x).collect().await;
@@ -624,7 +619,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_plus() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec![Value::Int(1), 3.into()].into_iter()));
@@ -634,7 +629,7 @@ mod tests {
         assert_eq!(res, z);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_str_concat() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
         let y: OutputStream<Value> = Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]));
@@ -643,7 +638,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_eval() {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()]
@@ -655,7 +650,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_eval_x_squared() {
         // This test is interesting since we use x twice in the eval strings
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
@@ -668,7 +663,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_eval_with_start_unknown() {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -685,7 +680,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_eval_with_mid_unknown() {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
             "x + 1".into(),
@@ -702,7 +697,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_defer() {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
@@ -714,7 +709,7 @@ mod tests {
         let exp: Vec<Value> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
     }
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_defer_x_squared() {
         // This test is interesting since we use x twice in the eval strings
         let e: OutputStream<Value> =
@@ -728,7 +723,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_defer_unknown() {
         // Using unknown to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, "x + 1".into()]));
@@ -741,7 +736,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_defer_unknown2() {
         // Unknown followed by property followed by unknown returns [U; val; val].
         let e = Box::pin(stream::iter(vec![
@@ -758,7 +753,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_update_both_init() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec!["x0".into(), "x1".into()]));
         let y: OutputStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
@@ -767,7 +762,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_default_no_unknown() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
@@ -777,7 +772,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_default_all_unknown() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -790,7 +785,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_default_one_unknown() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), Value::Unknown, "x2".into()]));
@@ -800,7 +795,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_update_first_x_then_y() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             "x0".into(),
@@ -819,7 +814,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_update_first_y_then_x() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -838,7 +833,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_update_neither() {
         use Value::Unknown;
         let x: OutputStream<Value> =
@@ -850,7 +845,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_update_first_x_then_y_value_sync() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -870,7 +865,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -884,7 +879,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_exprs() {
         let x: Vec<OutputStream<Value>> = vec![
             plus(
@@ -904,7 +899,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_idx() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -916,7 +911,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_idx_varying() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -929,7 +924,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_idx_expr() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -944,7 +939,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_idx_var() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -960,7 +955,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_append() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -975,7 +970,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_concat() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -993,7 +988,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_head() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -1004,7 +999,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_tail() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -1019,7 +1014,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_list_tail_one_el() {
         let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![1.into(), 2.into()]))];
         let res: Vec<Value> = ltail(list(x)).collect().await;

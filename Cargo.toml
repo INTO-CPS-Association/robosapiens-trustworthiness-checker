@@ -40,6 +40,11 @@ strum = "0.27.1"
 strum_macros = "0.27.1"
 petgraph = { version = "0.7.1", features = ["serde-1"] }
 enum_inner_method = { git = "https://github.com/mortenhaahr/enum_inner_method", tag = "v0.1.0" }
+smol = "2.0.2"
+async-unsync = "0.3.0"
+smol-macros = "0.1.1"
+macro_rules_attribute = "0.2.0"
+async-compat = "0.2.4"
 
 [features]
 ros = ["dep:r2r"]
@@ -47,7 +52,7 @@ testcontainers = []
 bench-full = []
 
 [dev-dependencies]
-criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.5.1", features = ["async_tokio", "async_smol", "html_reports"] }
 testcontainers-modules = "0.11.6"
 test-log = {version="0.2.17", features=["trace"]}
 proptest = "1.6.0"

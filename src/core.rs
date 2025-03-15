@@ -1,13 +1,13 @@
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
-    future::Future,
-    pin::Pin,
+    rc::Rc,
 };
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
+use futures::future::LocalBoxFuture;
 use serde::{Deserialize, Serialize};
+use smol::LocalExecutor;
 
 use crate::dep_manage::interface::DependencyManager;
 
@@ -157,7 +157,7 @@ impl Display for VarName {
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub struct IndexedVarName(pub String, pub usize);
 
-pub type OutputStream<T> = BoxStream<'static, T>;
+pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
 pub trait InputProvider {
     type Val;
@@ -175,17 +175,21 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     }
 }
 
-pub trait StreamContext<Val: StreamData>: Send + 'static {
+pub trait StreamContext<Val: StreamData>: 'static {
     fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
 
     fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>>;
 }
 
-#[async_trait]
-pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + Send + 'static {
+#[async_trait(?Send)]
+pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + 'static {
     /// Advance the clock used by the context by one step, letting all
-    /// streams to progress
+    /// streams to progress (blocking)
     async fn advance_clock(&mut self);
+
+    /// Try to advance clock used by the context by one step, letting all
+    /// streams to progress (non-blocking, don't care if anything happens)
+    async fn lazy_advance_clock(&mut self);
 
     /// Set the clock to automatically advance, allowing all substreams
     /// to progress freely (limited only by buffering)
@@ -198,16 +202,12 @@ pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + Send + 'stati
     /// that all stream have reached this time)
     fn clock(&self) -> usize;
 
-    /// Wait until the clock and all child streams reached the given
-    /// a given time
-    async fn wait_till(&self, time: usize);
-
     // This allows TimedStreamContext to be used as a StreamContext
     // This is necessary due to https://github.com/rust-lang/rust/issues/65991
     fn upcast(&self) -> &dyn StreamContext<Val>;
 }
 
-pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + Sync + Send + 'static {
+pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + 'static {
     fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
 }
 
@@ -227,8 +227,8 @@ pub trait Specification: Sync + Send {
 // output file name, etc.) whilst provide_streams is called by the runtime to
 // finish the setup of the output handler by providing the streams to be output,
 // and finally run is called to start the output handler.
-#[async_trait]
-pub trait OutputHandler: Send {
+#[async_trait(?Send)]
+pub trait OutputHandler {
     type Val: StreamData;
 
     // async fn handle_output(&mut self, var: &VarName, value: V);
@@ -237,7 +237,7 @@ pub trait OutputHandler: Send {
 
     // Essentially this is of type
     // async fn run(&mut self);
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
+    fn run(&mut self) -> LocalBoxFuture<'static, ()>;
     //  -> Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
 }
 
@@ -249,9 +249,10 @@ pub trait OutputHandler: Send {
  * type of input provider to be provided and allows the output
  * to borrow from the input provider without worrying about lifetimes.
  */
-#[async_trait]
-pub trait Monitor<M, V: StreamData>: Send {
+#[async_trait(?Send)]
+pub trait Monitor<M, V: StreamData> {
     fn new(
+        executor: Rc<LocalExecutor<'static>>,
         model: M,
         input: &mut dyn InputProvider<Val = V>,
         output: Box<dyn OutputHandler<Val = V>>,

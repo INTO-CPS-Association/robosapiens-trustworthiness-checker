@@ -1,12 +1,14 @@
 #![allow(warnings)]
 use std::fmt::Result as FmtResult;
+use std::rc::Rc;
 use std::time::Duration;
 use std::{future::Future, vec};
 
-use futures::{StreamExt, stream};
+use futures::{StreamExt, executor, stream};
 use paho_mqtt as mqtt;
+use smol::LocalExecutor;
 use std::pin::Pin;
-use std::task;
+use std::{mem, task};
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
@@ -18,13 +20,18 @@ use trustworthiness_checker::lola_fixtures::*;
 use trustworthiness_checker::{OutputStream, Specification, Value};
 use winnow::Parser;
 
+use async_compat::Compat as TokioCompat;
 use async_once_cell::Lazy;
+use macro_rules_attribute::apply;
+use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
 use test_log::test;
 use testcontainers_modules::testcontainers::core::WaitFor;
 use testcontainers_modules::testcontainers::core::{IntoContainerPort, Mount};
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
-use testcontainers_modules::testcontainers::{ContainerAsync, GenericImage, ImageExt};
+use testcontainers_modules::testcontainers::{
+    ContainerAsync as ContainerAsyncTokio, GenericImage, Image, ImageExt,
+};
 use tokio::time::sleep;
 use tracing::info_span;
 use trustworthiness_checker::{
@@ -39,6 +46,30 @@ use trustworthiness_checker::{
     semantics::{UntimedLolaSemantics, distributed::localisation::Localisable},
 };
 
+struct ContainerAsync<T: Image> {
+    inner: Option<ContainerAsyncTokio<T>>,
+}
+
+impl<T: Image> ContainerAsync<T> {
+    fn new(inner: ContainerAsyncTokio<T>) -> Self {
+        Self { inner: Some(inner) }
+    }
+
+    async fn get_host_port_ipv4(
+        &self,
+        port: u16,
+    ) -> Result<u16, testcontainers_modules::testcontainers::TestcontainersError> {
+        TokioCompat::new(self.inner.as_ref().unwrap().get_host_port_ipv4(port)).await
+    }
+}
+
+impl<T: Image> Drop for ContainerAsync<T> {
+    fn drop(&mut self) {
+        let inner = mem::take(&mut self.inner);
+        TokioCompat::new(async move { mem::drop(inner) });
+    }
+}
+
 #[instrument(level = tracing::Level::INFO)]
 async fn start_emqx() -> ContainerAsync<GenericImage> {
     let image = GenericImage::new("emqx/emqx", "5.8.3")
@@ -47,10 +78,11 @@ async fn start_emqx() -> ContainerAsync<GenericImage> {
         .with_startup_timeout(Duration::from_secs(30));
     // .with_mount(Mount::bind_mount("/tmp/emqx_logs", "/opt/emqx/log"));
 
-    image
-        .start()
-        .await
-        .expect("Failed to start EMQX test container")
+    ContainerAsync::new(
+        TokioCompat::new(image.start())
+            .await
+            .expect("Failed to start EMQX test container"),
+    )
 }
 
 #[instrument(level = tracing::Level::INFO)]
@@ -101,8 +133,8 @@ async fn dummy_publisher(client_name: String, topic: String, values: Vec<Value>,
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(tokio::test)]
-async fn manually_decomposed_monitor_test() {
+#[test(apply(smol_test))]
+async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) {
     let model1 = lola_specification
         .parse(spec_simple_add_decomposed_1())
         .expect("Model could not be parsed");
@@ -133,6 +165,7 @@ async fn manually_decomposed_monitor_test() {
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
     let mut input_provider_1 = MQTTInputProvider::new(
+        executor.clone(),
         mqtt_host.as_str(),
         var_in_topics_1.iter().cloned().collect(),
     )
@@ -142,6 +175,7 @@ async fn manually_decomposed_monitor_test() {
         .wait_for(|x| info_span!("Waited for input provider 1 started").in_scope(|| *x))
         .await;
     let mut input_provider_2 = MQTTInputProvider::new(
+        executor.clone(),
         mqtt_host.as_str(),
         var_in_topics_2.iter().cloned().collect(),
     )
@@ -151,14 +185,21 @@ async fn manually_decomposed_monitor_test() {
         .wait_for(|x| info_span!("Waited for input provider 2 started").in_scope(|| *x))
         .await;
 
-    let mut output_handler_1 =
-        MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_1.into_iter().collect())
-            .expect("Failed to create output handler 1");
-    let mut output_handler_2 =
-        MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_2.into_iter().collect())
-            .expect("Failed to create output handler 2");
+    let mut output_handler_1 = MQTTOutputHandler::new(
+        executor.clone(),
+        mqtt_host.as_str(),
+        var_out_topics_1.into_iter().collect(),
+    )
+    .expect("Failed to create output handler 1");
+    let mut output_handler_2 = MQTTOutputHandler::new(
+        executor.clone(),
+        mqtt_host.as_str(),
+        var_out_topics_2.into_iter().collect(),
+    )
+    .expect("Failed to create output handler 2");
 
     let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
         model1.clone(),
         &mut input_provider_1,
         Box::new(output_handler_1),
@@ -166,33 +207,40 @@ async fn manually_decomposed_monitor_test() {
     );
 
     let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
         model2.clone(),
         &mut input_provider_2,
         Box::new(output_handler_2),
         create_dependency_manager(DependencyKind::Empty, model2),
     );
 
-    tokio::spawn(runner_1.run());
-    tokio::spawn(runner_2.run());
+    executor.spawn(runner_1.run()).detach();
+    executor.spawn(runner_2.run()).detach();
 
-    tokio::spawn(dummy_publisher(
-        "x_dec_publisher".to_string(),
-        "mqtt_input_dec_x".to_string(),
-        xs,
-        mqtt_port,
-    ));
-    tokio::spawn(dummy_publisher(
-        "y_dec_publisher".to_string(),
-        "mqtt_input_dec_y".to_string(),
-        ys,
-        mqtt_port,
-    ));
-    tokio::spawn(dummy_publisher(
-        "z_dec_publisher".to_string(),
-        "mqtt_input_dec_z".to_string(),
-        zs,
-        mqtt_port,
-    ));
+    executor
+        .spawn(dummy_publisher(
+            "x_dec_publisher".to_string(),
+            "mqtt_input_dec_x".to_string(),
+            xs,
+            mqtt_port,
+        ))
+        .detach();
+    executor
+        .spawn(dummy_publisher(
+            "y_dec_publisher".to_string(),
+            "mqtt_input_dec_y".to_string(),
+            ys,
+            mqtt_port,
+        ))
+        .detach();
+    executor
+        .spawn(dummy_publisher(
+            "z_dec_publisher".to_string(),
+            "mqtt_input_dec_z".to_string(),
+            zs,
+            mqtt_port,
+        ))
+        .detach();
 
     let outputs_z = get_outputs(
         "mqtt_output_dec_v".to_string(),
@@ -208,8 +256,8 @@ async fn manually_decomposed_monitor_test() {
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(tokio::test)]
-async fn localisation_distribution_test() {
+#[test(apply(smol_test))]
+async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     let model1 = lola_specification
         .parse(spec_simple_add_decomposed_1())
         .expect("Model could not be parsed");
@@ -232,6 +280,7 @@ async fn localisation_distribution_test() {
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
     let mut input_provider_1 = MQTTInputProvider::new(
+        executor.clone(),
         mqtt_host.as_str(),
         local_spec1
             .input_vars()
@@ -245,6 +294,7 @@ async fn localisation_distribution_test() {
         .wait_for(|x| info_span!("Waited for input provider 1 started").in_scope(|| *x))
         .await;
     let mut input_provider_2 = MQTTInputProvider::new(
+        executor.clone(),
         mqtt_host.as_str(),
         local_spec2
             .input_vars()
@@ -263,18 +313,23 @@ async fn localisation_distribution_test() {
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_1 = MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_1)
-        .expect("Failed to create output handler 1");
+    let mut output_handler_1 =
+        MQTTOutputHandler::new(executor.clone(), mqtt_host.as_str(), var_out_topics_1)
+            .expect("Failed to create output handler 1");
     let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
         .output_vars()
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_2 =
-        MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_2.into_iter().collect())
-            .expect("Failed to create output handler 2");
+    let mut output_handler_2 = MQTTOutputHandler::new(
+        executor.clone(),
+        mqtt_host.as_str(),
+        var_out_topics_2.into_iter().collect(),
+    )
+    .expect("Failed to create output handler 2");
 
     let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
         model1.clone(),
         &mut input_provider_1,
         Box::new(output_handler_1),
@@ -282,33 +337,40 @@ async fn localisation_distribution_test() {
     );
 
     let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
         model2.clone(),
         &mut input_provider_2,
         Box::new(output_handler_2),
         create_dependency_manager(DependencyKind::Empty, model2),
     );
 
-    tokio::spawn(runner_1.run());
-    tokio::spawn(runner_2.run());
+    executor.spawn(runner_1.run()).detach();
+    executor.spawn(runner_2.run()).detach();
 
-    tokio::spawn(dummy_publisher(
-        "x_dec_publisher".to_string(),
-        "x".to_string(),
-        xs,
-        mqtt_port,
-    ));
-    tokio::spawn(dummy_publisher(
-        "y_dec_publisher".to_string(),
-        "y".to_string(),
-        ys,
-        mqtt_port,
-    ));
-    tokio::spawn(dummy_publisher(
-        "z_dec_publisher".to_string(),
-        "z".to_string(),
-        zs,
-        mqtt_port,
-    ));
+    executor
+        .spawn(dummy_publisher(
+            "x_dec_publisher".to_string(),
+            "x".to_string(),
+            xs,
+            mqtt_port,
+        ))
+        .detach();
+    executor
+        .spawn(dummy_publisher(
+            "y_dec_publisher".to_string(),
+            "y".to_string(),
+            ys,
+            mqtt_port,
+        ))
+        .detach();
+    executor
+        .spawn(dummy_publisher(
+            "z_dec_publisher".to_string(),
+            "z".to_string(),
+            zs,
+            mqtt_port,
+        ))
+        .detach();
 
     let outputs_z = get_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
 
@@ -319,8 +381,10 @@ async fn localisation_distribution_test() {
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(tokio::test)]
-async fn localisation_distribution_graphs_test() -> Result<(), Box<dyn std::error::Error>> {
+#[test(apply(smol_test))]
+async fn localisation_distribution_graphs_test(
+    executor: Rc<LocalExecutor<'static>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let model1 = lola_specification
         .parse(spec_simple_add_decomposed_1())
         .expect("Model could not be parsed");
@@ -329,7 +393,7 @@ async fn localisation_distribution_graphs_test() -> Result<(), Box<dyn std::erro
         .expect("Model could not be parsed");
 
     let file_content =
-        tokio::fs::read_to_string("examples/simple_add_distribution_graph.json").await?;
+        smol::fs::read_to_string("examples/simple_add_distribution_graph.json").await?;
     let dist_graph: LabelledConcDistributionGraph = serde_json::from_str(&file_content)?;
 
     let xs = vec![Value::Int(1), Value::Int(2)];
@@ -349,6 +413,7 @@ async fn localisation_distribution_graphs_test() -> Result<(), Box<dyn std::erro
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
     let mut input_provider_1 = MQTTInputProvider::new(
+        executor.clone(),
         mqtt_host.as_str(),
         local_spec1
             .input_vars()
@@ -362,6 +427,7 @@ async fn localisation_distribution_graphs_test() -> Result<(), Box<dyn std::erro
         .wait_for(|x| info_span!("Waited for input provider 1 started").in_scope(|| *x))
         .await;
     let mut input_provider_2 = MQTTInputProvider::new(
+        executor.clone(),
         mqtt_host.as_str(),
         local_spec2
             .input_vars()
@@ -380,18 +446,23 @@ async fn localisation_distribution_graphs_test() -> Result<(), Box<dyn std::erro
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_1 = MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_1)
-        .expect("Failed to create output handler 1");
+    let mut output_handler_1 =
+        MQTTOutputHandler::new(executor.clone(), mqtt_host.as_str(), var_out_topics_1)
+            .expect("Failed to create output handler 1");
     let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
         .output_vars()
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_2 =
-        MQTTOutputHandler::new(mqtt_host.as_str(), var_out_topics_2.into_iter().collect())
-            .expect("Failed to create output handler 2");
+    let mut output_handler_2 = MQTTOutputHandler::new(
+        executor.clone(),
+        mqtt_host.as_str(),
+        var_out_topics_2.into_iter().collect(),
+    )
+    .expect("Failed to create output handler 2");
 
     let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
         model1.clone(),
         &mut input_provider_1,
         Box::new(output_handler_1),
@@ -399,33 +470,40 @@ async fn localisation_distribution_graphs_test() -> Result<(), Box<dyn std::erro
     );
 
     let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
         model2.clone(),
         &mut input_provider_2,
         Box::new(output_handler_2),
         create_dependency_manager(DependencyKind::Empty, model2),
     );
 
-    tokio::spawn(runner_1.run());
-    tokio::spawn(runner_2.run());
+    executor.spawn(runner_1.run()).detach();
+    executor.spawn(runner_2.run()).detach();
 
-    tokio::spawn(dummy_publisher(
-        "x_dec_publisher".to_string(),
-        "x".to_string(),
-        xs,
-        mqtt_port,
-    ));
-    tokio::spawn(dummy_publisher(
-        "y_dec_publisher".to_string(),
-        "y".to_string(),
-        ys,
-        mqtt_port,
-    ));
-    tokio::spawn(dummy_publisher(
-        "z_dec_publisher".to_string(),
-        "z".to_string(),
-        zs,
-        mqtt_port,
-    ));
+    executor
+        .spawn(dummy_publisher(
+            "x_dec_publisher".to_string(),
+            "x".to_string(),
+            xs,
+            mqtt_port,
+        ))
+        .detach();
+    executor
+        .spawn(dummy_publisher(
+            "y_dec_publisher".to_string(),
+            "y".to_string(),
+            ys,
+            mqtt_port,
+        ))
+        .detach();
+    executor
+        .spawn(dummy_publisher(
+            "z_dec_publisher".to_string(),
+            "z".to_string(),
+            zs,
+            mqtt_port,
+        ))
+        .detach();
 
     let outputs_z = get_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
 

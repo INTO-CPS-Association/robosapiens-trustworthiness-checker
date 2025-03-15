@@ -1,7 +1,10 @@
-use std::{collections::BTreeMap, future::Future, pin::Pin};
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
+use futures::future::LocalBoxFuture;
+use smol::LocalExecutor;
 
 use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
 use crate::io::testing::ManualOutputHandler;
@@ -11,20 +14,22 @@ use crate::io::testing::ManualOutputHandler;
  * cannot be used again; this allows us to manage the lifetimes of our data
  * without mutexes or arcs. */
 pub struct StdoutOutputHandler<V: StreamData> {
+    executor: Rc<LocalExecutor<'static>>,
     manual_output_handler: ManualOutputHandler<V>,
 }
 
 impl<V: StreamData> StdoutOutputHandler<V> {
-    pub fn new(var_names: Vec<VarName>) -> Self {
-        let combined_output_handler = ManualOutputHandler::new(var_names);
+    pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: Vec<VarName>) -> Self {
+        let combined_output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
         Self {
+            executor,
             manual_output_handler: combined_output_handler,
         }
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
     type Val = V;
 
@@ -32,10 +37,10 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
         self.manual_output_handler.provide_streams(streams);
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + 'static + Send>> {
+    fn run(&mut self) -> LocalBoxFuture<'static, ()> {
         let output_stream = self.manual_output_handler.get_output();
         let mut enumerated_outputs = output_stream.enumerate();
-        let task = tokio::spawn(self.manual_output_handler.run());
+        let task = self.executor.spawn(self.manual_output_handler.run());
 
         Box::pin(async move {
             while let Some((i, output)) = enumerated_outputs.next().await {
@@ -43,7 +48,7 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
                     println!("{}[{}] = {:?}", var, i, data);
                 }
             }
-            task.await.unwrap();
+            task.await;
         })
     }
 }
@@ -54,15 +59,19 @@ mod tests {
     use futures::stream;
 
     use super::*;
+    use macro_rules_attribute::apply;
+    use smol_macros::test as smol_test;
     use test_log::test;
 
-    #[test(tokio::test)]
-    async fn test_run_stdout_output_handler() {
+    #[test(apply(smol_test))]
+    async fn test_run_stdout_output_handler(executor: Rc<LocalExecutor<'static>>) {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
-        let mut handler: StdoutOutputHandler<Value> =
-            StdoutOutputHandler::new(vec![VarName("x".to_string()), VarName("y".to_string())]);
+        let mut handler: StdoutOutputHandler<Value> = StdoutOutputHandler::new(
+            executor.clone(),
+            vec![VarName("x".to_string()), VarName("y".to_string())],
+        );
 
         handler.provide_streams(
             vec![
@@ -73,9 +82,8 @@ mod tests {
             .collect(),
         );
 
-        let task = tokio::spawn(handler.run());
+        let task = executor.spawn(handler.run());
 
-        //
-        task.await.unwrap();
+        task.await;
     }
 }

@@ -1,11 +1,12 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use async_stream::stream;
 use futures::{
     FutureExt, StreamExt,
-    stream::{self, BoxStream},
+    stream::{self, LocalBoxStream},
 };
-use tokio::sync::oneshot;
+// use tokio::sync::oneshot;
+use async_unsync::oneshot;
 use tokio_util::sync::DropGuard;
 
 /* Converts a `oneshot::Receiver` of an `OutputStream` into an `OutputStream`.
@@ -15,9 +16,9 @@ use tokio_util::sync::DropGuard;
  * is essentially a general version of this function (except for handling the
  * case where the oneshot resolves to an error due to the sender going away).
  */
-pub fn oneshot_to_stream<T: Send + 'static>(
-    receiver: oneshot::Receiver<BoxStream<'static, T>>,
-) -> BoxStream<'static, T> {
+pub fn oneshot_to_stream<T: 'static>(
+    receiver: oneshot::Receiver<LocalBoxStream<'static, T>>,
+) -> LocalBoxStream<'static, T> {
     let empty_stream = Box::pin(stream::empty());
     Box::pin(
         receiver
@@ -31,9 +32,9 @@ pub fn oneshot_to_stream<T: Send + 'static>(
  * This is used for automatic cleanup of background tasks when all consumers
  * of an output stream have gone away. */
 pub fn drop_guard_stream<T: 'static + Send>(
-    stream: BoxStream<'static, T>,
-    drop_guard: Arc<DropGuard>,
-) -> BoxStream<'static, T> {
+    stream: LocalBoxStream<'static, T>,
+    drop_guard: Rc<DropGuard>,
+) -> LocalBoxStream<'static, T> {
     Box::pin(stream! {
         // Keep the shared reference to drop_guard alive until the stream
         // is done

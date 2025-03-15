@@ -49,4 +49,5 @@ RUN echo Defaults secure_path = /opt/ros/humble/bin:/usr/local/sbin:/usr/local/b
 RUN echo "source /opt/entrypoint.sh" >> /root/.profile
 USER ${USERNAME}
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+RUN ~/.cargo/bin/rustup update
 RUN echo "source /opt/entrypoint.sh" >> /home/${USERNAME}/.bashrc

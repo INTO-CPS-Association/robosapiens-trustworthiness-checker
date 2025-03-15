@@ -3,7 +3,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
-use tokio::{fs::File, io::AsyncReadExt};
+// use tokio::{fs::File, io::AsyncReadExt};
 use tracing::debug;
 use winnow::{Parser, error::ContextError};
 
@@ -35,9 +35,7 @@ pub async fn parse_file<O: Clone + Debug>(
     mut parser: impl for<'a> Parser<&'a str, O, ContextError>,
     file: &str,
 ) -> Result<O, Box<dyn Error>> {
-    let mut file = File::open(file).await?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).await?;
+    let contents = smol::fs::read_to_string(file).await?;
     debug!(name: "Parsing file", 
         contents=?parser.parse_next(&mut contents.as_str().into()).unwrap());
     parser

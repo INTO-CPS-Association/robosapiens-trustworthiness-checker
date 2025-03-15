@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use futures::StreamExt;
 use r2r;
+use smol::LocalExecutor;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
@@ -17,6 +18,8 @@ pub struct VarData {
 }
 
 pub struct ROSInputProvider {
+    #[allow(dead_code)]
+    executor: Rc<LocalExecutor<'static>>,
     pub var_map: BTreeMap<VarName, VarData>,
     // node: Arc<Mutex<r2r::Node>>,
 }
@@ -59,7 +62,10 @@ impl ROSMsgType {
 }
 
 impl ROSInputProvider {
-    pub fn new(var_topics: ROSStreamMapping) -> Result<Self, r2r::Error> {
+    pub fn new(
+        executor: Rc<LocalExecutor<'static>>,
+        var_topics: ROSStreamMapping,
+    ) -> Result<Self, r2r::Error> {
         // Create a ROS node to subscribe to all of the input topics
         let ctx = r2r::Context::create()?;
         let mut node = r2r::Node::create(ctx, "input_monitor", "")?;
@@ -68,7 +74,7 @@ impl ROSInputProvider {
         // if all consumers of the output streams have
         // gone away
         let cancellation_token = CancellationToken::new();
-        let drop_guard = Arc::new(cancellation_token.clone().drop_guard());
+        let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
 
         // Provide streams for all input variables
         let mut var_map = BTreeMap::new();
@@ -91,25 +97,29 @@ impl ROSInputProvider {
         }
 
         // Launch the ROS subscriber node in background async task
-        tokio::task::spawn(async move {
-            loop {
-                select! {
-                    biased;
-                    _ = cancellation_token.cancelled() => {
-                        return;
-                    },
-                    _ = tokio::task::yield_now() => {
-                        node.spin_once(std::time::Duration::from_millis(0));
-                    },
+        executor
+            .spawn(async move {
+                loop {
+                    select! {
+                        biased;
+                        _ = cancellation_token.cancelled() => {
+                            return;
+                        },
+                        _ = smol::future::yield_now() => {
+                            node.spin_once(std::time::Duration::from_millis(0));
+                        },
+                    }
                 }
-            }
-        });
+            })
+            .detach();
 
-        Ok(Self { var_map })
+        Ok(Self { executor, var_map })
     }
 }
 
-impl InputProvider<Value> for ROSInputProvider {
+impl InputProvider for ROSInputProvider {
+    type Val = Value;
+
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         let var_data = self.var_map.get_mut(var)?;
         let stream = var_data.stream.take()?;

@@ -1,52 +1,51 @@
 use crate::{InputProvider, OutputStream, Value, VarName};
 use futures::stream;
-use futures::stream::BoxStream;
-use std::{collections::BTreeMap, pin::Pin};
+use std::collections::BTreeMap;
 
 // Dead code is allowed in this file since cargo does not correctly
 // track when functions are used in tests.
 
 #[allow(dead_code)]
-pub fn input_empty() -> BTreeMap<VarName, BoxStream<'static, Value>> {
+pub fn input_empty() -> BTreeMap<VarName, OutputStream<Value>> {
     BTreeMap::new()
 }
 
 // TODO: Make the input streams have 3 values...
 
 #[allow(dead_code)]
-pub fn input_streams1() -> BTreeMap<VarName, BoxStream<'static, Value>> {
+pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)].into_iter()))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+            as OutputStream<Value>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)].into_iter()))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+            as OutputStream<Value>,
     );
     input_streams
 }
 
 #[allow(dead_code)]
-pub fn input_streams2() -> BTreeMap<VarName, BoxStream<'static, Value>> {
+pub fn input_streams2() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)].into_iter()))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+            as OutputStream<Value>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)].into_iter()))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+            as OutputStream<Value>,
     );
     input_streams.insert(
         VarName("s".into()),
         Box::pin(stream::iter(
             vec![Value::Str("x+y".to_string()), Value::Str("x+y".to_string())].into_iter(),
-        )) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        )) as OutputStream<Value>,
     );
     input_streams
 }
@@ -183,7 +182,7 @@ pub fn spec_maple_sequence() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn maple_valid_input_stream(size: usize) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+pub fn maple_valid_input_stream(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let size = size as i64;
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
@@ -200,13 +199,13 @@ pub fn maple_valid_input_stream(size: usize) -> BTreeMap<VarName, BoxStream<'sta
             } else {
                 Value::Str("e".into())
             }
-        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        }))) as OutputStream<Value>,
     );
     input_streams
 }
 
 #[allow(dead_code)]
-pub fn maple_invalid_input_stream_1(size: usize) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+pub fn maple_invalid_input_stream_1(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let size = size as i64;
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
@@ -223,13 +222,13 @@ pub fn maple_invalid_input_stream_1(size: usize) -> BTreeMap<VarName, BoxStream<
             } else {
                 Value::Str("e".into())
             }
-        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        }))) as OutputStream<Value>,
     );
     input_streams
 }
 
 #[allow(dead_code)]
-pub fn maple_invalid_input_stream_2(size: usize) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+pub fn maple_invalid_input_stream_2(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let size = size as i64;
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
@@ -246,7 +245,7 @@ pub fn maple_invalid_input_stream_2(size: usize) -> BTreeMap<VarName, BoxStream<
             } else {
                 Value::Str("e".into())
             }
-        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        }))) as OutputStream<Value>,
     );
     input_streams
 }
@@ -285,8 +284,7 @@ pub fn input_streams_defer_1() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 15
     input_streams.insert(
         VarName("x".into()),
-        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i)))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -298,7 +296,7 @@ pub fn input_streams_defer_1() -> impl InputProvider<Val = Value> {
             } else {
                 Value::Unknown
             }
-        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        }))) as OutputStream<Value>,
     );
 
     input_streams
@@ -311,8 +309,7 @@ pub fn input_streams_defer_2() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 15
     input_streams.insert(
         VarName("x".into()),
-        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i)))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -324,7 +321,7 @@ pub fn input_streams_defer_2() -> impl InputProvider<Val = Value> {
             } else {
                 Value::Unknown
             }
-        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        }))) as OutputStream<Value>,
     );
 
     input_streams
@@ -337,8 +334,7 @@ pub fn input_streams_defer_3() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 15
     input_streams.insert(
         VarName("x".into()),
-        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i)))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -350,7 +346,7 @@ pub fn input_streams_defer_3() -> impl InputProvider<Val = Value> {
             } else {
                 Value::Unknown
             }
-        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        }))) as OutputStream<Value>,
     );
 
     input_streams
@@ -364,8 +360,7 @@ pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 5
     input_streams.insert(
         VarName("x".into()),
-        Box::pin(futures::stream::iter((0..5).map(|i| Value::Int(i))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(futures::stream::iter((0..5).map(|i| Value::Int(i)))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -377,7 +372,7 @@ pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
             } else {
                 Value::Unknown
             }
-        }))) as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        }))) as OutputStream<Value>,
     );
 
     input_streams
@@ -416,34 +411,28 @@ pub fn input_streams_indexing() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 6
     input_streams.insert(
         VarName("x".into()),
-        Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i)))) as OutputStream<Value>,
     );
 
     // Create x stream with values 1 through 6
     input_streams.insert(
         VarName("y".into()),
-        Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i)))) as OutputStream<Value>,
     );
 
     input_streams
 }
 
-pub fn input_streams_simple_add_untyped(
-    size: usize,
-) -> BTreeMap<VarName, BoxStream<'static, Value>> {
+pub fn input_streams_simple_add_untyped(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let size = size as i64;
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         VarName("x".into()),
-        Box::pin(stream::iter((0..size).map(|x| Value::Int(2 * x))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(stream::iter((0..size).map(|x| Value::Int(2 * x)))) as OutputStream<Value>,
     );
     input_streams.insert(
         VarName("y".into()),
-        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1))))
-            as Pin<Box<dyn futures::Stream<Item = Value> + std::marker::Send>>,
+        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))) as OutputStream<Value>,
     );
     input_streams
 }

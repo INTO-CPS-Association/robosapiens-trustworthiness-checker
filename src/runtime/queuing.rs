@@ -1,8 +1,11 @@
 use async_trait::async_trait;
+use smol::LocalExecutor;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
+use std::rc::Rc;
+// use std::sync::Rc;
+// use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
 
 use futures::StreamExt;
@@ -41,24 +44,24 @@ use crate::dep_manage::interface::DependencyManager;
  * historical values, and so the queues will grow indefinitely.
  */
 struct QueuingVarContext<Val: StreamData> {
-    queues: BTreeMap<VarName, Arc<Mutex<Vec<Val>>>>,
-    input_streams: BTreeMap<VarName, Arc<Mutex<OutputStream<Val>>>>,
+    queues: BTreeMap<VarName, Rc<Mutex<Vec<Val>>>>,
+    input_streams: BTreeMap<VarName, Rc<Mutex<OutputStream<Val>>>>,
     output_streams: BTreeMap<VarName, WaitingStream<OutputStream<Val>>>,
-    production_locks: BTreeMap<VarName, Arc<Mutex<()>>>,
+    production_locks: BTreeMap<VarName, Rc<Mutex<()>>>,
 }
 
 impl<Val: StreamData> QueuingVarContext<Val> {
     fn new(
         vars: Vec<VarName>,
-        input_streams: BTreeMap<VarName, Arc<Mutex<OutputStream<Val>>>>,
+        input_streams: BTreeMap<VarName, Rc<Mutex<OutputStream<Val>>>>,
         output_streams: BTreeMap<VarName, WaitingStream<OutputStream<Val>>>,
     ) -> Self {
         let mut queues = BTreeMap::new();
         let mut production_locks = BTreeMap::new();
 
         for var in vars {
-            queues.insert(var.clone(), Arc::new(Mutex::new(Vec::new())));
-            production_locks.insert(var.clone(), Arc::new(Mutex::new(())));
+            queues.insert(var.clone(), Rc::new(Mutex::new(Vec::new())));
+            production_locks.insert(var.clone(), Rc::new(Mutex::new(())));
         }
 
         QueuingVarContext {
@@ -76,8 +79,8 @@ impl<Val: StreamData> QueuingVarContext<Val> {
 // The get_stream function is used to wait until the stream is available and
 // then return it.
 enum WaitingStream<S> {
-    Arrived(Arc<Mutex<S>>),
-    Waiting(tokio::sync::watch::Receiver<Option<Arc<Mutex<S>>>>),
+    Arrived(Rc<Mutex<S>>),
+    Waiting(tokio::sync::watch::Receiver<Option<Rc<Mutex<S>>>>),
 }
 
 impl<S> Clone for WaitingStream<S> {
@@ -90,7 +93,7 @@ impl<S> Clone for WaitingStream<S> {
 }
 
 impl<S> WaitingStream<S> {
-    async fn get_stream(&mut self) -> Arc<Mutex<S>> {
+    async fn get_stream(&mut self) -> Rc<Mutex<S>> {
         let ret_stream = match self {
             WaitingStream::Arrived(stream) => return stream.clone(),
             WaitingStream::Waiting(receiver) => {
@@ -112,9 +115,9 @@ impl<S> WaitingStream<S> {
  * not, will produce values from waiting stream
  */
 fn queue_buffered_stream<V: StreamData>(
-    xs: Arc<Mutex<Vec<V>>>,
+    xs: Rc<Mutex<Vec<V>>>,
     waiting_stream: WaitingStream<OutputStream<V>>,
-    lock: Arc<Mutex<()>>,
+    lock: Rc<Mutex<()>>,
 ) -> OutputStream<V> {
     Box::pin(stream::unfold(
         (0, xs, waiting_stream, lock),
@@ -163,7 +166,7 @@ fn queue_buffered_stream<V: StreamData>(
 /*
  * Implement StreamContext for QueuingVarContext
  */
-impl<Val: StreamData> StreamContext<Val> for Arc<QueuingVarContext<Val>> {
+impl<Val: StreamData> StreamContext<Val> for Rc<QueuingVarContext<Val>> {
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
         let queue = self.queues.get(var)?;
         let production_lock = self.production_locks.get(var)?.clone();
@@ -192,19 +195,19 @@ impl<Val: StreamData> StreamContext<Val> for Arc<QueuingVarContext<Val>> {
  * history length.
  */
 struct SubMonitor<Val: StreamData> {
-    parent: Arc<QueuingVarContext<Val>>,
+    parent: Rc<QueuingVarContext<Val>>,
     #[allow(dead_code)]
     // Note that buffer_size is not used in this runtime -- it is unrestricted
     buffer_size: usize,
-    index: Arc<StdMutex<usize>>,
+    index: Rc<RefCell<usize>>,
 }
 
 impl<Val: StreamData> SubMonitor<Val> {
-    fn new(parent: Arc<QueuingVarContext<Val>>, buffer_size: usize) -> Self {
+    fn new(parent: Rc<QueuingVarContext<Val>>, buffer_size: usize) -> Self {
         SubMonitor {
             parent,
             buffer_size,
-            index: Arc::new(StdMutex::new(0)),
+            index: Rc::new(RefCell::new(0)),
         }
     }
 }
@@ -212,7 +215,7 @@ impl<Val: StreamData> SubMonitor<Val> {
 impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
         let parent_stream = self.parent.var(var)?;
-        let index = *self.index.lock().unwrap();
+        let index = *self.index.borrow();
         let substream = parent_stream.skip(index);
 
         Some(Box::pin(substream))
@@ -227,18 +230,18 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<Val: StreamData> SyncStreamContext<Val> for SubMonitor<Val> {
     fn clock(&self) -> usize {
-        *self.index.lock().unwrap()
+        *self.index.borrow()
     }
 
     async fn advance_clock(&mut self) {
-        *self.index.lock().unwrap() += 1;
+        *self.index.borrow_mut() += 1;
     }
 
-    async fn wait_till(&self, time: usize) {
-        while { self.index.lock().unwrap().clone() } < time {}
+    async fn lazy_advance_clock(&mut self) {
+        *self.index.borrow_mut() += 1;
     }
 
     fn upcast(&self) -> &dyn StreamContext<Val> {
@@ -272,17 +275,18 @@ where
     M: Specification<Expr = Expr>,
 {
     model: M,
-    var_exchange: Arc<QueuingVarContext<Val>>,
+    var_exchange: Rc<QueuingVarContext<Val>>,
     semantics_t: PhantomData<S>,
     expr_t: PhantomData<Expr>,
     output_handler: Box<dyn OutputHandler<Val = Val>>,
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specification<Expr = Expr>>
     Monitor<M, Val> for QueuingMonitorRunner<Expr, Val, S, M>
 {
     fn new(
+        _executor: Rc<LocalExecutor<'static>>,
         model: M,
         input_streams: &mut dyn InputProvider<Val = Val>,
         output: Box<dyn OutputHandler<Val = Val>>,
@@ -299,7 +303,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
             .iter()
             .map(|var| {
                 let stream = input_streams.input_stream(var);
-                (var.clone(), Arc::new(Mutex::new(stream.unwrap())))
+                (var.clone(), Rc::new(Mutex::new(stream.unwrap())))
             })
             .collect::<BTreeMap<_, _>>();
 
@@ -311,7 +315,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
             output_stream_waiting.insert(var.clone(), WaitingStream::Waiting(rx));
         }
 
-        let var_exchange = Arc::new(QueuingVarContext::<Val>::new(
+        let var_exchange = Rc::new(QueuingVarContext::<Val>::new(
             var_names,
             input_streams.clone(),
             output_stream_waiting,
@@ -323,7 +327,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
             output_stream_senders
                 .get(&var)
                 .unwrap()
-                .send(Some(Arc::new(Mutex::new(stream))))
+                .send(Some(Rc::new(Mutex::new(stream))))
                 .unwrap();
         }
 

@@ -4,9 +4,10 @@ use crate::lang::dynamic_lola::parser::lola_expression;
 use crate::semantics::UntimedLolaSemantics;
 use crate::semantics::untimed_untyped_lola::combinators::{lift1, lift2, lift3};
 use crate::{MonitoringSemantics, OutputStream};
+use futures::stream::LocalBoxStream;
 use futures::{
     StreamExt,
-    stream::{self, BoxStream},
+    stream::{self},
 };
 use std::fmt::Debug;
 use winnow::Parser;
@@ -70,9 +71,9 @@ pub fn sindex<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream
     let n = i.abs() as usize;
     let cs = stream::repeat(c).take(n);
     if i < 0 {
-        Box::pin(cs.chain(x)) as BoxStream<'static, X>
+        Box::pin(cs.chain(x)) as LocalBoxStream<'static, X>
     } else {
-        Box::pin(x.skip(n).chain(cs)) as BoxStream<'static, X>
+        Box::pin(x.skip(n).chain(cs)) as LocalBoxStream<'static, X>
     }
 }
 
@@ -156,11 +157,12 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use super::*;
+    use macro_rules_attribute::apply;
+    use smol_macros::test as smol_test;
     use test_log::test;
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_not() {
         let x: OutputStream<bool> = Box::pin(stream::iter(vec![true, false].into_iter()));
         let z: Vec<bool> = vec![false, true];
@@ -168,7 +170,7 @@ mod tests {
         assert_eq!(res, z);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_plus() {
         let x: OutputStream<i64> = Box::pin(stream::iter(vec![1, 3].into_iter()));
         let y: OutputStream<i64> = Box::pin(stream::iter(vec![2, 4].into_iter()));
@@ -177,7 +179,7 @@ mod tests {
         assert_eq!(res, z);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_str_plus() {
         let x: OutputStream<String> =
             Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
