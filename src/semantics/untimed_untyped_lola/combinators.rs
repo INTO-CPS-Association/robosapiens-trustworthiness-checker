@@ -249,7 +249,7 @@ pub fn eval(
             match current {
                 Value::Unknown => {
                     // Consume a sample from the subcontext but return Unknown (aka. Waiting)
-                    subcontext.lazy_advance_clock().await;
+                    subcontext.advance_clock().await;
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
