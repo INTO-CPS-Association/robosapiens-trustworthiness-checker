@@ -8,7 +8,10 @@ use smol::LocalExecutor;
 use tokio_stream::StreamExt;
 use tracing::{Level, debug, info, instrument};
 
-use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
+use crate::{
+    core::{OutputHandler, OutputStream, StreamData, VarName},
+    stream_utils::oneshot_to_stream,
+};
 
 /* Some members are defined as Option<T> as either they are provided after
  * construction by provide_streams or once they are used they are taken and
@@ -20,8 +23,8 @@ pub struct ManualOutputHandler<V: StreamData> {
     executor: Rc<LocalExecutor<'static>>,
     stream_senders: Option<Vec<oneshot::Sender<OutputStream<V>>>>,
     stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
-    output_sender: Option<bounded::Sender<BTreeMap<VarName, V>>>,
-    output_receiver: Option<bounded::Receiver<BTreeMap<VarName, V>>>,
+    output_receiver: Option<oneshot::Receiver<OutputStream<BTreeMap<VarName, V>>>>,
+    output_sender: Option<oneshot::Sender<OutputStream<BTreeMap<VarName, V>>>>,
 }
 
 impl<V: StreamData> ManualOutputHandler<V> {
@@ -33,7 +36,8 @@ impl<V: StreamData> ManualOutputHandler<V> {
             .iter()
             .map(|_| oneshot::channel().into_split())
             .unzip();
-        let (output_sender, output_receiver) = bounded::channel(10).into_split();
+        let (output_sender, output_receiver) = oneshot::channel().into_split();
+
         Self {
             var_names,
             executor,
@@ -45,15 +49,11 @@ impl<V: StreamData> ManualOutputHandler<V> {
     }
 
     pub fn get_output(&mut self) -> OutputStream<BTreeMap<VarName, V>> {
-        let mut receiver = self
+        let receiver = self
             .output_receiver
             .take()
             .expect("Output receiver missing");
-        Box::pin(stream! {
-            while let Some(data) = receiver.recv().await {
-                yield data;
-            }
-        })
+        oneshot_to_stream(receiver)
     }
 }
 
@@ -90,35 +90,44 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             .into_iter()
             .map(|mut r| r.try_recv().unwrap())
             .collect();
-        let output_sender = mem::take(&mut self.output_sender).expect("Output sender not found");
         let var_names = self.var_names.clone();
 
-        Box::pin(async move {
-            loop {
-                let nexts = streams.iter_mut().map(|s| s.next());
+        let (output_done_tx, output_done_rx) = oneshot::channel().into_split();
 
-                // Stop outputting when any of the streams ends, otherwise collect
-                // all of the values
-                if let Some(vals) = join_all(nexts)
-                    .await
-                    .into_iter()
-                    .collect::<Option<Vec<V>>>()
-                {
-                    // Combine the values into a single map
-                    let output: BTreeMap<VarName, V> =
-                        var_names.iter().cloned().zip(vals.into_iter()).collect();
-                    // Output the combined data
-                    debug!(name = "Outputting data", ?output);
-                    output_sender.send(output).await.unwrap();
-                } else {
-                    // One of the streams has ended, so we should stop
-                    info!(
-                        "Stopping ManualOutputHandler with len(nexts) = {}",
-                        streams.len()
-                    );
-                    break;
+        mem::take(&mut self.output_sender)
+            .expect("Output sender not found")
+            .send(Box::pin(stream! {
+                loop {
+                    let nexts = streams.iter_mut().map(|s| s.next());
+
+                    // Stop outputting when any of the streams ends, otherwise collect
+                    // all of the values
+                    if let Some(vals) = join_all(nexts)
+                        .await
+                        .into_iter()
+                        .collect::<Option<Vec<V>>>()
+                    {
+                        // Combine the values into a single map
+                        let output: BTreeMap<VarName, V> =
+                            var_names.iter().cloned().zip(vals.into_iter()).collect();
+                        // Output the combined data
+                        debug!(name = "Outputting data", ?output);
+                        yield output;
+                    } else {
+                        // One of the streams has ended, so we should stop
+                        info!(
+                            "Stopping ManualOutputHandler with len(nexts) = {}",
+                            streams.len()
+                        );
+                        break;
+                    }
                 }
-            }
+                output_done_tx.send(()).unwrap();
+            }))
+            .unwrap();
+
+        Box::pin(async move {
+            output_done_rx.await.unwrap();
         })
     }
 }
