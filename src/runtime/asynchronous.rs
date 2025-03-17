@@ -116,6 +116,9 @@ impl<V: StreamData> VarManager<V> {
         let mut var_stage_recv = self.var_stage.1.clone();
         let outstanding_sub_requests_ref = self.outstanding_sub_requests.clone();
         let mut current_var_stage = var_stage_recv.borrow().clone();
+        let var = self.var.clone();
+
+        debug!(?var, "Subscribing to variable");
 
         if current_var_stage == VarStage::Closed {
             panic!("Cannot subscribe to a variable in the closed stage");
@@ -138,22 +141,27 @@ impl<V: StreamData> VarManager<V> {
         self.executor
             .spawn(async move {
                 if current_var_stage == VarStage::Gathering {
-                    debug!("Waiting for context stage to move to open or closed");
+                    debug!(?var, "Waiting for context stage to move to open or closed");
                     current_var_stage = var_stage_recv
                         .wait_for(|stage| *stage != VarStage::Gathering)
                         .await
                         .unwrap()
                         .clone();
-                    debug!("done waiting with current stage {}", current_var_stage);
+                    debug!(
+                        ?var,
+                        "done waiting with current stage {}", current_var_stage
+                    );
                 }
 
                 let res = if current_var_stage == VarStage::Closed
                     && subscribers_ref.borrow().len() == 1
                 {
+                    debug!("Directly sending stream to single subscriber");
                     // Take the stream out of the RefCell by replacing it with None
                     let mut input_ref = input_stream_ref.borrow_mut();
                     let stream = input_ref.take().unwrap();
                     output_tx.send(stream).unwrap();
+                    subscribers_ref.borrow_mut().pop();
                 } else if current_var_stage == VarStage::Open
                     || current_var_stage == VarStage::Closed
                 {
@@ -255,7 +263,7 @@ impl<V: StreamData> VarManager<V> {
     /// is exhausted
     fn run(self) -> LocalBoxFuture<'static, ()> {
         // Move to the closed stage since the variable is now running
-        self.var_stage.0.send(VarStage::Open).unwrap();
+        self.var_stage.0.send(VarStage::Closed).unwrap();
 
         // Return a future which will run the tick function until it returns
         // false (indicating the input stream is exhausted or there are no
