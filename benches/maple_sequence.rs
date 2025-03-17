@@ -17,6 +17,9 @@ use trustworthiness_checker::lang::dynamic_lola::type_checker::TypedLOLASpecific
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::lola_fixtures::{maple_valid_input_stream, spec_maple_sequence};
 
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 #[derive(Clone)]
 struct LocalSmolExecutor {
     pub executor: Rc<LocalExecutor<'static>>,

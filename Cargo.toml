@@ -45,6 +45,13 @@ async-unsync = "0.3.0"
 smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.0"
 async-compat = "0.2.4"
+jemallocator = "0.5.4"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
 
 [features]
 ros = ["dep:r2r"]

@@ -28,6 +28,9 @@ use trustworthiness_checker::io::ros::{
 
 const MQTT_HOSTNAME: &str = "localhost";
 
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) {
     tracing_subscriber::registry()

@@ -25,6 +25,9 @@ use trustworthiness_checker::lola_fixtures::{
 use trustworthiness_checker::runtime::constraints::runtime::ConstraintBasedRuntime;
 // use trustworthiness_checker::semantics::untimed_typed_lola::to_typed_stream;
 
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
     stream: OutputStream<Value>,
 ) -> OutputStream<T> {
