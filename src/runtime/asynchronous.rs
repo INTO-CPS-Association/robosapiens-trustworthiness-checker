@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::rc::Rc;
 
+use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
 use async_unsync::bounded;
@@ -15,7 +16,6 @@ use futures::future::LocalBoxFuture;
 use futures::future::join_all;
 use smol::LocalExecutor;
 use strum_macros::Display;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 use tracing::Level;
@@ -85,7 +85,7 @@ struct VarManager<V: StreamData> {
     /// The input stream which is feeding data into the variable
     input_stream: Rc<RefCell<Option<OutputStream<V>>>>,
     /// The current stage of the variable's lifetime
-    var_stage: (watch::Sender<VarStage>, watch::Receiver<VarStage>),
+    var_stage: Rc<AsyncCell<VarStage>>,
     /// The number of outstanding unfulfilled subscription requests
     outstanding_sub_requests: Rc<RefCell<usize>>,
     /// The semaphore used to control access to the variable
@@ -104,7 +104,7 @@ impl<V: StreamData> VarManager<V> {
         var: VarName,
         input_stream: OutputStream<V>,
     ) -> Self {
-        let var_stage = watch::channel(VarStage::Gathering);
+        let var_stage = AsyncCell::new_with(VarStage::Gathering).into_shared();
         let var_semaphore = Rc::new(semaphore::Semaphore::new(1));
         let clock = Rc::new(RefCell::new(0));
         let subscribers = Rc::new(RefCell::new(vec![]));
@@ -128,16 +128,11 @@ impl<V: StreamData> VarManager<V> {
         let semaphore = self.var_semaphore.clone();
         let input_stream_ref = self.input_stream.clone();
         let subscribers_ref = self.subscribers.clone();
-        let mut var_stage_recv = self.var_stage.1.clone();
+        let var_stage_ref = self.var_stage.clone();
         let outstanding_sub_requests_ref = self.outstanding_sub_requests.clone();
-        let mut current_var_stage = var_stage_recv.borrow().clone();
         let var = self.var.clone();
 
         debug!(?var, "Subscribing to variable");
-
-        if current_var_stage == VarStage::Closed {
-            panic!("Cannot subscribe to a variable in the closed stage");
-        }
 
         // Create a oneshot channel to send the output stream to the subscriber
         let (output_tx, output_rx) = oneshot::channel().into_split();
@@ -152,20 +147,24 @@ impl<V: StreamData> VarManager<V> {
         *self.outstanding_sub_requests.borrow_mut() += 1;
         semaphore.remove_permits(1);
 
+        // This should return immediately since var_stage is never None
+        // (it is initialized to Gathering in the constructor)
+        let mut current_var_stage = smol::future::block_on(
+            var_stage_ref.get_shared()
+        );
+
         // Spawn a background async task to handle the subscription request
         self.executor
             .spawn(async move {
-                if current_var_stage == VarStage::Gathering {
+                if current_var_stage == VarStage::Closed {
+                    panic!("Cannot subscribe to a variable in the closed stage");
+                }
+
+                while current_var_stage == VarStage::Gathering {
                     debug!(?var, "Waiting for context stage to move to open or closed");
-                    current_var_stage = var_stage_recv
-                        .wait_for(|stage| *stage != VarStage::Gathering)
-                        .await
-                        .unwrap()
-                        .clone();
-                    debug!(
-                        ?var,
-                        "done waiting with current stage {}", current_var_stage
-                    );
+                    smol::future::yield_now().await;
+                    current_var_stage = var_stage_ref.get_shared().await;
+                    debug!(?var, "var stage changed {}", current_var_stage);
                 }
 
                 let res = if current_var_stage == VarStage::Closed
@@ -222,14 +221,15 @@ impl<V: StreamData> VarManager<V> {
         let var = self.var.clone();
         let var_stage = self.var_stage.clone();
 
-        // Move to the open stage if we are in the gathering stage and we
-        // have been ticked
-        if var_stage.1.borrow().clone() == VarStage::Gathering {
-            var_stage.0.send(VarStage::Open).unwrap();
-        }
-
         // Return a future which will actually do the distribution
         Box::pin(async move {
+            // Move to the open stage if we are in the gathering stage and we
+            // have been ticked
+            if var_stage.get().await == VarStage::Gathering {
+                debug!("Moving to open stage from tick");
+                var_stage.set(VarStage::Open);
+            }
+
             debug!(?var, "Waiting for permit");
             let _permit = semaphore.acquire().await.unwrap();
             debug!(?var, "Acquired permit");
@@ -245,7 +245,7 @@ impl<V: StreamData> VarManager<V> {
                 }
             };
 
-            if *var_stage.1.borrow() == VarStage::Closed && subscribers_ref.borrow().is_empty() {
+            if var_stage.get().await == VarStage::Closed && subscribers_ref.borrow().is_empty() {
                 debug!("No subscribers; stopping distribution");
                 return false;
             }
@@ -281,7 +281,8 @@ impl<V: StreamData> VarManager<V> {
     /// is exhausted
     fn run(self) -> LocalBoxFuture<'static, ()> {
         // Move to the closed stage since the variable is now running
-        self.var_stage.0.send(VarStage::Closed).unwrap();
+        debug!("Moving to closed stage from run");
+        self.var_stage.set(VarStage::Closed);
 
         // Return a future which will run the tick function until it returns
         // false (indicating the input stream is exhausted or there are no
