@@ -910,21 +910,21 @@ mod tests {
         let vals = variant_names
             .clone()
             .into_iter()
-            .map(|n| SExprV::Var(VarName(n.into())));
+            .map(|n| SExprV::Var(n.into()));
 
         // Fake context/environment that simulates type-checking context
         let mut ctx = TypeContext::new();
         for (n, t) in variant_names.into_iter().zip(variant_types.into_iter()) {
-            ctx.insert(VarName(n.into()), t);
+            ctx.insert(n.into(), t);
         }
 
         let results = vals.into_iter().map(|sexpr| sexpr.type_check(&mut ctx));
 
         let expected = vec![
-            Ok(SExprTE::Int(SExprInt::Var(VarName("int".into())))),
-            Ok(SExprTE::Str(SExprStr::Var(VarName("str".into())))),
-            Ok(SExprTE::Bool(SExprBool::Var(VarName("bool".into())))),
-            Ok(SExprTE::Unit(SExprUnit::Var(VarName("unit".into())))),
+            Ok(SExprTE::Int(SExprInt::Var("int".into()))),
+            Ok(SExprTE::Str(SExprStr::Var("str".into()))),
+            Ok(SExprTE::Bool(SExprBool::Var("bool".into()))),
+            Ok(SExprTE::Unit(SExprUnit::Var("unit".into()))),
         ];
 
         assert!(results.eq(expected));
@@ -934,7 +934,7 @@ mod tests {
     fn test_var_err() {
         // Checks that Vars produce UndeclaredVariable errors if they do not exist in the context
 
-        let val = SExprV::Var(VarName("undeclared_name".into()));
+        let val = SExprV::Var("undeclared_name".into());
         let result = val.type_check_with_default();
         let expected: SemantResultStr = Err(vec![SemanticError::UndeclaredVariable("".into())]);
         check_correct_error_type(&result, &expected);

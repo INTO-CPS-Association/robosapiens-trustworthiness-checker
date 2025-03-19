@@ -15,7 +15,7 @@ use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, Monitor, io::file::parse_file};
-use trustworthiness_checker::{InputProvider, Value};
+use trustworthiness_checker::{InputProvider, Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
@@ -82,7 +82,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         } => Some(Box::new(
             topics
                 .into_iter()
-                .map(tc::VarName)
+                .map(|v| v.into())
                 .collect::<Vec<tc::VarName>>(),
         )),
         trustworthiness_checker::cli::args::DistributionMode {
@@ -150,7 +150,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         } else if let Some(input_mqtt_topics) = input_mode.input_mqtt_topics {
             let var_topics = input_mqtt_topics
                 .iter()
-                .map(|topic| (tc::VarName(topic.clone()), topic.clone()))
+                .map(|topic| (VarName::new(topic), topic.clone()))
                 .collect();
             let mut mqtt_input_provider =
                 tc::io::mqtt::MQTTInputProvider::new(executor.clone(), MQTT_HOSTNAME, var_topics)
@@ -165,7 +165,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             let var_topics = model
                 .input_vars
                 .iter()
-                .map(|var| (var.clone(), var.0.clone()))
+                .map(|var| (var.clone(), var.into()))
                 .collect();
             let mut mqtt_input_provider =
                 tc::io::mqtt::MQTTInputProvider::new(executor.clone(), MQTT_HOSTNAME, var_topics)
@@ -201,8 +201,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
                 .into_iter()
                 // Only include topics that are in the output_vars
                 // this is necessary for localisation support
-                .filter(|topic| model.output_vars.contains(&tc::VarName(topic.clone())))
-                .map(|topic| (tc::VarName(topic.clone()), topic))
+                .filter(|topic| model.output_vars.contains(&VarName::new(topic.as_str())))
+                .map(|topic| (topic.clone().into(), topic))
                 .collect();
             Box::new(
                 MQTTOutputHandler::new(executor.clone(), MQTT_HOSTNAME, topics)
@@ -218,7 +218,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             let topics = model
                 .output_vars
                 .iter()
-                .map(|var| (var.clone(), var.0.clone()))
+                .map(|var| (var.clone(), var.into()))
                 .collect();
             Box::new(
                 MQTTOutputHandler::new(executor.clone(), MQTT_HOSTNAME, topics)

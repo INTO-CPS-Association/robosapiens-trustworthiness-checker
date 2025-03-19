@@ -147,9 +147,7 @@ impl<V: StreamData> VarManager<V> {
 
         // This should return immediately since var_stage is never None
         // (it is initialized to Gathering in the constructor)
-        let mut current_var_stage = smol::future::block_on(
-            var_stage_ref.get_shared()
-        );
+        let mut current_var_stage = smol::future::block_on(var_stage_ref.get_shared());
 
         // Spawn a background async task to handle the subscription request
         self.executor
@@ -535,7 +533,8 @@ where
                 (
                     var.clone(),
                     context.var(var).expect(
-                        format!("Failed to find expression for var {}", var.0.as_str()).as_str(),
+                        format!("Failed to find expression for var {}", var.name().as_str())
+                            .as_str(),
                     ),
                 )
             })
@@ -544,9 +543,9 @@ where
         // Send outputs computed based on the context to the
         // output handler
         for (var, tx) in output_txs {
-            let expr = model
-                .var_expr(&var)
-                .expect(format!("Failed to find expression for var {}", var.0.as_str()).as_str());
+            let expr = model.var_expr(&var).expect(
+                format!("Failed to find expression for var {}", var.name().as_str()).as_str(),
+            );
             let stream = S::to_async_stream(expr, &context);
             if let Err(_) = tx.send(stream) {
                 warn!(?var, "Failed to send stream for var to requester");
@@ -596,8 +595,7 @@ mod tests {
             yield 3;
         });
 
-        let mut manager =
-            VarManager::new(executor.clone(), VarName("test".to_string()), input_stream);
+        let mut manager = VarManager::new(executor.clone(), "test".into(), input_stream);
 
         info!("subscribing 1");
         let sub1 = manager.subscribe();
@@ -623,8 +621,7 @@ mod tests {
             yield 4;
         });
 
-        let mut manager =
-            VarManager::new(executor.clone(), VarName("test".to_string()), input_stream);
+        let mut manager = VarManager::new(executor.clone(), "test".into(), input_stream);
 
         info!("ticking 1");
         manager.tick().await;

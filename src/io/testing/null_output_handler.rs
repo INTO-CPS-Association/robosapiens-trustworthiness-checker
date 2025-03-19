@@ -50,7 +50,7 @@ impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{OutputStream, Value, VarName};
+    use crate::core::{OutputStream, Value};
     use futures::stream;
 
     use super::*;
@@ -64,14 +64,12 @@ mod tests {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
-        let mut handler: NullOutputHandler<Value> = NullOutputHandler::new(
-            executor.clone(),
-            vec![VarName("x".to_string()), VarName("y".to_string())],
-        );
+        let mut handler: NullOutputHandler<Value> =
+            NullOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()]);
 
         handler.provide_streams(BTreeMap::from([
-            (VarName("x".to_string()), x_stream),
-            (VarName("y".to_string()), y_stream),
+            ("x".into(), x_stream),
+            ("y".into(), y_stream),
         ]));
 
         let task = executor.spawn(handler.run());

@@ -279,7 +279,6 @@ pub fn var(ctx: &dyn StreamContext<Value>, x: VarName) -> OutputStream<Value> {
     match ctx.var(&x) {
         Some(x) => x,
         None => {
-            let VarName(x) = x;
             panic!("Variable {} not found", x)
         }
     }
@@ -598,7 +597,7 @@ mod tests {
 
     #[test(apply(smol_test))]
     async fn test_mock_subcontext() {
-        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into(), 3.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -606,7 +605,7 @@ mod tests {
         // This does not properly model a subcontext since need values need to
         // be able to arrive, after which they will be pruned down to the
         // history length on .advance()
-        let res: Vec<Value> = subctx.var(&VarName("x".into())).unwrap().collect().await;
+        let res: Vec<Value> = subctx.var(&"x".into()).unwrap().collect().await;
         assert_eq!(res, vec![3.into()]);
     }
 
@@ -640,7 +639,7 @@ mod tests {
     #[test(apply(smol_test))]
     async fn test_eval() {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
-        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -653,7 +652,7 @@ mod tests {
     async fn test_eval_x_squared() {
         // This test is interesting since we use x twice in the eval strings
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
-        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -669,7 +668,7 @@ mod tests {
             "x + 1".into(),
             "x + 2".into(),
         ]));
-        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into(), 3.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -686,7 +685,7 @@ mod tests {
             Value::Unknown,
             "x + 2".into(),
         ]));
-        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into(), 3.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -700,7 +699,7 @@ mod tests {
     async fn test_defer() {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
-        let map: VarMap = vec![(VarName("x".into()), vec![1.into(), 2.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -713,7 +712,7 @@ mod tests {
         // This test is interesting since we use x twice in the eval strings
         let e: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
-        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -726,7 +725,7 @@ mod tests {
     async fn test_defer_unknown() {
         // Using unknown to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, "x + 1".into()]));
-        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -743,7 +742,7 @@ mod tests {
             "x + 1".into(),
             Value::Unknown,
         ])) as OutputStream<Value>;
-        let map: VarMap = vec![(VarName("x".into()), vec![2.into(), 3.into(), 4.into()]).into()]
+        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into(), 4.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
@@ -944,11 +943,11 @@ mod tests {
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
-        let map: VarMap = vec![(VarName("y".into()), vec![0.into(), 1.into()]).into()]
+        let map: VarMap = vec![("y".into(), vec![0.into(), 1.into()]).into()]
             .into_iter()
             .collect();
         let ctx = MockContext { xs: map };
-        let i: OutputStream<Value> = var(&ctx, VarName("y".into()));
+        let i: OutputStream<Value> = var(&ctx, "y".into());
         let res: Vec<Value> = lindex(list(x), i).collect().await;
         let exp: Vec<Value> = vec![1.into(), 4.into()];
         assert_eq!(res, exp)

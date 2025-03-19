@@ -158,7 +158,7 @@ mod tests {
         let mqtt_topics = spec
             .output_vars
             .iter()
-            .map(|v| (v.clone(), format!("mqtt_output_{}", v.0.clone())))
+            .map(|v| (v.clone(), format!("mqtt_output_{}", v)))
             .collect::<BTreeMap<_, _>>();
 
         let outputs = get_outputs(
@@ -263,7 +263,7 @@ mod tests {
         info!("Outputs: {:?}", outputs);
         let expected_outputs = zs
             .into_iter()
-            .map(|val| vec![(VarName("z".into()), val)].into_iter().collect())
+            .map(|val| vec![("z".into(), val)].into_iter().collect())
             .collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
     }

@@ -40,8 +40,8 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([(VarName("z".into()), Value::Int(3))]),),
-            (1, BTreeMap::from([(VarName("z".into()), Value::Int(7))]),),
+            (0, BTreeMap::from([("z".into(), Value::Int(3))]),),
+            (1, BTreeMap::from([("z".into(), Value::Int(7))]),),
         ]
     );
 }
@@ -85,8 +85,8 @@ async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'st
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([(VarName("z".into()), Value::Int(3))]),),
-            (1, BTreeMap::from([(VarName("z".into()), Value::Int(7))]),),
+            (0, BTreeMap::from([("z".into(), Value::Int(3))]),),
+            (1, BTreeMap::from([("z".into(), Value::Int(7))]),),
         ]
     );
 }
@@ -110,10 +110,10 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([(VarName("x".into()), Value::Int(1))]),),
-            (1, BTreeMap::from([(VarName("x".into()), Value::Int(2))]),),
-            (2, BTreeMap::from([(VarName("x".into()), Value::Int(3))]),),
-            (3, BTreeMap::from([(VarName("x".into()), Value::Int(4))]),),
+            (0, BTreeMap::from([("x".into(), Value::Int(1))]),),
+            (1, BTreeMap::from([("x".into(), Value::Int(2))]),),
+            (2, BTreeMap::from([("x".into(), Value::Int(3))]),),
+            (3, BTreeMap::from([("x".into(), Value::Int(4))]),),
         ]
     );
 }
@@ -138,17 +138,11 @@ async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
         vec![
             (
                 0,
-                BTreeMap::from([
-                    (VarName("z".into()), Value::Int(3)),
-                    (VarName("w".into()), Value::Int(3))
-                ]),
+                BTreeMap::from([("z".into(), Value::Int(3)), ("w".into(), Value::Int(3))]),
             ),
             (
                 1,
-                BTreeMap::from([
-                    (VarName("z".into()), Value::Int(7)),
-                    (VarName("w".into()), Value::Int(7))
-                ]),
+                BTreeMap::from([("z".into(), Value::Int(7)), ("w".into(), Value::Int(7))]),
             ),
         ]
     );
@@ -176,17 +170,11 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
         vec![
             (
                 0,
-                BTreeMap::from([
-                    (VarName("r1".into()), Value::Int(3)),
-                    (VarName("r2".into()), Value::Int(2)),
-                ]),
+                BTreeMap::from([("r1".into(), Value::Int(3)), ("r2".into(), Value::Int(2)),]),
             ),
             (
                 1,
-                BTreeMap::from([
-                    (VarName("r1".into()), Value::Int(7)),
-                    (VarName("r2".into()), Value::Int(12)),
-                ]),
+                BTreeMap::from([("r1".into(), Value::Int(7)), ("r2".into(), Value::Int(12)),]),
             ),
         ]
     );
@@ -209,7 +197,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     let maple_outputs = outputs
         .into_iter()
-        .map(|(i, o)| (i, o[&VarName("maple".into())].clone()));
+        .map(|(i, o)| (i, o[&"maple".into()].clone()));
     let expected_outputs = vec![
         (0, Value::Bool(true)),
         (1, Value::Bool(true)),
@@ -242,21 +230,21 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
     executor.spawn(async_monitor.run()).detach();
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     let expected_outputs = vec![
-        (0, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (1, BTreeMap::from([(VarName("z".into()), Value::Int(2))])),
-        (2, BTreeMap::from([(VarName("z".into()), Value::Int(3))])),
-        (3, BTreeMap::from([(VarName("z".into()), Value::Int(4))])),
-        (4, BTreeMap::from([(VarName("z".into()), Value::Int(5))])),
-        (5, BTreeMap::from([(VarName("z".into()), Value::Int(6))])),
-        (6, BTreeMap::from([(VarName("z".into()), Value::Int(7))])),
-        (7, BTreeMap::from([(VarName("z".into()), Value::Int(8))])),
-        (8, BTreeMap::from([(VarName("z".into()), Value::Int(9))])),
-        (9, BTreeMap::from([(VarName("z".into()), Value::Int(10))])),
-        (10, BTreeMap::from([(VarName("z".into()), Value::Int(11))])),
-        (11, BTreeMap::from([(VarName("z".into()), Value::Int(12))])),
-        (12, BTreeMap::from([(VarName("z".into()), Value::Int(13))])),
-        (13, BTreeMap::from([(VarName("z".into()), Value::Int(14))])),
-        (14, BTreeMap::from([(VarName("z".into()), Value::Int(15))])),
+        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (1, BTreeMap::from([("z".into(), Value::Int(2))])),
+        (2, BTreeMap::from([("z".into(), Value::Int(3))])),
+        (3, BTreeMap::from([("z".into(), Value::Int(4))])),
+        (4, BTreeMap::from([("z".into(), Value::Int(5))])),
+        (5, BTreeMap::from([("z".into(), Value::Int(6))])),
+        (6, BTreeMap::from([("z".into(), Value::Int(7))])),
+        (7, BTreeMap::from([("z".into(), Value::Int(8))])),
+        (8, BTreeMap::from([("z".into(), Value::Int(9))])),
+        (9, BTreeMap::from([("z".into(), Value::Int(10))])),
+        (10, BTreeMap::from([("z".into(), Value::Int(11))])),
+        (11, BTreeMap::from([("z".into(), Value::Int(12))])),
+        (12, BTreeMap::from([("z".into(), Value::Int(13))])),
+        (13, BTreeMap::from([("z".into(), Value::Int(14))])),
+        (14, BTreeMap::from([("z".into(), Value::Int(15))])),
     ];
     assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
@@ -280,21 +268,21 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
     executor.spawn(async_monitor.run()).detach();
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     let expected_outputs = vec![
-        (0, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (1, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (2, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (3, BTreeMap::from([(VarName("z".into()), Value::Int(4))])),
-        (4, BTreeMap::from([(VarName("z".into()), Value::Int(5))])),
-        (5, BTreeMap::from([(VarName("z".into()), Value::Int(6))])),
-        (6, BTreeMap::from([(VarName("z".into()), Value::Int(7))])),
-        (7, BTreeMap::from([(VarName("z".into()), Value::Int(8))])),
-        (8, BTreeMap::from([(VarName("z".into()), Value::Int(9))])),
-        (9, BTreeMap::from([(VarName("z".into()), Value::Int(10))])),
-        (10, BTreeMap::from([(VarName("z".into()), Value::Int(11))])),
-        (11, BTreeMap::from([(VarName("z".into()), Value::Int(12))])),
-        (12, BTreeMap::from([(VarName("z".into()), Value::Int(13))])),
-        (13, BTreeMap::from([(VarName("z".into()), Value::Int(14))])),
-        (14, BTreeMap::from([(VarName("z".into()), Value::Int(15))])),
+        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (1, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (2, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (3, BTreeMap::from([("z".into(), Value::Int(4))])),
+        (4, BTreeMap::from([("z".into(), Value::Int(5))])),
+        (5, BTreeMap::from([("z".into(), Value::Int(6))])),
+        (6, BTreeMap::from([("z".into(), Value::Int(7))])),
+        (7, BTreeMap::from([("z".into(), Value::Int(8))])),
+        (8, BTreeMap::from([("z".into(), Value::Int(9))])),
+        (9, BTreeMap::from([("z".into(), Value::Int(10))])),
+        (10, BTreeMap::from([("z".into(), Value::Int(11))])),
+        (11, BTreeMap::from([("z".into(), Value::Int(12))])),
+        (12, BTreeMap::from([("z".into(), Value::Int(13))])),
+        (13, BTreeMap::from([("z".into(), Value::Int(14))])),
+        (14, BTreeMap::from([("z".into(), Value::Int(15))])),
     ];
     assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
@@ -318,21 +306,21 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
     executor.spawn(async_monitor.run()).detach();
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     let expected_outputs = vec![
-        (0, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (1, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (2, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (3, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (4, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (5, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (6, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (7, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (8, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (9, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (10, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (11, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (12, BTreeMap::from([(VarName("z".into()), Value::Int(13))])),
-        (13, BTreeMap::from([(VarName("z".into()), Value::Int(14))])),
-        (14, BTreeMap::from([(VarName("z".into()), Value::Int(15))])),
+        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (1, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (2, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (3, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (4, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (5, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (6, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (7, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (8, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (9, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (10, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (11, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (12, BTreeMap::from([("z".into(), Value::Int(13))])),
+        (13, BTreeMap::from([("z".into(), Value::Int(14))])),
+        (14, BTreeMap::from([("z".into(), Value::Int(15))])),
     ];
     assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
@@ -365,12 +353,12 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
     //
     // See also: Comment on sindex combinator.
     let expected_outputs = vec![
-        (0, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (1, BTreeMap::from([(VarName("z".into()), Value::Unknown)])),
-        (2, BTreeMap::from([(VarName("z".into()), Value::Int(1))])),
-        (3, BTreeMap::from([(VarName("z".into()), Value::Int(2))])),
-        (4, BTreeMap::from([(VarName("z".into()), Value::Int(3))])),
-        (5, BTreeMap::from([(VarName("z".into()), Value::Int(4))])),
+        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (1, BTreeMap::from([("z".into(), Value::Unknown)])),
+        (2, BTreeMap::from([("z".into(), Value::Int(1))])),
+        (3, BTreeMap::from([("z".into(), Value::Int(2))])),
+        (4, BTreeMap::from([("z".into(), Value::Int(3))])),
+        (5, BTreeMap::from([("z".into(), Value::Int(4))])),
     ];
     assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
@@ -397,44 +385,29 @@ async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
     let expected_outputs = vec![
         (
             0,
-            BTreeMap::from([
-                (VarName("z".into()), Value::Int(1)),
-                (VarName("a".into()), Value::Int(0)),
-            ]),
+            BTreeMap::from([("z".into(), Value::Int(1)), ("a".into(), Value::Int(0))]),
         ),
         (
             1,
-            BTreeMap::from([
-                (VarName("z".into()), Value::Int(2)),
-                (VarName("a".into()), Value::Int(1)),
-            ]),
+            BTreeMap::from([("z".into(), Value::Int(2)), ("a".into(), Value::Int(1))]),
         ),
         (
             2,
-            BTreeMap::from([
-                (VarName("z".into()), Value::Int(3)),
-                (VarName("a".into()), Value::Int(2)),
-            ]),
+            BTreeMap::from([("z".into(), Value::Int(3)), ("a".into(), Value::Int(2))]),
         ),
         (
             3,
-            BTreeMap::from([
-                (VarName("z".into()), Value::Int(4)),
-                (VarName("a".into()), Value::Int(3)),
-            ]),
+            BTreeMap::from([("z".into(), Value::Int(4)), ("a".into(), Value::Int(3))]),
         ),
         (
             4,
-            BTreeMap::from([
-                (VarName("z".into()), Value::Int(5)),
-                (VarName("a".into()), Value::Int(4)),
-            ]),
+            BTreeMap::from([("z".into(), Value::Int(5)), ("a".into(), Value::Int(4))]),
         ),
         (
             5,
             BTreeMap::from([
-                (VarName("z".into()), Value::Int(0)), // The default value
-                (VarName("a".into()), Value::Int(5)),
+                ("z".into(), Value::Int(0)), // The default value
+                ("a".into(), Value::Int(5)),
             ]),
         ),
     ];
@@ -458,13 +431,13 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 7); // NOTE: 1 "too" many. See comment sindex combinator
     let expected_outputs = vec![
-        (0, BTreeMap::from([(VarName("z".into()), Value::Int(42))])),
-        (1, BTreeMap::from([(VarName("z".into()), Value::Int(0))])),
-        (2, BTreeMap::from([(VarName("z".into()), Value::Int(1))])),
-        (3, BTreeMap::from([(VarName("z".into()), Value::Int(2))])),
-        (4, BTreeMap::from([(VarName("z".into()), Value::Int(3))])),
-        (5, BTreeMap::from([(VarName("z".into()), Value::Int(4))])),
-        (6, BTreeMap::from([(VarName("z".into()), Value::Int(5))])),
+        (0, BTreeMap::from([("z".into(), Value::Int(42))])),
+        (1, BTreeMap::from([("z".into(), Value::Int(0))])),
+        (2, BTreeMap::from([("z".into(), Value::Int(1))])),
+        (3, BTreeMap::from([("z".into(), Value::Int(2))])),
+        (4, BTreeMap::from([("z".into(), Value::Int(3))])),
+        (5, BTreeMap::from([("z".into(), Value::Int(4))])),
+        (6, BTreeMap::from([("z".into(), Value::Int(5))])),
     ];
     assert_eq!(outputs, expected_outputs);
 }

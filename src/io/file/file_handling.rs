@@ -45,7 +45,7 @@ pub async fn parse_file<O: Clone + Debug>(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::VarName;
+    
     use crate::{InputProvider, Value};
 
     use super::*;
@@ -58,7 +58,7 @@ mod tests {
         let file = "examples/simple_add.input";
         let mut data = parse_file(parser, file).await.unwrap();
         let x_vals = data
-            .input_stream(&VarName("x".into()))
+            .input_stream(&"x".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -71,7 +71,7 @@ mod tests {
         let file = "tests/test_inputs/maple_sequence_true.input";
         let mut data = parse_file(parser, file).await.unwrap();
         let m_vals = data
-            .input_stream(&VarName("m".into()))
+            .input_stream(&"m".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -86,7 +86,7 @@ mod tests {
             ],
         );
         let a_vals = data
-            .input_stream(&VarName("a".into()))
+            .input_stream(&"a".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -101,7 +101,7 @@ mod tests {
             ],
         );
         let p_vals = data
-            .input_stream(&VarName("p".into()))
+            .input_stream(&"p".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -116,7 +116,7 @@ mod tests {
             ],
         );
         let l_vals = data
-            .input_stream(&VarName("l".into()))
+            .input_stream(&"l".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -131,7 +131,7 @@ mod tests {
             ],
         );
         let e_vals = data
-            .input_stream(&VarName("e".into()))
+            .input_stream(&"e".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;

@@ -55,7 +55,7 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{OutputStream, Value, VarName};
+    use crate::core::{OutputStream, Value};
     use futures::stream;
 
     use super::*;
@@ -68,18 +68,13 @@ mod tests {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
-        let mut handler: StdoutOutputHandler<Value> = StdoutOutputHandler::new(
-            executor.clone(),
-            vec![VarName("x".to_string()), VarName("y".to_string())],
-        );
+        let mut handler: StdoutOutputHandler<Value> =
+            StdoutOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()]);
 
         handler.provide_streams(
-            vec![
-                (VarName("x".to_string()), x_stream),
-                (VarName("y".to_string()), y_stream),
-            ]
-            .into_iter()
-            .collect(),
+            vec![("x".into(), x_stream), ("y".into(), y_stream)]
+                .into_iter()
+                .collect(),
         );
 
         let task = executor.spawn(handler.run());

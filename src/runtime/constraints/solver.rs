@@ -65,9 +65,7 @@ pub struct ConstraintStore {
 pub fn model_constraints(model: LOLASpecification) -> ConstraintStore {
     let mut constraints = ConstraintStore::default();
     for (var, sexpr) in model.exprs.iter() {
-        constraints
-            .output_exprs
-            .insert(VarName(var.0.clone()), sexpr.clone());
+        constraints.output_exprs.insert(var.clone(), sexpr.clone());
     }
     constraints
 }

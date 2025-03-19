@@ -213,11 +213,7 @@ mod tests {
         };
         let labelled_graph = LabelledConcDistributionGraph {
             dist_graph,
-            var_names: vec![
-                VarName("a".into()),
-                VarName("b".into()),
-                VarName("c".into()),
-            ],
+            var_names: vec!["a".into(), "b".into(), "c".into()],
             node_labels: BTreeMap::new(),
         };
         let serialized = serde_json::to_string(&labelled_graph).unwrap();
@@ -247,11 +243,7 @@ mod tests {
         };
         let labelled_dist_graph = LabelledConcDistributionGraph {
             dist_graph,
-            var_names: vec![
-                VarName("a".into()),
-                VarName("b".into()),
-                VarName("c".into()),
-            ],
+            var_names: vec!["a".into(), "b".into(), "c".into()],
             node_labels: [(2.into(), vec!["a".into(), "b".into()])]
                 .into_iter()
                 .collect(),
@@ -302,11 +294,7 @@ mod tests {
         };
         let labelled_dist_graph = LabelledConcDistributionGraph {
             dist_graph,
-            var_names: vec![
-                VarName("a".into()),
-                VarName("b".into()),
-                VarName("c".into()),
-            ],
+            var_names: vec!["a".into(), "b".into(), "c".into()],
             node_labels: [(2.into(), vec!["a".into(), "b".into()])]
                 .into_iter()
                 .collect(),

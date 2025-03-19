@@ -13,13 +13,13 @@ use trustworthiness_checker::{Monitor, Value, VarName};
 pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
-        VarName("x".into()),
+        "x".into(),
         Box::pin(stream::iter(
             vec![Value::Int(1), 3.into(), 5.into()].into_iter(),
         )) as OutputStream<Value>,
     );
     input_streams.insert(
-        VarName("y".into()),
+        "y".into(),
         Box::pin(stream::iter(
             vec![Value::Int(2), 4.into(), 6.into()].into_iter(),
         )) as OutputStream<Value>,
@@ -84,9 +84,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("z".into()), 3.into())]),),
-                    (1, BTreeMap::from([(VarName("z".into()), 7.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 11.into())]),),
+                    (0, BTreeMap::from([("z".into(), 3.into())]),),
+                    (1, BTreeMap::from([("z".into(), 7.into())]),),
+                    (2, BTreeMap::from([("z".into(), 11.into())]),),
                 ]
             );
         }
@@ -159,9 +159,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("z".into()), 1.into())]),),
-                    (1, BTreeMap::from([(VarName("z".into()), 3.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 5.into())]),),
+                    (0, BTreeMap::from([("z".into(), 1.into())]),),
+                    (1, BTreeMap::from([("z".into(), 3.into())]),),
+                    (2, BTreeMap::from([("z".into(), 5.into())]),),
                 ]
             );
         }
@@ -189,9 +189,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("z".into()), 42.into())]),),
-                    (1, BTreeMap::from([(VarName("z".into()), 42.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 42.into())]),),
+                    (0, BTreeMap::from([("z".into(), 42.into())]),),
+                    (1, BTreeMap::from([("z".into(), 42.into())]),),
+                    (2, BTreeMap::from([("z".into(), 42.into())]),),
                 ]
             );
         }
@@ -219,9 +219,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("z".into()), 2.into())]),),
-                    (1, BTreeMap::from([(VarName("z".into()), 4.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 6.into())]),),
+                    (0, BTreeMap::from([("z".into(), 2.into())]),),
+                    (1, BTreeMap::from([("z".into(), 4.into())]),),
+                    (2, BTreeMap::from([("z".into(), 6.into())]),),
                 ]
             );
         }
@@ -249,18 +249,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), Value::Int(-9))]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), Value::Int(-7))]).into(),
-                    ),
-                    (
-                        2,
-                        BTreeMap::from([(VarName("z".into()), Value::Int(-5))]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), Value::Int(-9))]).into(),),
+                    (1, BTreeMap::from([("z".into(), Value::Int(-7))]).into(),),
+                    (2, BTreeMap::from([("z".into(), Value::Int(-5))]).into(),),
                 ]
             );
         }
@@ -291,17 +282,17 @@ mod tests {
                     (
                         // Resolved to default on first step
                         0,
-                        BTreeMap::from([(VarName("z".into()), 0.into())]),
+                        BTreeMap::from([("z".into(), 0.into())]),
                     ),
                     (
                         // Resolving to previous value on second step
                         1,
-                        BTreeMap::from([(VarName("z".into()), 1.into())]),
+                        BTreeMap::from([("z".into(), 1.into())]),
                     ),
                     (
                         // Resolving to previous value on second step
                         2,
-                        BTreeMap::from([(VarName("z".into()), 3.into())]),
+                        BTreeMap::from([("z".into(), 3.into())]),
                     ),
                 ]
             );
@@ -334,29 +325,17 @@ mod tests {
                     (
                         // Both resolve to default
                         0,
-                        BTreeMap::from([
-                            (VarName("z1".into()), 0.into()),
-                            (VarName("z2".into()), 0.into())
-                        ])
-                        .into(),
+                        BTreeMap::from([("z1".into(), 0.into()), ("z2".into(), 0.into())]).into(),
                     ),
                     (
                         // z1 resolves to prev, z2 resolves to default
                         1,
-                        BTreeMap::from([
-                            (VarName("z1".into()), 1.into()),
-                            (VarName("z2".into()), 0.into())
-                        ])
-                        .into(),
+                        BTreeMap::from([("z1".into(), 1.into()), ("z2".into(), 0.into())]).into(),
                     ),
                     (
                         // z1 resolves to prev, z2 resolves to prev_prev
                         2,
-                        BTreeMap::from([
-                            (VarName("z1".into()), 3.into()),
-                            (VarName("z2".into()), 1.into())
-                        ])
-                        .into(),
+                        BTreeMap::from([("z1".into(), 3.into()), ("z2".into(), 1.into())]).into(),
                     ),
                 ]
             );
@@ -394,9 +373,9 @@ mod tests {
                     (
                         // Resolved to index 1 on first step
                         0,
-                        BTreeMap::from([(VarName("z".into()), 3.into())]),
+                        BTreeMap::from([("z".into(), 3.into())]),
                     ),
-                    (1, BTreeMap::from([(VarName("z".into()), 5.into())]),),
+                    (1, BTreeMap::from([("z".into(), 5.into())]),),
                 ]
             );
         }
@@ -424,18 +403,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), true.into())]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), false.into())]).into(),
-                    ),
-                    (
-                        2,
-                        BTreeMap::from([(VarName("z".into()), false.into())]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), true.into())]).into(),),
+                    (1, BTreeMap::from([("z".into(), false.into())]).into(),),
+                    (2, BTreeMap::from([("z".into(), false.into())]).into(),),
                 ]
             );
         }
@@ -463,14 +433,8 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), "ab".into())]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), "cd".into())]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), "ab".into())]).into(),),
+                    (1, BTreeMap::from([("z".into(), "cd".into())]).into(),),
                 ]
             );
         }
@@ -500,27 +464,16 @@ mod tests {
                 vec![
                     (
                         0,
-                        BTreeMap::from([
-                            (VarName("r1".into()), 3.into()),
-                            (VarName("r2".into()), 2.into()),
-                        ])
-                        .into(),
+                        BTreeMap::from([("r1".into(), 3.into()), ("r2".into(), 2.into()),]).into(),
                     ),
                     (
                         1,
-                        BTreeMap::from([
-                            (VarName("r1".into()), 7.into()),
-                            (VarName("r2".into()), 12.into()),
-                        ])
-                        .into(),
+                        BTreeMap::from([("r1".into(), 7.into()), ("r2".into(), 12.into()),]).into(),
                     ),
                     (
                         2,
-                        BTreeMap::from([
-                            (VarName("r1".into()), 11.into()),
-                            (VarName("r2".into()), 30.into()),
-                        ])
-                        .into(),
+                        BTreeMap::from([("r1".into(), 11.into()), ("r2".into(), 30.into()),])
+                            .into(),
                     ),
                 ]
             );
@@ -550,9 +503,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("y".into()), 0.into())]),),
-                    (1, BTreeMap::from([(VarName("y".into()), 1.into())]),),
-                    (2, BTreeMap::from([(VarName("y".into()), 2.into())]),),
+                    (0, BTreeMap::from([("y".into(), 0.into())]),),
+                    (1, BTreeMap::from([("y".into(), 1.into())]),),
+                    (2, BTreeMap::from([("y".into(), 2.into())]),),
                 ]
             );
         }
@@ -581,9 +534,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("y".into()), 42.into())]),),
-                    (1, BTreeMap::from([(VarName("y".into()), 42.into())]),),
-                    (2, BTreeMap::from([(VarName("y".into()), 42.into())]),),
+                    (0, BTreeMap::from([("y".into(), 42.into())]),),
+                    (1, BTreeMap::from([("y".into(), 42.into())]),),
+                    (2, BTreeMap::from([("y".into(), 42.into())]),),
                 ]
             );
         }
@@ -612,9 +565,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("y".into()), 0.into())]),),
-                    (1, BTreeMap::from([(VarName("y".into()), 42.into())]),),
-                    (2, BTreeMap::from([(VarName("y".into()), 2.into())]),),
+                    (0, BTreeMap::from([("y".into(), 0.into())]),),
+                    (1, BTreeMap::from([("y".into(), 42.into())]),),
+                    (2, BTreeMap::from([("y".into(), 2.into())]),),
                 ]
             );
         }
@@ -642,9 +595,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("y".into()), 1.into())]),),
-                    (1, BTreeMap::from([(VarName("y".into()), 2.into())]),),
-                    (2, BTreeMap::from([(VarName("y".into()), 3.into())]),),
+                    (0, BTreeMap::from([("y".into(), 1.into())]),),
+                    (1, BTreeMap::from([("y".into(), 2.into())]),),
+                    (2, BTreeMap::from([("y".into(), 3.into())]),),
                 ]
             );
         }
@@ -676,9 +629,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("z".into()), 1.into())]),),
-                    (1, BTreeMap::from([(VarName("z".into()), 2.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 3.into())]),),
+                    (0, BTreeMap::from([("z".into(), 1.into())]),),
+                    (1, BTreeMap::from([("z".into(), 2.into())]),),
+                    (2, BTreeMap::from([("z".into(), 3.into())]),),
                 ]
             );
         }
@@ -710,9 +663,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("z".into()), 1.into())]),),
-                    (1, BTreeMap::from([(VarName("z".into()), 4.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 9.into())]),),
+                    (0, BTreeMap::from([("z".into(), 1.into())]),),
+                    (1, BTreeMap::from([("z".into(), 4.into())]),),
+                    (2, BTreeMap::from([("z".into(), 9.into())]),),
                 ]
             );
         }
@@ -744,12 +697,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                    ),
-                    (1, BTreeMap::from([(VarName("z".into()), 2.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 3.into())]),),
+                    (0, BTreeMap::from([("z".into(), Value::Unknown)]).into(),),
+                    (1, BTreeMap::from([("z".into(), 2.into())]),),
+                    (2, BTreeMap::from([("z".into(), 3.into())]),),
                 ]
             );
         }
@@ -781,12 +731,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                    ),
-                    (1, BTreeMap::from([(VarName("z".into()), 2.into())]),),
-                    (2, BTreeMap::from([(VarName("z".into()), 3.into())]),),
+                    (0, BTreeMap::from([("z".into(), Value::Unknown)]).into(),),
+                    (1, BTreeMap::from([("z".into(), 2.into())]),),
+                    (2, BTreeMap::from([("z".into(), 3.into())]),),
                 ]
             );
         }
@@ -822,21 +769,18 @@ mod tests {
             let sample_1 = if kind == DependencyKind::DepGraph {
                 // Because the new dependency is added at time idx 1 and requires knowledge
                 // of cleaned memory, it is not solved at this time index.
-                (1, BTreeMap::from([(VarName("z".into()), Value::Unknown)]))
+                (1, BTreeMap::from([("z".into(), Value::Unknown)]))
             } else {
                 // Might need more cases in the future
-                (1, BTreeMap::from([(VarName("z".into()), 0.into())]))
+                (1, BTreeMap::from([("z".into(), 0.into())]))
             };
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), Value::Unknown)]).into(),),
                     sample_1,
-                    (2, BTreeMap::from([(VarName("z".into()), 1.into())]),),
-                    (3, BTreeMap::from([(VarName("z".into()), 2.into())]),),
+                    (2, BTreeMap::from([("z".into(), 1.into())]),),
+                    (3, BTreeMap::from([("z".into(), 2.into())]),),
                 ]
             );
         }
@@ -867,18 +811,9 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), "y0".into())]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), "y1".into())]).into(),
-                    ),
-                    (
-                        2,
-                        BTreeMap::from([(VarName("z".into()), "y2".into())]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), "y0".into())]).into(),),
+                    (1, BTreeMap::from([("z".into(), "y1".into())]).into(),),
+                    (2, BTreeMap::from([("z".into(), "y2".into())]).into(),),
                 ]
             );
         }
@@ -909,22 +844,10 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), "x0".into())]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), "y1".into())]).into(),
-                    ),
-                    (
-                        2,
-                        BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                    ),
-                    (
-                        3,
-                        BTreeMap::from([(VarName("z".into()), "y3".into())]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), "x0".into())]).into(),),
+                    (1, BTreeMap::from([("z".into(), "y1".into())]).into(),),
+                    (2, BTreeMap::from([("z".into(), Value::Unknown)]).into(),),
+                    (3, BTreeMap::from([("z".into(), "y3".into())]).into(),),
                 ]
             );
         }
@@ -955,22 +878,10 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), "def".into())]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), "x1".into())]).into(),
-                    ),
-                    (
-                        2,
-                        BTreeMap::from([(VarName("z".into()), "x2".into())]).into(),
-                    ),
-                    (
-                        3,
-                        BTreeMap::from([(VarName("z".into()), "x3".into())]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), "def".into())]).into(),),
+                    (1, BTreeMap::from([("z".into(), "x1".into())]).into(),),
+                    (2, BTreeMap::from([("z".into(), "x2".into())]).into(),),
+                    (3, BTreeMap::from([("z".into(), "x3".into())]).into(),),
                 ]
             );
         }
@@ -1008,22 +919,10 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), Value::Unknown)]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), "y".into())]).into(),
-                    ),
-                    (
-                        2,
-                        BTreeMap::from([(VarName("z".into()), "y_won!".into())]).into(),
-                    ),
-                    (
-                        3,
-                        BTreeMap::from([(VarName("z".into()), "y_happy".into())]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), Value::Unknown)]).into(),),
+                    (1, BTreeMap::from([("z".into(), "y".into())]).into(),),
+                    (2, BTreeMap::from([("z".into(), "y_won!".into())]).into(),),
+                    (3, BTreeMap::from([("z".into(), "y_happy".into())]).into(),),
                 ]
             );
         }
@@ -1053,22 +952,10 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (
-                        0,
-                        BTreeMap::from([(VarName("z".into()), "x0".into())]).into(),
-                    ),
-                    (
-                        1,
-                        BTreeMap::from([(VarName("z".into()), "x1".into())]).into(),
-                    ),
-                    (
-                        2,
-                        BTreeMap::from([(VarName("z".into()), "x2".into())]).into(),
-                    ),
-                    (
-                        3,
-                        BTreeMap::from([(VarName("z".into()), "x3".into())]).into(),
-                    ),
+                    (0, BTreeMap::from([("z".into(), "x0".into())]).into(),),
+                    (1, BTreeMap::from([("z".into(), "x1".into())]).into(),),
+                    (2, BTreeMap::from([("z".into(), "x2".into())]).into(),),
+                    (3, BTreeMap::from([("z".into(), "x3".into())]).into(),),
                 ]
             );
         }
@@ -1102,20 +989,20 @@ mod tests {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, BTreeMap::from([(VarName("z".into()), 0.into())]),),
+                    (0, BTreeMap::from([("z".into(), 0.into())]),),
                     (
                         1,
-                        BTreeMap::from([(VarName("z".into()), 0.into())]),
+                        BTreeMap::from([("z".into(), 0.into())]),
                         // BTreeMap::from([(VarName("z".into()), 1.into())]),
                     ),
                     (
                         2,
-                        BTreeMap::from([(VarName("z".into()), 0.into())]),
+                        BTreeMap::from([("z".into(), 0.into())]),
                         // BTreeMap::from([(VarName("z".into()), 2.into())]),
                     ),
                     (
                         3,
-                        BTreeMap::from([(VarName("z".into()), 0.into())]),
+                        BTreeMap::from([("z".into(), 0.into())]),
                         // BTreeMap::from([(VarName("z".into()), 3.into())]),
                     ),
                 ]

@@ -283,19 +283,17 @@ mod tests {
         let xy_expected: Vec<BTreeMap<VarName, Value>> = (0..10)
             .map(|x| {
                 BTreeMap::from([
-                    (VarName("x".to_string()), (x * 2).into()),
-                    (VarName("y".to_string()), (x * 2 + 1).into()),
+                    ("x".into(), (x * 2).into()),
+                    ("y".into(), (x * 2 + 1).into()),
                 ])
             })
             .collect();
-        let mut handler: ManualOutputHandler<Value> = ManualOutputHandler::new(
-            ex.clone(),
-            vec![VarName("x".to_string()), VarName("y".to_string())],
-        );
+        let mut handler: ManualOutputHandler<Value> =
+            ManualOutputHandler::new(ex.clone(), vec!["x".into(), "y".into()]);
 
         handler.provide_streams(BTreeMap::from([
-            (VarName("x".to_string()), x_stream),
-            (VarName("y".to_string()), y_stream),
+            ("x".into(), x_stream),
+            ("y".into(), y_stream),
         ]));
 
         //
@@ -320,7 +318,7 @@ mod tests {
             multiplier: i64,
             offset: i64,
         ) -> (VarName, OutputStream<Value>) {
-            let var_name = VarName(name.to_string());
+            let var_name = name.into();
             // Delay to force expected ordering of the streams
             let stream =
                 Box::pin(stream::iter(0..10).map(move |x| (multiplier * x + offset).into()));

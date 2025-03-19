@@ -1,4 +1,4 @@
-use crate::core::{IndexedVarName, Specification, VarName};
+use crate::core::{Specification, VarName};
 use crate::core::{StreamType, Value};
 use std::{
     collections::BTreeMap,
@@ -162,12 +162,50 @@ impl SExpr<VarName> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LOLASpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
     pub exprs: BTreeMap<VarName, SExpr<VarName>>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
+}
+
+impl Debug for LOLASpecification {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        // Format the expressions map ordered lexicographically by key
+        // rather than by variable ordering
+        let exprs_by_name: BTreeMap<String, &SExpr<VarName>> =
+            self.exprs.iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let exprs_formatted = format!(
+            "{{{}}}",
+            exprs_by_name
+                .iter()
+                .map(|(k, v)| format!("{:?}: {:?}", VarName::new(k), v))
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+
+        // Type annotations ordered lexicographically by name
+        let type_annotations_by_name: BTreeMap<String, &StreamType> = self
+            .type_annotations
+            .iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let type_annotations_formatted = format!(
+            "{{{}}}",
+            type_annotations_by_name
+                .iter()
+                .map(|(k, v)| format!("{:?}: {:?}", VarName::new(k), v))
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+
+        write!(
+            f,
+            "LOLASpecification {{ input_vars: {:?}, output_vars: {:?}, exprs: {}, type_annotations: {} }}",
+            self.input_vars, self.output_vars, exprs_formatted, type_annotations_formatted
+        )
+    }
 }
 
 impl Specification for LOLASpecification {
@@ -183,19 +221,6 @@ impl Specification for LOLASpecification {
 
     fn var_expr(&self, var: &VarName) -> Option<SExpr<VarName>> {
         Some(self.exprs.get(var)?.clone())
-    }
-}
-
-impl VarName {
-    pub fn to_indexed(&self, i: usize) -> IndexedVarName {
-        IndexedVarName(self.0.clone(), i)
-    }
-}
-
-impl Display for IndexedVarName {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let IndexedVarName(name, index) = self;
-        write!(f, "{}[{}]", name, index)
     }
 }
 

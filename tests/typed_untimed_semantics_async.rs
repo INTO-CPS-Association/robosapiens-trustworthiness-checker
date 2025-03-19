@@ -44,8 +44,8 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([(VarName("z".into()), Value::Int(3))]),),
-            (1, BTreeMap::from([(VarName("z".into()), Value::Int(7))]),),
+            (0, BTreeMap::from([("z".into(), Value::Int(3))]),),
+            (1, BTreeMap::from([("z".into(), Value::Int(7))]),),
         ]
     );
 }
@@ -69,14 +69,8 @@ async fn test_concat_monitor(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         outputs,
         vec![
-            (
-                0,
-                BTreeMap::from([(VarName("z".into()), Value::Str("ab".into()))]),
-            ),
-            (
-                1,
-                BTreeMap::from([(VarName("z".into()), Value::Str("cd".into()))]),
-            ),
+            (0, BTreeMap::from([("z".into(), Value::Str("ab".into()))]),),
+            (1, BTreeMap::from([("z".into(), Value::Str("cd".into()))]),),
         ]
     );
 }
@@ -101,10 +95,10 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([(VarName("x".into()), Value::Int(1))]),),
-            (1, BTreeMap::from([(VarName("x".into()), Value::Int(2))]),),
-            (2, BTreeMap::from([(VarName("x".into()), Value::Int(3))]),),
-            (3, BTreeMap::from([(VarName("x".into()), Value::Int(4))]),),
+            (0, BTreeMap::from([("x".into(), Value::Int(1))]),),
+            (1, BTreeMap::from([("x".into(), Value::Int(2))]),),
+            (2, BTreeMap::from([("x".into(), Value::Int(3))]),),
+            (3, BTreeMap::from([("x".into(), Value::Int(4))]),),
         ]
     );
 }
@@ -132,17 +126,11 @@ async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
         vec![
             (
                 0,
-                BTreeMap::from([
-                    (VarName("z".into()), Value::Int(3)),
-                    (VarName("w".into()), Value::Int(3))
-                ]),
+                BTreeMap::from([("z".into(), Value::Int(3)), ("w".into(), Value::Int(3))]),
             ),
             (
                 1,
-                BTreeMap::from([
-                    (VarName("z".into()), Value::Int(7)),
-                    (VarName("w".into()), Value::Int(7))
-                ]),
+                BTreeMap::from([("z".into(), Value::Int(7)), ("w".into(), Value::Int(7))]),
             ),
         ]
     );
@@ -172,17 +160,11 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
         vec![
             (
                 0,
-                BTreeMap::from([
-                    (VarName("r1".into()), Value::Int(3)),
-                    (VarName("r2".into()), Value::Int(2)),
-                ]),
+                BTreeMap::from([("r1".into(), Value::Int(3)), ("r2".into(), Value::Int(2)),]),
             ),
             (
                 1,
-                BTreeMap::from([
-                    (VarName("r1".into()), Value::Int(7)),
-                    (VarName("r2".into()), Value::Int(12)),
-                ]),
+                BTreeMap::from([("r1".into(), Value::Int(7)), ("r2".into(), Value::Int(12)),]),
             ),
         ]
     );

@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     fmt::{Debug, Display},
     rc::Rc,
@@ -13,7 +14,30 @@ use smol::LocalExecutor;
 
 use crate::dep_manage::interface::DependencyManager;
 
-// use serde_json::{Deserializer, Sserializer};
+// Global list of all variables in the system. This is used
+// to represent individual variables as indices in the runtime
+// instead of strings. This makes variables very cheap to clone,
+// order, or compare.
+//
+// Variable names are assumed to act like atoms in programming languages:
+// the only permitted operations are equality, cloning, comparison,
+// and hashing (the results of the latter two operations is arbitrary
+// but consistent for a given program run). Variables are thread local.
+// They can also be converted to and from strings. For all of these operations
+// they should act indistinguishably from strings: any case in which this
+// global state is observable within these constraints is a bug.
+//
+// This is related to: https://dl.acm.org/doi/10.5555/646066.756689
+// and is a pretty standard technique in both programming languages
+// implementations and computer algebra systems.
+//
+// Note that this means that we leak some memory for each unique
+// variable encountered in the system: this is hopefully an acceptable
+// trade-off given how significant this is for symbolic computations and
+// how unwieldy any solution without global sharing is.
+thread_local! {
+    static VAR_LIST: RefCell<Vec<String>> = RefCell::new(Vec::new());
+}
 
 // Anything inside a stream should be clonable in O(1) time in order for the
 // runtimes to be efficiently implemented. This is why we use EcoString and
@@ -140,29 +164,117 @@ pub enum StreamType {
 // Could also do this with async steams
 // trait InputStream = Iterator<Item = StreamData>;
 
-#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord, Serialize, Deserialize, Hash)]
-pub struct VarName(pub String);
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VarName(usize);
+
+impl VarName {
+    pub fn new(name: &str) -> Self {
+        VAR_LIST.with(|var_list| {
+            if let Some(pos) = var_list.borrow().iter().position(|x| x == name) {
+                VarName(pos)
+            } else {
+                let pos = var_list.borrow().len();
+                var_list.borrow_mut().push(name.into());
+                VarName(pos)
+            }
+        })
+    }
+
+    pub fn name(&self) -> String {
+        VAR_LIST.with(|var_list| var_list.borrow()[self.0].clone())
+    }
+}
 
 impl From<&str> for VarName {
     fn from(s: &str) -> Self {
-        VarName(s.into())
+        VarName::new(s)
     }
 }
 
 impl From<String> for VarName {
     fn from(s: String) -> Self {
-        VarName(s)
+        VarName::new(&s)
     }
 }
 
 impl Display for VarName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.name())
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
-pub struct IndexedVarName(pub String, pub usize);
+impl Debug for VarName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "VarName::new(\"{}\")", self.name())
+    }
+}
+
+impl Serialize for VarName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.name().serialize(serializer)
+    }
+}
+
+impl<'a> Deserialize<'a> for VarName {
+    fn deserialize<D: serde::Deserializer<'a>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(VarName::new(&name))
+    }
+}
+
+impl From<&VarName> for String {
+    fn from(var_name: &VarName) -> String {
+        var_name.0.to_string()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IndexedVarName(usize, usize);
+
+impl IndexedVarName {
+    pub fn new(name: &str, index: usize) -> Self {
+        VAR_LIST.with(|var_list| {
+            if let Some(pos) = var_list.borrow().iter().position(|x| x == name) {
+                IndexedVarName(pos, index)
+            } else {
+                let pos = var_list.borrow().len();
+                var_list.borrow_mut().push(name.into());
+                IndexedVarName(pos, index)
+            }
+        })
+    }
+
+    pub fn name(&self) -> String {
+        VAR_LIST.with(|var_list| var_list.borrow()[self.0].clone())
+    }
+
+    pub fn index(&self) -> usize {
+        self.1
+    }
+}
+
+impl VarName {
+    pub fn to_indexed(&self, i: usize) -> IndexedVarName {
+        IndexedVarName(self.0, i)
+    }
+}
+
+impl Debug for IndexedVarName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "IndexedVarName::new(\"{}\", {})",
+            self.name(),
+            self.index()
+        )
+    }
+}
+
+impl Display for IndexedVarName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}[{}]", self.name(), self.index())
+    }
+}
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
