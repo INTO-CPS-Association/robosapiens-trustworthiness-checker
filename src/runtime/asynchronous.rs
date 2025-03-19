@@ -16,8 +16,6 @@ use futures::future::LocalBoxFuture;
 use futures::future::join_all;
 use smol::LocalExecutor;
 use strum_macros::Display;
-use tokio_util::sync::CancellationToken;
-use tokio_util::sync::DropGuard;
 use tracing::Level;
 use tracing::debug;
 use tracing::info;
@@ -32,7 +30,7 @@ use crate::core::Specification;
 use crate::core::SyncStreamContext;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 use crate::dep_manage::interface::DependencyManager;
-use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
+use crate::stream_utils::oneshot_to_stream;
 
 /// Track the stage of a variable's lifecycle
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
@@ -354,8 +352,6 @@ struct Context<Val: StreamData> {
     clock: usize,
     /// Variable manangers
     var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Val>>>>,
-    /// The cancellation token used to cancel all background tasks
-    cancellation_token: CancellationToken,
 }
 
 impl<Val: StreamData> Context<Val> {
@@ -363,7 +359,6 @@ impl<Val: StreamData> Context<Val> {
         executor: Rc<LocalExecutor<'static>>,
         input_streams: BTreeMap<VarName, OutputStream<Val>>,
         history_length: usize,
-        cancellation_token: CancellationToken,
     ) -> Self {
         let mut vars = Vec::new();
         let clock: usize = 0;
@@ -386,7 +381,6 @@ impl<Val: StreamData> Context<Val> {
             history_length,
             clock,
             var_managers,
-            cancellation_token,
         }
     }
 }
@@ -415,7 +409,6 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
             self.executor.clone(),
             input_streams,
             history_length,
-            self.cancellation_token.clone(),
         ))
     }
 }
@@ -487,9 +480,6 @@ where
     output_handler: Box<dyn OutputHandler<Val = Val>>,
     output_streams: BTreeMap<VarName, OutputStream<Val>>,
     #[allow(dead_code)]
-    // This is used for RAII to cancel background tasks when the async var
-    // exchange is dropped
-    cancellation_guard: Rc<DropGuard>,
     expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
 }
@@ -508,9 +498,6 @@ where
         output: Box<dyn OutputHandler<Val = Val>>,
         _dependencies: DependencyManager,
     ) -> Self {
-        let cancellation_token = CancellationToken::new();
-        let cancellation_guard = Rc::new(cancellation_token.clone().drop_guard());
-
         let input_vars = model.input_vars().clone();
         let output_vars = model.output_vars().clone();
 
@@ -537,7 +524,7 @@ where
         // Combine the input and output streams into a single map
         let streams = input_streams.chain(output_streams.into_iter()).collect();
 
-        let mut context = Context::new(executor.clone(), streams, 0, cancellation_token.clone());
+        let mut context = Context::new(executor.clone(), streams, 0);
 
         // Create a map of the output variables to their streams
         // based on using the context
@@ -547,14 +534,8 @@ where
             .map(|var| {
                 (
                     var.clone(),
-                    // Add a guard to the stream to cancel background
-                    // tasks whenever all the outputs are dropped
-                    drop_guard_stream(
-                        context.var(var).expect(
-                            format!("Failed to find expression for var {}", var.0.as_str())
-                                .as_str(),
-                        ),
-                        cancellation_guard.clone(),
+                    context.var(var).expect(
+                        format!("Failed to find expression for var {}", var.0.as_str()).as_str(),
                     ),
                 )
             })
@@ -583,7 +564,6 @@ where
             model,
             output_streams,
             semantics_t: PhantomData,
-            cancellation_guard,
             expr_t: PhantomData,
             output_handler: output,
         }
