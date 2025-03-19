@@ -52,16 +52,31 @@ enum VarStage {
 /// and creating independent output streams to forward new data to each
 /// subscriber.
 ///
-/// This actor goes through three stages of lifecycle determined by the
-/// `ContextStage` enum:
-/// 1. Gathering: In this stage, the actor waits for all subscribers to request
-///    output streams.
+/// This actor goes through three stages of the hidden internal lifecycle
+/// determined by the `ContextStage` enum:
+/// 1. Gathering: In this initial stage, the actor waits for all subscribers
+///    to request output streams.
 /// 2. Open: In this stage, the actor forwards data from the input stream to all
-///    subscribers but can also still grant new subscriptions.
+///    subscribers but can also still grant new subscriptions. This stage
+///    starts when tick is called manually and ends if run is called.
 /// 3. Closed: In this stage, the actor stops granting new subscriptions but
-///    continues to forward data to all subscribers. Moreover, the actor may
-///    stop running or directly forward the input stream if there is only one
-///    subscriber.
+///    continues to forward data to all subscribers.
+///    run is called.
+/// This lifecycle allows us to optimize how we distribute data based on the
+/// total number of subscribers to a variable in the case where all
+/// subscriptions occur before the first tick. In particular, we can directly
+/// forward the input stream if there is only a single subscriber or stop
+/// distributing data if there are no subscribers.
+///
+/// The actor also maintains a clock which is incremented each time a new value
+/// is distributed to the subscribers.
+///
+/// The data inside the var manager needs to be contained in Rc<RefCell<...>>s
+/// since the async tasks spawned by the actor need may outlive the var manager
+/// itself. The semaphore var_semaphore is used to control access to the
+/// variable, ensure in particular that:
+///  - only one time tick can happen at once
+///  - we can't tick when there are outstanding subscription requests
 struct VarManager<V: StreamData> {
     /// The async executor used to run background tasks
     executor: Rc<LocalExecutor<'static>>,
@@ -193,7 +208,10 @@ impl<V: StreamData> VarManager<V> {
         oneshot_to_stream(output_rx)
     }
 
-    /// Distribute the next value from the input stream to all subscribers
+    /// Distribute the next value from the input stream to all subscribers.
+    /// The future will be completed once all of the data has been
+    /// sent to all subscribers (i.e. placed in their input buffers) but will
+    /// not wait until they have processed it.
     fn tick(&self) -> LocalBoxFuture<'static, bool> {
         // Make owned copies of references to variables owned by the struct
         // so that these are not borrowed when the async block is returned
