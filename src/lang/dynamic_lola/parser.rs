@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(val(&mut (*"42".to_string()).into()), Ok(Value::Int(42)),);
         assert_eq!(
             val(&mut (*"\"abc2d\"".to_string()).into()),
-            Ok(Value::Str("abc2d".to_string())),
+            Ok(Value::Str("abc2d".into())),
         );
         assert_eq!(
             val(&mut (*"true".to_string()).into()),
@@ -507,7 +507,7 @@ mod tests {
         );
         assert_eq!(
             val(&mut (*"\"x+y\"".to_string()).into()),
-            Ok(Value::Str("x+y".to_string())),
+            Ok(Value::Str("x+y".into())),
         );
     }
 
@@ -583,7 +583,7 @@ mod tests {
         );
         assert_eq!(
             sexpr(&mut (*"\"test\"".to_string()).into())?,
-            SExpr::Val(Value::Str("test".to_string())),
+            SExpr::Val(Value::Str("test".into())),
         );
         assert_eq!(
             sexpr(&mut (*"(stage == \"m\")").into())?,
@@ -1031,7 +1031,7 @@ mod tests {
         );
         assert_eq!(
             var_decl(&mut "y = List()"),
-            Ok((VarName("y".into()), SExpr::Val(Value::List(vec![]))))
+            Ok((VarName("y".into()), SExpr::Val(Value::List(vec![].into()))))
         )
     }
 

@@ -202,7 +202,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
     ) -> Result<SExprTE, ()> {
         match self {
             Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
-            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.clone()))),
+            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.into()))),
             Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(*v))),
             Value::List(_) => todo!(),
             Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(()))),
@@ -356,7 +356,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &Value) {
                 (SExprTE::Str(se), Value::Str(def)) => Ok(SExprTE::Str(SExprStr::SIndex(
                     Box::new(se.clone()),
                     idx,
-                    def.clone(),
+                    def.into(),
                 ))),
                 (SExprTE::Bool(se), Value::Bool(def)) => Ok(SExprTE::Bool(SExprBool::SIndex(
                     Box::new(se.clone()),

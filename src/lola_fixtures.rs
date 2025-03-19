@@ -44,7 +44,7 @@ pub fn input_streams2() -> BTreeMap<VarName, OutputStream<Value>> {
     input_streams.insert(
         VarName("s".into()),
         Box::pin(stream::iter(
-            vec![Value::Str("x+y".to_string()), Value::Str("x+y".to_string())].into_iter(),
+            vec![Value::Str("x+y".into()), Value::Str("x+y".into())].into_iter(),
         )) as OutputStream<Value>,
     );
     input_streams
@@ -71,13 +71,13 @@ pub fn input_streams4() -> BTreeMap<VarName, OutputStream<Value>> {
     input_streams.insert(
         VarName("x".into()),
         Box::pin(stream::iter(
-            vec![Value::Str("a".to_string()), Value::Str("c".to_string())].into_iter(),
+            vec![Value::Str("a".into()), Value::Str("c".into())].into_iter(),
         )) as OutputStream<Value>,
     );
     input_streams.insert(
         VarName("y".into()),
         Box::pin(stream::iter(
-            vec![Value::Str("b".to_string()), Value::Str("d".to_string())].into_iter(),
+            vec![Value::Str("b".into()), Value::Str("d".into())].into_iter(),
         )),
     );
     input_streams

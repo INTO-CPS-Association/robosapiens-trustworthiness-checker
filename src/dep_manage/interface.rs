@@ -29,7 +29,7 @@ pub fn create_dependency_manager(
 }
 
 // Interface for resolving dependencies.
-pub trait DependencyResolver: Send + Sync {
+pub trait DependencyResolver {
     // Generates the dependency structure from the given expressions
     fn new(spec: impl Specification<Expr = SExpr<VarName>>) -> Self;
 

@@ -479,7 +479,6 @@ where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,
     M: Specification<Expr = Expr>,
-    Expr: Sync + Send,
 {
     #[allow(dead_code)]
     executor: Rc<LocalExecutor<'static>>,
@@ -495,7 +494,7 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr: Sync + Send, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M>
+impl<Expr, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val>,

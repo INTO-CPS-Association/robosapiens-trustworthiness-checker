@@ -141,14 +141,12 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
             BoolBinOp::Or => Bool(b1 || b2),
             BoolBinOp::And => Bool(b1 && b2),
         },
-        (Str(s1), Str(s2), SOp(sop)) => {
-            match sop {
-                StrBinOp::Concat => {
-                    // TODO: Probably more efficient way to concat than to create a new string
-                    Str(format!("{}{}", s1, s2))
-                }
+        (Str(mut s1), Str(s2), SOp(sop)) => match sop {
+            StrBinOp::Concat => {
+                s1.push_str(&s2);
+                Str(s1)
             }
-        }
+        },
         (Str(s1), Str(s2), COp(sop)) => match sop {
             CompBinOp::Eq => Bool(s1 == s2),
             CompBinOp::Le => Bool(s1 <= s2),
@@ -473,9 +471,8 @@ impl Simplifiable for SExpr<VarName> {
                         }
                     },
                 };
-                let defer_parse = &mut defer_s.as_str();
                 let new_expr = lola_expression
-                    .parse_next(defer_parse)
+                    .parse_next(&mut defer_s.as_ref())
                     .expect("Parsing the defer string resulted in an invalid expression.");
                 let res = new_expr.simplify(base_time, store, var, deps);
                 match &res {

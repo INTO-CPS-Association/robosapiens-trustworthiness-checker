@@ -5,6 +5,8 @@ use std::{
 };
 
 use async_trait::async_trait;
+use ecow::EcoString;
+use ecow::EcoVec;
 use futures::future::LocalBoxFuture;
 use serde::{Deserialize, Serialize};
 use smol::LocalExecutor;
@@ -13,12 +15,17 @@ use crate::dep_manage::interface::DependencyManager;
 
 // use serde_json::{Deserializer, Sserializer};
 
+// Anything inside a stream should be clonable in O(1) time in order for the
+// runtimes to be efficiently implemented. This is why we use EcoString and
+// EcoVec instead of String and Vec. These types are essentially references
+// which allow mutation in place if there is only one reference to the data or
+// copy-on-write if there is more than one reference.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Value {
     Int(i64),
-    Str(String),
+    Str(EcoString),
     Bool(bool),
-    List(Vec<Value>),
+    List(EcoVec<Value>),
     Unknown,
     Unit,
 }
@@ -39,7 +46,7 @@ impl TryFrom<Value> for String {
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Str(i) => Ok(i),
+            Value::Str(i) => Ok(i.to_string()),
             _ => Err(()),
         }
     }
@@ -71,12 +78,12 @@ impl From<i64> for Value {
 }
 impl From<String> for Value {
     fn from(value: String) -> Self {
-        Value::Str(value)
+        Value::Str(value.into())
     }
 }
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
-        Value::Str(value.to_string())
+        Value::Str(value.into())
     }
 }
 impl From<bool> for Value {
@@ -114,7 +121,7 @@ impl Display for Value {
  * streams, or time-stamped values for timed streams. This traits allows
  * for the implementation of runtimes to be agnostic of the types of stream
  * values used. */
-pub trait StreamData: Clone + Send + Sync + Debug + 'static {}
+pub trait StreamData: Clone + Debug + 'static {}
 
 // Trait defining the allowed types for expression values
 impl StreamData for i64 {}
@@ -211,7 +218,7 @@ pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + 'static {
     fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
 }
 
-pub trait Specification: Sync + Send {
+pub trait Specification {
     type Expr;
 
     fn input_vars(&self) -> Vec<VarName>;
@@ -238,7 +245,6 @@ pub trait OutputHandler {
     // Essentially this is of type
     // async fn run(&mut self);
     fn run(&mut self) -> LocalBoxFuture<'static, ()>;
-    //  -> Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
 }
 
 /*

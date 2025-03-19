@@ -31,7 +31,7 @@ pub fn oneshot_to_stream<T: 'static>(
  * token is not dropped before the stream has completed or been dropped.
  * This is used for automatic cleanup of background tasks when all consumers
  * of an output stream have gone away. */
-pub fn drop_guard_stream<T: 'static + Send>(
+pub fn drop_guard_stream<T: 'static>(
     stream: LocalBoxStream<'static, T>,
     drop_guard: Rc<DropGuard>,
 ) -> LocalBoxStream<'static, T> {

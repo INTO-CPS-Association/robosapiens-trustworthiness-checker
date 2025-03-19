@@ -1,3 +1,4 @@
+use ecow::EcoVec;
 use winnow::{
     Result,
     ascii::{line_ending, multispace1},
@@ -17,12 +18,13 @@ pub fn presult_to_string<T: Debug>(e: &Result<T>) -> String {
 }
 
 // Used for Lists in input streams (can only be Values)
-pub fn value_list(s: &mut &str) -> Result<Vec<Value>> {
+pub fn value_list(s: &mut &str) -> Result<EcoVec<Value>> {
     delimited(
         seq!("List", whitespace, '('),
         separated(0.., val, seq!(whitespace, ',', whitespace)),
         ')',
     )
+    .map(|v: Vec<_>| EcoVec::from(v))
     .parse_next(s)
 }
 

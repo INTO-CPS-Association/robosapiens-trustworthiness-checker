@@ -199,7 +199,7 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
         |x, y| match (x, y) {
             (Value::Str(x), Value::Str(y)) => {
                 // ConcreteStreamData::Str(format!("{x}{y}").into());
-                Value::Str(format!("{x}{y}"))
+                Value::Str(format!("{x}{y}").into())
             }
             _ => panic!("Invalid concatenation"),
         },
@@ -253,7 +253,7 @@ pub fn eval(
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
-                    let expr = lola_expression.parse_next(&mut s.as_str())
+                    let expr = lola_expression.parse_next(&mut s.as_ref())
                         .expect("Invalid eval str");
                     let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast());
                     // Advance the subcontext to make a new set of input values
@@ -306,11 +306,10 @@ pub fn defer(
             match current {
                 Value::Str(defer_s) => {
                     // We have a string to evaluate so do so
-                    let defer_parse = &mut defer_s.as_str();
-                    let expr = lola_expression.parse_next(defer_parse)
+                    let expr = lola_expression.parse_next(&mut defer_s.as_ref())
                         .expect("Invalid eval str");
                     eval_output_stream = Some(UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()));
-                    debug!(defer_s, "Evaluated defer string");
+                    debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
                     subcontext.start_auto_clock().await;
                     break;
                 }
@@ -473,7 +472,7 @@ pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
             match l {
                 Value::List(l) => {
                     if let Some(val) = l.get(1..) {
-                        yield Value::List(val.to_vec());
+                        yield Value::List(val.into());
                     } else {
                         panic!("List is empty");
                     }
@@ -873,8 +872,8 @@ mod tests {
         ];
         let res: Vec<Value> = list(x).collect().await;
         let exp: Vec<Value> = vec![
-            Value::List(vec![1.into(), 3.into()]),
-            Value::List(vec![2.into(), 4.into()]),
+            Value::List(vec![1.into(), 3.into()].into()),
+            Value::List(vec![2.into(), 4.into()].into()),
         ];
         assert_eq!(res, exp);
     }
@@ -893,8 +892,8 @@ mod tests {
         ];
         let res: Vec<Value> = list(x).collect().await;
         let exp: Vec<Value> = vec![
-            Value::List(vec![4.into(), "Hello World".into()]),
-            Value::List(vec![6.into(), "Goddag Verden".into()]),
+            Value::List(vec![4.into(), "Hello World".into()].into()),
+            Value::List(vec![6.into(), "Goddag Verden".into()].into()),
         ];
         assert_eq!(res, exp);
     }
@@ -964,8 +963,8 @@ mod tests {
         let y: OutputStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
         let res: Vec<Value> = lappend(list(x), y).collect().await;
         let exp: Vec<Value> = vec![
-            Value::List(vec![1.into(), 3.into(), 5.into()]),
-            Value::List(vec![2.into(), 4.into(), 6.into()]),
+            Value::List(vec![1.into(), 3.into(), 5.into()].into()),
+            Value::List(vec![2.into(), 4.into(), 6.into()].into()),
         ];
         assert_eq!(res, exp);
     }
@@ -982,8 +981,8 @@ mod tests {
         ];
         let res: Vec<Value> = lconcat(list(x), list(y)).collect().await;
         let exp: Vec<Value> = vec![
-            Value::List(vec![1.into(), 3.into(), 5.into(), 7.into()]),
-            Value::List(vec![2.into(), 4.into(), 6.into(), 8.into()]),
+            Value::List(vec![1.into(), 3.into(), 5.into(), 7.into()].into()),
+            Value::List(vec![2.into(), 4.into(), 6.into(), 8.into()].into()),
         ];
         assert_eq!(res, exp);
     }
@@ -1008,8 +1007,8 @@ mod tests {
         ];
         let res: Vec<Value> = ltail(list(x)).collect().await;
         let exp: Vec<Value> = vec![
-            Value::List(vec![3.into(), 5.into()]),
-            Value::List(vec![4.into(), 6.into()]),
+            Value::List(vec![3.into(), 5.into()].into()),
+            Value::List(vec![4.into(), 6.into()].into()),
         ];
         assert_eq!(res, exp);
     }
@@ -1018,7 +1017,7 @@ mod tests {
     async fn test_list_tail_one_el() {
         let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![1.into(), 2.into()]))];
         let res: Vec<Value> = ltail(list(x)).collect().await;
-        let exp: Vec<Value> = vec![Value::List(vec![]), Value::List(vec![])];
+        let exp: Vec<Value> = vec![Value::List(vec![].into()), Value::List(vec![].into())];
         assert_eq!(res, exp);
     }
 }

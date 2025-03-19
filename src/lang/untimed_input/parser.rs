@@ -129,7 +129,7 @@ mod tests {
         // Difference between value assignment and sexpr assignment
         assert_eq!(
             value_assignment(&mut "y = List()"),
-            Ok((VarName("y".into()), Value::List(vec![])))
+            Ok((VarName("y".into()), Value::List(vec![].into())))
         );
     }
 }

@@ -46,6 +46,7 @@ smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.0"
 async-compat = "0.2.4"
 jemallocator = "0.5.4"
+ecow = {version="0.2.3", features=["serde"]}
 
 [profile.release]
 lto = "fat"
