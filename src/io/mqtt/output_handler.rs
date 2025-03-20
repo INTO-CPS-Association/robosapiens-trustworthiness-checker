@@ -32,6 +32,7 @@ pub type OutputChannelMap = BTreeMap<VarName, String>;
 pub struct MQTTOutputHandler {
     #[allow(dead_code)]
     executor: Rc<LocalExecutor<'static>>,
+    var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     // node: Arc<Mutex<r2r::Node>>,
     hostname: String,
@@ -68,9 +69,13 @@ async fn publish_stream(
 impl OutputHandler for MQTTOutputHandler {
     type Val = Value;
 
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
-        for (var, stream) in streams.into_iter() {
-            let var_data = self.var_map.get_mut(&var).expect("Variable not found");
+    fn var_names(&self) -> Vec<VarName> {
+        self.var_names.clone()
+    }
+
+    fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
+        for (var, stream) in self.var_names().iter().zip(streams.into_iter()) {
+            let var_data = self.var_map.get_mut(var).expect("Variable not found");
             var_data.stream = Some(stream);
         }
     }
@@ -117,6 +122,7 @@ impl MQTTOutputHandler {
     #[instrument(level = Level::INFO)]
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
+        var_names: Vec<VarName>,
         host: &str,
         var_topics: OutputChannelMap,
     ) -> Result<Self, mqtt::Error> {
@@ -138,6 +144,7 @@ impl MQTTOutputHandler {
 
         Ok(MQTTOutputHandler {
             executor,
+            var_names,
             var_map,
             hostname,
         })

@@ -349,7 +349,7 @@ impl<Val: StreamData, Expr: Send, S: MonitoringSemantics<Expr, Val>, M: Specific
             .model
             .output_vars()
             .into_iter()
-            .map(|var| (var.clone(), self.output_stream(var)))
+            .map(|var| self.output_stream(var))
             .collect();
         self.output_handler.provide_streams(output_streams);
         self.output_handler.run().await;

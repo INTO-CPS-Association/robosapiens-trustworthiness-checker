@@ -187,12 +187,14 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
 
     let mut output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
+        vec!["w".into()],
         mqtt_host.as_str(),
         var_out_topics_1.into_iter().collect(),
     )
     .expect("Failed to create output handler 1");
     let mut output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
+        vec!["v".into()],
         mqtt_host.as_str(),
         var_out_topics_2.into_iter().collect(),
     )
@@ -313,9 +315,13 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_1 =
-        MQTTOutputHandler::new(executor.clone(), mqtt_host.as_str(), var_out_topics_1)
-            .expect("Failed to create output handler 1");
+    let mut output_handler_1 = MQTTOutputHandler::new(
+        executor.clone(),
+        vec!["w".into()],
+        mqtt_host.as_str(),
+        var_out_topics_1,
+    )
+    .expect("Failed to create output handler 1");
     let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
         .output_vars()
         .iter()
@@ -323,6 +329,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .collect();
     let mut output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
+        vec!["v".into()],
         mqtt_host.as_str(),
         var_out_topics_2.into_iter().collect(),
     )
@@ -418,7 +425,7 @@ async fn localisation_distribution_graphs_test(
         local_spec1
             .input_vars()
             .iter()
-            .map(|v| (v.clone(), format!("{}", v)))
+            .map(|v| (v.clone(), v.into()))
             .collect(),
     )
     .expect("Failed to create input provider 1");
@@ -432,7 +439,7 @@ async fn localisation_distribution_graphs_test(
         local_spec2
             .input_vars()
             .iter()
-            .map(|v| (v.clone(), format!("{}", v)))
+            .map(|v| (v.clone(), v.into()))
             .collect(),
     )
     .expect("Failed to create input provider 2");
@@ -446,9 +453,13 @@ async fn localisation_distribution_graphs_test(
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_1 =
-        MQTTOutputHandler::new(executor.clone(), mqtt_host.as_str(), var_out_topics_1)
-            .expect("Failed to create output handler 1");
+    let mut output_handler_1 = MQTTOutputHandler::new(
+        executor.clone(),
+        vec!["w".into()],
+        mqtt_host.as_str(),
+        var_out_topics_1,
+    )
+    .expect("Failed to create output handler 1");
     let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
         .output_vars()
         .iter()
@@ -456,6 +467,7 @@ async fn localisation_distribution_graphs_test(
         .collect();
     let mut output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
+        vec!["v".into()],
         mqtt_host.as_str(),
         var_out_topics_2.into_iter().collect(),
     )

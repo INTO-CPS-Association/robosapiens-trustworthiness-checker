@@ -17,6 +17,7 @@ use crate::runtime::constraints::solver::model_constraints;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
+use futures::future::join_all;
 use futures::stream::LocalBoxStream;
 use smol::LocalExecutor;
 use std::collections::BTreeMap;
@@ -163,23 +164,19 @@ impl ConstraintBasedRuntime {
 }
 
 #[derive(Default)]
-pub struct ValStreamCollection(pub BTreeMap<VarName, OutputStream<Value>>);
+pub struct ValStreamCollection(pub Vec<OutputStream<Value>>);
 
 impl ValStreamCollection {
-    fn into_stream(mut self) -> LocalBoxStream<'static, BTreeMap<VarName, Value>> {
+    fn into_stream(mut self) -> LocalBoxStream<'static, Vec<Value>> {
         Box::pin(stream!(loop {
-            let mut res = BTreeMap::new();
-            for (name, stream) in self.0.iter_mut() {
-                match stream.next().await {
-                    Some(val) => {
-                        res.insert(name.clone(), val);
-                    }
-                    None => {
-                        return;
-                    }
+            let mut res = Vec::with_capacity(self.0.len());
+            for fut_res in join_all(self.0.iter_mut().map(|stream| stream.next())).await {
+                match fut_res {
+                    Some(val) => res.push(val),
+                    None => return,
                 }
             }
-            yield res;
+            yield res
         }))
     }
 }
@@ -210,9 +207,9 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
             .iter()
             .map(move |var| {
                 let stream = input.input_stream(var);
-                (var.clone(), stream.unwrap())
+                stream.unwrap()
             })
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Vec<_>>();
         let has_inputs = !input_streams.is_empty();
         let stream_collection = ValStreamCollection(input_streams);
 
@@ -238,40 +235,44 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 }
 
 impl ConstraintBasedMonitor {
-    fn output_streams(&mut self) -> BTreeMap<VarName, LocalBoxStream<'static, Value>> {
+    fn output_streams(&mut self) -> Vec<LocalBoxStream<'static, Value>> {
         // Create senders and streams for each output variable
         let (output_senders, output_streams) =
             var_senders_and_streams(self.model.output_vars().into_iter());
         // Keep track of the index of the next variable to be sent for each
         // variable (initialize with 0)
-        let mut var_indexes = self
-            .model
-            .output_vars()
-            .into_iter()
-            .zip(std::iter::repeat(0))
-            .collect::<BTreeMap<_, _>>();
+        let mut var_indexes = std::iter::repeat(0)
+            .take(output_senders.len())
+            .collect::<Vec<_>>();
         // Either get the input stream or create an infinite stream of empty
         // input maps if there isn't any
         let mut input_stream = if self.has_inputs {
             mem::take(&mut self.stream_collection).into_stream()
         } else {
-            Box::pin(futures::stream::repeat(BTreeMap::new()))
+            Box::pin(futures::stream::repeat(Vec::new()))
         };
 
         // Set up the initial constraint store based on the model
         let mut runtime_initial = ConstraintBasedRuntime::new(self.dependencies.clone());
         runtime_initial.store = model_constraints(self.model.clone());
         let has_inputs = self.has_inputs;
+        let output_vars = self.model.output_vars().clone();
+        let input_vars = self.model.input_vars().clone();
 
         self.executor
             .spawn(async move {
                 let mut runtime = runtime_initial;
+                let input_vars = input_vars.clone();
+                let output_vars = output_vars.clone();
                 while let Some(inputs) = input_stream.next().await {
                     // Let the runtime take one step
-                    runtime.step(inputs.iter());
+                    runtime.step(input_vars.iter().zip(inputs.iter()));
                     // Send the resolved values for each output variable
-                    for (var, sender) in &output_senders {
-                        let idx = var_indexes.get_mut(var).unwrap();
+                    for ((var, sender), idx) in output_vars
+                        .iter()
+                        .zip(output_senders.iter())
+                        .zip(var_indexes.iter_mut())
+                    {
                         if let Some(val) = runtime.store.get_from_outputs_resolved(var, idx) {
                             let _ = sender.send(val.clone()).await;
                             *idx += 1;
@@ -299,22 +300,19 @@ impl ConstraintBasedMonitor {
 /// stream for the corresponding variable.
 fn var_senders_and_streams(
     vars: impl Iterator<Item = VarName>,
-) -> (
-    BTreeMap<VarName, bounded::Sender<Value>>,
-    BTreeMap<VarName, OutputStream<Value>>,
-) {
+) -> (Vec<bounded::Sender<Value>>, Vec<OutputStream<Value>>) {
     let (output_senders, output_streams): (Vec<_>, Vec<_>) = vars
-        .map(|var| {
+        .map(|_| {
             let (sender, mut receiver) = bounded::channel(100).into_split();
             let stream: OutputStream<Value> = Box::pin(stream! {
                 while let Some(val) = receiver.recv().await {
                     yield val;
                 }
             });
-            ((var.clone(), sender), (var.clone(), stream))
+            (sender, stream)
         })
         .unzip();
-    let output_senders = output_senders.into_iter().collect::<BTreeMap<_, _>>();
-    let output_streams = output_streams.into_iter().collect::<BTreeMap<_, _>>();
+    let output_senders = output_senders.into_iter().collect::<Vec<_>>();
+    let output_streams = output_streams.into_iter().collect::<Vec<_>>();
     (output_senders, output_streams)
 }

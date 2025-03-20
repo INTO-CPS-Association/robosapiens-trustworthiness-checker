@@ -341,7 +341,7 @@ struct Context<Val: StreamData> {
     /// The executor which is used to run background tasks
     executor: Rc<LocalExecutor<'static>>,
     /// The variables which are available in the context
-    vars: Vec<VarName>,
+    var_names: Vec<VarName>,
     /// The amount of history stored for retrospective monitoring
     /// of each variable (0 means no history)
     #[allow(dead_code)]
@@ -355,16 +355,15 @@ struct Context<Val: StreamData> {
 impl<Val: StreamData> Context<Val> {
     fn new(
         executor: Rc<LocalExecutor<'static>>,
-        input_streams: BTreeMap<VarName, OutputStream<Val>>,
+        var_names: Vec<VarName>,
+        input_streams: Vec<OutputStream<Val>>,
         history_length: usize,
     ) -> Self {
-        let mut vars = Vec::new();
         let clock: usize = 0;
         // TODO: push the mutability to the API of contexts
         let var_managers = Rc::new(RefCell::new(BTreeMap::new()));
 
-        for (var, input_stream) in input_streams.into_iter() {
-            vars.push(var.clone());
+        for (var, input_stream) in var_names.iter().zip(input_streams.into_iter()) {
             let input_stream =
                 store_history(executor.clone(), var.clone(), history_length, input_stream);
             var_managers.borrow_mut().insert(
@@ -375,7 +374,7 @@ impl<Val: StreamData> Context<Val> {
 
         Context {
             executor,
-            vars,
+            var_names,
             history_length,
             clock,
             var_managers,
@@ -397,14 +396,15 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
 
     fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
         let input_streams = self
-            .vars
+            .var_names
             .iter()
-            .map(|var| (var.clone(), self.var(var).unwrap()))
+            .map(|var| self.var(var).unwrap())
             .collect();
 
         // Recursively create a new context based on ourself
         Box::new(Context::new(
             self.executor.clone(),
+            self.var_names.clone(),
             input_streams,
             history_length,
         ))
@@ -476,7 +476,7 @@ where
     executor: Rc<LocalExecutor<'static>>,
     model: M,
     output_handler: Box<dyn OutputHandler<Val = Val>>,
-    output_streams: BTreeMap<VarName, OutputStream<Val>>,
+    output_streams: Vec<OutputStream<Val>>,
     #[allow(dead_code)]
     expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
@@ -498,10 +498,15 @@ where
     ) -> Self {
         let input_vars = model.input_vars().clone();
         let output_vars = model.output_vars().clone();
+        let var_names = input_vars
+            .iter()
+            .chain(output_vars.iter())
+            .cloned()
+            .collect();
 
         let input_streams = input_vars.iter().map(|var| {
             let stream = input_streams.input_stream(var).unwrap();
-            (var.clone(), stream)
+            stream
         });
 
         // Create deferred streams based on each of the output variables
@@ -517,12 +522,11 @@ where
             .zip(output_txs.into_iter())
             .collect();
         let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
-        let output_streams = output_vars.iter().cloned().zip(output_streams.into_iter());
 
         // Combine the input and output streams into a single map
         let streams = input_streams.chain(output_streams.into_iter()).collect();
 
-        let mut context = Context::new(executor.clone(), streams, 0);
+        let mut context = Context::new(executor.clone(), var_names, streams, 0);
 
         // Create a map of the output variables to their streams
         // based on using the context
@@ -530,12 +534,8 @@ where
             .output_vars()
             .iter()
             .map(|var| {
-                (
-                    var.clone(),
-                    context.var(var).expect(
-                        format!("Failed to find expression for var {}", var.name().as_str())
-                            .as_str(),
-                    ),
+                context.var(var).expect(
+                    format!("Failed to find expression for var {}", var.name().as_str()).as_str(),
                 )
             })
             .collect();

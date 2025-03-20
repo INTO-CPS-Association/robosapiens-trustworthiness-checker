@@ -32,13 +32,10 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
-        vec![
-            (0, BTreeMap::from([("z".into(), Value::Int(3))]),),
-            (1, BTreeMap::from([("z".into(), Value::Int(7))]),),
-        ]
+        vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)]),]
     );
 }
 
@@ -56,7 +53,7 @@ async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 100);
 }
 
@@ -74,15 +71,14 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        outputs.take(4).enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([("x".into(), Value::Int(1))]),),
-            (1, BTreeMap::from([("x".into(), Value::Int(2))]),),
-            (2, BTreeMap::from([("x".into(), Value::Int(3))]),),
-            (3, BTreeMap::from([("x".into(), Value::Int(4))]),),
+            (0, vec![Value::Int(1)]),
+            (1, vec![Value::Int(2)]),
+            (2, vec![Value::Int(3)]),
+            (3, vec![Value::Int(4)]),
         ]
     );
 }
@@ -101,18 +97,12 @@ async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
-            (
-                0,
-                BTreeMap::from([("z".into(), Value::Int(3)), ("w".into(), Value::Int(3))]),
-            ),
-            (
-                1,
-                BTreeMap::from([("z".into(), Value::Int(7)), ("w".into(), Value::Int(7))]),
-            ),
+            (0, vec![Value::Int(3), Value::Int(3)]),
+            (1, vec![Value::Int(7), Value::Int(7)]),
         ]
     );
 }
@@ -132,19 +122,13 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 2);
     assert_eq!(
         outputs,
         vec![
-            (
-                0,
-                BTreeMap::from([("r1".into(), Value::Int(3)), ("r2".into(), Value::Int(2)),]),
-            ),
-            (
-                1,
-                BTreeMap::from([("r1".into(), Value::Int(7)), ("r2".into(), Value::Int(12)),]),
-            ),
+            (0, vec![Value::Int(3), Value::Int(2)]),
+            (1, vec![Value::Int(7), Value::Int(12)]),
         ]
     );
 }
@@ -163,24 +147,24 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 15);
     let expected_outputs = vec![
-        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (1, BTreeMap::from([("z".into(), Value::Int(2))])),
-        (2, BTreeMap::from([("z".into(), Value::Int(3))])),
-        (3, BTreeMap::from([("z".into(), Value::Int(4))])),
-        (4, BTreeMap::from([("z".into(), Value::Int(5))])),
-        (5, BTreeMap::from([("z".into(), Value::Int(6))])),
-        (6, BTreeMap::from([("z".into(), Value::Int(7))])),
-        (7, BTreeMap::from([("z".into(), Value::Int(8))])),
-        (8, BTreeMap::from([("z".into(), Value::Int(9))])),
-        (9, BTreeMap::from([("z".into(), Value::Int(10))])),
-        (10, BTreeMap::from([("z".into(), Value::Int(11))])),
-        (11, BTreeMap::from([("z".into(), Value::Int(12))])),
-        (12, BTreeMap::from([("z".into(), Value::Int(13))])),
-        (13, BTreeMap::from([("z".into(), Value::Int(14))])),
-        (14, BTreeMap::from([("z".into(), Value::Int(15))])),
+        (0, vec![Value::Unknown]),
+        (1, vec![Value::Int(2)]),
+        (2, vec![Value::Int(3)]),
+        (3, vec![Value::Int(4)]),
+        (4, vec![Value::Int(5)]),
+        (5, vec![Value::Int(6)]),
+        (6, vec![Value::Int(7)]),
+        (7, vec![Value::Int(8)]),
+        (8, vec![Value::Int(9)]),
+        (9, vec![Value::Int(10)]),
+        (10, vec![Value::Int(11)]),
+        (11, vec![Value::Int(12)]),
+        (12, vec![Value::Int(13)]),
+        (13, vec![Value::Int(14)]),
+        (14, vec![Value::Int(15)]),
     ];
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
@@ -201,23 +185,23 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     let expected_outputs = vec![
-        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (1, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (2, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (3, BTreeMap::from([("z".into(), Value::Int(4))])),
-        (4, BTreeMap::from([("z".into(), Value::Int(5))])),
-        (5, BTreeMap::from([("z".into(), Value::Int(6))])),
-        (6, BTreeMap::from([("z".into(), Value::Int(7))])),
-        (7, BTreeMap::from([("z".into(), Value::Int(8))])),
-        (8, BTreeMap::from([("z".into(), Value::Int(9))])),
-        (9, BTreeMap::from([("z".into(), Value::Int(10))])),
-        (10, BTreeMap::from([("z".into(), Value::Int(11))])),
-        (11, BTreeMap::from([("z".into(), Value::Int(12))])),
-        (12, BTreeMap::from([("z".into(), Value::Int(13))])),
-        (13, BTreeMap::from([("z".into(), Value::Int(14))])),
-        (14, BTreeMap::from([("z".into(), Value::Int(15))])),
+        (0, vec![Value::Unknown]),
+        (1, vec![Value::Unknown]),
+        (2, vec![Value::Unknown]),
+        (3, vec![Value::Int(4)]),
+        (4, vec![Value::Int(5)]),
+        (5, vec![Value::Int(6)]),
+        (6, vec![Value::Int(7)]),
+        (7, vec![Value::Int(8)]),
+        (8, vec![Value::Int(9)]),
+        (9, vec![Value::Int(10)]),
+        (10, vec![Value::Int(11)]),
+        (11, vec![Value::Int(12)]),
+        (12, vec![Value::Int(13)]),
+        (13, vec![Value::Int(14)]),
+        (14, vec![Value::Int(15)]),
     ];
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
@@ -238,23 +222,23 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     let expected_outputs = vec![
-        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (1, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (2, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (3, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (4, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (5, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (6, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (7, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (8, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (9, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (10, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (11, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (12, BTreeMap::from([("z".into(), Value::Int(13))])),
-        (13, BTreeMap::from([("z".into(), Value::Int(14))])),
-        (14, BTreeMap::from([("z".into(), Value::Int(15))])),
+        (0, vec![Value::Unknown]),
+        (1, vec![Value::Unknown]),
+        (2, vec![Value::Unknown]),
+        (3, vec![Value::Unknown]),
+        (4, vec![Value::Unknown]),
+        (5, vec![Value::Unknown]),
+        (6, vec![Value::Unknown]),
+        (7, vec![Value::Unknown]),
+        (8, vec![Value::Unknown]),
+        (9, vec![Value::Unknown]),
+        (10, vec![Value::Unknown]),
+        (11, vec![Value::Unknown]),
+        (12, vec![Value::Int(13)]),
+        (13, vec![Value::Int(14)]),
+        (14, vec![Value::Int(15)]),
     ];
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
@@ -275,7 +259,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     // Notice one output "too many". This is expected behaviour (at least with a global default
     // history_length = 10 for defer) since once e = x[-1, 0] has arrived
     // the stream for z = defer(e) will continue as long as x[-1, 0] keeps
@@ -286,12 +270,12 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
     //
     // See also: Comment on sindex combinator.
     let expected_outputs = vec![
-        (0, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (1, BTreeMap::from([("z".into(), Value::Unknown)])),
-        (2, BTreeMap::from([("z".into(), Value::Int(1))])),
-        (3, BTreeMap::from([("z".into(), Value::Int(2))])),
-        (4, BTreeMap::from([("z".into(), Value::Int(3))])),
-        (5, BTreeMap::from([("z".into(), Value::Int(4))])),
+        (0, vec![Value::Unknown]),
+        (1, vec![Value::Unknown]),
+        (2, vec![Value::Int(1)]),
+        (3, vec![Value::Int(2)]),
+        (4, vec![Value::Int(3)]),
+        (5, vec![Value::Int(4)]),
     ];
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
@@ -312,36 +296,15 @@ async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 6);
     let expected_outputs = vec![
-        (
-            0,
-            BTreeMap::from([("z".into(), Value::Int(1)), ("a".into(), Value::Int(0))]),
-        ),
-        (
-            1,
-            BTreeMap::from([("z".into(), Value::Int(2)), ("a".into(), Value::Int(1))]),
-        ),
-        (
-            2,
-            BTreeMap::from([("z".into(), Value::Int(3)), ("a".into(), Value::Int(2))]),
-        ),
-        (
-            3,
-            BTreeMap::from([("z".into(), Value::Int(4)), ("a".into(), Value::Int(3))]),
-        ),
-        (
-            4,
-            BTreeMap::from([("z".into(), Value::Int(5)), ("a".into(), Value::Int(4))]),
-        ),
-        (
-            5,
-            BTreeMap::from([
-                ("z".into(), Value::Int(0)), // The default value
-                ("a".into(), Value::Int(5)),
-            ]),
-        ),
+        (0, vec![Value::Int(1), Value::Int(0)]),
+        (1, vec![Value::Int(2), Value::Int(1)]),
+        (2, vec![Value::Int(3), Value::Int(2)]),
+        (3, vec![Value::Int(4), Value::Int(3)]),
+        (4, vec![Value::Int(5), Value::Int(4)]),
+        (5, vec![Value::Int(0), Value::Int(5)]), // The default value for z is 0
     ];
     assert_eq!(outputs, expected_outputs);
 }
@@ -360,16 +323,16 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 7); // NOTE: 1 "too" many. See comment sindex combinator
     let expected_outputs = vec![
-        (0, BTreeMap::from([("z".into(), Value::Int(42))])),
-        (1, BTreeMap::from([("z".into(), Value::Int(0))])),
-        (2, BTreeMap::from([("z".into(), Value::Int(1))])),
-        (3, BTreeMap::from([("z".into(), Value::Int(2))])),
-        (4, BTreeMap::from([("z".into(), Value::Int(3))])),
-        (5, BTreeMap::from([("z".into(), Value::Int(4))])),
-        (6, BTreeMap::from([("z".into(), Value::Int(5))])),
+        (0, vec![Value::Int(42)]),
+        (1, vec![Value::Int(0)]),
+        (2, vec![Value::Int(1)]),
+        (3, vec![Value::Int(2)]),
+        (4, vec![Value::Int(3)]),
+        (5, vec![Value::Int(4)]),
+        (6, vec![Value::Int(5)]),
     ];
     assert_eq!(outputs, expected_outputs);
 }

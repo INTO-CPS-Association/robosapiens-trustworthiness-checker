@@ -45,7 +45,7 @@ pub async fn parse_file<O: Clone + Debug>(
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::{InputProvider, Value};
 
     use super::*;

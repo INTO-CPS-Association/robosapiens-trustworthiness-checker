@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::rc::Rc;
 
 use async_trait::async_trait;
 use futures::{StreamExt, future::LocalBoxFuture};
@@ -31,7 +31,11 @@ impl<V: StreamData> NullOutputHandler<V> {
 impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
     type Val = V;
 
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
+    fn var_names(&self) -> Vec<VarName> {
+        self.manual_output_handler.var_names()
+    }
+
+    fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
         self.manual_output_handler.provide_streams(streams);
     }
 
@@ -67,10 +71,7 @@ mod tests {
         let mut handler: NullOutputHandler<Value> =
             NullOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()]);
 
-        handler.provide_streams(BTreeMap::from([
-            ("x".into(), x_stream),
-            ("y".into(), y_stream),
-        ]));
+        handler.provide_streams(vec![x_stream, y_stream]);
 
         let task = executor.spawn(handler.run());
 

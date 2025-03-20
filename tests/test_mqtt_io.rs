@@ -170,7 +170,13 @@ mod tests {
         // sleep(Duration::from_secs(2)).await;
 
         let mut output_handler = Box::new(
-            MQTTOutputHandler::new(executor.clone(), mqtt_host.as_str(), mqtt_topics).unwrap(),
+            MQTTOutputHandler::new(
+                executor.clone(),
+                vec!["z".into()],
+                mqtt_host.as_str(),
+                mqtt_topics,
+            )
+            .unwrap(),
         );
         let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
             executor.clone(),
@@ -261,10 +267,7 @@ mod tests {
         info!("Waiting for {:?} outputs", zs.len());
         let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;
         info!("Outputs: {:?}", outputs);
-        let expected_outputs = zs
-            .into_iter()
-            .map(|val| vec![("z".into(), val)].into_iter().collect())
-            .collect::<Vec<_>>();
+        let expected_outputs = zs.into_iter().map(|val| vec![val]).collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
     }
 

@@ -40,13 +40,10 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
-        vec![
-            (0, BTreeMap::from([("z".into(), Value::Int(3))]),),
-            (1, BTreeMap::from([("z".into(), Value::Int(7))]),),
-        ]
+        vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)]),]
     );
 }
 
@@ -65,12 +62,12 @@ async fn test_concat_monitor(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([("z".into(), Value::Str("ab".into()))]),),
-            (1, BTreeMap::from([("z".into(), Value::Str("cd".into()))]),),
+            (0, vec![Value::Str("ab".into())]),
+            (1, vec![Value::Str("cd".into())]),
         ]
     );
 }
@@ -90,15 +87,14 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
-        outputs.take(4).enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
-            (0, BTreeMap::from([("x".into(), Value::Int(1))]),),
-            (1, BTreeMap::from([("x".into(), Value::Int(2))]),),
-            (2, BTreeMap::from([("x".into(), Value::Int(3))]),),
-            (3, BTreeMap::from([("x".into(), Value::Int(4))]),),
+            (0, vec![Value::Int(1)]),
+            (1, vec![Value::Int(2)]),
+            (2, vec![Value::Int(3)]),
+            (3, vec![Value::Int(4)]),
         ]
     );
 }
@@ -120,18 +116,12 @@ async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(
         outputs,
         vec![
-            (
-                0,
-                BTreeMap::from([("z".into(), Value::Int(3)), ("w".into(), Value::Int(3))]),
-            ),
-            (
-                1,
-                BTreeMap::from([("z".into(), Value::Int(7)), ("w".into(), Value::Int(7))]),
-            ),
+            (0, vec![Value::Int(3), Value::Int(3)]),
+            (1, vec![Value::Int(7), Value::Int(7)]),
         ]
     );
 }
@@ -153,19 +143,13 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, spec_untyped),
     );
     executor.spawn(async_monitor.run()).detach();
-    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = outputs.enumerate().collect().await;
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 2);
     assert_eq!(
         outputs,
         vec![
-            (
-                0,
-                BTreeMap::from([("r1".into(), Value::Int(3)), ("r2".into(), Value::Int(2)),]),
-            ),
-            (
-                1,
-                BTreeMap::from([("r1".into(), Value::Int(7)), ("r2".into(), Value::Int(12)),]),
-            ),
+            (0, vec![Value::Int(3), Value::Int(2)]),
+            (1, vec![Value::Int(7), Value::Int(12)]),
         ]
     );
 }

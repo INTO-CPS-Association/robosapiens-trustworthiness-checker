@@ -181,6 +181,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         }
     };
 
+    let output_var_names = model.output_vars.clone();
     let output_handler: Box<dyn OutputHandler<Val = Value>> = match cli.output_mode {
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: true,
@@ -205,7 +206,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
                 .map(|topic| (topic.clone().into(), topic))
                 .collect();
             Box::new(
-                MQTTOutputHandler::new(executor.clone(), MQTT_HOSTNAME, topics)
+                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
                     .expect("MQTT output handler could not be created"),
             )
         }
@@ -221,7 +222,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
                 .map(|var| (var.clone(), var.into()))
                 .collect();
             Box::new(
-                MQTTOutputHandler::new(executor.clone(), MQTT_HOSTNAME, topics)
+                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
                     .expect("MQTT output handler could not be created"),
             )
         }

@@ -304,7 +304,9 @@ pub trait OutputHandler {
 
     // async fn handle_output(&mut self, var: &VarName, value: V);
     // This should only be called once by the runtime to provide the streams
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Self::Val>>);
+    fn provide_streams(&mut self, streams: Vec<OutputStream<Self::Val>>);
+
+    fn var_names(&self) -> Vec<VarName>;
 
     // Essentially this is of type
     // async fn run(&mut self);
