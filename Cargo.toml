@@ -20,8 +20,6 @@ tokio-util = "0.7.13"
 clap = { version = "4.5.30", features = ["derive"] }
 async-stream = "0.3.6"
 r2r = { version = "0.9.4", optional=true }
-thiserror = "2.0.11"
-justerror = "1.1.0"
 serde = {version = "1.0.218", features = ["derive"]}
 serde_json = "1.0.139"
 # mqtt client
