@@ -228,54 +228,6 @@ impl From<&VarName> for String {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct IndexedVarName(usize, usize);
-
-impl IndexedVarName {
-    pub fn new(name: &str, index: usize) -> Self {
-        VAR_LIST.with(|var_list| {
-            if let Some(pos) = var_list.borrow().iter().position(|x| x == name) {
-                IndexedVarName(pos, index)
-            } else {
-                let pos = var_list.borrow().len();
-                var_list.borrow_mut().push(name.into());
-                IndexedVarName(pos, index)
-            }
-        })
-    }
-
-    pub fn name(&self) -> String {
-        VAR_LIST.with(|var_list| var_list.borrow()[self.0].clone())
-    }
-
-    pub fn index(&self) -> usize {
-        self.1
-    }
-}
-
-impl VarName {
-    pub fn to_indexed(&self, i: usize) -> IndexedVarName {
-        IndexedVarName(self.0, i)
-    }
-}
-
-impl Debug for IndexedVarName {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "IndexedVarName::new(\"{}\", {})",
-            self.name(),
-            self.index()
-        )
-    }
-}
-
-impl Display for IndexedVarName {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}[{}]", self.name(), self.index())
-    }
-}
-
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
 pub trait InputProvider {
