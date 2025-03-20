@@ -136,7 +136,7 @@ impl<V: StreamData> VarManager<V> {
         let (output_tx, output_rx) = oneshot::channel().into_split();
 
         // Prepare an inner channel which will be used to return the output
-        let (tx, mut rx) = bounded::channel(10).into_split();
+        let (tx, mut rx) = bounded::channel(1000).into_split();
         subscribers_ref.borrow_mut().push(tx);
 
         // Increment the number of outstanding subscription requests and remove
