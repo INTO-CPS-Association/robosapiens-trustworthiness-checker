@@ -224,7 +224,7 @@ impl<'a> Deserialize<'a> for VarName {
 
 impl From<&VarName> for String {
     fn from(var_name: &VarName) -> String {
-        var_name.0.to_string()
+        var_name.name()
     }
 }
 
