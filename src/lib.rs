@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+pub mod benches_common;
 pub mod core;
 pub use crate::core::Value;
 pub use core::{

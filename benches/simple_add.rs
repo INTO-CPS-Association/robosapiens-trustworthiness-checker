@@ -1,38 +1,27 @@
-use std::collections::BTreeMap;
 use std::rc::Rc;
+use trustworthiness_checker::dep_manage::interface::DependencyKind;
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::SamplingMode;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
-use futures::StreamExt;
 use smol::LocalExecutor;
-use std::fmt::Debug;
-use trustworthiness_checker::LOLASpecification;
-use trustworthiness_checker::Monitor;
-use trustworthiness_checker::OutputStream;
-use trustworthiness_checker::Value;
-use trustworthiness_checker::dep_manage::interface::DependencyKind;
-use trustworthiness_checker::dep_manage::interface::DependencyManager;
+use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
+use trustworthiness_checker::benches_common::monitor_outputs_typed_queuing;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_constraints;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_constraints_no_overhead;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_queuing;
 use trustworthiness_checker::dep_manage::interface::create_dependency_manager;
-use trustworthiness_checker::io::testing::null_output_handler::NullOutputHandler;
-use trustworthiness_checker::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
-use trustworthiness_checker::lola_fixtures::{
-    input_streams_simple_add_typed, input_streams_simple_add_untyped,
-};
-use trustworthiness_checker::runtime::constraints::runtime::ConstraintBasedRuntime;
-// use trustworthiness_checker::semantics::untimed_typed_lola::to_typed_stream;
+use trustworthiness_checker::lola_fixtures::input_streams_simple_add_typed;
+use trustworthiness_checker::lola_fixtures::input_streams_simple_add_untyped;
+use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
+use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor_typed;
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
-pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
-    stream: OutputStream<Value>,
-) -> OutputStream<T> {
-    Box::pin(stream.map(|x| x.try_into().expect("Type error")))
-}
 
 #[derive(Clone)]
 struct LocalSmolExecutor {
@@ -53,167 +42,6 @@ impl AsyncExecutor for LocalSmolExecutor {
     }
 }
 
-pub fn spec_simple_add_monitor() -> &'static str {
-    "in x\n\
-     in y\n\
-     out z\n\
-     z = x + y"
-}
-
-pub fn spec_simple_add_monitor_typed() -> &'static str {
-    "in x: Int\n\
-     in y: Int\n\
-     out z: Int\n\
-     z = x + y"
-}
-
-async fn monitor_outputs_untyped_constraints(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: LOLASpecification,
-    dep_manager: DependencyManager,
-    num_outputs: usize,
-) {
-    let mut input_streams = input_streams_simple_add_untyped(num_outputs);
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let async_monitor = trustworthiness_checker::runtime::constraints::ConstraintBasedMonitor::new(
-        executor.clone(),
-        spec.clone(),
-        &mut input_streams,
-        output_handler,
-        dep_manager,
-    );
-    async_monitor.run().await;
-}
-
-async fn monitor_outputs_untyped_async(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: LOLASpecification,
-    dep_manager: DependencyManager,
-    num_outputs: usize,
-) {
-    let mut input_streams = input_streams_simple_add_untyped(num_outputs);
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let async_monitor = trustworthiness_checker::runtime::asynchronous::AsyncMonitorRunner::<
-        _,
-        _,
-        trustworthiness_checker::semantics::UntimedLolaSemantics,
-        trustworthiness_checker::LOLASpecification,
-    >::new(
-        executor,
-        spec,
-        &mut input_streams,
-        output_handler,
-        dep_manager,
-    );
-    async_monitor.run().await;
-}
-
-async fn monitor_outputs_typed_async(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: TypedLOLASpecification,
-    dep_manager: DependencyManager,
-    num_outputs: usize,
-) {
-    let mut input_streams = input_streams_simple_add_typed(num_outputs);
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let async_monitor = trustworthiness_checker::runtime::asynchronous::AsyncMonitorRunner::<
-        _,
-        _,
-        trustworthiness_checker::semantics::TypedUntimedLolaSemantics,
-        _,
-    >::new(
-        executor,
-        spec,
-        &mut input_streams,
-        output_handler,
-        dep_manager,
-    );
-    async_monitor.run().await;
-}
-
-async fn monitor_outputs_untyped_queuing(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: LOLASpecification,
-    dep_manager: DependencyManager,
-    num_outputs: usize,
-) {
-    let mut input_streams = input_streams_simple_add_untyped(num_outputs);
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let async_monitor = trustworthiness_checker::runtime::queuing::QueuingMonitorRunner::<
-        _,
-        _,
-        trustworthiness_checker::semantics::UntimedLolaSemantics,
-        trustworthiness_checker::LOLASpecification,
-    >::new(
-        executor.clone(),
-        spec.clone(),
-        &mut input_streams,
-        output_handler,
-        dep_manager,
-    );
-    async_monitor.run().await;
-}
-
-async fn monitor_outputs_typed_queuing(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: TypedLOLASpecification,
-    dep_manager: DependencyManager,
-    num_outputs: usize,
-) {
-    let mut input_streams = input_streams_simple_add_typed(num_outputs);
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let async_monitor = trustworthiness_checker::runtime::queuing::QueuingMonitorRunner::<
-        _,
-        _,
-        trustworthiness_checker::semantics::TypedUntimedLolaSemantics,
-        _,
-    >::new(
-        executor,
-        spec,
-        &mut input_streams,
-        output_handler,
-        dep_manager,
-    );
-    async_monitor.run().await;
-}
-
-fn monitor_outputs_untyped_constraints_no_overhead(
-    num_outputs: usize,
-    dependency_kind: DependencyKind,
-) {
-    let size = num_outputs as i64;
-    let mut xs = (0..size).map(|i| Value::Int(i * 2));
-    let mut ys = (0..size).map(|i| Value::Int(i * 2 + 1));
-    let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
-    let mut runtime =
-        ConstraintBasedRuntime::new(create_dependency_manager(dependency_kind, spec.clone()));
-    runtime.store_from_spec(spec);
-
-    for _ in 0..size {
-        let inputs = BTreeMap::from([
-            ("x".into(), xs.next().unwrap()),
-            ("y".into(), ys.next().unwrap()),
-        ]);
-        runtime.step(inputs.iter());
-        runtime.cleanup();
-    }
-}
-
 fn from_elem(c: &mut Criterion) {
     let sizes = vec![
         1, 10, 100, 500, 1000, 2000, 5000, 10000, 25000, // 100000,
@@ -227,11 +55,12 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec =
+    let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
+    let spec_typed =
         trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
     let dep_manager = create_dependency_manager(DependencyKind::Empty, spec.clone());
     let dep_manager_graph = create_dependency_manager(DependencyKind::DepGraph, spec.clone());
-    let spec_typed = type_check(spec.clone()).expect("Type check failed");
+    let spec_typed = type_check(spec_typed.clone()).expect("Type check failed");
 
     for size in sizes {
         if size <= 5000 {
@@ -240,11 +69,12 @@ fn from_elem(c: &mut Criterion) {
                 &(size, &spec, &dep_manager),
                 |b, &(size, spec, dep_manager)| {
                     b.to_async(local_smol_executor.clone()).iter(|| {
+                        let input_streams = input_streams_simple_add_untyped(size);
                         monitor_outputs_untyped_constraints(
                             local_smol_executor.executor.clone(),
                             spec.clone(),
+                            input_streams,
                             dep_manager.clone(),
-                            size,
                         )
                     })
                 },
@@ -255,21 +85,26 @@ fn from_elem(c: &mut Criterion) {
             &(size, &spec, &dep_manager_graph),
             |b, &(size, spec, dep_manager_graph)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
+                    let input_streams = input_streams_simple_add_untyped(size);
                     monitor_outputs_untyped_constraints(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
+                        input_streams,
                         dep_manager_graph.clone(),
-                        size,
                     )
                 })
             },
         );
         group.bench_with_input(
             BenchmarkId::new("simple_add_constraints_nooverhead_gc", size),
-            &size,
-            |b, &size| {
+            &(size, &spec, &dep_manager_graph),
+            |b, &(size, spec, dep_manager_graph)| {
                 b.iter(|| {
-                    monitor_outputs_untyped_constraints_no_overhead(size, DependencyKind::DepGraph)
+                    monitor_outputs_untyped_constraints_no_overhead(
+                        spec.clone(),
+                        size as i64,
+                        dep_manager_graph.clone(),
+                    )
                 })
             },
         );
@@ -278,11 +113,12 @@ fn from_elem(c: &mut Criterion) {
             &(size, &spec, &dep_manager),
             |b, &(size, spec, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
+                    let input_streams = input_streams_simple_add_untyped(size);
                     monitor_outputs_untyped_async(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
+                        input_streams,
                         dep_manager.clone(),
-                        size,
                     )
                 })
             },
@@ -292,11 +128,12 @@ fn from_elem(c: &mut Criterion) {
             &(size, &spec_typed, &dep_manager),
             |b, &(size, spec_typed, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
+                    let input_streams = input_streams_simple_add_typed(size);
                     monitor_outputs_typed_async(
                         local_smol_executor.executor.clone(),
                         spec_typed.clone(),
+                        input_streams,
                         dep_manager.clone(),
-                        size,
                     )
                 })
             },
@@ -306,11 +143,12 @@ fn from_elem(c: &mut Criterion) {
             &(size, &spec, &dep_manager),
             |b, &(size, spec, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
+                    let input_streams = input_streams_simple_add_untyped(size);
                     monitor_outputs_untyped_queuing(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
+                        input_streams,
                         dep_manager.clone(),
-                        size,
                     )
                 })
             },
@@ -320,11 +158,12 @@ fn from_elem(c: &mut Criterion) {
             &(size, &spec_typed, &dep_manager),
             |b, &(size, spec_typed, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
+                    let input_streams = input_streams_simple_add_typed(size);
                     monitor_outputs_typed_queuing(
                         local_smol_executor.executor.clone(),
                         spec_typed.clone(),
+                        input_streams,
                         dep_manager.clone(),
-                        size,
                     )
                 })
             },
