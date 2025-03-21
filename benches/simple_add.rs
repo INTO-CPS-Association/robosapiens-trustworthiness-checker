@@ -63,17 +63,18 @@ fn from_elem(c: &mut Criterion) {
     let spec_typed = type_check(spec_typed.clone()).expect("Type check failed");
 
     for size in sizes {
+        let input_stream_untyped_fn = || input_streams_simple_add_untyped(size);
+        let input_stream_typed_fn = || input_streams_simple_add_typed(size);
         if size <= 5000 {
             group.bench_with_input(
                 BenchmarkId::new("simple_add_constraints", size),
-                &(size, &spec, &dep_manager),
-                |b, &(size, spec, dep_manager)| {
+                &(&spec, &dep_manager),
+                |b, &(spec, dep_manager)| {
                     b.to_async(local_smol_executor.clone()).iter(|| {
-                        let input_streams = input_streams_simple_add_untyped(size);
                         monitor_outputs_untyped_constraints(
                             local_smol_executor.executor.clone(),
                             spec.clone(),
-                            input_streams,
+                            input_stream_untyped_fn(),
                             dep_manager.clone(),
                         )
                     })
@@ -82,14 +83,13 @@ fn from_elem(c: &mut Criterion) {
         }
         group.bench_with_input(
             BenchmarkId::new("simple_add_constraints_gc", size),
-            &(size, &spec, &dep_manager_graph),
-            |b, &(size, spec, dep_manager_graph)| {
+            &(&spec, &dep_manager_graph),
+            |b, &(spec, dep_manager_graph)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
-                    let input_streams = input_streams_simple_add_untyped(size);
                     monitor_outputs_untyped_constraints(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
-                        input_streams,
+                        input_stream_untyped_fn(),
                         dep_manager_graph.clone(),
                     )
                 })
@@ -110,14 +110,13 @@ fn from_elem(c: &mut Criterion) {
         );
         group.bench_with_input(
             BenchmarkId::new("simple_add_untyped_async", size),
-            &(size, &spec, &dep_manager),
-            |b, &(size, spec, dep_manager)| {
+            &(&spec, &dep_manager),
+            |b, &(spec, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
-                    let input_streams = input_streams_simple_add_untyped(size);
                     monitor_outputs_untyped_async(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
-                        input_streams,
+                        input_stream_untyped_fn(),
                         dep_manager.clone(),
                     )
                 })
@@ -125,14 +124,13 @@ fn from_elem(c: &mut Criterion) {
         );
         group.bench_with_input(
             BenchmarkId::new("simple_add_typed_async", size),
-            &(size, &spec_typed, &dep_manager),
-            |b, &(size, spec_typed, dep_manager)| {
+            &(&spec_typed, &dep_manager),
+            |b, &(spec_typed, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
-                    let input_streams = input_streams_simple_add_typed(size);
                     monitor_outputs_typed_async(
                         local_smol_executor.executor.clone(),
                         spec_typed.clone(),
-                        input_streams,
+                        input_stream_typed_fn(),
                         dep_manager.clone(),
                     )
                 })
@@ -140,14 +138,13 @@ fn from_elem(c: &mut Criterion) {
         );
         group.bench_with_input(
             BenchmarkId::new("simple_add_untyped_queuing", size),
-            &(size, &spec, &dep_manager),
-            |b, &(size, spec, dep_manager)| {
+            &(&spec, &dep_manager),
+            |b, &(spec, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
-                    let input_streams = input_streams_simple_add_untyped(size);
                     monitor_outputs_untyped_queuing(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
-                        input_streams,
+                        input_stream_untyped_fn(),
                         dep_manager.clone(),
                     )
                 })
@@ -155,14 +152,13 @@ fn from_elem(c: &mut Criterion) {
         );
         group.bench_with_input(
             BenchmarkId::new("simple_add_typed_queuing", size),
-            &(size, &spec_typed, &dep_manager),
-            |b, &(size, spec_typed, dep_manager)| {
+            &(&spec_typed, &dep_manager),
+            |b, &(spec_typed, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
-                    let input_streams = input_streams_simple_add_typed(size);
                     monitor_outputs_typed_queuing(
                         local_smol_executor.executor.clone(),
                         spec_typed.clone(),
-                        input_streams,
+                        input_stream_typed_fn(),
                         dep_manager.clone(),
                     )
                 })
