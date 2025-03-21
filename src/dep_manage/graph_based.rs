@@ -294,6 +294,7 @@ mod tests {
                 "in a\nout x\nout y\nx = a[-1, 0]\ny = x[-1, 0]",
             ),
             ("multi_same_dependent", "in a\nout x\nx = a + a[-1, 0]"),
+            ("recursion", "out z\nz = z[-1, 0]"),
         ])
     }
 
@@ -411,6 +412,19 @@ mod tests {
     }
 
     #[test]
+    fn test_graph_recursion() {
+        let mut spec = specs()["recursion"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let graph = DepGraph::new(spec).graph;
+        assert_eq!(graph.node_count(), 1);
+        assert_eq!(graph.edge_count(), 1);
+        let z = find_node(&graph, "z");
+        assert!(graph.contains_edge(z, z));
+        let weight = get_weights(&graph, z, z);
+        assert_eq!(weight, vec![-1]);
+    }
+
+    #[test]
     fn test_time_simple() {
         let mut spec = specs()["single_no_inp"];
         let spec = lola_specification(&mut spec).unwrap();
@@ -478,6 +492,16 @@ mod tests {
         assert_eq!(dep.longest_time_dependency(&"x".into()), Some(0));
         assert_eq!(dep.longest_time_dependency(&"a".into()), Some(1));
         let expected: BTreeMap<VarName, usize> = BTreeMap::from([("x".into(), 0), ("a".into(), 1)]);
+        assert_eq!(dep.longest_time_dependencies(), expected);
+    }
+
+    #[test]
+    fn test_time_recursion() {
+        let mut spec = specs()["recursion"];
+        let spec = lola_specification(&mut spec).unwrap();
+        let dep = DepGraph::new(spec);
+        assert_eq!(dep.longest_time_dependency(&"z".into()), Some(1));
+        let expected: BTreeMap<VarName, usize> = BTreeMap::from([("z".into(), 1)]);
         assert_eq!(dep.longest_time_dependencies(), expected);
     }
 
