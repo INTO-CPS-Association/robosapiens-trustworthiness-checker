@@ -41,7 +41,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_simple_add_untyped(100);
+    let mut input_streams = input_streams_simple_add(100);
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();

@@ -1,5 +1,6 @@
 use crate::{InputProvider, OutputStream, Value, VarName};
 use futures::stream;
+use smol::stream::StreamExt;
 use std::collections::BTreeMap;
 
 // Dead code is allowed in this file since cargo does not correctly
@@ -9,8 +10,6 @@ use std::collections::BTreeMap;
 pub fn input_empty() -> BTreeMap<VarName, OutputStream<Value>> {
     BTreeMap::new()
 }
-
-// TODO: Make the input streams have 3 values...
 
 #[allow(dead_code)]
 pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
@@ -423,7 +422,16 @@ pub fn input_streams_indexing() -> impl InputProvider<Val = Value> {
     input_streams
 }
 
-pub fn input_streams_simple_add_untyped(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
+#[allow(dead_code)]
+pub fn spec_add_defer() -> &'static str {
+    "in x
+     in y
+     in e
+     out z
+     z = defer(e)"
+}
+
+pub fn input_streams_add_defer(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let size = size as i64;
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
@@ -434,19 +442,26 @@ pub fn input_streams_simple_add_untyped(size: usize) -> BTreeMap<VarName, Output
         "y".into(),
         Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))) as OutputStream<Value>,
     );
+    let e_stream = stream::repeat(Value::Unknown)
+        .take((size / 2) as usize)
+        .chain(stream::iter(
+            (0..size / 2).map(|_| Value::Str("x + y".into())),
+        ));
+    input_streams.insert("e".into(), Box::pin(e_stream) as OutputStream<Value>);
+
     input_streams
 }
 
-pub fn input_streams_simple_add_typed(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
+pub fn input_streams_simple_add(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let size = size as i64;
+    let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
         Box::pin(stream::iter((0..size).map(|x| Value::Int(2 * x)))) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))),
+        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))) as OutputStream<Value>,
     );
     input_streams
 }

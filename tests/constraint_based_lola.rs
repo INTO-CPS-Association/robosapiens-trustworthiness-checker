@@ -60,7 +60,7 @@ mod tests {
         DependencyKind, create_dependency_manager,
     };
     use trustworthiness_checker::lola_fixtures::{
-        input_empty, input_streams_simple_add_untyped, input_streams4, input_streams5, spec_empty,
+        input_empty, input_streams_simple_add, input_streams4, input_streams5, spec_empty,
         spec_simple_add_monitor,
     };
 
@@ -94,7 +94,7 @@ mod tests {
     #[test(apply(smol_test))]
     async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>>) {
         for kind in DependencyKind::iter() {
-            let mut input_streams = input_streams_simple_add_untyped(100);
+            let mut input_streams = input_streams_simple_add(100);
             let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),

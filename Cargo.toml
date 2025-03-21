@@ -78,3 +78,7 @@ harness = false
 [[bench]]
 name = "maple_sequence"
 harness = false
+
+[[bench]]
+name = "dup_defer"
+harness = false
