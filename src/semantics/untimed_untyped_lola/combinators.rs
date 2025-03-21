@@ -326,17 +326,18 @@ pub fn defer(
             }
         }
 
-        let eval_output_stream = eval_output_stream.expect("No eval stream");
+        // This is None if the prop_stream is done but we never received a property
+        if let Some(eval_output_stream) = eval_output_stream {
+            // Wind forward the stream to the current time
+            let time_progressed = i.min(history_length);
+            debug!(?i, ?time_progressed, ?history_length, "Time progressed");
+            // subcontext.advance_clock();
+            let mut eval_output_stream = eval_output_stream.skip(time_progressed);
 
-        // Wind forward the stream to the current time
-        let time_progressed = i.min(history_length);
-        debug!(?i, ?time_progressed, ?history_length, "Time progressed");
-        // subcontext.advance_clock();
-        let mut eval_output_stream = eval_output_stream.skip(time_progressed);
-
-        // Yield the saved value until the inner stream is done
-        while let Some(eval_res) = eval_output_stream.next().await {
-            yield eval_res;
+            // Yield the saved value until the inner stream is done
+            while let Some(eval_res) = eval_output_stream.next().await {
+                yield eval_res;
+            }
         }
     })
 }
@@ -748,6 +749,19 @@ mod tests {
         let ctx = MockContext { xs: map };
         let res = defer(&ctx, e, 10).collect::<Vec<Value>>().await;
         let exp: Vec<Value> = vec![Value::Unknown, 4.into(), 5.into()];
+        assert_eq!(res, exp)
+    }
+
+    #[test(apply(smol_test))]
+    async fn test_defer_only_unknown() {
+        // Using unknown to represent no data on the stream
+        let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, Value::Unknown]));
+        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
+            .into_iter()
+            .collect();
+        let ctx = MockContext { xs: map };
+        let res = defer(&ctx, e, 10).collect::<Vec<Value>>().await;
+        let exp: Vec<Value> = vec![Value::Unknown, Value::Unknown];
         assert_eq!(res, exp)
     }
 
