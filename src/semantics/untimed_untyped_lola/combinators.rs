@@ -368,8 +368,8 @@ pub fn defer(
     })
 }
 
-// Update for a synchronized language - in this case UntimedLolaSemantics.
-// We use Unknown for simulating no data on the stream
+// Evaluates to the l.h.s. until the r.h.s. provides a value.
+// Then continues evaluating the r.h.s. (even if it provides Unknown)
 pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
     return Box::pin(stream! {
         while let (Some(x_val), Some(y_val)) = join!(x.next(), y.next()) {
@@ -389,6 +389,7 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
     });
 }
 
+// Evaluates to a placeholder value whenever Unknown is received.
 pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<Value> {
     let xs = x
         .zip(d)
