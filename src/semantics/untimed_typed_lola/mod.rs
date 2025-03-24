@@ -1,9 +1,11 @@
 use crate::core::Value;
 use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
-use crate::lang::dynamic_lola::ast::{BoolBinOp, IntBinOp, StrBinOp};
-use crate::lang::dynamic_lola::type_checker::{SExprBool, SExprInt, SExprStr, SExprTE, SExprUnit};
+use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
+use crate::lang::dynamic_lola::type_checker::{
+    SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
+};
 // use crate::semantics::typed_monitoring_semantics as mc;
-mod combinators;
+pub (super) mod combinators;
 use combinators as mc;
 pub use combinators::{from_typed_stream, to_typed_stream};
 
@@ -14,6 +16,7 @@ impl MonitoringSemantics<SExprTE, Value, Value> for TypedUntimedLolaSemantics {
     fn to_async_stream(expr: SExprTE, ctx: &dyn StreamContext<Value>) -> OutputStream<Value> {
         match expr {
             SExprTE::Int(e) => from_typed_stream::<i64>(Self::to_async_stream(e, ctx)),
+            SExprTE::Float(e) => from_typed_stream::<f32>(Self::to_async_stream(e, ctx)),
             SExprTE::Str(e) => from_typed_stream::<String>(Self::to_async_stream(e, ctx)),
             SExprTE::Bool(e) => from_typed_stream::<bool>(Self::to_async_stream(e, ctx)),
             SExprTE::Unit(e) => from_typed_stream::<()>(Self::to_async_stream(e, ctx)),
@@ -41,6 +44,35 @@ impl MonitoringSemantics<SExprInt, i64, Value> for TypedUntimedLolaSemantics {
                 mc::sindex(e, i, c)
             }
             SExprInt::If(b, e1, e2) => {
+                let b = Self::to_async_stream(*b, ctx);
+                let e1 = Self::to_async_stream(*e1, ctx);
+                let e2 = Self::to_async_stream(*e2, ctx);
+                mc::if_stm(b, e1, e2)
+            }
+        }
+    }
+}
+
+impl MonitoringSemantics<SExprFloat, f32, Value> for TypedUntimedLolaSemantics {
+    fn to_async_stream(expr: SExprFloat, ctx: &dyn StreamContext<Value>) -> OutputStream<f32> {
+        match expr {
+            SExprFloat::Val(v) => mc::val(v),
+            SExprFloat::BinOp(e1, e2, op) => {
+                let e1 = Self::to_async_stream(*e1, ctx);
+                let e2 = Self::to_async_stream(*e2, ctx);
+                match op {
+                    FloatBinOp::Add => mc::plus(e1, e2),
+                    FloatBinOp::Sub => mc::minus(e1, e2),
+                    FloatBinOp::Mul => mc::mult(e1, e2),
+                    FloatBinOp::Div => mc::div(e1, e2),
+                }
+            }
+            SExprFloat::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
+            SExprFloat::SIndex(e, i, c) => {
+                let e = Self::to_async_stream(*e, ctx);
+                mc::sindex(e, i, c)
+            }
+            SExprFloat::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
                 let e1 = Self::to_async_stream(*e1, ctx);
                 let e2 = Self::to_async_stream(*e2, ctx);

@@ -77,7 +77,10 @@ pub fn sindex<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream
     }
 }
 
-pub fn plus(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
+pub fn plus<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+where
+    T: std::ops::Add<Output = T> + StreamData,
+{
     lift2(|x, y| x + y, x, y)
 }
 
@@ -92,15 +95,24 @@ pub fn concat(x: OutputStream<String>, y: OutputStream<String>) -> OutputStream<
     )
 }
 
-pub fn minus(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
+pub fn minus<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+where
+    T: std::ops::Sub<Output = T> + StreamData,
+{
     lift2(|x, y| x - y, x, y)
 }
 
-pub fn mult(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
+pub fn mult<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+where
+    T: std::ops::Mul<Output = T> + StreamData,
+{
     lift2(|x, y| x * y, x, y)
 }
 
-pub fn div(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<i64> {
+pub fn div<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+where
+    T: std::ops::Div<Output = T> + StreamData,
+{
     lift2(|x, y| x / y, x, y)
 }
 

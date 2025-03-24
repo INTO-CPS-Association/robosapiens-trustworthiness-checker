@@ -101,6 +101,24 @@ pub fn input_streams5() -> BTreeMap<VarName, OutputStream<Value>> {
 }
 
 #[allow(dead_code)]
+pub fn input_streams_float() -> BTreeMap<VarName, OutputStream<Value>> {
+    let mut input_streams = BTreeMap::new();
+    input_streams.insert(
+        "x".into(),
+        Box::pin(stream::iter(
+            vec![Value::Float(1.3), Value::Float(3.4)].into_iter(),
+        )) as OutputStream<Value>,
+    );
+    input_streams.insert(
+        "y".into(),
+        Box::pin(stream::iter(
+            vec![Value::Float(2.4), Value::Float(4.3)].into_iter(),
+        )) as OutputStream<Value>,
+    );
+    input_streams
+}
+
+#[allow(dead_code)]
 pub fn spec_empty() -> &'static str {
     ""
 }
@@ -118,6 +136,14 @@ pub fn spec_simple_add_monitor_typed() -> &'static str {
     "in x: Int\n\
      in y: Int\n\
      out z: Int\n\
+     z = x + y"
+}
+
+#[allow(dead_code)]
+pub fn spec_simple_add_monitor_typed_float() -> &'static str {
+    "in x: Float\n\
+     in y: Float\n\
+     out z: Float\n\
      z = x + y"
 }
 

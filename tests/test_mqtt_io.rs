@@ -105,6 +105,7 @@ async fn dummy_publisher(client_name: String, topic: String, values: Vec<Value>,
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_abs_diff_eq;
     use futures::executor;
     use std::{collections::BTreeMap, pin::Pin, rc::Rc};
     use test_log::test;
@@ -123,6 +124,7 @@ mod tests {
             mqtt::{MQTTInputProvider, MQTTOutputHandler},
             testing::manual_output_handler::ManualOutputHandler,
         },
+        lola_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         lola_specification,
         runtime::asynchronous::AsyncMonitorRunner,
         semantics::UntimedLolaSemantics,
@@ -141,7 +143,7 @@ mod tests {
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[test(apply(smol_test))]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
-        let model = lola_specification
+        let spec = lola_specification
             .parse(spec_simple_add_monitor())
             .expect("Model could not be parsed");
 
@@ -153,7 +155,6 @@ mod tests {
             .expect("Failed to get host port for EMQX server");
 
         let mut input_streams = input_streams1();
-        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
         let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
         let mqtt_topics = spec
             .output_vars
@@ -189,6 +190,63 @@ mod tests {
         // Test the outputs
         let outputs = outputs.take(2).collect::<Vec<_>>().await;
         assert_eq!(outputs, expected_outputs);
+    }
+
+    #[cfg_attr(not(feature = "testcontainers"), ignore)]
+    #[test(apply(smol_test))]
+    async fn test_add_monitor_mqtt_output_float(executor: Rc<LocalExecutor<'static>>) {
+        let spec = lola_specification
+            .parse(spec_simple_add_monitor_typed_float())
+            .expect("Model could not be parsed");
+
+        let emqx_server = Pin::new(&MQTT_TEST_CONTAINER).get().await;
+        let mqtt_port = TokioCompat::new(emqx_server.get_host_port_ipv4(1883))
+            .await
+            .expect("Failed to get host port for EMQX server");
+
+        let mut input_streams = input_streams_float();
+        let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
+        let mqtt_topics = spec
+            .output_vars
+            .iter()
+            .map(|v| (v.clone(), format!("mqtt_output_float_{}", v)))
+            .collect::<BTreeMap<_, _>>();
+
+        let outputs = get_outputs(
+            "mqtt_output_float_z".to_string(),
+            "z_float_subscriber".to_string(),
+            mqtt_port,
+        )
+        .await;
+        // sleep(Duration::from_secs(2)).await;
+
+        let mut output_handler = Box::new(
+            MQTTOutputHandler::new(
+                executor.clone(),
+                vec!["z".into()],
+                mqtt_host.as_str(),
+                mqtt_topics,
+            )
+            .unwrap(),
+        );
+        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+            executor.clone(),
+            spec.clone(),
+            &mut input_streams,
+            output_handler,
+            create_dependency_manager(DependencyKind::Empty, spec),
+        );
+        executor.spawn(async_monitor.run()).detach();
+        // Test the outputs
+        let outputs = outputs.take(2).collect::<Vec<_>>().await;
+        match outputs[0] {
+            Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
+            _ => panic!("Expected float"),
+        }
+        match outputs[1] {
+            Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
+            _ => panic!("Expected float"),
+        }
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
@@ -269,6 +327,94 @@ mod tests {
         info!("Outputs: {:?}", outputs);
         let expected_outputs = zs.into_iter().map(|val| vec![val]).collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
+    }
+
+    #[cfg_attr(not(feature = "testcontainers"), ignore)]
+    #[test(apply(smol_test))]
+    async fn test_add_monitor_mqtt_input_float(executor: Rc<LocalExecutor<'static>>) {
+        let model = lola_specification
+            .parse(spec_simple_add_monitor())
+            .expect("Model could not be parsed");
+
+        // let pool = tokio::task::LocalSet::new();
+
+        let xs = vec![Value::Float(1.3), Value::Float(3.4)];
+        let ys = vec![Value::Float(2.4), Value::Float(4.3)];
+        let zs = vec![Value::Float(3.7), Value::Float(7.7)];
+
+        let emqx_server = MQTT_TEST_CONTAINER.get_unpin().await;
+
+        let mqtt_port = TokioCompat::new(emqx_server.get_host_port_ipv4(1883))
+            .await
+            .expect("Failed to get host port for EMQX server");
+
+        let var_topics = [
+            ("x".into(), "mqtt_input_float_x".to_string()),
+            ("y".into(), "mqtt_input_float_y".to_string()),
+        ]
+        .into_iter()
+        .collect::<BTreeMap<VarName, _>>();
+
+        // Create the ROS input provider
+        let mut input_provider = MQTTInputProvider::new(
+            executor.clone(),
+            format!("tcp://localhost:{}", mqtt_port).as_str(),
+            var_topics,
+        )
+        .unwrap();
+        input_provider
+            .started
+            .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+            .await;
+
+        // Run the monitor
+        let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
+        let outputs = output_handler.get_output();
+        let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+            executor.clone(),
+            model.clone(),
+            &mut input_provider,
+            Box::new(output_handler),
+            create_dependency_manager(DependencyKind::Empty, model),
+        );
+
+        executor.spawn(runner.run()).detach();
+
+        // Spawn dummy MQTT publisher nodes
+        executor
+            .spawn(dummy_publisher(
+                "x_publisher_float".to_string(),
+                "mqtt_input_float_x".to_string(),
+                xs,
+                mqtt_port,
+            ))
+            .detach();
+
+        executor
+            .spawn(dummy_publisher(
+                "y_publisher_float".to_string(),
+                "mqtt_input_float_y".to_string(),
+                ys,
+                mqtt_port,
+            ))
+            .detach();
+
+        // Test we have the expected outputs
+        // We have to specify how many outputs we want to take as the ROS
+        // topic is not assumed to tell us when it is done
+        info!("Waiting for {:?} outputs", zs.len());
+        let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;
+        info!("Outputs: {:?}", outputs);
+        // Test the outputs
+        assert_eq!(outputs.len(), zs.len());
+        match outputs[0][0] {
+            Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
+            _ => panic!("Expected float"),
+        }
+        match outputs[1][0] {
+            Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
+            _ => panic!("Expected float"),
+        }
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]

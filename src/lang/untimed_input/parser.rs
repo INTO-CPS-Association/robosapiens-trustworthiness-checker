@@ -123,4 +123,16 @@ mod tests {
             Ok(("y".into(), Value::List(vec![].into())))
         );
     }
+
+    #[test]
+    fn test_float_assignments() {
+        assert_eq!(
+            presult_to_string(&value_assignment(&mut "y = 3.4")),
+            r#"Ok((VarName::new("y"), Float(3.4)))"#
+        );
+        assert_eq!(
+            presult_to_string(&value_assignment(&mut "y = 1e-3")),
+            r#"Ok((VarName::new("y"), Float(0.001)))"#
+        );
+    }
 }

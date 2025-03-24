@@ -44,9 +44,12 @@ thread_local! {
 // EcoVec instead of String and Vec. These types are essentially references
 // which allow mutation in place if there is only one reference to the data or
 // copy-on-write if there is more than one reference.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// Floats are represented as f32 since this is the most common type in
+// Ros messages (e.g. LaserScan).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Int(i64),
+    Float(f32),
     Str(EcoString),
     Bool(bool),
     List(EcoVec<Value>),
@@ -61,6 +64,16 @@ impl TryFrom<Value> for i64 {
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Int(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<Value> for f32 {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Float(x) => Ok(x),
             _ => Err(()),
         }
     }
@@ -100,6 +113,11 @@ impl From<i64> for Value {
         Value::Int(value)
     }
 }
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Value::Float(value)
+    }
+}
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Value::Str(value.into())
@@ -125,6 +143,7 @@ impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Int(i) => write!(f, "{}", i),
+            Value::Float(fl) => write!(f, "{}", fl),
             Value::Str(s) => write!(f, "{}", s),
             Value::Bool(b) => write!(f, "{}", b),
             Value::List(vals) => {
@@ -149,6 +168,7 @@ pub trait StreamData: Clone + Debug + 'static {}
 
 // Trait defining the allowed types for expression values
 impl StreamData for i64 {}
+impl StreamData for f32 {}
 impl StreamData for String {}
 impl StreamData for bool {}
 impl StreamData for () {}
@@ -156,6 +176,7 @@ impl StreamData for () {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StreamType {
     Int,
+    Float,
     Str,
     Bool,
     Unit,

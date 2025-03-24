@@ -10,7 +10,7 @@ use crate::lang::dynamic_lola::parser::lola_expression;
 // An SExpr with an absolute time
 // Identical to SExpr except SIndex is unsigned, Var has a time index and certain DUP functions are
 // removed (because they are not needed)
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SExprAbs {
     // if-then-else
     If(Box<Self>, Box<Self>, Box<Self>),
@@ -129,11 +129,29 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
     use Value::*;
 
     match (v1, v2, op) {
-        (Int(i1), Int(i2), IOp(iop)) => match iop {
-            IntBinOp::Add => Int(i1 + i2),
-            IntBinOp::Sub => Int(i1 - i2),
-            IntBinOp::Mul => Int(i1 * i2),
-            IntBinOp::Div => Int(i1 / i2),
+        (Int(i1), Int(i2), NOp(iop)) => match iop {
+            NumericalBinOp::Add => Int(i1 + i2),
+            NumericalBinOp::Sub => Int(i1 - i2),
+            NumericalBinOp::Mul => Int(i1 * i2),
+            NumericalBinOp::Div => Int(i1 / i2),
+        },
+        (Float(i1), Int(i2), NOp(iop)) => match iop {
+            NumericalBinOp::Add => Float(i1 + i2 as f32),
+            NumericalBinOp::Sub => Float(i1 - i2 as f32),
+            NumericalBinOp::Mul => Float(i1 * i2 as f32),
+            NumericalBinOp::Div => Float(i1 / i2 as f32),
+        },
+        (Int(i1), Float(i2), NOp(iop)) => match iop {
+            NumericalBinOp::Add => Float(i1 as f32 + i2),
+            NumericalBinOp::Sub => Float(i1 as f32 - i2),
+            NumericalBinOp::Mul => Float(i1 as f32 * i2),
+            NumericalBinOp::Div => Float(i1 as f32 / i2),
+        },
+        (Float(i1), Float(i2), NOp(iop)) => match iop {
+            NumericalBinOp::Add => Float(i1 + i2),
+            NumericalBinOp::Sub => Float(i1 - i2),
+            NumericalBinOp::Mul => Float(i1 * i2),
+            NumericalBinOp::Div => Float(i1 / i2),
         },
         (Bool(b1), Bool(b2), BOp(bop)) => match bop {
             BoolBinOp::Or => Bool(b1 || b2),

@@ -5,6 +5,9 @@ use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use test_log::test;
+#[macro_use]
+extern crate approx;
+
 use tracing::info;
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
@@ -45,6 +48,33 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
         outputs,
         vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)]),]
     );
+}
+
+#[test(apply(smol_test))]
+async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
+    let mut input_streams = input_streams_float();
+    let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
+    let spec = type_check(spec_untyped.clone()).expect("Type check failed");
+    let mut output_handler = output_handler(executor.clone(), spec.clone());
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(
+        executor.clone(),
+        spec,
+        &mut input_streams,
+        output_handler,
+        create_dependency_manager(DependencyKind::Empty, spec_untyped),
+    );
+    executor.spawn(async_monitor.run()).detach();
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+    assert_eq!(outputs.len(), 2);
+    match outputs[0].1[0] {
+        Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
+        _ => panic!("Expected float"),
+    }
+    match outputs[1].1[0] {
+        Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
+        _ => panic!("Expected float"),
+    }
 }
 
 #[test(apply(smol_test))]

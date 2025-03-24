@@ -330,10 +330,10 @@ impl BinaryPrecedences {
             Concat => SBinOp::SOp(StrBinOp::Concat),
             Or => SBinOp::BOp(BoolBinOp::Or),
             And => SBinOp::BOp(BoolBinOp::And),
-            Add => SBinOp::IOp(IntBinOp::Add),
-            Sub => SBinOp::IOp(IntBinOp::Sub),
-            Mul => SBinOp::IOp(IntBinOp::Mul),
-            Div => SBinOp::IOp(IntBinOp::Div),
+            Add => SBinOp::NOp(NumericalBinOp::Add),
+            Sub => SBinOp::NOp(NumericalBinOp::Sub),
+            Mul => SBinOp::NOp(NumericalBinOp::Mul),
+            Div => SBinOp::NOp(NumericalBinOp::Div),
             Le => SBinOp::COp(CompBinOp::Le),
             Eq => SBinOp::COp(CompBinOp::Eq),
         }
@@ -388,11 +388,12 @@ fn type_annotation(s: &mut &str) -> Result<StreamType> {
         _: whitespace,
         _: literal(":"),
         _: loop_ms_or_lb_or_lc,
-        alt((literal("Int"), literal("Bool"), literal("Str"), literal("Unit"))),
+        alt((literal("Int"), literal("Float"), literal("Bool"), literal("Str"), literal("Unit"))),
         _: whitespace,
     ))
     .map(|(typ,)| match typ {
         "Int" => StreamType::Int,
+        "Float" => StreamType::Float,
         "Bool" => StreamType::Bool,
         "Str" => StreamType::Str,
         "Unit" => StreamType::Unit,
@@ -492,7 +493,15 @@ mod tests {
 
     #[test]
     fn test_streamdata() {
-        assert_eq!(val(&mut (*"42".to_string()).into()), Ok(Value::Int(42)),);
+        assert_eq!(val(&mut (*"42".to_string()).into()), Ok(Value::Int(42)));
+        assert_eq!(
+            val(&mut (*"42.0".to_string()).into()),
+            Ok(Value::Float(42.0)),
+        );
+        assert_eq!(
+            val(&mut (*"1e-1".to_string()).into()),
+            Ok(Value::Float(1e-1)),
+        );
         assert_eq!(
             val(&mut (*"\"abc2d\"".to_string()).into()),
             Ok(Value::Str("abc2d".into())),
@@ -518,7 +527,7 @@ mod tests {
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::Val(Value::Int(2))),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         assert_eq!(
@@ -528,9 +537,9 @@ mod tests {
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(2))),
                     Box::new(SExpr::Val(Value::Int(3))),
-                    SBinOp::IOp(IntBinOp::Mul),
+                    SBinOp::NOp(NumericalBinOp::Mul),
                 )),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         assert_eq!(
@@ -540,9 +549,9 @@ mod tests {
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var("y".into())),
                     Box::new(SExpr::Val(Value::Int(2))),
-                    SBinOp::IOp(IntBinOp::Add),
+                    SBinOp::NOp(NumericalBinOp::Add),
                 )),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         assert_eq!(
@@ -563,7 +572,7 @@ mod tests {
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
                     Box::new(SExpr::Var("y".into()),),
-                    SBinOp::IOp(IntBinOp::Add),
+                    SBinOp::NOp(NumericalBinOp::Add),
                 )),
                 -3,
                 Value::Int(2),
@@ -578,7 +587,7 @@ mod tests {
                     -1,
                     Value::Int(0),
                 ),),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             )
         );
         assert_eq!(
@@ -611,6 +620,10 @@ mod tests {
             input_decl(&mut (*"in x: Int".to_string()).into())?,
             ("x".into(), Some(StreamType::Int)),
         );
+        assert_eq!(
+            input_decl(&mut (*"in x: Float".to_string()).into())?,
+            ("x".into(), Some(StreamType::Float)),
+        );
         Ok(())
     }
 
@@ -630,11 +643,7 @@ mod tests {
 
     #[test]
     fn test_parse_lola_simple_add() -> Result<(), ContextError> {
-        let input = "\
-            in x\n\
-            in y\n\
-            out z\n\
-            z = x + y";
+        let input = crate::lola_fixtures::spec_simple_add_monitor();
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
@@ -643,12 +652,60 @@ mod tests {
                 SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
                     Box::new(SExpr::Var("y".into())),
-                    SBinOp::IOp(IntBinOp::Add),
+                    SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
             type_annotations: BTreeMap::new(),
         };
         assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_lola_simple_add_typed() -> Result<(), ContextError> {
+        let mut input = crate::lola_fixtures::spec_simple_add_monitor_typed();
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec!["x".into(), "y".into()],
+            output_vars: vec!["z".into()],
+            exprs: BTreeMap::from([(
+                "z".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Var("x".into())),
+                    Box::new(SExpr::Var("y".into())),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::from([
+                (VarName::new("x"), StreamType::Int),
+                (VarName::new("y"), StreamType::Int),
+                (VarName::new("z"), StreamType::Int),
+            ]),
+        };
+        assert_eq!(lola_specification(&mut input)?, simple_add_spec);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_lola_simple_add_float_typed() -> Result<(), ContextError> {
+        let mut input = crate::lola_fixtures::spec_simple_add_monitor_typed_float();
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec!["x".into(), "y".into()],
+            output_vars: vec!["z".into()],
+            exprs: BTreeMap::from([(
+                "z".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Var("x".into())),
+                    Box::new(SExpr::Var("y".into())),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::from([
+                ("x".into(), StreamType::Float),
+                ("y".into(), StreamType::Float),
+                ("z".into(), StreamType::Float),
+            ]),
+        };
+        assert_eq!(lola_specification(&mut input)?, simple_add_spec);
         Ok(())
     }
 
@@ -669,7 +726,7 @@ mod tests {
                         -1,
                         Value::Int(0),
                     )),
-                    SBinOp::IOp(IntBinOp::Add),
+                    SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
             type_annotations: BTreeMap::new(),
@@ -697,7 +754,7 @@ mod tests {
                     SExpr::BinOp(
                         Box::new(SExpr::Var("x".into())),
                         Box::new(SExpr::Var("y".into())),
-                        SBinOp::IOp(IntBinOp::Add),
+                        SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
                 ("w".into(), SExpr::Eval(Box::new(SExpr::Var("s".into())))),
@@ -709,43 +766,120 @@ mod tests {
     }
 
     #[test]
+    fn test_float_exprs() {
+        // Add
+        assert_eq!(presult_to_string(&sexpr(&mut "0.0")), "Ok(Val(Float(0.0)))");
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "  1.0 +2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut " 1.0  + 2.0 +3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
+        );
+        // Sub
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "  1.0 -2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)))"
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut " 1.0  - 2.0 -3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
+        );
+        // Mul
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "  1.0 *2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)))"
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut " 1.0  * 2.0 *3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
+        );
+        // Div
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "  1.0 /2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Div)))"
+        );
+    }
+
+    #[test]
+    fn test_mixed_float_int_exprs() {
+        // Add
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "0.0 + 2")),
+            "Ok(BinOp(Val(Float(0.0)), Val(Int(2)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "1 + 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "1.0 + 2 + 3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
+        );
+        // Sub
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "1 - 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Sub)))"
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "1.0 - 2 - 3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
+        );
+        // Mul
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "1 * 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Mul)))"
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "1.0 * 2 * 3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
+        );
+        // Div
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "1 / 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Div)))"
+        );
+    }
+
+    #[test]
     fn test_integer_exprs() {
         // Add
         assert_eq!(presult_to_string(&sexpr(&mut "0")), "Ok(Val(Int(0)))");
         assert_eq!(
             presult_to_string(&sexpr(&mut "  1 +2  ")),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut " 1  + 2 +3")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), Val(Int(3)), IOp(Add)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Add)))"
         );
         // Sub
         assert_eq!(
             presult_to_string(&sexpr(&mut "  1 -2  ")),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Sub)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut " 1  - 2 -3")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Sub)), Val(Int(3)), IOp(Sub)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)), Val(Int(3)), NOp(Sub)))"
         );
         // Mul
         assert_eq!(
             presult_to_string(&sexpr(&mut "  1 *2  ")),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut " 1  * 2 *3")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), Val(Int(3)), IOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Mul)))"
         );
         // Div
         assert_eq!(
             presult_to_string(&sexpr(&mut "  1 /2  ")),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), IOp(Div)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut " 1  / 2 /3")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Div)), Val(Int(3)), IOp(Div)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)), Val(Int(3)), NOp(Div)))"
         );
         // Var
         assert_eq!(
@@ -770,7 +904,7 @@ mod tests {
         // Don't care about order of eval; care about what the AST looks like
         assert_eq!(
             presult_to_string(&sexpr(&mut " 2 + (2 + 3)")),
-            "Ok(BinOp(Val(Int(2)), BinOp(Val(Int(2)), Val(Int(3)), IOp(Add)), IOp(Add)))"
+            "Ok(BinOp(Val(Int(2)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Add)), NOp(Add)))"
         );
         // If then else
         assert_eq!(
@@ -779,103 +913,103 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "if true then x+x else y+y")),
-            r#"Ok(If(Val(Bool(true)), BinOp(Var(VarName::new("x")), Var(VarName::new("x")), IOp(Add)), BinOp(Var(VarName::new("y")), Var(VarName::new("y")), IOp(Add))))"#
+            r#"Ok(If(Val(Bool(true)), BinOp(Var(VarName::new("x")), Var(VarName::new("x")), NOp(Add)), BinOp(Var(VarName::new("y")), Var(VarName::new("y")), NOp(Add))))"#
         );
 
         // ChatGPT generated tests with mixed arithmetic and parentheses iexprs. It only had knowledge of the tests above.
         // Basic mixed addition and multiplication
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 + 2 * 3")),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), IOp(Mul)), IOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 * 2 + 3")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), Val(Int(3)), IOp(Add)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)))"
         );
         // Mixed addition, subtraction, and multiplication
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 + 2 * 3 - 4")),
-            "Ok(BinOp(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), IOp(Mul)), IOp(Add)), Val(Int(4)), IOp(Sub)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 * 2 + 3 - 4")),
-            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), Val(Int(3)), IOp(Add)), Val(Int(4)), IOp(Sub)))"
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
         );
         // Mixed addition and division
         assert_eq!(
             presult_to_string(&sexpr(&mut "10 + 20 / 5")),
-            "Ok(BinOp(Val(Int(10)), BinOp(Val(Int(20)), Val(Int(5)), IOp(Div)), IOp(Add)))"
+            "Ok(BinOp(Val(Int(10)), BinOp(Val(Int(20)), Val(Int(5)), NOp(Div)), NOp(Add)))"
         );
         // Nested parentheses with mixed operations
         assert_eq!(
             presult_to_string(&sexpr(&mut "(1 + 2) * (3 - 4)")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Sub)), IOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Sub)), NOp(Mul)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 + (2 * (3 + 4))")),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Add)), IOp(Mul)), IOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)), NOp(Add)))"
         );
         // Complex nested expressions
         assert_eq!(
             presult_to_string(&sexpr(&mut "((1 + 2) * 3) + (4 / (5 - 6))")),
-            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), Val(Int(3)), IOp(Mul)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), IOp(Sub)), IOp(Div)), IOp(Add)))"
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Mul)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "(1 + (2 * (3 - (4 / 5))))")),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), Val(Int(5)), IOp(Div)), IOp(Sub)), IOp(Mul)), IOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), Val(Int(5)), NOp(Div)), NOp(Sub)), NOp(Mul)), NOp(Add)))"
         );
         // More complex expressions with deep nesting
         assert_eq!(
             presult_to_string(&sexpr(&mut "((1 + 2) * (3 + 4))")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Add)), IOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "((1 * 2) + (3 * 4)) / 5")),
-            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Mul)), IOp(Add)), Val(Int(5)), IOp(Div)))"
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul)), NOp(Add)), Val(Int(5)), NOp(Div)))"
         );
         // Multiple levels of nested expressions
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 + (2 * (3 + (4 / (5 - 6))))")),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), IOp(Sub)), IOp(Div)), IOp(Add)), IOp(Mul)), IOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)), NOp(Mul)), NOp(Add)))"
         );
 
         // ChatGPT generated tests with mixed iexprs. It only had knowledge of the tests above.
         // Mixing addition, subtraction, and variables
         assert_eq!(
             presult_to_string(&sexpr(&mut "x + 2 - y")),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Val(Int(2)), IOp(Add)), Var(VarName::new("y")), IOp(Sub)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Val(Int(2)), NOp(Add)), Var(VarName::new("y")), NOp(Sub)))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "(x + y) * 3")),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), IOp(Add)), Val(Int(3)), IOp(Mul)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), NOp(Add)), Val(Int(3)), NOp(Mul)))"#
         );
         // Nested arithmetic with variables and parentheses
         assert_eq!(
             presult_to_string(&sexpr(&mut "(a + b) / (c - d)")),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("a")), Var(VarName::new("b")), IOp(Add)), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), IOp(Sub)), IOp(Div)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("a")), Var(VarName::new("b")), NOp(Add)), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Sub)), NOp(Div)))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "x * (y + 3) - z / 2")),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), BinOp(Var(VarName::new("y")), Val(Int(3)), IOp(Add)), IOp(Mul)), BinOp(Var(VarName::new("z")), Val(Int(2)), IOp(Div)), IOp(Sub)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)), BinOp(Var(VarName::new("z")), Val(Int(2)), NOp(Div)), NOp(Sub)))"#
         );
         // If-then-else with mixed arithmetic
         assert_eq!(
             presult_to_string(&sexpr(&mut "if true then 1 + 2 else 3 * 4")),
-            "Ok(If(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), IOp(Mul))))"
+            "Ok(If(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul))))"
         );
         // Time index in arithmetic expression
         assert_eq!(
             presult_to_string(&sexpr(&mut "x[0, 1] + y[-1, 0]")),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0, Int(1)), SIndex(Var(VarName::new("y")), -1, Int(0)), IOp(Add)))"#
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0, Int(1)), SIndex(Var(VarName::new("y")), -1, Int(0)), NOp(Add)))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "x[1, 2] * (y + 3)")),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1, Int(2)), BinOp(Var(VarName::new("y")), Val(Int(3)), IOp(Add)), IOp(Mul)))"#
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1, Int(2)), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)))"#
         );
         // Complex expression with nested if-then-else and mixed operations
         assert_eq!(
             presult_to_string(&sexpr(&mut "(1 + x) * if y then 3 else z / 2")),
-            r#"Ok(BinOp(BinOp(Val(Int(1)), Var(VarName::new("x")), IOp(Add)), If(Var(VarName::new("y")), Val(Int(3)), BinOp(Var(VarName::new("z")), Val(Int(2)), IOp(Div))), IOp(Mul)))"#
+            r#"Ok(BinOp(BinOp(Val(Int(1)), Var(VarName::new("x")), NOp(Add)), If(Var(VarName::new("y")), Val(Int(3)), BinOp(Var(VarName::new("z")), Val(Int(2)), NOp(Div))), NOp(Mul)))"#
         );
     }
 
@@ -934,11 +1068,11 @@ mod tests {
         // Expressions do not make sense but parser should allow it
         assert_eq!(
             presult_to_string(&sexpr(&mut "1 + 2 && 3")),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), Val(Int(3)), BOp(And)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), BOp(And)))"
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "true || 1 * 2")),
-            "Ok(BinOp(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), IOp(Mul)), BOp(Or)))"
+            "Ok(BinOp(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BOp(Or)))"
         );
     }
     #[test]
@@ -1007,7 +1141,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List(1+2,2*5)"#)),
-            r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), IOp(Add)), BinOp(Val(Int(2)), Val(Int(5)), IOp(Mul))]))"#
+            r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))]))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List("hello","world")"#)),
@@ -1040,7 +1174,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.get(x, 1+2)"#)),
-            r#"Ok(LIndex(Var(VarName::new("x")), BinOp(Val(Int(1)), Val(Int(2)), IOp(Add))))"#
+            r#"Ok(LIndex(Var(VarName::new("x")), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add))))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(
@@ -1107,14 +1241,14 @@ mod tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = z[-1, 0] + 1",
-            r#"Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new("z")], exprs: {VarName::new("z"): BinOp(SIndex(Var(VarName::new("z")), -1, Int(0)), Val(Int(1)), IOp(Add))}, type_annotations: {} })"#,
+            r#"Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new("z")], exprs: {VarName::new("z"): BinOp(SIndex(Var(VarName::new("z")), -1, Int(0)), Val(Int(1)), NOp(Add))}, type_annotations: {} })"#,
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = z[-1, 0] + x",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(SIndex(Var(VarName::new(\"z\")), -1, Int(0)), Var(VarName::new(\"x\")), IOp(Add))}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(SIndex(Var(VarName::new(\"z\")), -1, Int(0)), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
         )
     }
 
@@ -1128,21 +1262,21 @@ mod tests {
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"iList\")], output_vars: [VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")], exprs: {VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), IOp(Add)), Val(Int(2)), IOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\"))), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"oList\"): Var(VarName::new(\"iList\"))}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"iList\")], output_vars: [VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")], exprs: {VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\"))), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"oList\"): Var(VarName::new(\"iList\"))}, type_annotations: {} })",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), IOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), IOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
         )
     }
 

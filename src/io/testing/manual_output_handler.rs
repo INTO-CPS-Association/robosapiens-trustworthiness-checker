@@ -231,6 +231,11 @@ mod tests {
     use smol_macros::test as smol_test;
     use test_log::test;
 
+    // Implement Eq for Value - only available for testing since this is not
+    // true for floats
+    impl Eq for Value {
+    }
+
     // Ordering of Value - only available for testing
     impl Ord for Value {
         fn cmp(&self, other: &Self) -> Ordering {
@@ -242,8 +247,9 @@ mod tests {
                 Unit => 1,
                 Bool(_) => 2,
                 Int(_) => 3,
-                Str(_) => 4,
-                List(_) => 5,
+                Float(_) => 4,
+                Str(_) => 5,
+                List(_) => 6,
             };
 
             // First compare based on variant order
@@ -258,6 +264,9 @@ mod tests {
             match (self, other) {
                 (Bool(a), Bool(b)) => a.cmp(b),
                 (Int(a), Int(b)) => a.cmp(b),
+                // Compare floats as ordered floats (with NaNs at either end of 
+                // the ordering) for the purposes of this test
+                (Float(a), Float(b)) => ordered_float::OrderedFloat(*a).cmp(&ordered_float::OrderedFloat(*b)),
                 (Str(a), Str(b)) => a.cmp(b),
                 (List(a), List(b)) => a.cmp(b), // Vec<Value> implements Ord if Value does
                 _ => Ordering::Equal, // Unit and Unknown are considered equal within their kind

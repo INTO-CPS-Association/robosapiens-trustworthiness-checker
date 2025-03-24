@@ -46,6 +46,8 @@ async-compat = "0.2.4"
 jemallocator = "0.5.4"
 ecow = {version="0.2.3", features=["serde"]}
 async_cell = "0.2.2"
+ordered-float = "5.0.0"
+approx = "0.5.1"
 
 [profile.release]
 lto = "fat"

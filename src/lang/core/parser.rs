@@ -3,6 +3,7 @@ use winnow::{
     Result,
     ascii::{line_ending, multispace1},
     combinator::{alt, delimited, opt, separated, seq},
+    error::ContextError,
     token::{literal, take_until},
 };
 
@@ -11,6 +12,7 @@ use std::fmt::Debug;
 use winnow::Parser;
 pub use winnow::ascii::alphanumeric1 as ident;
 pub use winnow::ascii::dec_int as integer;
+pub use winnow::ascii::float;
 pub use winnow::ascii::space0 as whitespace;
 
 pub fn presult_to_string<T: Debug>(e: &Result<T>) -> String {
@@ -36,6 +38,17 @@ pub fn val(s: &mut &str) -> Result<Value> {
     delimited(
         whitespace,
         alt((
+            // Order matters here, as prefixes of float can also be parsed as
+            // an integer
+            // We also specifically excude integrers from being parsed as floats
+            // (e.g. 1.0 is a float, 1 is an integer)
+            float.with_taken().verify_map(|(x, s): (f32, &str)| {
+                match (integer::<&str, i64, ContextError>).parse(s) {
+                    Ok(_i) => None,
+                    Err(_) => Some(Value::Float(x)),
+                }
+            }),
+            // This is a separate case, since a i64 could overflow a f32
             integer.map(Value::Int),
             string.map(|s: &str| Value::Str(s.into())),
             literal("true").map(|_| Value::Bool(true)),

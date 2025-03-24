@@ -50,6 +50,7 @@ fn output_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
     use strum::IntoEnumIterator;
 
     use macro_rules_attribute::apply;
@@ -60,8 +61,8 @@ mod tests {
         DependencyKind, create_dependency_manager,
     };
     use trustworthiness_checker::lola_fixtures::{
-        input_empty, input_streams_simple_add, input_streams4, input_streams5, spec_empty,
-        spec_simple_add_monitor,
+        input_empty, input_streams_float, input_streams_simple_add, input_streams4, input_streams5,
+        spec_empty, spec_simple_add_monitor, spec_simple_add_monitor_typed_float,
     };
 
     #[test(apply(smol_test))]
@@ -88,6 +89,34 @@ mod tests {
                     (2, vec![11.into()]),
                 ]
             );
+        }
+    }
+
+    #[test(apply(smol_test))]
+    async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
+        for kind in DependencyKind::iter() {
+            let mut input_streams = input_streams_float();
+            let spec = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
+            let mut output_handler = output_handler(executor.clone(), spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                executor.clone(),
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, spec),
+            );
+            executor.spawn(monitor.run()).detach();
+            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+            assert_eq!(outputs.len(), 2);
+            match outputs[0].1[0] {
+                Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
+                _ => panic!("Expected float"),
+            }
+            match outputs[1].1[0] {
+                Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
+                _ => panic!("Expected float"),
+            }
         }
     }
 

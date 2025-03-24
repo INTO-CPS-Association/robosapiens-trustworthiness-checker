@@ -1,4 +1,4 @@
-use super::ast::{BoolBinOp, CompBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
+use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::StreamType;
 use crate::{LOLASpecification, Specification};
 use crate::{Value, VarName};
@@ -91,6 +91,28 @@ pub enum SExprInt {
     Var(VarName),
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum SExprFloat {
+    If(Box<SExprBool>, Box<Self>, Box<Self>),
+
+    // Stream indexing
+    SIndex(
+        // Inner SExpr e
+        Box<Self>,
+        // Index i
+        isize,
+        // Default c
+        f32,
+    ),
+
+    // Arithmetic Stream expression
+    Val(f32),
+
+    BinOp(Box<Self>, Box<Self>, FloatBinOp),
+
+    Var(VarName),
+}
+
 // Stream expressions - now with types
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExprUnit {
@@ -138,15 +160,16 @@ pub enum SExprStr {
 }
 
 // Stream expression typed enum
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum SExprTE {
     Int(SExprInt),
+    Float(SExprFloat),
     Str(SExprStr),
     Bool(SExprBool),
     Unit(SExprUnit),
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TypedLOLASpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
@@ -202,6 +225,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
     ) -> Result<SExprTE, ()> {
         match self {
             Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
+            Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(*v))),
             Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.into()))),
             Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(*v))),
             Value::List(_) => todo!(),
@@ -233,9 +257,40 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>)
 
         match (op, se1_check, se2_check) {
             // Integer operations
-            (SBinOp::IOp(op), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => Ok(SExprTE::Int(
-                SExprInt::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
-            )),
+            (SBinOp::NOp(op), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
+                match op.clone().try_into() {
+                    Ok(op) => Ok(SExprTE::Int(SExprInt::BinOp(
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                        op,
+                    ))),
+                    Err(_) => {
+                        errs.push(SemanticError::TypeError(
+                            "Numerical operation not valid on integers".into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            // Pure float operations
+            (SBinOp::NOp(op), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
+                match op.clone().try_into() {
+                    Ok(op) => Ok(SExprTE::Float(SExprFloat::BinOp(
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                        op,
+                    ))),
+                    Err(_) => {
+                        errs.push(SemanticError::TypeError(
+                            "Numerical operation not valid on integers".into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+
+            // TODO: add casts for mixed integer/float operations
+
             // Boolean operations
             (SBinOp::BOp(op), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(SExprTE::Bool(
                 SExprBool::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
@@ -396,6 +451,7 @@ impl TypeCheckableHelper<SExprTE> for VarName {
         match type_opt {
             Some(t) => match t {
                 StreamType::Int => Ok(SExprTE::Int(SExprInt::Var(self.clone()))),
+                StreamType::Float => Ok(SExprTE::Float(SExprFloat::Var(self.clone()))),
                 StreamType::Str => Ok(SExprTE::Str(SExprStr::Var(self.clone()))),
                 StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Var(self.clone()))),
                 StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Var(self.clone()))),
@@ -471,7 +527,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
 mod tests {
     use std::{iter::zip, mem::discriminant};
 
-    use crate::lang::dynamic_lola::ast::StrBinOp;
+    use crate::lang::dynamic_lola::ast::{NumericalBinOp, StrBinOp};
 
     use super::{SemanticResult, TypeCheckable, TypeContext};
 
@@ -498,7 +554,7 @@ mod tests {
     impl BinOpExpr<Box<SExprInt>> for SExprInt {
         fn binop_expr(lhs: Box<SExprInt>, rhs: Box<SExprInt>, op: SBinOp) -> Self {
             match op {
-                SBinOp::IOp(op) => SExprInt::BinOp(lhs, rhs, op),
+                SBinOp::NOp(op) => SExprInt::BinOp(lhs, rhs, op.try_into().unwrap()),
                 _ => panic!("Invalid operation for SExprInt: {:?}", op),
             }
         }
@@ -554,10 +610,10 @@ mod tests {
     // // (Not guaranteed to be maintained)
     fn all_sbinop_variants() -> Vec<SBinOp> {
         vec![
-            SBinOp::IOp(IntBinOp::Add),
-            SBinOp::IOp(IntBinOp::Sub),
-            SBinOp::IOp(IntBinOp::Mul),
-            SBinOp::IOp(IntBinOp::Div),
+            SBinOp::NOp(NumericalBinOp::Add),
+            SBinOp::NOp(NumericalBinOp::Sub),
+            SBinOp::NOp(NumericalBinOp::Mul),
+            SBinOp::NOp(NumericalBinOp::Div),
         ]
     }
 
@@ -664,12 +720,12 @@ mod tests {
             SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Bool(false))),
                 Box::new(SExprV::Val(Value::Bool(false))),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
             SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Unit)),
                 Box::new(SExprV::Val(Value::Unit)),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
         ];
         let results = vals
@@ -730,17 +786,17 @@ mod tests {
             SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Int(0))),
                 Box::new(SExprV::Val(Value::Unknown)),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
             SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Unknown)),
                 Box::new(SExprV::Val(Value::Int(0))),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
             SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Unknown)),
                 Box::new(SExprV::Val(Value::Unknown)),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             ),
         ];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
@@ -948,7 +1004,7 @@ mod tests {
             Box::new(SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Int(3))),
                 Box::new(SExprV::Val(Value::Str("Banana".into()))),
-                SBinOp::IOp(IntBinOp::Add),
+                SBinOp::NOp(NumericalBinOp::Add),
             )),
             SBinOp::COp(CompBinOp::Eq),
         );

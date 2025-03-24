@@ -5,6 +5,15 @@ use std::{
     fmt::{Debug, Display},
 };
 
+// Numerical Binary Operations
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NumericalBinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
 // Integer Binary Operations
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IntBinOp {
@@ -12,6 +21,41 @@ pub enum IntBinOp {
     Sub,
     Mul,
     Div,
+}
+
+impl TryFrom<NumericalBinOp> for IntBinOp {
+    type Error = ();
+
+    fn try_from(op: NumericalBinOp) -> Result<IntBinOp, ()> {
+        match op {
+            NumericalBinOp::Add => Ok(IntBinOp::Add),
+            NumericalBinOp::Sub => Ok(IntBinOp::Sub),
+            NumericalBinOp::Mul => Ok(IntBinOp::Mul),
+            NumericalBinOp::Div => Ok(IntBinOp::Div),
+        }
+    }
+}
+
+// Floating point binary operations
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FloatBinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl TryFrom<NumericalBinOp> for FloatBinOp {
+    type Error = ();
+
+    fn try_from(op: NumericalBinOp) -> Result<FloatBinOp, ()> {
+        match op {
+            NumericalBinOp::Add => Ok(FloatBinOp::Add),
+            NumericalBinOp::Sub => Ok(FloatBinOp::Sub),
+            NumericalBinOp::Mul => Ok(FloatBinOp::Mul),
+            NumericalBinOp::Div => Ok(FloatBinOp::Div),
+        }
+    }
 }
 
 // Bool Binary Operations
@@ -37,7 +81,7 @@ pub enum CompBinOp {
 // Stream BinOp
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SBinOp {
-    IOp(IntBinOp),
+    NOp(NumericalBinOp),
     BOp(BoolBinOp),
     SOp(StrBinOp),
     COp(CompBinOp),
@@ -47,10 +91,10 @@ pub enum SBinOp {
 impl From<&str> for SBinOp {
     fn from(s: &str) -> Self {
         match s {
-            "+" => SBinOp::IOp(IntBinOp::Add),
-            "-" => SBinOp::IOp(IntBinOp::Sub),
-            "*" => SBinOp::IOp(IntBinOp::Mul),
-            "/" => SBinOp::IOp(IntBinOp::Div),
+            "+" => SBinOp::NOp(NumericalBinOp::Add),
+            "-" => SBinOp::NOp(NumericalBinOp::Sub),
+            "*" => SBinOp::NOp(NumericalBinOp::Mul),
+            "/" => SBinOp::NOp(NumericalBinOp::Div),
             "||" => SBinOp::BOp(BoolBinOp::Or),
             "&&" => SBinOp::BOp(BoolBinOp::And),
             "++" => SBinOp::SOp(StrBinOp::Concat),
@@ -61,7 +105,7 @@ impl From<&str> for SBinOp {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SExpr<VarT: Debug> {
     // if-then-else
     If(Box<Self>, Box<Self>, Box<Self>),
@@ -162,7 +206,7 @@ impl SExpr<VarName> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct LOLASpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
@@ -232,10 +276,10 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
             SIndex(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
             Val(n) => write!(f, "{}", n),
-            BinOp(e1, e2, IOp(IntBinOp::Add)) => write!(f, "({} + {})", e1, e2),
-            BinOp(e1, e2, IOp(IntBinOp::Sub)) => write!(f, "({} - {})", e1, e2),
-            BinOp(e1, e2, IOp(IntBinOp::Mul)) => write!(f, "({} * {})", e1, e2),
-            BinOp(e1, e2, IOp(IntBinOp::Div)) => write!(f, "({} / {})", e1, e2),
+            BinOp(e1, e2, NOp(NumericalBinOp::Add)) => write!(f, "({} + {})", e1, e2),
+            BinOp(e1, e2, NOp(NumericalBinOp::Sub)) => write!(f, "({} - {})", e1, e2),
+            BinOp(e1, e2, NOp(NumericalBinOp::Mul)) => write!(f, "({} * {})", e1, e2),
+            BinOp(e1, e2, NOp(NumericalBinOp::Div)) => write!(f, "({} / {})", e1, e2),
             BinOp(e1, e2, BOp(BoolBinOp::Or)) => write!(f, "({} || {})", e1, e2),
             BinOp(e1, e2, BOp(BoolBinOp::And)) => write!(f, "({} && {})", e1, e2),
             BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),

@@ -154,6 +154,9 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 + y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f32),
+            (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
             (x, y) => panic!("Invalid addition with types: {:?}, {:?}", x, y),
         },
         x,
@@ -165,6 +168,9 @@ pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Val
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 - y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x - y as f32),
+            (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
             _ => panic!("Invalid subtraction"),
         },
         x,
@@ -176,6 +182,9 @@ pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 * y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x * y as f32),
+            (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
             _ => panic!("Invalid multiplication"),
         },
         x,
@@ -187,6 +196,9 @@ pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 / y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x / y as f32),
+            (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
             _ => panic!("Invalid multiplication"),
         },
         x,
