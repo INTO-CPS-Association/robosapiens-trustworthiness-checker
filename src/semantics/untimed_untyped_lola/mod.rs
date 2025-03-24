@@ -4,7 +4,7 @@ use crate::lang::dynamic_lola::ast::{
     BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
 };
 use combinators as mc;
-pub (super) mod combinators;
+pub(super) mod combinators;
 
 #[derive(Clone)]
 pub struct UntimedLolaSemantics;
@@ -24,6 +24,7 @@ impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
                     SBinOp::NOp(NumericalBinOp::Sub) => mc::minus(e1, e2),
                     SBinOp::NOp(NumericalBinOp::Mul) => mc::mult(e1, e2),
                     SBinOp::NOp(NumericalBinOp::Div) => mc::div(e1, e2),
+                    SBinOp::NOp(NumericalBinOp::Mod) => mc::modulo(e1, e2),
                     SBinOp::BOp(BoolBinOp::Or) => mc::or(e1, e2),
                     SBinOp::BOp(BoolBinOp::And) => mc::and(e1, e2),
                     SBinOp::SOp(StrBinOp::Concat) => mc::concat(e1, e2),

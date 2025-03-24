@@ -134,24 +134,28 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
             NumericalBinOp::Sub => Int(i1 - i2),
             NumericalBinOp::Mul => Int(i1 * i2),
             NumericalBinOp::Div => Int(i1 / i2),
+            NumericalBinOp::Mod => Int(i1 % i2),
         },
         (Float(i1), Int(i2), NOp(iop)) => match iop {
             NumericalBinOp::Add => Float(i1 + i2 as f32),
             NumericalBinOp::Sub => Float(i1 - i2 as f32),
             NumericalBinOp::Mul => Float(i1 * i2 as f32),
             NumericalBinOp::Div => Float(i1 / i2 as f32),
+            NumericalBinOp::Mod => Float(i1 % i2 as f32),
         },
         (Int(i1), Float(i2), NOp(iop)) => match iop {
             NumericalBinOp::Add => Float(i1 as f32 + i2),
             NumericalBinOp::Sub => Float(i1 as f32 - i2),
             NumericalBinOp::Mul => Float(i1 as f32 * i2),
             NumericalBinOp::Div => Float(i1 as f32 / i2),
+            NumericalBinOp::Mod => Float(i1 as f32 % i2),
         },
         (Float(i1), Float(i2), NOp(iop)) => match iop {
             NumericalBinOp::Add => Float(i1 + i2),
             NumericalBinOp::Sub => Float(i1 - i2),
             NumericalBinOp::Mul => Float(i1 * i2),
             NumericalBinOp::Div => Float(i1 / i2),
+            NumericalBinOp::Mod => Float(i1 % i2),
         },
         (Bool(b1), Bool(b2), BOp(bop)) => match bop {
             BoolBinOp::Or => Bool(b1 || b2),

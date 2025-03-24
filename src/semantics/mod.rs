@@ -75,12 +75,14 @@ mod tests {
             let mut tc_minus = tc::minus;
             let mut tc_mult = tc::mult;
             let mut tc_div = tc::div;
+            let mut tc_modulo = tc::modulo;
             let mut uc_plus = uc::plus;
             let mut uc_minus = uc::minus;
             let mut uc_mult = uc::mult;
             let mut uc_div = uc::div;
+            let mut uc_modulo = uc::modulo;
 
-            let ops: Vec<(&str, &mut dyn FnMut(_, _) -> _, &mut dyn FnMut(_, _) -> _)> = vec![("plus", &mut tc_plus, &mut uc_plus), ("minus", &mut tc_minus, &mut uc_minus), ("mult", &mut tc_mult, &mut uc_mult), ("div", &mut tc_div, &mut uc_div)];
+            let ops: Vec<(&str, &mut dyn FnMut(_, _) -> _, &mut dyn FnMut(_, _) -> _)> = vec![("plus", &mut tc_plus, &mut uc_plus), ("minus", &mut tc_minus, &mut uc_minus), ("mult", &mut tc_mult, &mut uc_mult), ("div", &mut tc_div, &mut uc_div), ("modulo", &mut tc_modulo, &mut uc_modulo)];
 
             for (op_name, typed_op, untyped_op) in ops {
                 // Create distinct typed and untyped input and output streams

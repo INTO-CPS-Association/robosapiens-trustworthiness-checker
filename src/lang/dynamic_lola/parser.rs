@@ -290,6 +290,7 @@ enum BinaryPrecedences {
     Sub,
     Mul,
     Div,
+    Mod,
     Le,
     Eq,
 }
@@ -303,7 +304,8 @@ impl BinaryPrecedences {
             Sub => Some(Add),
             Add => Some(Mul),
             Mul => Some(Div),
-            Div => Some(Le),
+            Div => Some(Mod),
+            Mod => Some(Le),
             Le => Some(Eq),
             Eq => None,
         }
@@ -319,6 +321,7 @@ impl BinaryPrecedences {
             Sub => "-",
             Mul => "*",
             Div => "/",
+            Mod => "%",
             Le => "<=",
             Eq => "==",
         }
@@ -334,6 +337,7 @@ impl BinaryPrecedences {
             Sub => SBinOp::NOp(NumericalBinOp::Sub),
             Mul => SBinOp::NOp(NumericalBinOp::Mul),
             Div => SBinOp::NOp(NumericalBinOp::Div),
+            Mod => SBinOp::NOp(NumericalBinOp::Mod),
             Le => SBinOp::COp(CompBinOp::Le),
             Eq => SBinOp::COp(CompBinOp::Eq),
         }

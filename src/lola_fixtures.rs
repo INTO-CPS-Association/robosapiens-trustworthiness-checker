@@ -132,6 +132,22 @@ pub fn spec_simple_add_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_simple_modulo_monitor() -> &'static str {
+    "in x\n\
+     in y\n\
+     out z\n\
+     z = y % x"
+}
+
+#[allow(dead_code)]
+pub fn spec_simple_modulo_monitor_typed() -> &'static str {
+    "in x: Int\n\
+     in y: Int\n\
+     out z: Int\n\
+     z = y % x"
+}
+
+#[allow(dead_code)]
 pub fn spec_simple_add_monitor_typed() -> &'static str {
     "in x: Int\n\
      in y: Int\n\

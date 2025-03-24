@@ -43,6 +43,27 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[test(apply(smol_test))]
+async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
+    let mut input_streams = input_streams1();
+    let spec = lola_specification(&mut spec_simple_modulo_monitor()).unwrap();
+    let mut output_handler = output_handler(executor.clone(), spec.clone());
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
+        spec.clone(),
+        &mut input_streams,
+        output_handler,
+        create_dependency_manager(DependencyKind::Empty, spec),
+    );
+    executor.spawn(async_monitor.run()).detach();
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+    assert_eq!(
+        outputs,
+        vec![(0, vec![Value::Int(0)]), (1, vec![Value::Int(1)]),]
+    );
+}
+
+#[test(apply(smol_test))]
 async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
     let mut input_streams = input_streams_float();
     let spec = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();

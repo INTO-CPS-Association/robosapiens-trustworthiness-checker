@@ -61,8 +61,7 @@ mod tests {
         DependencyKind, create_dependency_manager,
     };
     use trustworthiness_checker::lola_fixtures::{
-        input_empty, input_streams_float, input_streams_simple_add, input_streams4, input_streams5,
-        spec_empty, spec_simple_add_monitor, spec_simple_add_monitor_typed_float,
+        input_empty, input_streams4, input_streams5, input_streams_float, input_streams_simple_add, spec_empty, spec_simple_add_monitor, spec_simple_add_monitor_typed_float, spec_simple_modulo_monitor
     };
 
     #[test(apply(smol_test))]
@@ -87,6 +86,33 @@ mod tests {
                     (0, vec![3.into()]),
                     (1, vec![7.into()]),
                     (2, vec![11.into()]),
+                ]
+            );
+        }
+    }
+
+    #[test(apply(smol_test))]
+    async fn test_simple_modulo(executor: Rc<LocalExecutor<'static>>) {
+        for kind in DependencyKind::iter() {
+            let mut input_streams = input_streams1();
+            let spec = lola_specification(&mut spec_simple_modulo_monitor()).unwrap();
+            let mut output_handler = output_handler(executor.clone(), spec.clone());
+            let outputs = output_handler.get_output();
+            let monitor = ConstraintBasedMonitor::new(
+                executor.clone(),
+                spec.clone(),
+                &mut input_streams,
+                output_handler,
+                create_dependency_manager(kind, spec),
+            );
+            executor.spawn(monitor.run()).detach();
+            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+            assert_eq!(
+                outputs,
+                vec![
+                    (0, vec![0.into()]),
+                    (1, vec![1.into()]),
+                    (2, vec![1.into()]),
                 ]
             );
         }

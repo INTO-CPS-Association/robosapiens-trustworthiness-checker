@@ -12,6 +12,7 @@ pub enum NumericalBinOp {
     Sub,
     Mul,
     Div,
+    Mod,
 }
 
 // Integer Binary Operations
@@ -21,6 +22,7 @@ pub enum IntBinOp {
     Sub,
     Mul,
     Div,
+    Mod,
 }
 
 impl TryFrom<NumericalBinOp> for IntBinOp {
@@ -32,6 +34,7 @@ impl TryFrom<NumericalBinOp> for IntBinOp {
             NumericalBinOp::Sub => Ok(IntBinOp::Sub),
             NumericalBinOp::Mul => Ok(IntBinOp::Mul),
             NumericalBinOp::Div => Ok(IntBinOp::Div),
+            NumericalBinOp::Mod => Ok(IntBinOp::Mod),
         }
     }
 }
@@ -43,6 +46,7 @@ pub enum FloatBinOp {
     Sub,
     Mul,
     Div,
+    Mod,
 }
 
 impl TryFrom<NumericalBinOp> for FloatBinOp {
@@ -54,6 +58,7 @@ impl TryFrom<NumericalBinOp> for FloatBinOp {
             NumericalBinOp::Sub => Ok(FloatBinOp::Sub),
             NumericalBinOp::Mul => Ok(FloatBinOp::Mul),
             NumericalBinOp::Div => Ok(FloatBinOp::Div),
+            NumericalBinOp::Mod => Ok(FloatBinOp::Mod),
         }
     }
 }
@@ -280,6 +285,7 @@ impl<VarT: Display + Debug> Display for SExpr<VarT> {
             BinOp(e1, e2, NOp(NumericalBinOp::Sub)) => write!(f, "({} - {})", e1, e2),
             BinOp(e1, e2, NOp(NumericalBinOp::Mul)) => write!(f, "({} * {})", e1, e2),
             BinOp(e1, e2, NOp(NumericalBinOp::Div)) => write!(f, "({} / {})", e1, e2),
+            BinOp(e1, e2, NOp(NumericalBinOp::Mod)) => write!(f, "({} % {})", e1, e2),
             BinOp(e1, e2, BOp(BoolBinOp::Or)) => write!(f, "({} || {})", e1, e2),
             BinOp(e1, e2, BOp(BoolBinOp::And)) => write!(f, "({} && {})", e1, e2),
             BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),

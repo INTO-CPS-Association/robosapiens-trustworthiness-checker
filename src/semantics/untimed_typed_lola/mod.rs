@@ -5,7 +5,7 @@ use crate::lang::dynamic_lola::type_checker::{
     SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
 };
 // use crate::semantics::typed_monitoring_semantics as mc;
-pub (super) mod combinators;
+pub(super) mod combinators;
 use combinators as mc;
 pub use combinators::{from_typed_stream, to_typed_stream};
 
@@ -36,6 +36,7 @@ impl MonitoringSemantics<SExprInt, i64, Value> for TypedUntimedLolaSemantics {
                     IntBinOp::Sub => mc::minus(e1, e2),
                     IntBinOp::Mul => mc::mult(e1, e2),
                     IntBinOp::Div => mc::div(e1, e2),
+                    IntBinOp::Mod => mc::modulo(e1, e2),
                 }
             }
             SExprInt::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
@@ -65,6 +66,7 @@ impl MonitoringSemantics<SExprFloat, f32, Value> for TypedUntimedLolaSemantics {
                     FloatBinOp::Sub => mc::minus(e1, e2),
                     FloatBinOp::Mul => mc::mult(e1, e2),
                     FloatBinOp::Div => mc::div(e1, e2),
+                    FloatBinOp::Mod => mc::modulo(e1, e2),
                 }
             }
             SExprFloat::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),

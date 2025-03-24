@@ -84,6 +84,13 @@ where
     lift2(|x, y| x + y, x, y)
 }
 
+pub fn modulo<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+where
+    T: std::ops::Rem<Output = T> + StreamData,
+{
+    lift2(|x, y| x % y, x, y)
+}
+
 pub fn concat(x: OutputStream<String>, y: OutputStream<String>) -> OutputStream<String> {
     lift2(
         |mut x, y| {
