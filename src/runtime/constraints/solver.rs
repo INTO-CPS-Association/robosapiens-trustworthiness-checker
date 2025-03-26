@@ -222,6 +222,7 @@ impl SExpr {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
         }
     }
@@ -373,6 +374,7 @@ impl SExpr {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
         }
     }
@@ -531,6 +533,7 @@ impl Simplifiable for SExpr {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
         }
     }

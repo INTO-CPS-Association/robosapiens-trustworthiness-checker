@@ -397,6 +397,11 @@ pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<V
     Box::pin(xs) as LocalBoxStream<'static, Value>
 }
 
+pub fn is_defined(x: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(x.map(|x| Value::Bool(x != Value::Unknown)))
+}
+
+// Could also be implemented with is_defined but I think this is more efficient
 pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
         while let Some(x_val) = x.next().await {

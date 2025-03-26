@@ -1,0 +1,5 @@
+// Use input file `eval.input`
+in x
+in e
+out z
+z = is_defined(e)

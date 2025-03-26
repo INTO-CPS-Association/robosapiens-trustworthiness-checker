@@ -118,6 +118,21 @@ fn update(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+fn is_defined(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: literal("is_defined"),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    ))
+    .map(|(e,)| SExpr::IsDefined(Box::new(e)))
+    .parse_next(s)
+}
+
 fn when(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
@@ -274,7 +289,7 @@ fn atom(s: &mut &str) -> Result<SExpr> {
         whitespace,
         alt((
             sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
-            default, when, sexpr_list, var, paren,
+            default, when, is_defined, sexpr_list, var, paren,
         )),
         whitespace,
     )

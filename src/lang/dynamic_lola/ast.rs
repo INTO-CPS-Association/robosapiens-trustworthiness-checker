@@ -137,7 +137,8 @@ pub enum SExpr {
     Defer(Box<Self>),
     Update(Box<Self>, Box<Self>),
     Default(Box<Self>, Box<Self>),
-    When(Box<Self>), // Becomes true after the first time .0 is not Unknown
+    IsDefined(Box<Self>), // True when .0 is not Unknown
+    When(Box<Self>),      // Becomes true after the first time .0 is not Unknown
 
     // Unary expressions (refactor if more are added...)
     Not(Box<Self>),
@@ -182,6 +183,7 @@ impl SExpr {
                 inputs.extend(e2.inputs());
                 inputs
             }
+            IsDefined(e) => e.inputs(),
             When(e) => e.inputs(),
             List(es) => {
                 let mut inputs = vec![];
@@ -297,6 +299,7 @@ impl Display for SExpr {
             Defer(e) => write!(f, "defer({})", e),
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
             Default(e, v) => write!(f, "default({}, {})", e, v),
+            IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),
             When(sexpr) => write!(f, "when({})", sexpr),
             List(es) => {
                 let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
