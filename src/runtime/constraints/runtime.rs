@@ -68,7 +68,7 @@ impl ConstraintBasedRuntime {
             let mut new_exprs = BTreeMap::new();
             // Note: Intentionally does not borrow outputs_exprs here as it is needed for expr.simplify
             for (name, expr) in &self.store.output_exprs {
-                if is_enum_variant!(expr, SExpr::<VarName>::Val(_)) {
+                if is_enum_variant!(expr, SExpr::Val(_)) {
                     new_exprs.insert(name.clone(), expr.clone());
                     continue;
                 }

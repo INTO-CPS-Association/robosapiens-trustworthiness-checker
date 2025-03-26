@@ -11,8 +11,8 @@ use super::{DepGraph, Empty};
 #[strum_discriminants(name(DependencyKind), derive(EnumIter))]
 #[enum_inner_method (fn longest_time_dependency(&self, v: &VarName) -> Option<usize>)]
 #[enum_inner_method (fn longest_time_dependencies(&self) -> BTreeMap<VarName, usize>)]
-#[enum_inner_method (fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>))]
-#[enum_inner_method (fn remove_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>))]
+#[enum_inner_method (fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr))]
+#[enum_inner_method (fn remove_dependency(&mut self, var: &VarName, sexpr: &SExpr))]
 pub enum DependencyManager {
     Empty(Empty),
     DepGraph(DepGraph),
@@ -20,7 +20,7 @@ pub enum DependencyManager {
 
 pub fn create_dependency_manager(
     kind: DependencyKind,
-    spec: impl Specification<Expr = SExpr<VarName>>,
+    spec: impl Specification<Expr = SExpr>,
 ) -> DependencyManager {
     match kind {
         DependencyKind::Empty => DependencyManager::Empty(Empty::new(spec)),
@@ -31,13 +31,13 @@ pub fn create_dependency_manager(
 // Interface for resolving dependencies.
 pub trait DependencyResolver {
     // Generates the dependency structure from the given expressions
-    fn new(spec: impl Specification<Expr = SExpr<VarName>>) -> Self;
+    fn new(spec: impl Specification<Expr = SExpr>) -> Self;
 
     // Adds a new dependency to the resolver
-    fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>);
+    fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr);
 
     // Remove dependency to the resolver
-    fn remove_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>);
+    fn remove_dependency(&mut self, var: &VarName, sexpr: &SExpr);
 
     // Returns how long the variable needs to be saved before it can be forgotten
     fn longest_time_dependency(&self, var: &VarName) -> Option<usize>;

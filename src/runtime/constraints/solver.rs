@@ -57,7 +57,7 @@ pub type SExprStream = SyncStream<SExprAbs>;
 // A ConstraintStore is the environment for the streams
 pub struct ConstraintStore {
     pub input_streams: ValStream,
-    pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
+    pub output_exprs: BTreeMap<VarName, SExpr>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
 }
@@ -180,7 +180,7 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
     }
 }
 
-impl SExpr<VarName> {
+impl SExpr {
     pub fn to_absolute(&self, base_time: usize) -> SExprAbs {
         match self {
             SExpr::Val(val) => SExprAbs::Val(val.clone()),
@@ -329,7 +329,7 @@ impl Simplifiable for SExprAbs {
     }
 }
 
-impl SExpr<VarName> {
+impl SExpr {
     fn is_solveable(&self, base_time: usize, store: &ConstraintStore) -> bool {
         match self {
             SExpr::Val(_) => true,
@@ -379,7 +379,7 @@ impl SExpr<VarName> {
 }
 
 // SExprR
-impl Simplifiable for SExpr<VarName> {
+impl Simplifiable for SExpr {
     fn simplify(
         &self,
         base_time: usize,

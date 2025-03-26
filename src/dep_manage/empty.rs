@@ -12,7 +12,7 @@ pub struct Empty {
 // A DependencyStore that simply saves the VarNames.
 // It always returns time infinity for all dependencies.
 impl DependencyResolver for Empty {
-    fn new(spec: impl Specification<Expr = SExpr<VarName>>) -> Self {
+    fn new(spec: impl Specification<Expr = SExpr>) -> Self {
         let mut names = BTreeSet::new();
         spec.output_vars().iter().for_each(|name| {
             names.insert(name.clone());
@@ -23,11 +23,11 @@ impl DependencyResolver for Empty {
         Self { names }
     }
 
-    fn add_dependency(&mut self, name: &VarName, _: &SExpr<VarName>) {
+    fn add_dependency(&mut self, name: &VarName, _: &SExpr) {
         self.names.insert(name.clone());
     }
 
-    fn remove_dependency(&mut self, _: &VarName, _: &SExpr<VarName>) {
+    fn remove_dependency(&mut self, _: &VarName, _: &SExpr) {
         // In principle, this should remove the Dependencies inside the SExpr from `names`.
         // However, since we don't know if other variables are using them we can't.
     }

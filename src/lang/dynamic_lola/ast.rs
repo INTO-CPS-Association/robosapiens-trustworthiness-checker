@@ -111,7 +111,7 @@ impl From<&str> for SBinOp {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum SExpr<VarT: Debug> {
+pub enum SExpr {
     // if-then-else
     If(Box<Self>, Box<Self>, Box<Self>),
 
@@ -130,7 +130,7 @@ pub enum SExpr<VarT: Debug> {
 
     BinOp(Box<Self>, Box<Self>, SBinOp),
 
-    Var(VarT),
+    Var(VarName),
 
     // Eval
     Eval(Box<Self>),
@@ -151,7 +151,7 @@ pub enum SExpr<VarT: Debug> {
     LTail(Box<Self>),             // List tail -- get all but first element of list
 }
 
-impl SExpr<VarName> {
+impl SExpr {
     pub fn inputs(&self) -> Vec<VarName> {
         use SExpr::*;
         match self {
@@ -215,7 +215,7 @@ impl SExpr<VarName> {
 pub struct LOLASpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
-    pub exprs: BTreeMap<VarName, SExpr<VarName>>,
+    pub exprs: BTreeMap<VarName, SExpr>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
@@ -223,7 +223,7 @@ impl Debug for LOLASpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // Format the expressions map ordered lexicographically by key
         // rather than by variable ordering
-        let exprs_by_name: BTreeMap<String, &SExpr<VarName>> =
+        let exprs_by_name: BTreeMap<String, &SExpr> =
             self.exprs.iter().map(|(k, v)| (k.to_string(), v)).collect();
         let exprs_formatted = format!(
             "{{{}}}",
@@ -258,7 +258,7 @@ impl Debug for LOLASpecification {
 }
 
 impl Specification for LOLASpecification {
-    type Expr = SExpr<VarName>;
+    type Expr = SExpr;
 
     fn input_vars(&self) -> Vec<VarName> {
         self.input_vars.clone()
@@ -268,12 +268,12 @@ impl Specification for LOLASpecification {
         self.output_vars.clone()
     }
 
-    fn var_expr(&self, var: &VarName) -> Option<SExpr<VarName>> {
+    fn var_expr(&self, var: &VarName) -> Option<SExpr> {
         Some(self.exprs.get(var)?.clone())
     }
 }
 
-impl<VarT: Display + Debug> Display for SExpr<VarT> {
+impl Display for SExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         use SBinOp::*;
         use SExpr::*;
@@ -322,7 +322,7 @@ pub mod generation {
         lang::dynamic_lola::ast::{BoolBinOp, SBinOp},
     };
 
-    pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr<VarName>> {
+    pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
         let leaf = prop_oneof![
             any::<bool>().prop_map(|x| SExpr::Val(x.into())),
             proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
