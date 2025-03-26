@@ -100,6 +100,9 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y),
+            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f32 <= b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a <= b as f32),
+            (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
             _ => panic!("Invalid comparison"),
         },
