@@ -2,10 +2,9 @@
 	"name": "RoboSapiens Adaptive Platform (No GPU)",
 	"dockerComposeFile": "../../docker/docker-compose.yaml",
 	"service": "devnogpu",
-	// "runServices": [
-	// 	"rapdevnogpu",
-	// 	"rosmqttbridge"
-	// ],
+	"runServices": [
+		"devnogpu"
+	],
 	"workspaceFolder": "/ws",
 	"shutdownAction": "stopCompose",
 	"mounts": [
