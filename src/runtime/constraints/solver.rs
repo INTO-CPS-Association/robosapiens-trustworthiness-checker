@@ -47,6 +47,11 @@ pub enum SExprAbs {
     LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
     LHead(Box<Self>),             // List head -- get first element of list
     LTail(Box<Self>),             // List tail -- get all but first element of list
+
+    // Triginometric functions
+    Sin(Box<Self>),
+    Cos(Box<Self>),
+    Tan(Box<Self>),
 }
 
 pub type SyncStream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
@@ -57,7 +62,7 @@ pub type SExprStream = SyncStream<SExprAbs>;
 // A ConstraintStore is the environment for the streams
 pub struct ConstraintStore {
     pub input_streams: ValStream,
-    pub output_exprs: BTreeMap<VarName, SExpr<VarName>>,
+    pub output_exprs: BTreeMap<VarName, SExpr>,
     pub outputs_resolved: ValStream,
     pub outputs_unresolved: SExprStream,
 }
@@ -180,7 +185,7 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
     }
 }
 
-impl SExpr<VarName> {
+impl SExpr {
     pub fn to_absolute(&self, base_time: usize) -> SExprAbs {
         match self {
             SExpr::Val(val) => SExprAbs::Val(val.clone()),
@@ -222,7 +227,11 @@ impl SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }
@@ -325,11 +334,14 @@ impl Simplifiable for SExprAbs {
             SExprAbs::LHead(_) => todo!(),
             SExprAbs::LTail(_) => todo!(),
             SExprAbs::When(_) => todo!(),
+            SExprAbs::Sin(_) => todo!(),
+            SExprAbs::Cos(_) => todo!(),
+            SExprAbs::Tan(_) => todo!(),
         }
     }
 }
 
-impl SExpr<VarName> {
+impl SExpr {
     fn is_solveable(&self, base_time: usize, store: &ConstraintStore) -> bool {
         match self {
             SExpr::Val(_) => true,
@@ -373,13 +385,17 @@ impl SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }
 
 // SExprR
-impl Simplifiable for SExpr<VarName> {
+impl Simplifiable for SExpr {
     fn simplify(
         &self,
         base_time: usize,
@@ -531,7 +547,11 @@ impl Simplifiable for SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }

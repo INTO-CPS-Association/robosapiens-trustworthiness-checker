@@ -371,8 +371,8 @@ pub fn defer(
     })
 }
 
-// Update for a synchronized language - in this case UntimedLolaSemantics.
-// We use Unknown for simulating no data on the stream
+// Evaluates to the l.h.s. until the r.h.s. provides a value.
+// Then continues evaluating the r.h.s. (even if it provides Unknown)
 pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
     return Box::pin(stream! {
         while let (Some(x_val), Some(y_val)) = join!(x.next(), y.next()) {
@@ -392,6 +392,7 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
     });
 }
 
+// Evaluates to a placeholder value whenever Unknown is received.
 pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<Value> {
     let xs = x
         .zip(d)
@@ -399,6 +400,11 @@ pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<V
     Box::pin(xs) as LocalBoxStream<'static, Value>
 }
 
+pub fn is_defined(x: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(x.map(|x| Value::Bool(x != Value::Unknown)))
+}
+
+// Could also be implemented with is_defined but I think this is more efficient
 pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
         while let Some(x_val) = x.next().await {
@@ -510,6 +516,36 @@ pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
             }
         }
     })
+}
+
+pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
+    lift1(
+        |v| match v {
+            Value::Float(v) => Value::Float(v.sin()),
+            _ => panic!("Invalid type of angle input stream"),
+        }, 
+        v,
+    )
+}
+
+pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
+    lift1(
+        |v| match v {
+            Value::Float(v) => Value::Float(v.cos()),
+            _ => panic!("Invalid type of angle input stream"),
+        }, 
+        v,
+    )
+}
+
+pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
+    lift1(
+        |v| match v {
+            Value::Float(v) => Value::Float(v.tan()),
+            _ => panic!("Invalid type of angle input stream"),
+        }, 
+        v,
+    )
 }
 
 #[cfg(test)]

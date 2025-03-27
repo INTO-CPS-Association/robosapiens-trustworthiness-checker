@@ -9,16 +9,16 @@ use crate::core::StreamType;
 use crate::core::VarName;
 
 // This is the top-level parser for LOLA expressions
-pub fn lola_expression(s: &mut &str) -> Result<SExpr<VarName>> {
+pub fn lola_expression(s: &mut &str) -> Result<SExpr> {
     sexpr.parse_next(s)
 }
 
-fn paren(s: &mut &str) -> Result<SExpr<VarName>> {
+fn paren(s: &mut &str) -> Result<SExpr> {
     delimited('(', sexpr, ')').parse_next(s)
 }
 
 // Used for Lists in output streams
-fn sexpr_list(s: &mut &str) -> Result<SExpr<VarName>> {
+fn sexpr_list(s: &mut &str) -> Result<SExpr> {
     let res = delimited(
         seq!("List", loop_ms_or_lb_or_lc, '('),
         separated(
@@ -35,18 +35,18 @@ fn sexpr_list(s: &mut &str) -> Result<SExpr<VarName>> {
     }
 }
 
-fn var(s: &mut &str) -> Result<SExpr<VarName>> {
+fn var(s: &mut &str) -> Result<SExpr> {
     ident
         .map(|name: &str| SExpr::Var(name.into()))
         .parse_next(s)
 }
 
 // Same as `val` but returns SExpr::Val
-fn sval(s: &mut &str) -> Result<SExpr<VarName>> {
+fn sval(s: &mut &str) -> Result<SExpr> {
     val.map(|v| SExpr::Val(v)).parse_next(s)
 }
 
-fn sindex(s: &mut &str) -> Result<SExpr<VarName>> {
+fn sindex(s: &mut &str) -> Result<SExpr> {
     seq!(
         _: whitespace,
         alt((sval, var, paren)),
@@ -65,7 +65,7 @@ fn sindex(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn ifelse(s: &mut &str) -> Result<SExpr<VarName>> {
+fn ifelse(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: "if",
@@ -85,7 +85,7 @@ fn ifelse(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn defer(s: &mut &str) -> Result<SExpr<VarName>> {
+fn defer(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: literal("defer"),
@@ -100,7 +100,7 @@ fn defer(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn update(s: &mut &str) -> Result<SExpr<VarName>> {
+fn update(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: literal("update"),
@@ -118,7 +118,22 @@ fn update(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn when(s: &mut &str) -> Result<SExpr<VarName>> {
+fn is_defined(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: literal("is_defined"),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    ))
+    .map(|(e,)| SExpr::IsDefined(Box::new(e)))
+    .parse_next(s)
+}
+
+fn when(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: literal("when"),
@@ -133,7 +148,7 @@ fn when(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn eval(s: &mut &str) -> Result<SExpr<VarName>> {
+fn eval(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: "eval",
@@ -149,7 +164,7 @@ fn eval(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn default(s: &mut &str) -> Result<SExpr<VarName>> {
+fn default(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: literal("default"),
@@ -167,7 +182,7 @@ fn default(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn not(s: &mut &str) -> Result<SExpr<VarName>> {
+fn not(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: "!",
@@ -179,7 +194,7 @@ fn not(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn lindex(s: &mut &str) -> Result<SExpr<VarName>> {
+fn lindex(s: &mut &str) -> Result<SExpr> {
     seq!(
         _: whitespace,
         _: "List.get",
@@ -198,7 +213,7 @@ fn lindex(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn lappend(s: &mut &str) -> Result<SExpr<VarName>> {
+fn lappend(s: &mut &str) -> Result<SExpr> {
     seq!(
         _: whitespace,
         _: "List.append",
@@ -217,7 +232,7 @@ fn lappend(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn lconcat(s: &mut &str) -> Result<SExpr<VarName>> {
+fn lconcat(s: &mut &str) -> Result<SExpr> {
     seq!(
         _: whitespace,
         _: "List.concat",
@@ -236,7 +251,7 @@ fn lconcat(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn lhead(s: &mut &str) -> Result<SExpr<VarName>> {
+fn lhead(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: "List.head",
@@ -252,7 +267,7 @@ fn lhead(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
-fn ltail(s: &mut &str) -> Result<SExpr<VarName>> {
+fn ltail(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: "List.tail",
@@ -268,13 +283,62 @@ fn ltail(s: &mut &str) -> Result<SExpr<VarName>> {
     .parse_next(s)
 }
 
+/// Trigonometric functions
+fn sin(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "sin",
+        _: loop_ms_or_lb_or_lc,
+        _: "(",
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ")",
+        _: whitespace,
+    ))
+    .map(|(v,)| SExpr::Sin(Box::new(v)))
+    .parse_next(s)
+}
+fn cos(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "cos",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(v,)| SExpr::Cos(Box::new(v)))
+    .parse_next(s)
+}
+fn tan(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "tan",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(v,)| SExpr::Tan(Box::new(v)))
+    .parse_next(s)
+}
+
+
 /// Fundamental expressions of the language
-fn atom(s: &mut &str) -> Result<SExpr<VarName>> {
+fn atom(s: &mut &str) -> Result<SExpr> {
     delimited(
         whitespace,
         alt((
             sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
-            default, when, sexpr_list, var, paren,
+            sin, cos, tan, 
+            default, when, is_defined, sexpr_list, var, paren
         )),
         whitespace,
     )
@@ -361,14 +425,13 @@ impl BinaryPrecedences {
 /// @param current_op: The current precedence level
 ///
 /// (Inspired by https://github.com/winnow-rs/winnow/blob/main/examples/arithmetic/parser_ast.rs)
-fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<SExpr<VarName>> {
+fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<SExpr> {
     move |s: &mut &str| {
         let next_parser_op = current_op.next();
-        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<SExpr<VarName>>> =
-            match next_parser_op {
-                Some(next_parser) => Box::new(binary_op(next_parser)),
-                None => Box::new(|i: &mut &str| atom.parse_next(i)),
-            };
+        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<SExpr>> = match next_parser_op {
+            Some(next_parser) => Box::new(binary_op(next_parser)),
+            None => Box::new(|i: &mut &str| atom.parse_next(i)),
+        };
         let lit = current_op.get_lit();
         let res = separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
             SExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
@@ -378,7 +441,7 @@ fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<S
     }
 }
 
-pub fn sexpr(s: &mut &str) -> Result<SExpr<VarName>> {
+pub fn sexpr(s: &mut &str) -> Result<SExpr> {
     delimited(
         whitespace,
         binary_op(BinaryPrecedences::lowest_precedence()),
@@ -440,7 +503,7 @@ fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
     separated(0.., output_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-fn var_decl(s: &mut &str) -> Result<(VarName, SExpr<VarName>)> {
+fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     seq!((
         _: whitespace,
         ident,
@@ -454,7 +517,7 @@ fn var_decl(s: &mut &str) -> Result<(VarName, SExpr<VarName>)> {
     .parse_next(s)
 }
 
-fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr<VarName>)>> {
+fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
     separated(0.., var_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 

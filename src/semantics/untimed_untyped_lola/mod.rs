@@ -1,5 +1,5 @@
 use crate::core::Value;
-use crate::core::{MonitoringSemantics, OutputStream, StreamContext, VarName};
+use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
 use crate::lang::dynamic_lola::ast::{
     BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
 };
@@ -9,11 +9,8 @@ pub(super) mod combinators;
 #[derive(Clone)]
 pub struct UntimedLolaSemantics;
 
-impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
-    fn to_async_stream(
-        expr: SExpr<VarName>,
-        ctx: &dyn StreamContext<Value>,
-    ) -> OutputStream<Value> {
+impl MonitoringSemantics<SExpr, Value> for UntimedLolaSemantics {
+    fn to_async_stream(expr: SExpr, ctx: &dyn StreamContext<Value>) -> OutputStream<Value> {
         match expr {
             SExpr::Val(v) => mc::val(v),
             SExpr::BinOp(e1, e2, op) => {
@@ -54,6 +51,10 @@ impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
                 let e = Self::to_async_stream(*e, ctx);
                 let d = Self::to_async_stream(*d, ctx);
                 mc::default(e, d)
+            }
+            SExpr::IsDefined(e) => {
+                let e = Self::to_async_stream(*e, ctx);
+                mc::is_defined(e)
             }
             SExpr::When(e) => {
                 let e = Self::to_async_stream(*e, ctx);
@@ -98,6 +99,18 @@ impl MonitoringSemantics<SExpr<VarName>, Value> for UntimedLolaSemantics {
             SExpr::LTail(lst) => {
                 let lst = Self::to_async_stream(*lst, ctx);
                 mc::ltail(lst)
+            }
+            SExpr::Sin(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::sin(v)
+            }
+            SExpr::Cos(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::cos(v)
+            }
+            SExpr::Tan(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::tan(v)
             }
         }
     }

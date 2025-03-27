@@ -2,9 +2,9 @@
 	"name": "RoboSapiens Adaptive Platform (NVIDIA GPU)",
 	"dockerComposeFile": "../../docker/docker-compose.yaml",
 	"service": "devnvidia",
-	// "runServices": [
-	// 	"rapdevnvidia",
-	// 	"rosmqttbridge"
+	"runServices": [
+		"devnvidia"
+	],
 	// ],
 	"workspaceFolder": "/ws",
 	"shutdownAction": "stopCompose",

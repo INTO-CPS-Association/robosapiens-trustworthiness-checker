@@ -61,7 +61,9 @@ mod tests {
         DependencyKind, create_dependency_manager,
     };
     use trustworthiness_checker::lola_fixtures::{
-        input_empty, input_streams4, input_streams5, input_streams_float, input_streams_simple_add, spec_empty, spec_simple_add_monitor, spec_simple_add_monitor_typed_float, spec_simple_modulo_monitor
+        input_empty, input_streams_float, input_streams_simple_add, input_streams4, input_streams5,
+        spec_empty, spec_simple_add_monitor, spec_simple_add_monitor_typed_float,
+        spec_simple_modulo_monitor,
     };
 
     #[test(apply(smol_test))]

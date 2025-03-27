@@ -110,9 +110,9 @@ impl DepGraph {
     // See: sexpr_dependencies
     // NOTE: The graph returned here may have multiple edges to the same node.
     // Can be combined by calling `combine_edges`. This is not done in this function for efficiency
-    fn sexpr_dependencies_impl(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
+    fn sexpr_dependencies_impl(sexpr: &SExpr, root_name: &Node) -> DepGraph {
         fn deps_impl(
-            sexpr: &SExpr<Node>,
+            sexpr: &SExpr,
             steps: &mut Vec<Weight>,
             map: &mut DepGraph,
             current_node: &NodeIndex,
@@ -146,8 +146,12 @@ impl DepGraph {
                 | SExpr::Not(sexpr)
                 | SExpr::LHead(sexpr)
                 | SExpr::LTail(sexpr)
+                | SExpr::IsDefined(sexpr)
                 | SExpr::When(sexpr)
-                | SExpr::Defer(sexpr) => deps_impl(sexpr, steps, map, current_node),
+                | SExpr::Defer(sexpr) 
+                | SExpr::Sin(sexpr)
+                | SExpr::Cos(sexpr)
+                | SExpr::Tan(sexpr) => deps_impl(sexpr, steps, map, current_node),
                 SExpr::BinOp(sexpr1, sexpr2, _)
                 | SExpr::Default(sexpr1, sexpr2)
                 | SExpr::Update(sexpr1, sexpr2)
@@ -167,7 +171,7 @@ impl DepGraph {
     }
 
     // Traverses the sexpr and returns a map of its dependencies to other variables
-    pub fn sexpr_dependencies(sexpr: &SExpr<Node>, root_name: &Node) -> DepGraph {
+    pub fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
         let graph = DepGraph::sexpr_dependencies_impl(sexpr, &root_name);
         graph
     }
@@ -208,11 +212,9 @@ impl DepGraph {
         }
     }
 
-    // Takes a spec and creates a Map of VarName to SExpr<VarName>
+    // Takes a spec and creates a Map of VarName to SExpr
     // I.e., all the assignment states in the spec (because we only support assignment statements)
-    fn spec_to_map(
-        spec: impl Specification<Expr = SExpr<VarName>>,
-    ) -> BTreeMap<VarName, SExpr<VarName>> {
+    fn spec_to_map(spec: impl Specification<Expr = SExpr>) -> BTreeMap<VarName, SExpr> {
         let mut map = BTreeMap::new();
         for var in spec.output_vars() {
             if let Some(expr) = spec.var_expr(&var) {
@@ -224,7 +226,7 @@ impl DepGraph {
 }
 
 impl DependencyResolver for DepGraph {
-    fn new(spec: impl Specification<Expr = SExpr<VarName>>) -> Self {
+    fn new(spec: impl Specification<Expr = SExpr>) -> Self {
         let mut graph = DepGraph::empty_graph();
         for (name, expr) in Self::spec_to_map(spec) {
             let expr_deps = Self::sexpr_dependencies_impl(&expr, &name);
@@ -233,12 +235,12 @@ impl DependencyResolver for DepGraph {
         graph
     }
 
-    fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr<VarName>) {
+    fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr) {
         let expr_deps = DepGraph::sexpr_dependencies(sexpr, &var);
         self.merge_graphs(&expr_deps);
     }
 
-    fn remove_dependency(&mut self, name: &VarName, sexpr: &SExpr<VarName>) {
+    fn remove_dependency(&mut self, name: &VarName, sexpr: &SExpr) {
         let expr_deps = DepGraph::sexpr_dependencies(sexpr, &name);
         self.diff_graphs(&expr_deps);
     }

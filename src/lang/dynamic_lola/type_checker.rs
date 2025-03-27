@@ -245,7 +245,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
 }
 
 // Type check a binary operation
-impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>) {
+impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,
@@ -332,7 +332,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr<VarName>, &SExpr<VarName>)
 }
 
 // Type check an if expression
-impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, &SExpr<VarName>, &SExpr<VarName>) {
+impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,
@@ -392,7 +392,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, &SExpr<VarName>, &SExpr<
 }
 
 // Type check an index expression
-impl TypeCheckableHelper<SExprTE> for (&SExpr<VarName>, isize, &Value) {
+impl TypeCheckableHelper<SExprTE> for (&SExpr, isize, &Value) {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,
@@ -467,7 +467,7 @@ impl TypeCheckableHelper<SExprTE> for VarName {
 }
 
 // Type check an expression
-impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
+impl TypeCheckableHelper<SExprTE> for SExpr {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,
@@ -518,7 +518,11 @@ impl TypeCheckableHelper<SExprTE> for SExpr<VarName> {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }
@@ -534,7 +538,7 @@ mod tests {
     use super::*;
     use test_log::test;
 
-    type SExprV = SExpr<VarName>;
+    type SExprV = SExpr;
     type SemantResultStr = SemanticResult<SExprTE>;
 
     trait BinOpExpr<Expr> {
@@ -545,8 +549,8 @@ mod tests {
         fn if_expr(b: BoolExpr, t: Expr, f: Expr) -> Self;
     }
 
-    impl BinOpExpr<Box<SExpr<VarName>>> for SExpr<VarName> {
-        fn binop_expr(lhs: Box<SExpr<VarName>>, rhs: Box<SExpr<VarName>>, op: SBinOp) -> Self {
+    impl BinOpExpr<Box<SExpr>> for SExpr {
+        fn binop_expr(lhs: Box<SExpr>, rhs: Box<SExpr>, op: SBinOp) -> Self {
             SExpr::BinOp(lhs, rhs, op)
         }
     }
@@ -560,8 +564,8 @@ mod tests {
         }
     }
 
-    impl IfExpr<Box<SExpr<VarName>>, Box<SExpr<VarName>>> for SExpr<VarName> {
-        fn if_expr(b: Box<SExpr<VarName>>, t: Box<SExpr<VarName>>, f: Box<SExpr<VarName>>) -> Self {
+    impl IfExpr<Box<SExpr>, Box<SExpr>> for SExpr {
+        fn if_expr(b: Box<SExpr>, t: Box<SExpr>, f: Box<SExpr>) -> Self {
             SExpr::If(b, t, f)
         }
     }
@@ -832,8 +836,7 @@ mod tests {
         // Checks that if we BinOp two Ints together it results in typed AST after semantic analysis
         let int_val = vec![SExprV::Val(Value::Int(0))];
         let sbinops = all_sbinop_variants();
-        let vals: Vec<SExpr<VarName>> =
-            generate_binop_combinations(&int_val, &int_val, sbinops.clone());
+        let vals: Vec<SExpr> = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
         let int_t_val = vec![SExprInt::Val(0)];
@@ -851,8 +854,7 @@ mod tests {
         // Checks that if we add two Strings together it results in typed AST after semantic analysis
         let str_val = vec![SExprV::Val(Value::Str("".into()))];
         let sbinops = vec![SBinOp::SOp(StrBinOp::Concat)];
-        let vals: Vec<SExpr<VarName>> =
-            generate_binop_combinations(&str_val, &str_val, sbinops.clone());
+        let vals: Vec<SExpr> = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
         let str_t_val = vec![SExprStr::Val("".into())];

@@ -2,10 +2,9 @@
 	"name": "RoboSapiens Adaptive Platform (MESA)",
 	"dockerComposeFile": "../../docker/docker-compose.yaml",
 	"service": "devmesa",
-	// "runServices": [
-	// "rapdevmesa",
-	// "rosmqttbridge"
-	// ],
+	"runServices": [
+		"devmesa"
+	],
 	"workspaceFolder": "/ws",
 	"shutdownAction": "stopCompose",
 	"mounts": [
