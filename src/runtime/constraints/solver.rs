@@ -47,6 +47,11 @@ pub enum SExprAbs {
     LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
     LHead(Box<Self>),             // List head -- get first element of list
     LTail(Box<Self>),             // List tail -- get all but first element of list
+
+    // Triginometric functions
+    Sin(Box<Self>),
+    Cos(Box<Self>),
+    Tan(Box<Self>),
 }
 
 pub type SyncStream<T> = BTreeMap<VarName, Vec<(usize, T)>>;
@@ -224,6 +229,9 @@ impl SExpr {
             SExpr::LTail(_) => todo!(),
             SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }
@@ -326,6 +334,9 @@ impl Simplifiable for SExprAbs {
             SExprAbs::LHead(_) => todo!(),
             SExprAbs::LTail(_) => todo!(),
             SExprAbs::When(_) => todo!(),
+            SExprAbs::Sin(_) => todo!(),
+            SExprAbs::Cos(_) => todo!(),
+            SExprAbs::Tan(_) => todo!(),
         }
     }
 }
@@ -376,6 +387,9 @@ impl SExpr {
             SExpr::LTail(_) => todo!(),
             SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }
@@ -535,6 +549,9 @@ impl Simplifiable for SExpr {
             SExpr::LTail(_) => todo!(),
             SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }

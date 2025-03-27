@@ -150,6 +150,11 @@ pub enum SExpr {
     LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
     LHead(Box<Self>),             // List head -- get first element of list
     LTail(Box<Self>),             // List tail -- get all but first element of list
+
+    // Trigonometric functions
+    Sin(Box<Self>),
+    Cos(Box<Self>),
+    Tan(Box<Self>),
 }
 
 impl SExpr {
@@ -209,6 +214,9 @@ impl SExpr {
             }
             LHead(lst) => lst.inputs(),
             LTail(lst) => lst.inputs(),
+            Sin(v) => v.inputs(),
+            Cos(v) => v.inputs(),
+            Tan(v) => v.inputs(),
         }
     }
 }
@@ -310,6 +318,9 @@ impl Display for SExpr {
             LConcat(lst1, lst2) => write!(f, "List.concat({}, {})", lst1, lst2),
             LHead(lst) => write!(f, "List.head({})", lst),
             LTail(lst) => write!(f, "List.tail({})", lst),
+            Sin(v) => write!(f, "sin({})", v),
+            Cos(v) => write!(f, "cos({})", v),
+            Tan(v) => write!(f, "tan({})", v),
         }
     }
 }

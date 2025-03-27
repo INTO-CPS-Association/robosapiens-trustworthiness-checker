@@ -100,6 +100,18 @@ impl MonitoringSemantics<SExpr, Value> for UntimedLolaSemantics {
                 let lst = Self::to_async_stream(*lst, ctx);
                 mc::ltail(lst)
             }
+            SExpr::Sin(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::sin(v)
+            }
+            SExpr::Cos(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::cos(v)
+            }
+            SExpr::Tan(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::tan(v)
+            }
         }
     }
 }

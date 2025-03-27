@@ -148,7 +148,10 @@ impl DepGraph {
                 | SExpr::LTail(sexpr)
                 | SExpr::IsDefined(sexpr)
                 | SExpr::When(sexpr)
-                | SExpr::Defer(sexpr) => deps_impl(sexpr, steps, map, current_node),
+                | SExpr::Defer(sexpr) 
+                | SExpr::Sin(sexpr)
+                | SExpr::Cos(sexpr)
+                | SExpr::Tan(sexpr) => deps_impl(sexpr, steps, map, current_node),
                 SExpr::BinOp(sexpr1, sexpr2, _)
                 | SExpr::Default(sexpr1, sexpr2)
                 | SExpr::Update(sexpr1, sexpr2)

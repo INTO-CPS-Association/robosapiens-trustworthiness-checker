@@ -520,6 +520,9 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::LTail(_) => todo!(),
             SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Sin(_) => todo!(),
+            SExpr::Cos(_) => todo!(),
+            SExpr::Tan(_) => todo!(),
         }
     }
 }

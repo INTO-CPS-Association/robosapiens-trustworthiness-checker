@@ -515,6 +515,36 @@ pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
+pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
+    lift1(
+        |v| match v {
+            Value::Float(v) => Value::Float(v.sin()),
+            _ => panic!("Invalid type of angle input stream"),
+        }, 
+        v,
+    )
+}
+
+pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
+    lift1(
+        |v| match v {
+            Value::Float(v) => Value::Float(v.cos()),
+            _ => panic!("Invalid type of angle input stream"),
+        }, 
+        v,
+    )
+}
+
+pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
+    lift1(
+        |v| match v {
+            Value::Float(v) => Value::Float(v.tan()),
+            _ => panic!("Invalid type of angle input stream"),
+        }, 
+        v,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

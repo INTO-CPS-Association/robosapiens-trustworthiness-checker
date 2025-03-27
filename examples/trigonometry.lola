@@ -1,0 +1,7 @@
+in x
+out s
+out c
+out t
+s = sin(x)
+c = cos(x)
+t =tan(x)

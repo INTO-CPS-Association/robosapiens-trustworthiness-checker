@@ -283,13 +283,62 @@ fn ltail(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+/// Trigonometric functions
+fn sin(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "sin",
+        _: loop_ms_or_lb_or_lc,
+        _: "(",
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ")",
+        _: whitespace,
+    ))
+    .map(|(v,)| SExpr::Sin(Box::new(v)))
+    .parse_next(s)
+}
+fn cos(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "cos",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(v,)| SExpr::Cos(Box::new(v)))
+    .parse_next(s)
+}
+fn tan(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "tan",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(v,)| SExpr::Tan(Box::new(v)))
+    .parse_next(s)
+}
+
+
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> Result<SExpr> {
     delimited(
         whitespace,
         alt((
             sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
-            default, when, is_defined, sexpr_list, var, paren,
+            sin, cos, tan, 
+            default, when, is_defined, sexpr_list, var, paren
         )),
         whitespace,
     )
