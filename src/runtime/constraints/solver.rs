@@ -172,9 +172,40 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
                 Str(s1)
             }
         },
-        (Str(s1), Str(s2), COp(sop)) => match sop {
-            CompBinOp::Eq => Bool(s1 == s2),
-            CompBinOp::Le => Bool(s1 <= s2),
+        (Int(v1), Int(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2),
+            CompBinOp::Le => Bool(v1 <= v2),
+            CompBinOp::Lt => Bool(v1 < v2),
+            CompBinOp::Ge => Bool(v1 >= v2),
+            CompBinOp::Gt => Bool(v1 > v2),
+        },
+        (Float(v1), Int(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2 as f32),
+            CompBinOp::Le => Bool(v1 <= v2 as f32),
+            CompBinOp::Lt => Bool(v1 < v2 as f32),
+            CompBinOp::Ge => Bool(v1 >= v2 as f32),
+            CompBinOp::Gt => Bool(v1 > v2 as f32),
+        },
+        (Int(v1), Float(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool((v1 as f32) == v2),
+            CompBinOp::Le => Bool((v1 as f32) <= v2),
+            CompBinOp::Lt => Bool((v1 as f32) < v2),
+            CompBinOp::Ge => Bool((v1 as f32) >= v2),
+            CompBinOp::Gt => Bool((v1 as f32) > v2),
+        },
+        (Float(v1), Float(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2),
+            CompBinOp::Le => Bool(v1 <= v2),
+            CompBinOp::Lt => Bool(v1 < v2),
+            CompBinOp::Ge => Bool(v1 >= v2),
+            CompBinOp::Gt => Bool(v1 > v2),
+        },
+        (Str(v1), Str(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2),
+            CompBinOp::Le => Bool(v1 <= v2),
+            CompBinOp::Lt => Bool(v1 < v2),
+            CompBinOp::Ge => Bool(v1 >= v2),
+            CompBinOp::Gt => Bool(v1 > v2),
         },
         (v1, v2, op) => {
             unreachable!(

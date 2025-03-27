@@ -330,15 +330,13 @@ fn tan(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
-
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> Result<SExpr> {
     delimited(
         whitespace,
         alt((
             sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
-            sin, cos, tan, 
-            default, when, is_defined, sexpr_list, var, paren
+            sin, cos, tan, default, when, is_defined, sexpr_list, var, paren,
         )),
         whitespace,
     )
@@ -356,6 +354,9 @@ enum BinaryPrecedences {
     Div,
     Mod,
     Le,
+    Ge,
+    Lt,
+    Gt,
     Eq,
 }
 impl BinaryPrecedences {
@@ -370,7 +371,10 @@ impl BinaryPrecedences {
             Mul => Some(Div),
             Div => Some(Mod),
             Mod => Some(Le),
-            Le => Some(Eq),
+            Le => Some(Ge),
+            Ge => Some(Lt),
+            Lt => Some(Gt),
+            Gt => Some(Eq),
             Eq => None,
         }
     }
@@ -387,6 +391,9 @@ impl BinaryPrecedences {
             Div => "/",
             Mod => "%",
             Le => "<=",
+            Ge => ">=",
+            Lt => "<",
+            Gt => ">",
             Eq => "==",
         }
     }
@@ -403,6 +410,9 @@ impl BinaryPrecedences {
             Div => SBinOp::NOp(NumericalBinOp::Div),
             Mod => SBinOp::NOp(NumericalBinOp::Mod),
             Le => SBinOp::COp(CompBinOp::Le),
+            Ge => SBinOp::COp(CompBinOp::Ge),
+            Lt => SBinOp::COp(CompBinOp::Lt),
+            Gt => SBinOp::COp(CompBinOp::Gt),
             Eq => SBinOp::COp(CompBinOp::Eq),
         }
     }

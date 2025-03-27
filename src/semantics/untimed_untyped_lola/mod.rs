@@ -27,6 +27,9 @@ impl MonitoringSemantics<SExpr, Value> for UntimedLolaSemantics {
                     SBinOp::SOp(StrBinOp::Concat) => mc::concat(e1, e2),
                     SBinOp::COp(CompBinOp::Eq) => mc::eq(e1, e2),
                     SBinOp::COp(CompBinOp::Le) => mc::le(e1, e2),
+                    SBinOp::COp(CompBinOp::Lt) => mc::lt(e1, e2),
+                    SBinOp::COp(CompBinOp::Ge) => mc::ge(e1, e2),
+                    SBinOp::COp(CompBinOp::Gt) => mc::gt(e1, e2),
                 }
             }
             SExpr::Not(x) => {

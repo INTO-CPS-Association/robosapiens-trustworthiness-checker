@@ -81,6 +81,9 @@ pub enum StrBinOp {
 pub enum CompBinOp {
     Eq,
     Le,
+    Ge,
+    Lt,
+    Gt,
 }
 
 // Stream BinOp
@@ -301,6 +304,9 @@ impl Display for SExpr {
             BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Eq)) => write!(f, "({} == {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Le)) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Lt)) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Ge)) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Gt)) => write!(f, "({} <= {})", e1, e2),
             Not(b) => write!(f, "!{}", b),
             Var(v) => write!(f, "{}", v),
             Eval(e) => write!(f, "eval({})", e),

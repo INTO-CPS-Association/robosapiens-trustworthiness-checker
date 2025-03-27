@@ -104,6 +104,55 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(a), Value::Int(b)) => Value::Bool(a <= b as f32),
             (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
+            (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
+            _ => panic!("Invalid comparison"),
+        },
+        x,
+        y,
+    )
+}
+
+pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    lift2(
+        |x, y| match (x, y) {
+            (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
+            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f32) < b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a < b as f32),
+            (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a < b),
+            (Value::Str(a), Value::Str(b)) => Value::Bool(a < b),
+            _ => panic!("Invalid comparison"),
+        },
+        x,
+        y,
+    )
+}
+
+pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    lift2(
+        |x, y| match (x, y) {
+            (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y),
+            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f32 >= b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f32),
+            (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a >= b),
+            (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
+            _ => panic!("Invalid comparison"),
+        },
+        x,
+        y,
+    )
+}
+
+pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    lift2(
+        |x, y| match (x, y) {
+            (Value::Int(x), Value::Int(y)) => Value::Bool(x > y),
+            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f32) > b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f32),
+            (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a > b),
+            (Value::Str(a), Value::Str(b)) => Value::Bool(a > b),
             _ => panic!("Invalid comparison"),
         },
         x,
@@ -523,7 +572,7 @@ pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
         |v| match v {
             Value::Float(v) => Value::Float(v.sin()),
             _ => panic!("Invalid type of angle input stream"),
-        }, 
+        },
         v,
     )
 }
@@ -533,7 +582,7 @@ pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
         |v| match v {
             Value::Float(v) => Value::Float(v.cos()),
             _ => panic!("Invalid type of angle input stream"),
-        }, 
+        },
         v,
     )
 }
@@ -543,7 +592,7 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
         |v| match v {
             Value::Float(v) => Value::Float(v.tan()),
             _ => panic!("Invalid type of angle input stream"),
-        }, 
+        },
         v,
     )
 }

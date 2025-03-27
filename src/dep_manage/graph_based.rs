@@ -148,7 +148,7 @@ impl DepGraph {
                 | SExpr::LTail(sexpr)
                 | SExpr::IsDefined(sexpr)
                 | SExpr::When(sexpr)
-                | SExpr::Defer(sexpr) 
+                | SExpr::Defer(sexpr)
                 | SExpr::Sin(sexpr)
                 | SExpr::Cos(sexpr)
                 | SExpr::Tan(sexpr) => deps_impl(sexpr, steps, map, current_node),
