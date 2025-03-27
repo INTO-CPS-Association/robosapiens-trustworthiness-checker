@@ -308,7 +308,7 @@ pub fn var(ctx: &dyn StreamContext<Value>, x: VarName) -> OutputStream<Value> {
     match ctx.var(&x) {
         Some(x) => x,
         None => {
-            panic!("Variable {} not found", x)
+            panic!("Variable \"{}\" not found", x)
         }
     }
 }
