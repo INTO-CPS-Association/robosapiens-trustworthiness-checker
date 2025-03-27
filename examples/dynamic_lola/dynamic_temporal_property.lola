@@ -1,0 +1,8 @@
+in prop
+in pos
+out clock
+out savedClock
+out verdict
+clock = clock[-1, 0] + 1 + pos - pos
+verdict = eval(prop)
+savedClock = if is_defined(prop) then clock else savedClock[-1, 0]
