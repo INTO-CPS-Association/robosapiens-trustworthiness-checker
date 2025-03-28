@@ -1,8 +1,9 @@
 in prop
 in pos
 out clock
-out savedClock
+out propTimestamp
 out verdict
-clock = clock[-1, 0] + 1 + pos - pos
+clock = if is_defined(pos) then clock[-1, 0] + 1 else clock[-1, 0] // is_defined used to bind the clock to the position
 verdict = eval(prop)
-savedClock = if is_defined(prop) then clock else savedClock[-1, 0]
+propTimestamp = if is_defined(prop) then clock else propTimestamp[-1, 0]
+
