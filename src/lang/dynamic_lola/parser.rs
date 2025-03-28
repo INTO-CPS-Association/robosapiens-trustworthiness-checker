@@ -1,3 +1,4 @@
+use ecow::EcoVec;
 use winnow::Parser;
 use winnow::Result;
 use winnow::combinator::*;
@@ -151,7 +152,7 @@ fn when(s: &mut &str) -> Result<SExpr> {
 fn eval(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
-        _: "eval",
+        _: alt(("dynamic", "eval")),
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
@@ -161,6 +162,44 @@ fn eval(s: &mut &str) -> Result<SExpr> {
         _: whitespace,
     ))
     .map(|(e,)| SExpr::Eval(Box::new(e)))
+    .parse_next(s)
+}
+
+fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: alt(("dynamic", "eval")),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: literal(","),
+        _: loop_ms_or_lb_or_lc,
+        var_set,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(e, vs)| SExpr::RestrictedDynamic(Box::new(e), vs))
+    .parse_next(s)
+}
+
+fn var_set(s: &mut &str) -> Result<EcoVec<VarName>> {
+    seq!((
+        _: whitespace,
+        _: '{',
+        _: loop_ms_or_lb_or_lc,
+        separated(0.., ident, seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc)),
+        _: loop_ms_or_lb_or_lc,
+        _: '}',
+        _: whitespace,
+    ))
+    .map(|(names,): (Vec<_>,)| {
+        names
+            .into_iter()
+            .map(|name: &str| VarName::from(name))
+            .collect::<EcoVec<_>>()
+    })
     .parse_next(s)
 }
 
@@ -332,11 +371,25 @@ fn tan(s: &mut &str) -> Result<SExpr> {
 
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> Result<SExpr> {
+    // Break up the large alt into smaller groups to avoid exceeding the trait implementation limit
     delimited(
         whitespace,
         alt((
-            sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
-            sin, cos, tan, default, when, is_defined, sexpr_list, var, paren,
+            // Group 1
+            alt((
+                sindex,
+                lindex,
+                lappend,
+                lconcat,
+                lhead,
+                ltail,
+                not,
+                restricted_dynamic,
+            )),
+            // Group 2
+            alt((eval, sval, ifelse, defer, update, sin, cos, tan)),
+            // Group 3
+            alt((default, when, is_defined, sexpr_list, var, paren)),
         )),
         whitespace,
     )

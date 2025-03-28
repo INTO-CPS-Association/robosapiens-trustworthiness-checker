@@ -188,6 +188,14 @@ impl<Val: StreamData> StreamContext<Val> for Rc<QueuingVarContext<Val>> {
     fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
         Box::new(SubMonitor::new(self.clone(), history_length))
     }
+
+    fn restricted_subcontext(
+        &self,
+        _vs: ecow::EcoVec<VarName>,
+        _history_length: usize,
+    ) -> Box<dyn SyncStreamContext<Val>> {
+        todo!()
+    }
 }
 
 /*
@@ -226,6 +234,14 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
         // is only used if eval is called within an eval, and it will require
         // careful thought to decide how much history should be passed down
         // (the current implementation passes down none)
+        self.parent.subcontext(history_length)
+    }
+
+    fn restricted_subcontext(
+        &self,
+        _vs: ecow::EcoVec<VarName>,
+        history_length: usize,
+    ) -> Box<dyn SyncStreamContext<Val>> {
         self.parent.subcontext(history_length)
     }
 }

@@ -409,6 +409,32 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
             history_length,
         ))
     }
+
+    fn restricted_subcontext(
+        &self,
+        vs: ecow::EcoVec<VarName>,
+        history_length: usize,
+    ) -> Box<dyn SyncStreamContext<Val>> {
+        let input_streams = self
+            .var_names
+            .iter()
+            .filter_map(|var| {
+                if vs.contains(var) {
+                    self.var(var)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Recursively create a new context based on ourself
+        Box::new(Context::new(
+            self.executor.clone(),
+            self.var_names.clone(),
+            input_streams,
+            history_length,
+        ))
+    }
 }
 
 #[async_trait(?Send)]

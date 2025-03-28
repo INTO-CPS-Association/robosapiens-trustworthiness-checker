@@ -1,3 +1,5 @@
+use ecow::EcoVec;
+
 use crate::core::{Specification, VarName};
 use crate::core::{StreamType, Value};
 use std::{
@@ -137,6 +139,7 @@ pub enum SExpr {
 
     // Eval
     Eval(Box<Self>),
+    RestrictedDynamic(Box<Self>, EcoVec<VarName>),
     Defer(Box<Self>),
     Update(Box<Self>, Box<Self>),
     Default(Box<Self>, Box<Self>),
@@ -179,7 +182,9 @@ impl SExpr {
             }
             Var(v) => vec![v.clone()],
             Not(b) => b.inputs(),
+            // TODO: is this correct?
             Eval(e) => e.inputs(),
+            RestrictedDynamic(_, vs) => vs.iter().cloned().collect(),
             Defer(e) => e.inputs(),
             Update(e1, e2) => {
                 let mut inputs = e1.inputs();
@@ -310,6 +315,15 @@ impl Display for SExpr {
             Not(b) => write!(f, "!{}", b),
             Var(v) => write!(f, "{}", v),
             Eval(e) => write!(f, "eval({})", e),
+            RestrictedDynamic(e, vs) => write!(
+                f,
+                "dynamic({}, {{{}}})",
+                e,
+                vs.iter()
+                    .map(|v| format!("{}", v))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
             Defer(e) => write!(f, "defer({})", e),
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
             Default(e, v) => write!(f, "default({}, {})", e, v),

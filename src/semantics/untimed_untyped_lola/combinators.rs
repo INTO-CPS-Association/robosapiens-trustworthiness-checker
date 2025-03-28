@@ -5,6 +5,7 @@ use crate::semantics::untimed_untyped_lola::UntimedLolaSemantics;
 use crate::{MonitoringSemantics, OutputStream, StreamContext, VarName};
 use async_stream::stream;
 use core::panic;
+use ecow::EcoVec;
 use futures::stream::LocalBoxStream;
 use futures::{
     StreamExt,
@@ -293,6 +294,74 @@ pub fn eval(
 ) -> OutputStream<Value> {
     // Create a subcontext with a history window length
     let mut subcontext = ctx.subcontext(history_length);
+
+    // Build an output stream for eval of x over the subcontext
+    Box::pin(stream! {
+            // Store the previous value of the stream we are evaluating so we can
+            // check when it changes
+            struct PrevData {
+                // The previous property provided
+                eval_val: Value,
+                // The output stream for eval
+                eval_output_stream: OutputStream<Value>
+            }
+            let mut prev_data: Option<PrevData> = None;
+            while let Some(current) = eval_stream.next().await {
+                // If we have a previous value and it is the same as the current
+                // value or if the current value is unknown (not provided),
+            // continue using the existing stream as our output
+            if let Some(prev_data) = &mut prev_data {
+                if prev_data.eval_val == current || current == Value::Unknown {
+                    // Advance the subcontext to make a new set of input values
+                    // available for the eval stream
+                    // info!("advancing eval clock");
+                    subcontext.lazy_advance_clock().await;
+
+                    if let Some(eval_res) = prev_data.eval_output_stream.next().await {
+                        yield eval_res;
+                        continue;
+                    } else {
+                        return;
+                    }
+                }
+            }
+            match current {
+                Value::Unknown => {
+                    // Consume a sample from the subcontext but return Unknown (aka. Waiting)
+                    subcontext.advance_clock().await;
+                    yield Value::Unknown;
+                }
+                Value::Str(s) => {
+                    let expr = lola_expression.parse_next(&mut s.as_ref())
+                        .expect("Invalid eval str");
+                    let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast());
+                    // Advance the subcontext to make a new set of input values
+                    // available for the eval stream
+                    subcontext.lazy_advance_clock().await;
+                    if let Some(eval_res) = eval_output_stream.next().await {
+                        yield eval_res;
+                    } else {
+                        return;
+                    }
+                    prev_data = Some(PrevData{
+                        eval_val: Value::Str(s),
+                        eval_output_stream
+                    });
+                }
+                cur => panic!("Invalid eval property type {:?}", cur)
+            }
+        }
+    })
+}
+
+pub fn restricted_dynamic(
+    ctx: &dyn StreamContext<Value>,
+    mut eval_stream: OutputStream<Value>,
+    vs: EcoVec<VarName>,
+    history_length: usize,
+) -> OutputStream<Value> {
+    // Create a subcontext with a history window length
+    let mut subcontext = ctx.restricted_subcontext(vs, history_length);
 
     // Build an output stream for eval of x over the subcontext
     Box::pin(stream! {
@@ -650,6 +719,7 @@ mod tests {
                 std::panic!("Mutex was poisoned");
             }
         }
+
         fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Value>> {
             // Create new xs with only the `history_length` latest values for the Vec
             let new_xs = self
@@ -670,6 +740,14 @@ mod tests {
                 })
                 .collect();
             Box::new(MockContext { xs: new_xs })
+        }
+
+        fn restricted_subcontext(
+            &self,
+            _vs: EcoVec<VarName>,
+            _history_length: usize,
+        ) -> Box<dyn SyncStreamContext<Value>> {
+            unimplemented!()
         }
     }
 

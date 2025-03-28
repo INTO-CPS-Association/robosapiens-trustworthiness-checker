@@ -497,6 +497,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     }
                 }
             }
+            SExpr::RestrictedDynamic(_, _) => todo!("Implement support for RestrictedDynamic"),
             SExpr::Defer(_) => todo!("Implement support for Defer"),
             SExpr::Update(_, _) => todo!("Implement support for Update"),
             SExpr::Default(_, _) => todo!(),

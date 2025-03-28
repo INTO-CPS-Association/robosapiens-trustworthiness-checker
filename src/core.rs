@@ -271,6 +271,12 @@ pub trait StreamContext<Val: StreamData>: 'static {
     fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
 
     fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>>;
+
+    fn restricted_subcontext(
+        &self,
+        vs: EcoVec<VarName>,
+        history_length: usize,
+    ) -> Box<dyn SyncStreamContext<Val>>;
 }
 
 #[async_trait(?Send)]

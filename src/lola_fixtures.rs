@@ -206,6 +206,17 @@ pub fn spec_eval_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_eval_restricted_monitor() -> &'static str {
+    "in x\n\
+    in y\n\
+    in s\n\
+    out z\n\
+    out w\n\
+    z = x + y\n\
+    w = dynamic(s, {x,y})"
+}
+
+#[allow(dead_code)]
 pub fn spec_maple_sequence() -> &'static str {
     "in stage : Str\n
      out m: Bool\n

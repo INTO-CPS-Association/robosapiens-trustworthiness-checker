@@ -182,6 +182,30 @@ async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[test(apply(smol_test))]
+async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
+    let mut input_streams = input_streams2();
+    let spec = lola_specification(&mut spec_eval_restricted_monitor()).unwrap();
+    let mut output_handler = output_handler(executor.clone(), spec.clone());
+    let outputs = output_handler.get_output();
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        executor.clone(),
+        spec.clone(),
+        &mut input_streams,
+        output_handler,
+        create_dependency_manager(DependencyKind::Empty, spec),
+    );
+    executor.spawn(async_monitor.run()).detach();
+    let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+    assert_eq!(
+        outputs,
+        vec![
+            (0, vec![Value::Int(3), Value::Int(3)]),
+            (1, vec![Value::Int(7), Value::Int(7)]),
+        ]
+    );
+}
+
+#[test(apply(smol_test))]
 async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
     let mut input_streams = input_streams1();
     let mut spec = "in x\nin y\nout r1\nout r2\nr1 =x+y\nr2 = x * y";
