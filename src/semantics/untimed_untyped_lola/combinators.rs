@@ -332,7 +332,7 @@ pub fn dynamic(
             match current {
                 Value::Unknown => {
                     // Consume a sample from the subcontext but return Unknown (aka. Waiting)
-                    subcontext.advance_clock().await;
+                    subcontext.lazy_advance_clock().await; // Currently must be lazy -- test on actual example files to replicate
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
