@@ -99,7 +99,8 @@ impl MonitoringSemantics<SExprStr, String, Value> for TypedUntimedLolaSemantics 
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
-            SExprStr::Eval(e) => mc::eval(ctx, Self::to_async_stream(*e, ctx), 10),
+            SExprStr::Dynamic(e) => mc::dynamic(ctx, Self::to_async_stream(*e, ctx), None, 10),
+            SExprStr::RestrictedDynamic(e, vs) => mc::dynamic(ctx, Self::to_async_stream(*e, ctx), Some(vs), 10),
             SExprStr::BinOp(x, y, StrBinOp::Concat) => mc::concat(
                 Self::to_async_stream(*x, ctx),
                 Self::to_async_stream(*y, ctx),

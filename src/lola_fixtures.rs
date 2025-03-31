@@ -178,14 +178,14 @@ pub fn spec_typed_count_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn spec_typed_eval_monitor() -> &'static str {
+pub fn spec_typed_dynamic_monitor() -> &'static str {
     "in x: Int\n\
     in y: Int\n\
     in s: Str\n\
     out z: Int\n\
     out w: Int\n\
     z = x + y\n\
-    w = eval(s)"
+    w = dynamic(s)"
 }
 
 #[allow(dead_code)]
@@ -195,18 +195,18 @@ pub fn spec_count_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn spec_eval_monitor() -> &'static str {
+pub fn spec_dynamic_monitor() -> &'static str {
     "in x\n\
     in y\n\
     in s\n\
     out z\n\
     out w\n\
     z = x + y\n\
-    w = eval(s)"
+    w = dynamic(s)"
 }
 
 #[allow(dead_code)]
-pub fn spec_eval_restricted_monitor() -> &'static str {
+pub fn spec_dynamic_restricted_monitor() -> &'static str {
     "in x\n\
     in y\n\
     in s\n\

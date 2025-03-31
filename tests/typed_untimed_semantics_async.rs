@@ -155,7 +155,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
 #[ignore = "Not currently working"]
 async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
     let mut input_streams = input_streams2();
-    let spec_untyped = lola_specification(&mut spec_typed_eval_monitor()).unwrap();
+    let spec_untyped = lola_specification(&mut spec_typed_dynamic_monitor()).unwrap();
     let spec = type_check(spec_untyped.clone()).expect("Type check failed");
     info!("{:?}", spec);
     let mut output_handler = output_handler(executor.clone(), spec.clone());

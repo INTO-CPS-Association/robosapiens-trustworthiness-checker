@@ -37,13 +37,13 @@ impl MonitoringSemantics<SExpr, Value> for UntimedLolaSemantics {
                 mc::not(x)
             }
             SExpr::Var(v) => mc::var(ctx, v),
-            SExpr::Eval(e) => {
+            SExpr::Dynamic(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::eval(ctx, e, 10)
+                mc::dynamic(ctx, e, None, 10)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::restricted_dynamic(ctx, e, vs, 10)
+                mc::dynamic(ctx, e, Some(vs), 10)
             }
             SExpr::Defer(e) => {
                 let e = Self::to_async_stream(*e, ctx);

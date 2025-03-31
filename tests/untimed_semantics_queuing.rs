@@ -86,7 +86,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
 #[test(apply(smol_test))]
 async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
     let mut input_streams = input_streams2();
-    let spec = lola_specification(&mut spec_eval_monitor()).unwrap();
+    let spec = lola_specification(&mut spec_dynamic_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
     let async_monitor = QueuingMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
@@ -266,7 +266,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
     // producing values (making use of its history) which can continue beyond
     // the lifetime of the stream for e (since it does not depend on e any more
     // once a value has been received). This differs from the behaviour of
-    // eval(e) which stops if e stops.
+    // defer(e) which stops if e stops.
     //
     // See also: Comment on sindex combinator.
     let expected_outputs = vec![

@@ -244,7 +244,7 @@ impl SExpr {
                 Box::new(if_expr.to_absolute(base_time)),
                 Box::new(else_expr.to_absolute(base_time)),
             ),
-            SExpr::Eval(_) => todo!(),
+            SExpr::Dynamic(_) => todo!(),
             SExpr::RestrictedDynamic(_, _) => todo!(),
             SExpr::Defer(_) => SExprAbs::Val(Value::Unknown),
             SExpr::Update(lhs, _) => lhs.to_absolute(base_time),
@@ -402,7 +402,7 @@ impl SExpr {
                     && else_expr.is_solveable(base_time, store)
             }
             SExpr::Defer(sexpr) => sexpr.is_solveable(base_time, store),
-            SExpr::Eval(_) => todo!(),
+            SExpr::Dynamic(_) => todo!(),
             SExpr::RestrictedDynamic(_, _) => todo!(),
             SExpr::Update(_, rhs) => {
                 // Technically: (is_solveable(lhs) && is_solveable(rhs)) || is_solveable(rhs)
@@ -488,7 +488,7 @@ impl Simplifiable for SExpr {
                     ),
                 }
             }
-            SExpr::Eval(_) => todo!(),
+            SExpr::Dynamic(_) => todo!(),
             SExpr::RestrictedDynamic(_, _) => todo!(),
             SExpr::Defer(expr) => {
                 // Important to remember here that what we return here is the new "state" of the

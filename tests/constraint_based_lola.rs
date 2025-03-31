@@ -666,7 +666,7 @@ mod tests {
 
     #[test(apply(smol_test))]
     async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
-        // This test is interesting since we use x twice in the eval strings
+        // This test is interesting since we use x twice in the deferred strings
         for kind in DependencyKind::iter() {
             let x = vec![1.into(), 2.into(), 3.into()];
             let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
@@ -982,7 +982,7 @@ mod tests {
     // NOTE: While this test is interesting, it cannot work due to how defer is handled.
     // When defer receives a prop stream it changes state from being a defer expression into
     // the received prop stream. Thus, it cannot be used recursively.
-    // This is the reason why we also need eval for the constraint based runtime.
+    // This is the reason why we also need dynamic for the constraint based runtime.
     #[test(apply(smol_test))]
     async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) {
         for kind in DependencyKind::iter() {

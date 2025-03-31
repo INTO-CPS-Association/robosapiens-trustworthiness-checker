@@ -1,3 +1,5 @@
+use ecow::EcoVec;
+
 use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::StreamType;
 use crate::{LOLASpecification, Specification};
@@ -156,7 +158,8 @@ pub enum SExprStr {
     Var(VarName),
 
     // Eval
-    Eval(Box<Self>),
+    Dynamic(Box<Self>),
+    RestrictedDynamic(Box<Self>, EcoVec<VarName>),
 }
 
 // Stream expression typed enum
@@ -485,19 +488,33 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 (inner.deref(), *idx, default).type_check_raw(ctx, errs)
             }
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
-            SExpr::Eval(e) => {
+            SExpr::Dynamic(e) => {
                 let e_check = e.type_check_raw(ctx, errs)?;
                 match e_check {
-                    SExprTE::Str(e_str) => Ok(SExprTE::Str(SExprStr::Eval(Box::new(e_str)))),
+                    SExprTE::Str(e_str) => Ok(SExprTE::Str(SExprStr::Dynamic(Box::new(e_str)))),
                     _ => {
                         errs.push(SemanticError::TypeError(
-                            "Eval can only be applied to string expressions".into(),
+                            "Dynamic can only be applied to string expressions".into(),
                         ));
                         Err(())
                     }
                 }
             }
-            SExpr::RestrictedDynamic(_, _) => todo!("Implement support for RestrictedDynamic"),
+            SExpr::RestrictedDynamic(e, vs) => {
+                let e_check = e.type_check_raw(ctx, errs)?;
+                match e_check {
+                    SExprTE::Str(e_str) => Ok(SExprTE::Str(SExprStr::RestrictedDynamic(
+                        Box::new(e_str),
+                        vs.clone(),
+                    ))),
+                    _ => {
+                        errs.push(SemanticError::TypeError(
+                            "Dynamic can only be applied to string expressions".into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
             SExpr::Defer(_) => todo!("Implement support for Defer"),
             SExpr::Update(_, _) => todo!("Implement support for Update"),
             SExpr::Default(_, _) => todo!(),

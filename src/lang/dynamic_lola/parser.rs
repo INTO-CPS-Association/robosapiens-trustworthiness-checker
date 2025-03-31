@@ -149,7 +149,7 @@ fn when(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
-fn eval(s: &mut &str) -> Result<SExpr> {
+fn dynamic(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
         _: alt(("dynamic", "eval")),
@@ -161,7 +161,7 @@ fn eval(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(e,)| SExpr::Eval(Box::new(e)))
+    .map(|(e,)| SExpr::Dynamic(Box::new(e)))
     .parse_next(s)
 }
 
@@ -387,7 +387,7 @@ fn atom(s: &mut &str) -> Result<SExpr> {
                 restricted_dynamic,
             )),
             // Group 2
-            alt((eval, sval, ifelse, defer, update, sin, cos, tan)),
+            alt((dynamic, sval, ifelse, defer, update, sin, cos, tan)),
             // Group 3
             alt((default, when, is_defined, sexpr_list, var, paren)),
         )),
@@ -866,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_eval() -> Result<(), ContextError> {
+    fn test_parse_lola_dynamic() -> Result<(), ContextError> {
         let input = "\
             in x\n\
             in y\n\
@@ -874,7 +874,7 @@ mod tests {
             out z\n\
             out w\n\
             z = x + y\n\
-            w = eval(s)";
+            w = dynamic(s)";
         let eval_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into(), "s".into()],
             output_vars: vec!["z".into(), "w".into()],
@@ -887,7 +887,7 @@ mod tests {
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
-                ("w".into(), SExpr::Eval(Box::new(SExpr::Var("s".into())))),
+                ("w".into(), SExpr::Dynamic(Box::new(SExpr::Var("s".into())))),
             ]),
             type_annotations: BTreeMap::new(),
         };

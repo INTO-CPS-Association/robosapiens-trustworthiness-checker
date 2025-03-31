@@ -142,7 +142,7 @@ impl DepGraph {
                     vec.iter()
                         .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node));
                 }
-                SExpr::Eval(sexpr)
+                SExpr::Dynamic(sexpr)
                 | SExpr::RestrictedDynamic(sexpr, _)
                 | SExpr::Not(sexpr)
                 | SExpr::LHead(sexpr)

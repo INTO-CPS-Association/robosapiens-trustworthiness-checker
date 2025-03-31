@@ -231,9 +231,9 @@ impl<Val: StreamData> StreamContext<Val> for SubMonitor<Val> {
 
     fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
         // TODO: consider if this is the right approach; creating a subcontext
-        // is only used if eval is called within an eval, and it will require
-        // careful thought to decide how much history should be passed down
-        // (the current implementation passes down none)
+        // is only used if dynamic is called within an dynamics, and it will
+        // require careful thought to decide how much history should be passed
+        // down (the current implementation passes down none)
         self.parent.subcontext(history_length)
     }
 

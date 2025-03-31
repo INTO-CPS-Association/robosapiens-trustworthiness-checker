@@ -137,11 +137,15 @@ pub enum SExpr {
 
     Var(VarName),
 
-    // Eval
-    Eval(Box<Self>),
+    // Dynamic, continuously updatable properties
+    Dynamic(Box<Self>),
     RestrictedDynamic(Box<Self>, EcoVec<VarName>),
+    // Deferred properties
     Defer(Box<Self>),
+    // Update between properties
     Update(Box<Self>, Box<Self>),
+    // Default value for properties (replaces Unknown with an alternative
+    // stream)
     Default(Box<Self>, Box<Self>),
     IsDefined(Box<Self>), // True when .0 is not Unknown
     When(Box<Self>),      // Becomes true after the first time .0 is not Unknown
@@ -183,7 +187,7 @@ impl SExpr {
             Var(v) => vec![v.clone()],
             Not(b) => b.inputs(),
             // TODO: is this correct?
-            Eval(e) => e.inputs(),
+            Dynamic(e) => e.inputs(),
             RestrictedDynamic(_, vs) => vs.iter().cloned().collect(),
             Defer(e) => e.inputs(),
             Update(e1, e2) => {
@@ -314,7 +318,7 @@ impl Display for SExpr {
             BinOp(e1, e2, COp(CompBinOp::Gt)) => write!(f, "({} <= {})", e1, e2),
             Not(b) => write!(f, "!{}", b),
             Var(v) => write!(f, "{}", v),
-            Eval(e) => write!(f, "eval({})", e),
+            Dynamic(e) => write!(f, "dynamic({})", e),
             RestrictedDynamic(e, vs) => write!(
                 f,
                 "dynamic({}, {{{}}})",

@@ -3,7 +3,8 @@ use crate::core::{StreamContext, StreamData};
 use crate::lang::dynamic_lola::parser::lola_expression;
 use crate::semantics::UntimedLolaSemantics;
 use crate::semantics::untimed_untyped_lola::combinators::{lift1, lift2, lift3};
-use crate::{MonitoringSemantics, OutputStream};
+use crate::{MonitoringSemantics, OutputStream, VarName};
+use ecow::EcoVec;
 use futures::stream::LocalBoxStream;
 use futures::{
     StreamExt,
@@ -123,13 +124,18 @@ where
     lift2(|x, y| x / y, x, y)
 }
 
-pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
+pub fn dynamic<T: TryFrom<Value, Error = ()> + StreamData>(
     ctx: &dyn StreamContext<Value>,
     x: OutputStream<String>,
+    vs: Option<EcoVec<VarName>>,
     history_length: usize,
 ) -> OutputStream<T> {
-    // Create a subcontext with a history window length of 10
-    let subcontext = ctx.subcontext(history_length);
+    // Create a subcontext with a history window length
+    let subcontext = match vs {
+        Some(vs) => ctx.restricted_subcontext(vs, history_length),
+        None => ctx.subcontext(history_length),
+    };
+
     /*unfold() creates a Stream from a seed value.*/
     Box::pin(stream::unfold(
         (subcontext, x, None::<(String, OutputStream<T>)>),
@@ -147,7 +153,7 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
                     // println!("returning val from existing stream: {:?}", eval_res);
                     return match eval_res {
                         Some(eval_res) => {
-                            // println!("eval producing {:?}", eval_res);
+                            // println!("dynamic producing {:?}", eval_res);
                             Some((eval_res, (subcontext, x, Some((current, es)))))
                         }
                         None => {
@@ -161,14 +167,14 @@ pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
             let s_parse = &mut current.as_str();
             let expr = match lola_expression.parse(s_parse) {
                 Ok(expr) => expr,
-                Err(_) => unimplemented!("Invalid eval str"),
+                Err(_) => unimplemented!("Invalid dynamic str"),
             };
             let es = { UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()) };
             let mut es = to_typed_stream(es);
-            // println!("new eval stream");
+            // println!("new dynamic stream");
             subcontext.advance_clock().await;
             let eval_res = es.next().await?;
-            // println!("eval producing {:?}", eval_res);
+            // println!("dynamic producing {:?}", eval_res);
             return Some((eval_res, (subcontext, x, Some((current, es)))));
         },
     )) as OutputStream<T>
