@@ -135,4 +135,93 @@ mod tests {
         assert_eq!(spec_parsed.dist_constraints, dist_constraints_expected);
         Ok(())
     }
+
+    #[ignore = "TODO: fix this test"]
+    #[test]
+    fn test_dist_constraints_minimal() -> Result<(), ContextError> {
+        let mut input = "\
+        in x\
+        in y\
+        out w
+        can_run w: source(x) || source(x)[-1, false]
+                             || source(y)
+                             || source(y)[-1, false]\
+        w = x + y\
+        v = z + w";
+        let count_spec = LOLASpecification {
+            input_vars: vec!["y".into()],
+            output_vars: vec!["x".into()],
+            exprs: BTreeMap::from([(
+                "x".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Val(Value::Int(1))),
+                    Box::new(SExpr::SIndex(
+                        Box::new(SExpr::Var("x".into())),
+                        -1,
+                        Value::Int(0),
+                    )),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::new(),
+        };
+        let dist_constraints_expected = BTreeMap::from([(
+            "x".into(),
+            vec![DistConstraint(
+                DistConstraintType::CanRun,
+                DistConstraintBody::Source("y".into()),
+            )],
+        )]);
+        let spec_parsed = dist_lang_specification(&mut input)?;
+        assert_eq!(spec_parsed.lola_spec, count_spec);
+        // assert_eq!(lola_specification(&mut (*input).into())?, count_spec);
+        assert_eq!(spec_parsed.dist_constraints, dist_constraints_expected);
+        Ok(())
+    }
+
+    #[ignore = "TODO: fix this test"]
+    #[test]
+    fn test_dist_constraints_full() -> Result<(), ContextError> {
+        let mut input = "\
+        in x\
+        in y\
+        out w
+        can_run w: node <= monitor(x)\
+        can_run w: source(x) || source(x)[-1, false]
+                             || source(y)
+                             || source(y)[-1, false]\
+        // locality w: max(dist(source(x)) + dist(source(y)))\
+        // redundancy w: sum(dist(node, monitor(w)) <= 2) >= 5\
+        w = x + y\
+        v = z + w";
+        let count_spec = LOLASpecification {
+            input_vars: vec!["y".into()],
+            output_vars: vec!["x".into()],
+            exprs: BTreeMap::from([(
+                "x".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Val(Value::Int(1))),
+                    Box::new(SExpr::SIndex(
+                        Box::new(SExpr::Var("x".into())),
+                        -1,
+                        Value::Int(0),
+                    )),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::new(),
+        };
+        let dist_constraints_expected = BTreeMap::from([(
+            "x".into(),
+            vec![DistConstraint(
+                DistConstraintType::CanRun,
+                DistConstraintBody::Source("y".into()),
+            )],
+        )]);
+        let spec_parsed = dist_lang_specification(&mut input)?;
+        assert_eq!(spec_parsed.lola_spec, count_spec);
+        // assert_eq!(lola_specification(&mut (*input).into())?, count_spec);
+        assert_eq!(spec_parsed.dist_constraints, dist_constraints_expected);
+        Ok(())
+    }
 }

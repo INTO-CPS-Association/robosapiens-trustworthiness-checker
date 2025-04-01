@@ -248,7 +248,7 @@ fn ltail(s: &mut &str) -> Result<DistConstraintBody> {
     .parse_next(s)
 }
 
-/// Trigonometric functions
+/// Monitors
 fn source(s: &mut &str) -> Result<DistConstraintBody> {
     seq!((
         _: whitespace,
@@ -262,6 +262,22 @@ fn source(s: &mut &str) -> Result<DistConstraintBody> {
         _: whitespace,
     ))
     .map(|(v,)| DistConstraintBody::Source(v.into()))
+    .parse_next(s)
+}
+
+fn monitor(s: &mut &str) -> Result<DistConstraintBody> {
+    seq!((
+        _: whitespace,
+        _: "monitor",
+        _: loop_ms_or_lb_or_lc,
+        _: "(",
+        _: loop_ms_or_lb_or_lc,
+        ident,
+        _: loop_ms_or_lb_or_lc,
+        _: ")",
+        _: whitespace,
+    ))
+    .map(|(v,)| DistConstraintBody::Monitor(v.into()))
     .parse_next(s)
 }
 
@@ -321,7 +337,7 @@ fn atom(s: &mut &str) -> Result<DistConstraintBody> {
             // Group 1
             alt((sindex, lindex, lappend, lconcat, lhead, ltail, not)),
             // Group 2
-            alt((sval, ifelse, source, sin, cos, tan)),
+            alt((sval, ifelse, monitor, source, sin, cos, tan)),
             // Group 3
             alt((default, is_defined, dist_constraint_body_list, var, paren)),
         )),
