@@ -513,7 +513,7 @@ pub fn sexpr(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
-fn type_annotation(s: &mut &str) -> Result<StreamType> {
+pub(crate) fn type_annotation(s: &mut &str) -> Result<StreamType> {
     seq!((
         _: whitespace,
         _: literal(":"),
@@ -532,7 +532,7 @@ fn type_annotation(s: &mut &str) -> Result<StreamType> {
     .parse_next(s)
 }
 
-fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
+pub(crate) fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     seq!((
         _: whitespace,
         _: literal("in"),
@@ -545,11 +545,11 @@ fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     .parse_next(s)
 }
 
-fn input_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
+pub(crate) fn input_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
     separated(0.., input_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
+pub(crate) fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     seq!((
         _: whitespace,
         _: literal("out"),
@@ -562,11 +562,11 @@ fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     .parse_next(s)
 }
 
-fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
+pub(crate) fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
     separated(0.., output_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
+pub(crate) fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     seq!((
         _: whitespace,
         ident,
@@ -580,7 +580,7 @@ fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     .parse_next(s)
 }
 
-fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
+pub(crate) fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
     separated(0.., var_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 

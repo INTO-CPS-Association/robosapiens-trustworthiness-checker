@@ -1,0 +1,16 @@
+in x
+in y
+in z
+out w {
+  can_run   node <= monitor(x)
+  can_run        source(x) || source(x)[-1, false]
+                           || source(y)
+                           || source(y)[-1, false]
+  locality_score dist(source(x)) + dist(source(y))
+  redundancy     sum(dist(node, monitor(w)) <= 2) >= 5
+  aggregation    average
+}
+out v
+  locality 
+w = x + y
+v = z + w
