@@ -1,19 +1,14 @@
+use crate::OutputStream;
+use crate::core::StreamData;
 use crate::core::Value;
-use crate::core::{StreamContext, StreamData};
-use crate::lang::dynamic_lola::parser::lola_expression;
 use crate::lang::dynamic_lola::type_checker::PossiblyUnknown;
-use crate::semantics::UntimedLolaSemantics;
 use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
-use crate::{MonitoringSemantics, OutputStream, VarName};
-use async_stream::stream;
-use ecow::EcoVec;
 use futures::stream::LocalBoxStream;
 use futures::{
     StreamExt,
     stream::{self},
 };
 use std::fmt::Debug;
-use winnow::Parser;
 
 pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
     stream: OutputStream<Value>,
