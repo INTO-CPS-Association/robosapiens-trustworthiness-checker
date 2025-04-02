@@ -304,7 +304,7 @@ async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
         (2, vec![Value::Int(3), Value::Int(2)]),
         (3, vec![Value::Int(4), Value::Int(3)]),
         (4, vec![Value::Int(5), Value::Int(4)]),
-        (5, vec![Value::Int(0), Value::Int(5)]), // The default value for z is 0
+        (5, vec![Value::Unknown, Value::Int(5)]), // Stream ends - last z is Unknown
     ];
     assert_eq!(outputs, expected_outputs);
 }
@@ -326,7 +326,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
     let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
     assert_eq!(outputs.len(), 7); // NOTE: 1 "too" many. See comment sindex combinator
     let expected_outputs = vec![
-        (0, vec![Value::Int(42)]),
+        (0, vec![Value::Unknown]),
         (1, vec![Value::Int(0)]),
         (2, vec![Value::Int(1)]),
         (3, vec![Value::Int(2)]),

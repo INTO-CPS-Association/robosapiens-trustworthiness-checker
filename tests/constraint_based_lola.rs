@@ -312,7 +312,7 @@ mod tests {
     async fn test_index_past(executor: Rc<LocalExecutor<'static>>) {
         for kind in DependencyKind::iter() {
             let mut input_streams = input_streams1();
-            let mut spec = "in x\nout z\nz =x[-1, 0]";
+            let mut spec = "in x\nout z\nz =x[-1]";
             let spec = lola_specification(&mut spec).unwrap();
             let mut output_handler = output_handler(executor.clone(), spec.clone());
             let outputs = output_handler.get_output();
@@ -330,9 +330,9 @@ mod tests {
                 outputs,
                 vec![
                     (
-                        // Resolved to default on first step
+                        // Resolved to Unknown on first step
                         0,
-                        vec![0.into()],
+                        vec![Value::Unknown],
                     ),
                     (
                         // Resolving to previous value on second step
@@ -354,7 +354,7 @@ mod tests {
         for kind in DependencyKind::iter() {
             // Specifically tests past indexing that the cleaner does not delete dependencies too early
             let mut input_streams = input_streams1();
-            let mut spec = "in x\nout z1\nout z2\nz2 = x[-2, 0]\nz1 = x[-1, 0]";
+            let mut spec = "in x\nout z1\nout z2\nz2 = x[-2]\nz1 = x[-1]";
             let spec = lola_specification(&mut spec).unwrap();
             let mut output_handler = output_handler(executor.clone(), spec.clone());
             let outputs = output_handler.get_output();
@@ -372,14 +372,14 @@ mod tests {
                 outputs,
                 vec![
                     (
-                        // Both resolve to default
+                        // Both resolve to Unknown
                         0,
-                        vec![0.into(), 0.into()],
+                        vec![Value::Unknown, Value::Unknown],
                     ),
                     (
-                        // z1 resolves to prev, z2 resolves to default
+                        // z1 resolves to prev, z2 resolves to Unknown
                         1,
-                        vec![1.into(), 0.into()],
+                        vec![1.into(), Value::Unknown],
                     ),
                     (
                         // z1 resolves to prev, z2 resolves to prev_prev
@@ -398,7 +398,7 @@ mod tests {
                                    // future indexing
         ] {
             let mut input_streams = input_streams1();
-            let mut spec = "in x\nout z\nz =x[1, 0]";
+            let mut spec = "in x\nout z\nz =x[1]";
             let spec = lola_specification(&mut spec).unwrap();
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -606,7 +606,7 @@ mod tests {
     async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
         for kind in DependencyKind::iter() {
             let mut input_streams = new_input_stream(BTreeMap::from([]));
-            let mut spec = "out y\ny=y[-1, 0] + 1";
+            let mut spec = "out y\ny=default(y[-1], 0) + 1";
             let spec = lola_specification(&mut spec).unwrap();
             let mut output_handler = output_handler(executor.clone(), spec.clone());
             let outputs = output_handler.get_output();
@@ -769,7 +769,7 @@ mod tests {
             let x = vec![0.into(), 1.into(), 2.into(), 3.into()];
             let e = vec![
                 Value::Unknown,
-                "x[-1, 42]".into(),
+                "x[-1]".into(),
                 Value::Unknown,
                 Value::Unknown,
             ];

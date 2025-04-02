@@ -169,11 +169,11 @@ pub enum SExprBool {
         Box<Self>,
         // Index i
         isize,
-        // Default c
-        bool,
     ),
 
     Var(VarName),
+
+    Default(Box<Self>, Box<Self>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -186,8 +186,6 @@ pub enum SExprInt {
         Box<Self>,
         // Index i
         isize,
-        // Default c
-        i64,
     ),
 
     // Arithmetic Stream expression
@@ -196,6 +194,8 @@ pub enum SExprInt {
     BinOp(Box<Self>, Box<Self>, IntBinOp),
 
     Var(VarName),
+
+    Default(Box<Self>, Box<Self>),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -208,8 +208,6 @@ pub enum SExprFloat {
         Box<Self>,
         // Index i
         isize,
-        // Default c
-        f32,
     ),
 
     // Arithmetic Stream expression
@@ -218,6 +216,8 @@ pub enum SExprFloat {
     BinOp(Box<Self>, Box<Self>, FloatBinOp),
 
     Var(VarName),
+
+    Default(Box<Self>, Box<Self>),
 }
 
 // Stream expressions - now with types
@@ -231,14 +231,14 @@ pub enum SExprUnit {
         Box<Self>,
         // Index i
         isize,
-        // Default c
-        (),
     ),
 
     // Arithmetic Stream expression
     Val(PossiblyUnknown<()>),
 
     Var(VarName),
+
+    Default(Box<Self>, Box<Self>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -251,8 +251,6 @@ pub enum SExprStr {
         Box<Self>,
         // Index i
         isize,
-        // Default c
-        String,
     ),
 
     BinOp(Box<Self>, Box<Self>, StrBinOp),
@@ -265,6 +263,7 @@ pub enum SExprStr {
     // Eval
     Dynamic(Box<Self>),
     RestrictedDynamic(Box<Self>, EcoVec<VarName>),
+    Default(Box<Self>, Box<Self>),
 }
 
 // Stream expression typed enum
@@ -441,6 +440,53 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
     }
 }
 
+// Type check a default operation
+impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
+    fn type_check_raw(
+        &self,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
+        let (se1, se2) = *self;
+        let se1_check = se1.type_check_raw(ctx, errs);
+        let se2_check = se2.type_check_raw(ctx, errs);
+
+        match (se1_check, se2_check) {
+            (Ok(ste1), Ok(ste2)) => {
+                // Matching on type-checked expressions. If same then Ok, else error.
+                match (ste1, ste2) {
+                    (SExprTE::Int(se1), SExprTE::Int(se2)) => Ok(SExprTE::Int(SExprInt::Default(
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                    ))),
+                    (SExprTE::Str(se1), SExprTE::Str(se2)) => Ok(SExprTE::Str(SExprStr::Default(
+                        Box::new(se1.clone()),
+                        Box::new(se2.clone()),
+                    ))),
+                    (SExprTE::Bool(se1), SExprTE::Bool(se2)) => Ok(SExprTE::Bool(
+                        SExprBool::Default(Box::new(se1.clone()), Box::new(se2.clone())),
+                    )),
+                    (SExprTE::Unit(se1), SExprTE::Unit(se2)) => Ok(SExprTE::Unit(
+                        SExprUnit::Default(Box::new(se1.clone()), Box::new(se2.clone())),
+                    )),
+                    (stenum1, stenum2) => {
+                        errs.push(SemanticError::TypeError(
+                            format!(
+                                "Cannot create if-expression with two different types: {:?} and {:?}",
+                                stenum1, stenum2
+                            )
+                                .into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            // If there's already an error in any branch, propagate the error
+            _ => Err(()),
+        }
+    }
+}
+
 // Type check an if expression
 impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
     fn type_check_raw(
@@ -502,42 +548,30 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
 }
 
 // Type check an index expression
-impl TypeCheckableHelper<SExprTE> for (&SExpr, isize, &Value) {
+impl TypeCheckableHelper<SExprTE> for (&SExpr, isize) {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,
         errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
-        let (inner, idx, default) = *self;
+        let (inner, idx) = *self;
         let inner_check = inner.type_check_raw(ctx, errs);
 
         match inner_check {
-            Ok(ste) => match (ste, default) {
-                (SExprTE::Int(se), Value::Int(def)) => Ok(SExprTE::Int(SExprInt::SIndex(
-                    Box::new(se.clone()),
-                    idx,
-                    *def,
-                ))),
-                (SExprTE::Str(se), Value::Str(def)) => Ok(SExprTE::Str(SExprStr::SIndex(
-                    Box::new(se.clone()),
-                    idx,
-                    def.into(),
-                ))),
-                (SExprTE::Bool(se), Value::Bool(def)) => Ok(SExprTE::Bool(SExprBool::SIndex(
-                    Box::new(se.clone()),
-                    idx,
-                    *def,
-                ))),
-                (SExprTE::Unit(se), Value::Unit) => Ok(SExprTE::Unit(SExprUnit::SIndex(
-                    Box::new(se.clone()),
-                    idx,
-                    (),
-                ))),
-                (se, def) => {
+            Ok(ste) => match ste {
+                SExprTE::Int(se) => Ok(SExprTE::Int(SExprInt::SIndex(Box::new(se.clone()), idx))),
+                SExprTE::Str(se) => Ok(SExprTE::Str(SExprStr::SIndex(Box::new(se.clone()), idx))),
+                SExprTE::Bool(se) => {
+                    Ok(SExprTE::Bool(SExprBool::SIndex(Box::new(se.clone()), idx)))
+                }
+                SExprTE::Unit(se) => {
+                    Ok(SExprTE::Unit(SExprUnit::SIndex(Box::new(se.clone()), idx)))
+                }
+                se => {
                     errs.push(SemanticError::TypeError(
                         format!(
                             "Mismatched type in Stream Index expression, expression and default does not match: {:?}",
-                            (se, def)
+                            se
                         )
                             .into(),
                     ));
@@ -591,9 +625,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::If(b, se1, se2) => {
                 (b.deref(), se1.deref(), se2.deref()).type_check_raw(ctx, errs)
             }
-            SExpr::SIndex(inner, idx, default) => {
-                (inner.deref(), *idx, default).type_check_raw(ctx, errs)
-            }
+            SExpr::SIndex(inner, idx) => (inner.deref(), *idx).type_check_raw(ctx, errs),
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
             SExpr::Dynamic(e) => {
                 let e_check = e.type_check_raw(ctx, errs)?;
@@ -624,7 +656,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             }
             SExpr::Defer(_) => todo!("Implement support for Defer"),
             SExpr::Update(_, _) => todo!("Implement support for Update"),
-            SExpr::Default(_, _) => todo!(),
+            SExpr::Default(se, d) => (se.deref(), d.deref()).type_check_raw(ctx, errs),
             SExpr::Not(sexpr) => {
                 let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
                 match sexpr_check {

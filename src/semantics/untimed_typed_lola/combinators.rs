@@ -184,6 +184,18 @@ where
     unknown_lift2(|x, y| x / y, x, y)
 }
 
+// Evaluates to a placeholder value whenever Unknown is received.
+pub fn default<T: 'static>(
+    x: OutputStream<PossiblyUnknown<T>>,
+    d: OutputStream<PossiblyUnknown<T>>,
+) -> OutputStream<PossiblyUnknown<T>> {
+    let xs = x.zip(d).map(|(x, d)| match x {
+        PossiblyUnknown::Known(x) => PossiblyUnknown::Known(x),
+        PossiblyUnknown::Unknown => d,
+    });
+    Box::pin(xs) as LocalBoxStream<'static, PossiblyUnknown<T>>
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

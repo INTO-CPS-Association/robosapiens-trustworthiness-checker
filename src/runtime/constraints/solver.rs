@@ -21,8 +21,6 @@ pub enum SExprAbs {
         Box<Self>,
         // Index i
         usize,
-        // Default c
-        Value,
     ),
 
     // Arithmetic Stream expression
@@ -226,16 +224,15 @@ impl SExpr {
                 op.clone(),
             ),
             SExpr::Var(name) => SExprAbs::Var(base_time, name.clone()),
-            SExpr::SIndex(expr, offset, default) => {
+            SExpr::SIndex(expr, offset) => {
                 // Determine if it is something that can eventually be solved. If not, transform it to a lit
                 let absolute_time = base_time as isize + offset;
                 if absolute_time < 0 {
-                    SExprAbs::Val(default.clone())
+                    SExprAbs::Val(Value::Unknown)
                 } else {
                     SExprAbs::SIndex(
                         Box::new(expr.to_absolute(base_time)),
                         absolute_time.abs() as usize,
-                        default.clone(),
                     )
                 }
             }
@@ -318,17 +315,13 @@ impl Simplifiable for SExprAbs {
                     Resolved(Value::Unknown)
                 }
             }
-            SExprAbs::SIndex(expr, idx_time, default) => {
+            SExprAbs::SIndex(expr, idx_time) => {
                 // Should not be negative at this stage since it was indexed...
                 let uidx_time = *idx_time as usize;
                 if uidx_time <= base_time {
                     expr.simplify(uidx_time, store, var, deps)
                 } else {
-                    Unresolved(Box::new(SExprAbs::SIndex(
-                        expr.clone(),
-                        *idx_time,
-                        default.clone(),
-                    )))
+                    Unresolved(Box::new(SExprAbs::SIndex(expr.clone(), *idx_time)))
                 }
             }
             SExprAbs::If(bexpr, if_expr, else_expr) => {
@@ -388,7 +381,7 @@ impl SExpr {
                     .or_else(|| store.get_from_input_streams(&name, &base_time));
                 val.is_some() && val != Some(&Value::Unknown)
             }
-            SExpr::SIndex(expr, rel_time, _) => {
+            SExpr::SIndex(expr, rel_time) => {
                 let new_time = (base_time as isize) + *rel_time;
                 if new_time < 0 {
                     true
@@ -454,21 +447,18 @@ impl Simplifiable for SExpr {
                 }
             }
             SExpr::Var(name) => Unresolved(Box::new(SExpr::Var(name.clone()))),
-            SExpr::SIndex(expr, rel_time, default) => {
+            SExpr::SIndex(expr, rel_time) => {
                 if *rel_time == 0 {
                     expr.simplify(base_time, store, var, deps)
                 } else {
                     // Attempt to partially solve the expression and return unresolved
                     match expr.simplify(base_time, store, var, deps) {
-                        Unresolved(expr) => Unresolved(Box::new(SExpr::SIndex(
-                            expr.clone(),
-                            *rel_time,
-                            default.clone(),
-                        ))),
+                        Unresolved(expr) => {
+                            Unresolved(Box::new(SExpr::SIndex(expr.clone(), *rel_time)))
+                        }
                         Resolved(val) => Unresolved(Box::new(SExpr::SIndex(
                             Box::new(SExpr::Val(val)),
                             *rel_time,
-                            default.clone(),
                         ))),
                     }
                 }

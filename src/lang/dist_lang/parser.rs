@@ -74,7 +74,7 @@ mod tests {
         let mut input = "\
             in y\n\
             out x\n\
-            x = 1 + (x)[-1, 0]";
+            x = 1 + (x)[-1]";
         let count_spec = LOLASpecification {
             input_vars: vec!["y".into()],
             output_vars: vec!["x".into()],
@@ -82,11 +82,7 @@ mod tests {
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::SIndex(
-                        Box::new(SExpr::Var("x".into())),
-                        -1,
-                        Value::Int(0),
-                    )),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -104,7 +100,7 @@ mod tests {
             in y\n\
             out x\n\
             can_run x: source(y)\n\
-            x = 1 + (x)[-1, 0]";
+            x = 1 + (x)[-1]";
         let count_spec = LOLASpecification {
             input_vars: vec!["y".into()],
             output_vars: vec!["x".into()],
@@ -112,11 +108,7 @@ mod tests {
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::SIndex(
-                        Box::new(SExpr::Var("x".into())),
-                        -1,
-                        Value::Int(0),
-                    )),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -155,11 +147,7 @@ mod tests {
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::SIndex(
-                        Box::new(SExpr::Var("x".into())),
-                        -1,
-                        Value::Int(0),
-                    )),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -201,11 +189,7 @@ mod tests {
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::SIndex(
-                        Box::new(SExpr::Var("x".into())),
-                        -1,
-                        Value::Int(0),
-                    )),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),

@@ -53,9 +53,9 @@ impl MonitoringSemantics<SExprInt, PossiblyUnknown<i64>, Value> for TypedUntimed
                 }
             }
             SExprInt::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprInt::SIndex(e, i, c) => {
+            SExprInt::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Known(c))
+                mc::sindex(e, i, PossiblyUnknown::Unknown)
             }
             SExprInt::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -63,6 +63,10 @@ impl MonitoringSemantics<SExprInt, PossiblyUnknown<i64>, Value> for TypedUntimed
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
+            SExprInt::Default(x, y) => mc::default(
+                Self::to_async_stream(*x, ctx),
+                Self::to_async_stream(*y, ctx),
+            ),
         }
     }
 }
@@ -86,9 +90,9 @@ impl MonitoringSemantics<SExprFloat, PossiblyUnknown<f32>, Value> for TypedUntim
                 }
             }
             SExprFloat::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprFloat::SIndex(e, i, c) => {
+            SExprFloat::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Known(c))
+                mc::sindex(e, i, PossiblyUnknown::Unknown)
             }
             SExprFloat::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -96,6 +100,10 @@ impl MonitoringSemantics<SExprFloat, PossiblyUnknown<f32>, Value> for TypedUntim
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
+            SExprFloat::Default(x, y) => mc::default(
+                Self::to_async_stream(*x, ctx),
+                Self::to_async_stream(*y, ctx),
+            ),
         }
     }
 }
@@ -108,9 +116,9 @@ impl MonitoringSemantics<SExprStr, PossiblyUnknown<String>, Value> for TypedUnti
         match expr {
             SExprStr::Val(v) => mc::val(v),
             SExprStr::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprStr::SIndex(e, i, c) => {
+            SExprStr::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Known(c))
+                mc::sindex(e, i, PossiblyUnknown::Unknown)
             }
             SExprStr::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -130,6 +138,10 @@ impl MonitoringSemantics<SExprStr, PossiblyUnknown<String>, Value> for TypedUnti
                 Self::to_async_stream(*x, ctx),
                 Self::to_async_stream(*y, ctx),
             ),
+            SExprStr::Default(x, y) => mc::default(
+                Self::to_async_stream(*x, ctx),
+                Self::to_async_stream(*y, ctx),
+            ),
         }
     }
 }
@@ -142,9 +154,9 @@ impl MonitoringSemantics<SExprUnit, PossiblyUnknown<()>, Value> for TypedUntimed
         match expr {
             SExprUnit::Val(v) => mc::val(v),
             SExprUnit::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprUnit::SIndex(e, i, c) => {
+            SExprUnit::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Known(c))
+                mc::sindex(e, i, PossiblyUnknown::Unknown)
             }
             SExprUnit::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -152,6 +164,10 @@ impl MonitoringSemantics<SExprUnit, PossiblyUnknown<()>, Value> for TypedUntimed
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
+            SExprUnit::Default(x, y) => mc::default(
+                Self::to_async_stream(*x, ctx),
+                Self::to_async_stream(*y, ctx),
+            ),
         }
     }
 }
@@ -203,9 +219,9 @@ impl MonitoringSemantics<SExprBool, PossiblyUnknown<bool>, Value> for TypedUntim
                 mc::or(e1, e2)
             }
             SExprBool::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
-            SExprBool::SIndex(e, i, c) => {
+            SExprBool::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Known(c))
+                mc::sindex(e, i, PossiblyUnknown::Unknown)
             }
             SExprBool::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -213,6 +229,10 @@ impl MonitoringSemantics<SExprBool, PossiblyUnknown<bool>, Value> for TypedUntim
                 let e2 = Self::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
+            SExprBool::Default(x, y) => mc::default(
+                Self::to_async_stream(*x, ctx),
+                Self::to_async_stream(*y, ctx),
+            ),
         }
     }
 }

@@ -126,8 +126,6 @@ pub enum SExpr {
         Box<Self>,
         // Index i
         isize,
-        // Default c
-        Value,
     ),
 
     // Arithmetic Stream expression
@@ -177,7 +175,7 @@ impl SExpr {
                 inputs.extend(e2.inputs());
                 inputs
             }
-            SIndex(s, _, _) => s.inputs(),
+            SIndex(s, _) => s.inputs(),
             Val(_) => vec![],
             BinOp(e1, e2, _) => {
                 let mut inputs = e1.inputs();
@@ -301,7 +299,7 @@ impl Display for SExpr {
         use SExpr::*;
         match self {
             If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
-            SIndex(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
+            SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Val(n) => write!(f, "{}", n),
             BinOp(e1, e2, NOp(NumericalBinOp::Add)) => write!(f, "({} + {})", e1, e2),
             BinOp(e1, e2, NOp(NumericalBinOp::Sub)) => write!(f, "({} - {})", e1, e2),
