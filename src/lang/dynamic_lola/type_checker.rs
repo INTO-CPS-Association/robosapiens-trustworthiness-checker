@@ -1,7 +1,7 @@
 use ecow::EcoVec;
 
 use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
-use crate::core::StreamType;
+use crate::core::{StreamData, StreamType};
 use crate::{LOLASpecification, Specification};
 use crate::{Value, VarName};
 use std::collections::BTreeMap;
@@ -47,8 +47,113 @@ pub trait TypeCheckable<TypedExpr> {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PossiblyUnknown<T> {
+    Known(T),
+    Unknown,
+}
+
+impl StreamData for PossiblyUnknown<bool> {}
+impl StreamData for PossiblyUnknown<i64> {}
+impl StreamData for PossiblyUnknown<f32> {}
+impl StreamData for PossiblyUnknown<String> {}
+impl StreamData for PossiblyUnknown<()> {}
+
+impl TryFrom<Value> for PossiblyUnknown<i64> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Int(i) => Ok(PossiblyUnknown::Known(i)),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<Value> for PossiblyUnknown<f32> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Float(x) => Ok(PossiblyUnknown::Known(x)),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<Value> for PossiblyUnknown<String> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Str(i) => Ok(PossiblyUnknown::Known(i.to_string())),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<Value> for PossiblyUnknown<bool> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Bool(i) => Ok(PossiblyUnknown::Known(i)),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<Value> for PossiblyUnknown<()> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Unit => Ok(PossiblyUnknown::Known(())),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<PossiblyUnknown<i64>> for Value {
+    fn from(value: PossiblyUnknown<i64>) -> Self {
+        match value {
+            PossiblyUnknown::Known(v) => Value::Int(v),
+            PossiblyUnknown::Unknown => Value::Unknown,
+        }
+    }
+}
+
+impl From<PossiblyUnknown<f32>> for Value {
+    fn from(value: PossiblyUnknown<f32>) -> Self {
+        match value {
+            PossiblyUnknown::Known(v) => Value::Float(v),
+            PossiblyUnknown::Unknown => Value::Unknown,
+        }
+    }
+}
+impl From<PossiblyUnknown<String>> for Value {
+    fn from(value: PossiblyUnknown<String>) -> Self {
+        match value {
+            PossiblyUnknown::Known(v) => Value::Str(v.into()),
+            PossiblyUnknown::Unknown => Value::Unknown,
+        }
+    }
+}
+impl From<PossiblyUnknown<bool>> for Value {
+    fn from(value: PossiblyUnknown<bool>) -> Self {
+        match value {
+            PossiblyUnknown::Known(v) => Value::Bool(v),
+            PossiblyUnknown::Unknown => Value::Unknown,
+        }
+    }
+}
+impl From<PossiblyUnknown<()>> for Value {
+    fn from(value: PossiblyUnknown<()>) -> Self {
+        match value {
+            PossiblyUnknown::Known(_) => Value::Unit,
+            PossiblyUnknown::Unknown => Value::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExprBool {
-    Val(bool),
+    Val(PossiblyUnknown<bool>),
     EqInt(SExprInt, SExprInt),
     EqStr(SExprStr, SExprStr),
     EqBool(Box<Self>, Box<Self>),
@@ -86,7 +191,7 @@ pub enum SExprInt {
     ),
 
     // Arithmetic Stream expression
-    Val(i64),
+    Val(PossiblyUnknown<i64>),
 
     BinOp(Box<Self>, Box<Self>, IntBinOp),
 
@@ -108,7 +213,7 @@ pub enum SExprFloat {
     ),
 
     // Arithmetic Stream expression
-    Val(f32),
+    Val(PossiblyUnknown<f32>),
 
     BinOp(Box<Self>, Box<Self>, FloatBinOp),
 
@@ -131,7 +236,7 @@ pub enum SExprUnit {
     ),
 
     // Arithmetic Stream expression
-    Val(()),
+    Val(PossiblyUnknown<()>),
 
     Var(VarName),
 }
@@ -153,7 +258,7 @@ pub enum SExprStr {
     BinOp(Box<Self>, Box<Self>, StrBinOp),
 
     // Arithmetic Stream expression
-    Val(String),
+    Val(PossiblyUnknown<String>),
 
     Var(VarName),
 
@@ -227,12 +332,14 @@ impl TypeCheckableHelper<SExprTE> for Value {
         errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         match self {
-            Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(*v))),
-            Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(*v))),
-            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(v.into()))),
-            Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(*v))),
+            Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(PossiblyUnknown::Known(*v)))),
+            Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(PossiblyUnknown::Known(*v)))),
+            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(PossiblyUnknown::Known(
+                v.into(),
+            )))),
+            Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PossiblyUnknown::Known(*v)))),
             Value::List(_) => todo!(),
-            Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(()))),
+            Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PossiblyUnknown::Known(())))),
             Value::Unknown => {
                 errs.push(SemanticError::UnknownError(
                     format!(
@@ -717,10 +824,12 @@ mod tests {
         ];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
-            Ok(SExprTE::Int(SExprInt::Val(1))),
-            Ok(SExprTE::Str(SExprStr::Val("".into()))),
-            Ok(SExprTE::Bool(SExprBool::Val(true))),
-            Ok(SExprTE::Unit(SExprUnit::Val(()))),
+            Ok(SExprTE::Int(SExprInt::Val(PossiblyUnknown::Known(1)))),
+            Ok(SExprTE::Str(SExprStr::Val(PossiblyUnknown::Known(
+                "".into(),
+            )))),
+            Ok(SExprTE::Bool(SExprBool::Val(PossiblyUnknown::Known(true)))),
+            Ok(SExprTE::Unit(SExprUnit::Val(PossiblyUnknown::Known(())))),
         ];
 
         assert!(results.eq(expected.into_iter()));
@@ -857,7 +966,7 @@ mod tests {
         let vals: Vec<SExpr> = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
-        let int_t_val = vec![SExprInt::Val(0)];
+        let int_t_val = vec![SExprInt::Val(PossiblyUnknown::Known(0))];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprInt> =
@@ -875,7 +984,7 @@ mod tests {
         let vals: Vec<SExpr> = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
-        let str_t_val = vec![SExprStr::Val("".into())];
+        let str_t_val = vec![SExprStr::Val(PossiblyUnknown::Known("".into()))];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprStr> = generate_concat_combinations(&str_t_val, &str_t_val);
@@ -897,7 +1006,7 @@ mod tests {
 
         // Create a vector of all SBinOp variants
         let bexpr = Box::new(SExpr::Val(true.into()));
-        let bexpr_checked = Box::new(SExprBool::Val(true));
+        let bexpr_checked = Box::new(SExprBool::Val(PossiblyUnknown::Known(true)));
 
         let vals_tmp = generate_if_combinations(&val_variants, &val_variants, bexpr.clone());
 
@@ -913,23 +1022,23 @@ mod tests {
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprInt::If(
                 bexpr_checked.clone(),
-                Box::new(SExprInt::Val(0)),
-                Box::new(SExprInt::Val(0)),
+                Box::new(SExprInt::Val(PossiblyUnknown::Known(0))),
+                Box::new(SExprInt::Val(PossiblyUnknown::Known(0))),
             ))),
             Ok(SExprTE::Str(SExprStr::If(
                 bexpr_checked.clone(),
-                Box::new(SExprStr::Val("".into())),
-                Box::new(SExprStr::Val("".into())),
+                Box::new(SExprStr::Val(PossiblyUnknown::Known("".into()))),
+                Box::new(SExprStr::Val(PossiblyUnknown::Known("".into()))),
             ))),
             Ok(SExprTE::Bool(SExprBool::If(
                 bexpr_checked.clone(),
-                Box::new(SExprBool::Val(true)),
-                Box::new(SExprBool::Val(true)),
+                Box::new(SExprBool::Val(PossiblyUnknown::Known(true))),
+                Box::new(SExprBool::Val(PossiblyUnknown::Known(true))),
             ))),
             Ok(SExprTE::Unit(SExprUnit::If(
                 bexpr_checked.clone(),
-                Box::new(SExprUnit::Val(())),
-                Box::new(SExprUnit::Val(())),
+                Box::new(SExprUnit::Val(PossiblyUnknown::Known(()))),
+                Box::new(SExprUnit::Val(PossiblyUnknown::Known(()))),
             ))),
         ];
 
