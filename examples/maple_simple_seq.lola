@@ -10,10 +10,10 @@ out lout : Bool
 out eout : Bool
 out maple : Bool
 out globallymaple : Bool
-mout = m && !a && !p && !l && !e && eout[-1, true]
-aout = !m && a && !p && !l && !e && mout[-1, false]
-pout = !m && !a && p && !l && !e && aout[-1, false]
-lout = !m && !a && !p && l && !e && pout[-1, false]
-eout = !m && !a && !p && !l && e && lout[-1, false]
+mout = m && !a && !p && !l && !e && default(eout[-1], true)
+aout = !m && a && !p && !l && !e && default(mout[-1], false)
+pout = !m && !a && p && !l && !e && default(aout[-1], false)
+lout = !m && !a && !p && l && !e && default(pout[-1], false)
+eout = !m && !a && !p && !l && e && default(lout[-1], false)
 maple = mout || aout || pout || lout || eout
-globallymaple = maple && maple[-1, true]
+globallymaple = maple && default(maple[-1], true)

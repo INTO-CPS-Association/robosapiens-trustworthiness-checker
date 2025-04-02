@@ -1,3 +1,3 @@
 in x
 out z
-z = z[-1, 0] + x
+z = default(z[-1], 0) + x
