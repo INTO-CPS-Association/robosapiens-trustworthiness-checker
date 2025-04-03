@@ -75,7 +75,7 @@ enum VarStage {
 /// variable, ensure in particular that:
 ///  - only one time tick can happen at once
 ///  - we can't tick when there are outstanding subscription requests
-struct VarManager<V: StreamData> {
+pub struct VarManager<V: StreamData> {
     /// The async executor used to run background tasks
     executor: Rc<LocalExecutor<'static>>,
     /// The name of the variable managed by this actor
@@ -97,7 +97,7 @@ struct VarManager<V: StreamData> {
 }
 
 impl<V: StreamData> VarManager<V> {
-    fn new(
+    pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var: VarName,
         input_stream: OutputStream<V>,
@@ -120,7 +120,7 @@ impl<V: StreamData> VarManager<V> {
     }
 
     /// Subscribe to the variable and return a stream of its output
-    fn subscribe(&mut self) -> OutputStream<V> {
+    pub fn subscribe(&mut self) -> OutputStream<V> {
         // Make owned copies of references to variables owned by the struct
         // so that these are not borrowed when the async block is spawned
         let semaphore = self.var_semaphore.clone();
@@ -207,7 +207,7 @@ impl<V: StreamData> VarManager<V> {
     /// The future will be completed once all of the data has been
     /// sent to all subscribers (i.e. placed in their input buffers) but will
     /// not wait until they have processed it.
-    fn tick(&self) -> LocalBoxFuture<'static, bool> {
+    pub fn tick(&self) -> LocalBoxFuture<'static, bool> {
         // Make owned copies of references to variables owned by the struct
         // so that these are not borrowed when the async block is returned
         let semaphore = self.var_semaphore.clone();
@@ -275,7 +275,7 @@ impl<V: StreamData> VarManager<V> {
 
     /// Continuously distribute data to all subscribers until the input stream
     /// is exhausted
-    fn run(self) -> LocalBoxFuture<'static, ()> {
+    pub fn run(self) -> LocalBoxFuture<'static, ()> {
         // Move to the closed stage since the variable is now running
         debug!("Moving to closed stage from run");
         self.var_stage.set(VarStage::Closed);
@@ -337,7 +337,7 @@ fn store_history<V: StreamData>(
 //
 /// This is implemented in the background using a combination of
 /// manage_var and store history actors
-struct Context<Val: StreamData> {
+pub struct Context<Val: StreamData> {
     /// The executor which is used to run background tasks
     executor: Rc<LocalExecutor<'static>>,
     /// The variables which are available in the context
@@ -353,7 +353,7 @@ struct Context<Val: StreamData> {
 }
 
 impl<Val: StreamData> Context<Val> {
-    fn new(
+    pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
         input_streams: Vec<OutputStream<Val>>,
