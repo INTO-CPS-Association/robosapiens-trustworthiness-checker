@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use paho_mqtt::Message;
 use tracing::info;
 
-use super::distribution_graphs::{LabelledConcDistributionGraph, NodeName};
+use super::distribution_graphs::{LabelledDistributionGraph, NodeName};
 
 #[async_trait]
 pub trait SchedulerCommunicator {
@@ -79,7 +79,7 @@ impl SchedulerCommunicator for Arc<Mutex<MockSchedulerCommunicator>> {
 }
 
 pub async fn static_work_scheduler(
-    dist_graph: LabelledConcDistributionGraph,
+    dist_graph: LabelledDistributionGraph,
     mut communicator: impl SchedulerCommunicator,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let nodes = dist_graph.dist_graph.graph.node_indices();
@@ -138,7 +138,7 @@ mod tests {
             tokio::fs::read_to_string("examples/simple_add_distribution_graph.json")
                 .await
                 .unwrap();
-        let dist_graph: LabelledConcDistributionGraph = serde_json::from_str(&graph_str).unwrap();
+        let dist_graph: LabelledDistributionGraph = serde_json::from_str(&graph_str).unwrap();
 
         let mqtt_server = start_emqx().await;
         let mqtt_port = mqtt_server.get_host_port_ipv4(1883).await.unwrap();

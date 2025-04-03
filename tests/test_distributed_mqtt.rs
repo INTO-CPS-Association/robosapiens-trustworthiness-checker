@@ -12,7 +12,7 @@ use std::{mem, task};
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
-use trustworthiness_checker::distributed::distribution_graphs::LabelledConcDistributionGraph;
+use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,
 };
@@ -401,7 +401,7 @@ async fn localisation_distribution_graphs_test(
 
     let file_content =
         smol::fs::read_to_string("examples/simple_add_distribution_graph.json").await?;
-    let dist_graph: LabelledConcDistributionGraph = serde_json::from_str(&file_content)?;
+    let dist_graph: LabelledDistributionGraph = serde_json::from_str(&file_content)?;
 
     let xs = vec![Value::Int(1), Value::Int(2)];
     let ys = vec![Value::Int(3), Value::Int(4)];

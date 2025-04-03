@@ -9,7 +9,7 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::core::OutputHandler;
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
-use trustworthiness_checker::distributed::distribution_graphs::LabelledConcDistributionGraph;
+use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
@@ -69,7 +69,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distributed_work: _,
         } => {
             let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
-            let distribution_graph: LabelledConcDistributionGraph =
+            let distribution_graph: LabelledDistributionGraph =
                 serde_json::from_str(&f).expect("Distribution graph could not be parsed");
             let local_node = cli.local_node.expect("Local node not specified").into();
 

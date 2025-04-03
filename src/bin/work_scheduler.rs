@@ -5,7 +5,7 @@ use tracing::{info, instrument};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::distributed::{
-    distribution_graphs::LabelledConcDistributionGraph,
+    distribution_graphs::LabelledDistributionGraph,
     static_work_scheduler::{MQTTSchedulerCommunicator, static_work_scheduler},
 };
 
@@ -23,10 +23,10 @@ struct Args {
 #[instrument]
 async fn load_distribution_graph(
     path: PathBuf,
-) -> Result<LabelledConcDistributionGraph, Box<dyn std::error::Error>> {
+) -> Result<LabelledDistributionGraph, Box<dyn std::error::Error>> {
     info!("Loading distribution graph from {:?}", path);
     let file_content = tokio::fs::read_to_string(path).await?;
-    let dist_graph: LabelledConcDistributionGraph = serde_json::from_str(&file_content)?;
+    let dist_graph: LabelledDistributionGraph = serde_json::from_str(&file_content)?;
     info!("Successfully loaded distribution graph");
     Ok(dist_graph)
 }
