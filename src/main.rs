@@ -19,7 +19,7 @@ use trustworthiness_checker::{InputProvider, Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
-use trustworthiness_checker::cli::args::{Cli, Language, Runtime, Semantics};
+use trustworthiness_checker::cli::args::{Cli, Language, ParserMode, Runtime, Semantics};
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::io::ros::{
@@ -46,6 +46,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     // let model = std::fs::read_to_string(cli.model).expect("Model file could not be read");
     let input_mode = cli.input_mode;
 
+    let parser = cli.parser_mode.unwrap_or(ParserMode::Combinator);
     let language = cli.language.unwrap_or(Language::Lola);
     let semantics = cli.semantics.unwrap_or(Semantics::Untimed);
     let runtime = cli.runtime.unwrap_or(Runtime::Async);
@@ -105,9 +106,12 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         _ => unreachable!(),
     };
 
-    let model = parse_file(model_parser, cli.model.as_str())
-        .await
-        .expect("Model file could not be parsed");
+    let model = match parser {
+        ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
+            .await
+            .expect("Model file could not be parsed"),
+        ParserMode::LALR => unimplemented!(),
+    };
     info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
 
     // Localise the model to contain only the local variables (if needed)
