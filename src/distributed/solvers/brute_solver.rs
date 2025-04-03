@@ -5,15 +5,16 @@ use crate::distributed::distribution_graphs::{LabelledDistributionGraph, NodeNam
 use crate::lang::distribution_constraints::ast::{
     DistConstraint, DistConstraintBody, DistConstraintType,
 };
-use contracts::{ensures, invariant};
+use contracts::ensures;
 use ecow::EcoVec;
 use petgraph::algo::all_simple_paths;
 use petgraph::prelude::*;
-use petgraph::visit::{GraphRef, Walker};
 
 // use petgraph::visit
+#[allow(unused)]
 type Path = EcoVec<NodeIndex>;
 
+#[allow(unused)]
 struct PathGenerator {
     active_paths: EcoVec<Path>,
     next_paths: EcoVec<Path>,
@@ -151,8 +152,6 @@ mod tests {
     use crate::distributed::distribution_graphs::{
         GenericDistributionGraph, LabelledDistributionGraph,
     };
-    use crate::lang::distribution_constraints::ast::{DistConstraint, DistConstraintBody};
-    use petgraph::prelude::*;
     use std::collections::BTreeMap;
 
     #[test]
@@ -167,6 +166,7 @@ mod tests {
 
         graph.extend_with_edges(&[(a, b), (b, c), (c, d), (d, e), (e, f)]);
 
+        #[allow(unused)]
         let var_names = vec!["x".to_string(), "y".to_string(), "z".to_string()];
 
         let dist_graph = GenericDistributionGraph {

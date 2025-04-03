@@ -5,9 +5,7 @@ use tracing::info;
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 
 use crate::VarName;
-use crate::distributed::distribution_graphs::{
-    GenericLabelledDistributionGraph, LabelledDistributionGraph, NodeName,
-};
+use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
 
 pub trait LocalitySpec {
     fn local_vars(&self) -> Vec<VarName>;
