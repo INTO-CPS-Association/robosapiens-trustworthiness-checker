@@ -10,7 +10,7 @@ default-run = "trustworthiness_checker"
 crate-type = ["lib"]
 bench = false
 
-[build-dependencies] # <-- We added this and everything after!
+[build-dependencies]
 lalrpop = "0.22.1"
 
 [dependencies]
