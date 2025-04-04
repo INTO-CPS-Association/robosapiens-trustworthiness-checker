@@ -122,10 +122,3 @@ impl MonitoringSemantics<DistSExpr, Value> for DistributedSemantics {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn test_monitor_at_true() {}
-}

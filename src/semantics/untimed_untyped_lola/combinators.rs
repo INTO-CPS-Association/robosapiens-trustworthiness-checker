@@ -604,138 +604,14 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{SyncStreamContext, Value, VarName};
-    use async_trait::async_trait;
+    use crate::core::{SyncStreamContext, Value};
+    use crate::runtime::asynchronous::Context;
     use futures::stream;
     use macro_rules_attribute::apply;
+    use smol::LocalExecutor;
     use smol_macros::test as smol_test;
-    use std::collections::BTreeMap;
-    use std::iter::FromIterator;
-    use std::ops::{Deref, DerefMut};
-    use std::sync::Mutex;
+    use std::rc::Rc;
     use test_log::test;
-
-    pub struct VarMap(BTreeMap<VarName, Mutex<Vec<Value>>>);
-    impl Deref for VarMap {
-        type Target = BTreeMap<VarName, Mutex<Vec<Value>>>;
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl DerefMut for VarMap {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
-        }
-    }
-
-    #[allow(dead_code)] // Only used in test code
-    struct MockContext {
-        xs: VarMap,
-    }
-
-    impl FromIterator<(VarName, Vec<Value>)> for VarMap {
-        fn from_iter<I: IntoIterator<Item = (VarName, Vec<Value>)>>(iter: I) -> Self {
-            let mut map = VarMap(BTreeMap::new());
-            for (key, vec) in iter {
-                map.insert(key, Mutex::new(vec));
-            }
-            map
-        }
-    }
-
-    impl StreamContext<Value> for MockContext {
-        fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {
-            let mutex = self.xs.get(x)?;
-            if let Ok(vec) = mutex.lock() {
-                Some(Box::pin(stream::iter(vec.clone())))
-            } else {
-                std::panic!("Mutex was poisoned");
-            }
-        }
-
-        fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Value>> {
-            // Create new xs with only the `history_length` latest values for the Vec
-            let new_xs = self
-                .xs
-                .iter()
-                .map(|(key, mutex)| {
-                    if let Ok(vec) = mutex.lock() {
-                        let start = if vec.len() > history_length {
-                            vec.len() - history_length
-                        } else {
-                            0
-                        };
-                        let latest_elements = vec[start..].to_vec();
-                        (key.clone(), latest_elements)
-                    } else {
-                        std::panic!("Mutex was poisoned");
-                    }
-                })
-                .collect();
-            Box::new(MockContext { xs: new_xs })
-        }
-
-        fn restricted_subcontext(
-            &self,
-            _vs: EcoVec<VarName>,
-            _history_length: usize,
-        ) -> Box<dyn SyncStreamContext<Value>> {
-            unimplemented!()
-        }
-    }
-
-    #[async_trait(?Send)]
-    impl SyncStreamContext<Value> for MockContext {
-        async fn advance_clock(&mut self) {
-            // Remove the first element from each Vec (the oldest value)
-            for (_, vec_mutex) in self.xs.iter() {
-                if let Ok(mut vec) = vec_mutex.lock() {
-                    if !vec.is_empty() {
-                        let _ = vec.remove(0);
-                    }
-                } else {
-                    std::panic!("Mutex was poisoned");
-                }
-            }
-            return;
-        }
-
-        async fn lazy_advance_clock(&mut self) {
-            self.advance_clock().await;
-        }
-
-        fn clock(&self) -> usize {
-            0
-        }
-
-        fn is_clock_started(&self) -> bool {
-            true
-        }
-
-        async fn start_auto_clock(&mut self) {
-            // Do nothing
-        }
-
-        fn upcast(&self) -> &dyn StreamContext<Value> {
-            self
-        }
-    }
-
-    #[test(apply(smol_test))]
-    async fn test_mock_subcontext() {
-        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into(), 3.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let subctx = ctx.subcontext(1);
-        // This does not properly model a subcontext since need values need to
-        // be able to arrive, after which they will be pruned down to the
-        // history length on .advance()
-        let res: Vec<Value> = subctx.var(&"x".into()).unwrap().collect().await;
-        assert_eq!(res, vec![3.into()]);
-    }
 
     #[test(apply(smol_test))]
     async fn test_not() {
@@ -765,129 +641,129 @@ mod tests {
     }
 
     #[test(apply(smol_test))]
-    async fn test_dynamic() {
+    async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
-        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res: Vec<Value> = dynamic(&ctx, e, None, 10).collect().await;
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = dynamic(&ctx, e, None, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
         assert_eq!(res, exp)
     }
 
     #[test(apply(smol_test))]
-    async fn test_dynamic_x_squared() {
+    async fn test_dynamic_x_squared(executor: Rc<LocalExecutor<'static>>) {
         // This test is interesting since we use x twice in the dynamic strings
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
-        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res: Vec<Value> = dynamic(&ctx, e, None, 10).collect().await;
+        let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = dynamic(&ctx, e, None, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
         assert_eq!(res, exp)
     }
 
     #[test(apply(smol_test))]
-    async fn test_dynamic_with_start_unknown() {
+    async fn test_dynamic_with_start_unknown(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
             "x + 1".into(),
             "x + 2".into(),
         ]));
-        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into(), 3.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res: Vec<Value> = dynamic(&ctx, e, None, 10).collect().await;
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = dynamic(&ctx, e, None, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-unknown value
         let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 5.into()];
         assert_eq!(res, exp)
     }
 
     #[test(apply(smol_test))]
-    async fn test_dynamic_with_mid_unknown() {
+    async fn test_dynamic_with_mid_unknown(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
             "x + 1".into(),
             Value::Unknown,
             "x + 2".into(),
         ]));
-        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into(), 3.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res: Vec<Value> = dynamic(&ctx, e, None, 10).collect().await;
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = dynamic(&ctx, e, None, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-unknown value
         let exp: Vec<Value> = vec![2.into(), 3.into(), 5.into()];
         assert_eq!(res, exp)
     }
 
     #[test(apply(smol_test))]
-    async fn test_defer() {
+    async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
-        let map: VarMap = vec![("x".into(), vec![1.into(), 2.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res: Vec<Value> = defer(&ctx, e, 2).collect().await;
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = defer(&ctx, e, 2);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
     }
     #[test(apply(smol_test))]
-    async fn test_defer_x_squared() {
+    async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
         // This test is interesting since we use x twice in the dynamic strings
         let e: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
-        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res: Vec<Value> = defer(&ctx, e, 10).collect().await;
+        let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = defer(&ctx, e, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
         assert_eq!(res, exp)
     }
 
     #[test(apply(smol_test))]
-    async fn test_defer_unknown() {
+    async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
         // Using unknown to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, "x + 1".into()]));
-        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res = defer(&ctx, e, 10).collect::<Vec<Value>>().await;
+        let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = defer(&ctx, e, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, 4.into()];
         assert_eq!(res, exp)
     }
 
     #[test(apply(smol_test))]
-    async fn test_defer_unknown2() {
+    async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
         // Unknown followed by property followed by unknown returns [U; val; val].
         let e = Box::pin(stream::iter(vec![
             Value::Unknown,
             "x + 1".into(),
             Value::Unknown,
         ])) as OutputStream<Value>;
-        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into(), 4.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res = defer(&ctx, e, 10).collect::<Vec<Value>>().await;
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = defer(&ctx, e, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, 4.into(), 5.into()];
         assert_eq!(res, exp)
     }
 
     #[test(apply(smol_test))]
-    async fn test_defer_only_unknown() {
+    async fn test_defer_only_unknown(executor: Rc<LocalExecutor<'static>>) {
         // Using unknown to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, Value::Unknown]));
-        let map: VarMap = vec![("x".into(), vec![2.into(), 3.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let res = defer(&ctx, e, 10).collect::<Vec<Value>>().await;
+        let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let res_stream = defer(&ctx, e, 10);
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, Value::Unknown];
         assert_eq!(res, exp)
     }
@@ -1079,17 +955,16 @@ mod tests {
     }
 
     #[test(apply(smol_test))]
-    async fn test_list_idx_var() {
+    async fn test_list_idx_var(executor: Rc<LocalExecutor<'static>>) {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
-        let map: VarMap = vec![("y".into(), vec![0.into(), 1.into()]).into()]
-            .into_iter()
-            .collect();
-        let ctx = MockContext { xs: map };
-        let i: OutputStream<Value> = var(&ctx, "y".into());
-        let res: Vec<Value> = lindex(list(x), i).collect().await;
+        let i = Box::pin(stream::iter(vec![0.into(), 1.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["i".into()], vec![i], 10);
+        let res_stream = lindex(list(x), var(&ctx, "i".into()));
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![1.into(), 4.into()];
         assert_eq!(res, exp)
     }

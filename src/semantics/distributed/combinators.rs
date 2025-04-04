@@ -177,11 +177,10 @@ mod tests {
             graph_stream,
         );
         let exp = vec![Value::Int(2), Value::Int(4)];
+        let res_stream =
+            crate::semantics::untimed_untyped_lola::combinators::dynamic(&ctx, e, None, 10);
         ctx.start_auto_clock().await;
-        let res: Vec<Value> =
-            crate::semantics::untimed_untyped_lola::combinators::dynamic(&ctx, e, None, 10)
-                .collect()
-                .await;
+        let res: Vec<Value> = res_stream.collect().await;
         assert_eq!(res, exp);
     }
 }
