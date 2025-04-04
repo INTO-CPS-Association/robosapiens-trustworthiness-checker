@@ -256,8 +256,8 @@ impl<V: StreamData> VarManager<V> {
                             to_delete.push(i);
                         }
                     }
-                    for i in to_delete {
-                        subscribers_ref.borrow_mut().remove(i);
+                    for i in to_delete.iter().rev() {
+                        subscribers_ref.borrow_mut().remove(*i);
                     }
                     debug!("Distributed data");
                 }
