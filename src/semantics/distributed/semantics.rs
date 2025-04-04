@@ -118,7 +118,10 @@ impl MonitoringSemantics<DistSExpr, Value> for DistributedSemantics {
                 let v = Self::to_async_stream(*v, ctx);
                 mc::tan(v)
             }
-            DistSExpr::MonitoredAt(var_name, label) => dist_mc::monitored_at(var_name, label, ctx),
+            DistSExpr::MonitoredAt(var_name, label) => {
+                //  dist_mc::monitored_at(var_name, label, ctx),
+                todo!("Integrate this thing")
+            }
         }
     }
 }

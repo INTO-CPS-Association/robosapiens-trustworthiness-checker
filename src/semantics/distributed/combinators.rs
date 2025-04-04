@@ -65,9 +65,8 @@ impl SyncStreamContext<Value> for DistributedContext {
     }
 
     async fn start_auto_clock(&mut self) {
-        self.ctx.start_auto_clock().await;
-
         if !self.ctx.is_clock_started() {
+            self.ctx.start_auto_clock().await;
             let graph_manager = mem::take(&mut *self.graph_manager.borrow_mut()).unwrap();
             self.executor.spawn(graph_manager.run()).detach();
         }
@@ -126,16 +125,8 @@ impl DistributedContext {
 pub fn monitored_at(
     var_name: VarName,
     label: NodeName,
-    ctx: &dyn StreamContext<Value>,
+    ctx: &DistributedContext,
 ) -> OutputStream<Value> {
-    // Hack to ensure that the Context is specifically a DistributedContext
-    // (Instead of refactoring everything)
-    // Note that this is VERY unsafe. Undefined behavior will happen
-    // TODO: Fixme
-    let ctx: &(dyn Any + 'static) = unsafe { mem::transmute(ctx) };
-    let ctx = ctx
-        .downcast_ref::<DistributedContext>()
-        .expect("Invalid context type");
     let mut graph_stream = ctx.graph().unwrap();
 
     Box::pin(stream! {
@@ -156,10 +147,16 @@ pub fn monitored_at(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
-    use crate::core::{SyncStreamContext, Value};
+    use crate::{
+        core::{SyncStreamContext, Value},
+        distributed::distribution_graphs::DistributionGraph,
+    };
     use futures::stream;
     use macro_rules_attribute::apply;
+    use petgraph::graph::DiGraph;
     use smol_macros::test as smol_test;
     use test_log::test;
 
@@ -182,5 +179,49 @@ mod tests {
         ctx.start_auto_clock().await;
         let res: Vec<Value> = res_stream.collect().await;
         assert_eq!(res, exp);
+    }
+
+    #[test(apply(smol_test))]
+    async fn test_monitor_at_stream(executor: Rc<LocalExecutor<'static>>) {
+        // Just a little test to check that we can do our tests... :-)
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let z = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+
+        let mut graph = DiGraph::new();
+        let a = graph.add_node("A".into());
+        let b = graph.add_node("B".into());
+        let c = graph.add_node("C".into());
+        graph.add_edge(a, b, 0);
+        graph.add_edge(b, c, 0);
+        let dist_graph = DistributionGraph {
+            central_monitor: a,
+            graph,
+        };
+        let labelled_graph = LabelledDistributionGraph {
+            dist_graph,
+            var_names: vec!["x".into(), "y".into(), "z".into()],
+            node_labels: BTreeMap::from([
+                (a, vec![]),
+                (b, vec!["x".into()]),
+                (c, vec!["y".into(), "z".into()]),
+            ]),
+        };
+
+        let graph_stream = Box::pin(stream::repeat(labelled_graph));
+
+        let mut ctx = DistributedContext::new(
+            executor.clone(),
+            vec!["x".into(), "y".into(), "z".into()],
+            vec![x, y, z],
+            10,
+            graph_stream,
+        );
+
+        let res_x = monitored_at("x".into(), "B".into(), &ctx);
+        ctx.start_auto_clock().await;
+        let res_x: Vec<_> = res_x.take(3).collect().await;
+
+        assert_eq!(res_x, vec![true.into(), true.into(), true.into()]);
     }
 }
