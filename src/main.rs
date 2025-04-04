@@ -260,42 +260,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             ));
             executor.spawn(runner.run())
         }
-        (Runtime::Queuing, Semantics::Untimed) => {
-            let runner = tc::runtime::queuing::QueuingMonitorRunner::<
-                _,
-                _,
-                tc::semantics::UntimedLolaSemantics,
-                _,
-            >::new(
-                executor.clone(),
-                model.clone(),
-                &mut *input_streams,
-                output_handler,
-                create_dependency_manager(DependencyKind::Empty, model),
-            );
-            executor.spawn(runner.run())
-        }
         (Runtime::Async, Semantics::TypedUntimed) => {
             let typed_model = type_check(model.clone()).expect("Model failed to type check");
 
             let runner = tc::runtime::asynchronous::AsyncMonitorRunner::<
-                _,
-                _,
-                tc::semantics::TypedUntimedLolaSemantics,
-                _,
-            >::new(
-                executor.clone(),
-                typed_model,
-                &mut *input_streams,
-                output_handler,
-                create_dependency_manager(DependencyKind::Empty, model),
-            );
-            executor.spawn(runner.run())
-        }
-        (Runtime::Queuing, Semantics::TypedUntimed) => {
-            let typed_model = type_check(model.clone()).expect("Model failed to type check");
-
-            let runner = tc::runtime::queuing::QueuingMonitorRunner::<
                 _,
                 _,
                 tc::semantics::TypedUntimedLolaSemantics,

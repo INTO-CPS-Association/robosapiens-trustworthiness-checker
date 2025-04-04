@@ -10,7 +10,6 @@ use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_constraints;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_constraints_no_overhead;
-use trustworthiness_checker::benches_common::monitor_outputs_untyped_queuing;
 use trustworthiness_checker::dep_manage::interface::create_dependency_manager;
 use trustworthiness_checker::lola_fixtures::input_streams_add_defer;
 use trustworthiness_checker::lola_fixtures::spec_add_defer;
@@ -105,20 +104,6 @@ fn from_elem(c: &mut Criterion) {
             |b, &(spec, dep_manager)| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async(
-                        local_smol_executor.executor.clone(),
-                        spec.clone(),
-                        input_stream_fn(),
-                        dep_manager.clone(),
-                    )
-                })
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("dup_defer_untyped_queuing", size),
-            &(&spec, &dep_manager),
-            |b, &(spec, dep_manager)| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
-                    monitor_outputs_untyped_queuing(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),

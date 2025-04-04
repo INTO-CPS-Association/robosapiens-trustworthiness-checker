@@ -94,56 +94,6 @@ pub async fn monitor_outputs_typed_async(
     async_monitor.run().await;
 }
 
-pub async fn monitor_outputs_untyped_queuing(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: LOLASpecification,
-    mut input_streams: BTreeMap<VarName, OutputStream<Value>>,
-    dep_manager: DependencyManager,
-) {
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let async_monitor = crate::runtime::queuing::QueuingMonitorRunner::<
-        _,
-        _,
-        crate::semantics::UntimedLolaSemantics,
-        crate::LOLASpecification,
-    >::new(
-        executor.clone(),
-        spec.clone(),
-        &mut input_streams,
-        output_handler,
-        dep_manager,
-    );
-    async_monitor.run().await;
-}
-
-pub async fn monitor_outputs_typed_queuing(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: TypedLOLASpecification,
-    mut input_streams: BTreeMap<VarName, OutputStream<Value>>,
-    dep_manager: DependencyManager,
-) {
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let async_monitor = crate::runtime::queuing::QueuingMonitorRunner::<
-        _,
-        _,
-        crate::semantics::TypedUntimedLolaSemantics,
-        _,
-    >::new(
-        executor,
-        spec,
-        &mut input_streams,
-        output_handler,
-        dep_manager,
-    );
-    async_monitor.run().await;
-}
-
 pub fn monitor_outputs_untyped_constraints_no_overhead(
     spec: LOLASpecification,
     num_outputs: i64,

@@ -14,7 +14,6 @@ use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::{
     TypedLOLASpecification, type_check,
 };
-use trustworthiness_checker::runtime::queuing::QueuingMonitorRunner;
 use trustworthiness_checker::{
     Monitor, VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
 };
@@ -106,7 +105,7 @@ async fn test_concat_monitor(executor: Rc<LocalExecutor<'static>>) {
     let spec = type_check(spec_untyped.clone()).expect("Type check failed");
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = QueuingMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, TypedUntimedLolaSemantics, _>::new(
         executor.clone(),
         spec,
         &mut input_streams,
