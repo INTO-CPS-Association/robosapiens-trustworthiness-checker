@@ -136,9 +136,9 @@ pub fn monitored_at(
     let ctx = ctx
         .downcast_ref::<DistributedContext>()
         .expect("Invalid context type");
+    let mut graph_stream = ctx.graph().unwrap();
 
     Box::pin(stream! {
-        let mut graph_stream = ctx.graph().unwrap();
         loop {
             if let Some(graph) = graph_stream.next().await {
                 let idx = graph.get_node_index_by_name(&label).expect("Label not inside graph");
@@ -152,4 +152,36 @@ pub fn monitored_at(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{SyncStreamContext, Value};
+    use futures::stream;
+    use macro_rules_attribute::apply;
+    use smol_macros::test as smol_test;
+    use test_log::test;
+
+    #[test(apply(smol_test))]
+    async fn test_that_test_can_test(executor: Rc<LocalExecutor<'static>>) {
+        // Just a little test to check that we can do our tests... :-)
+        let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let graph_stream = Box::pin(stream::iter(vec![]));
+        let mut ctx = DistributedContext::new(
+            executor.clone(),
+            vec!["x".into()],
+            vec![x],
+            10,
+            graph_stream,
+        );
+        let exp = vec![Value::Int(2), Value::Int(4)];
+        ctx.start_auto_clock().await;
+        let res: Vec<Value> =
+            crate::semantics::untimed_untyped_lola::combinators::dynamic(&ctx, e, None, 10)
+                .collect()
+                .await;
+        assert_eq!(res, exp);
+    }
 }
