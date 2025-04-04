@@ -27,7 +27,6 @@ use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::OutputHandler;
 use crate::core::Specification;
-use crate::core::SyncStreamContext;
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 use crate::dep_manage::interface::DependencyManager;
 use crate::stream_utils::oneshot_to_stream;
@@ -285,6 +284,11 @@ impl<V: StreamData> VarManager<V> {
         // subscribers)
         Box::pin(async move { while self.tick().await {} })
     }
+
+    /// Get the var name
+    pub fn var_name(&self) -> VarName {
+        self.var.clone()
+    }
 }
 
 /// Create a wrapper around an input stream which stores a history buffer of
@@ -382,6 +386,7 @@ impl<Val: StreamData> Context<Val> {
     }
 }
 
+#[async_trait(?Send)]
 impl<Val: StreamData> StreamContext<Val> for Context<Val> {
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
         if self.is_clock_started() {
@@ -394,7 +399,7 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
         Some(var_manager.subscribe())
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>> {
+    fn subcontext(&self, history_length: usize) -> Self {
         let input_streams = self
             .var_names
             .iter()
@@ -402,19 +407,15 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
             .collect();
 
         // Recursively create a new context based on ourself
-        Box::new(Context::new(
+        Context::new(
             self.executor.clone(),
             self.var_names.clone(),
             input_streams,
             history_length,
-        ))
+        )
     }
 
-    fn restricted_subcontext(
-        &self,
-        vs: ecow::EcoVec<VarName>,
-        history_length: usize,
-    ) -> Box<dyn SyncStreamContext<Val>> {
+    fn restricted_subcontext(&self, vs: ecow::EcoVec<VarName>, history_length: usize) -> Self {
         let input_streams = self
             .var_names
             .iter()
@@ -428,17 +429,14 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
             .collect();
 
         // Recursively create a new context based on ourself
-        Box::new(Context::new(
+        Context::new(
             self.executor.clone(),
             self.var_names.clone(),
             input_streams,
             history_length,
-        ))
+        )
     }
-}
 
-#[async_trait(?Send)]
-impl<Val: StreamData> SyncStreamContext<Val> for Context<Val> {
     async fn advance_clock(&mut self) {
         join_all(
             self.var_managers
@@ -474,10 +472,6 @@ impl<Val: StreamData> SyncStreamContext<Val> for Context<Val> {
     fn is_clock_started(&self) -> bool {
         self.clock() == usize::MAX
     }
-
-    fn upcast(&self) -> &dyn StreamContext<Val> {
-        self
-    }
 }
 
 /// A Monitor instance implementing the Async Runtime.
@@ -495,7 +489,7 @@ impl<Val: StreamData> SyncStreamContext<Val> for Context<Val> {
 pub struct AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
-    S: MonitoringSemantics<Expr, Val>,
+    S: MonitoringSemantics<Expr, Val, Context<Val>>,
     M: Specification<Expr = Expr>,
 {
     #[allow(dead_code)]
@@ -512,7 +506,7 @@ where
 impl<Expr, Val, S, M> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M>
 where
     Val: StreamData,
-    S: MonitoringSemantics<Expr, Val>,
+    S: MonitoringSemantics<Expr, Val, Context<Val>>,
     M: Specification<Expr = Expr>,
 {
     fn new(

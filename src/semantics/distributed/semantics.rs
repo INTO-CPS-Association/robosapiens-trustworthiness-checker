@@ -1,15 +1,17 @@
 use crate::core::Value;
-use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
+use crate::core::{MonitoringSemantics, OutputStream};
 use crate::lang::dist_lang::ast::DistSExpr;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_untyped_lola::combinators as mc;
 
+use super::combinators::DistributedContext;
+
 #[derive(Clone)]
 pub struct DistributedSemantics;
 
-impl MonitoringSemantics<DistSExpr, Value> for DistributedSemantics {
-    fn to_async_stream(expr: DistSExpr, ctx: &dyn StreamContext<Value>) -> OutputStream<Value> {
+impl MonitoringSemantics<DistSExpr, Value, DistributedContext> for DistributedSemantics {
+    fn to_async_stream(expr: DistSExpr, ctx: &DistributedContext) -> OutputStream<Value> {
         match expr {
             DistSExpr::Val(v) => mc::val(v),
             DistSExpr::BinOp(e1, e2, op) => {
@@ -118,10 +120,7 @@ impl MonitoringSemantics<DistSExpr, Value> for DistributedSemantics {
                 let v = Self::to_async_stream(*v, ctx);
                 mc::tan(v)
             }
-            DistSExpr::MonitoredAt(var_name, label) => {
-                //  dist_mc::monitored_at(var_name, label, ctx),
-                todo!("Integrate this thing")
-            }
+            DistSExpr::MonitoredAt(var_name, label) => dist_mc::monitored_at(var_name, label, ctx),
         }
     }
 }

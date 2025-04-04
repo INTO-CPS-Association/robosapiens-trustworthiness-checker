@@ -8,8 +8,11 @@ use crate::lang::dynamic_lola::ast::{
 #[derive(Clone)]
 pub struct UntimedLolaSemantics;
 
-impl MonitoringSemantics<SExpr, Value> for UntimedLolaSemantics {
-    fn to_async_stream(expr: SExpr, ctx: &dyn StreamContext<Value>) -> OutputStream<Value> {
+impl<Ctx> MonitoringSemantics<SExpr, Value, Ctx> for UntimedLolaSemantics
+where
+    Ctx: StreamContext<Value>,
+{
+    fn to_async_stream(expr: SExpr, ctx: &Ctx) -> OutputStream<Value> {
         match expr {
             SExpr::Val(v) => mc::val(v),
             SExpr::BinOp(e1, e2, op) => {

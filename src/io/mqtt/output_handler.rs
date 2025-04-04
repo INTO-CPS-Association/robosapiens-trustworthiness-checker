@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::mem;
 use std::rc::Rc;
 
-use async_trait::async_trait;
 use futures::StreamExt;
 use futures::future::LocalBoxFuture;
 use paho_mqtt::{self as mqtt};
@@ -65,7 +64,6 @@ async fn publish_stream(
     }
 }
 
-#[async_trait(?Send)]
 impl OutputHandler for MQTTOutputHandler {
     type Val = Value;
 

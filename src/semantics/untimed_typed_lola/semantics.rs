@@ -10,8 +10,11 @@ use crate::lang::dynamic_lola::type_checker::{
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;
 
-impl MonitoringSemantics<SExprTE, Value, Value> for TypedUntimedLolaSemantics {
-    fn to_async_stream(expr: SExprTE, ctx: &dyn StreamContext<Value>) -> OutputStream<Value> {
+impl<Ctx> MonitoringSemantics<SExprTE, Value, Ctx, Value> for TypedUntimedLolaSemantics
+where
+    Ctx: StreamContext<Value>,
+{
+    fn to_async_stream(expr: SExprTE, ctx: &Ctx) -> OutputStream<Value> {
         match expr {
             SExprTE::Int(e) => {
                 from_typed_stream::<PossiblyUnknown<i64>>(Self::to_async_stream(e, ctx))
@@ -32,11 +35,12 @@ impl MonitoringSemantics<SExprTE, Value, Value> for TypedUntimedLolaSemantics {
     }
 }
 
-impl MonitoringSemantics<SExprInt, PossiblyUnknown<i64>, Value> for TypedUntimedLolaSemantics {
-    fn to_async_stream(
-        expr: SExprInt,
-        ctx: &dyn StreamContext<Value>,
-    ) -> OutputStream<PossiblyUnknown<i64>> {
+impl<Ctx> MonitoringSemantics<SExprInt, PossiblyUnknown<i64>, Ctx, Value>
+    for TypedUntimedLolaSemantics
+where
+    Ctx: StreamContext<Value>,
+{
+    fn to_async_stream(expr: SExprInt, ctx: &Ctx) -> OutputStream<PossiblyUnknown<i64>> {
         match expr {
             SExprInt::Val(v) => mc::val(v),
             SExprInt::BinOp(e1, e2, op) => {
@@ -69,11 +73,12 @@ impl MonitoringSemantics<SExprInt, PossiblyUnknown<i64>, Value> for TypedUntimed
     }
 }
 
-impl MonitoringSemantics<SExprFloat, PossiblyUnknown<f32>, Value> for TypedUntimedLolaSemantics {
-    fn to_async_stream(
-        expr: SExprFloat,
-        ctx: &dyn StreamContext<Value>,
-    ) -> OutputStream<PossiblyUnknown<f32>> {
+impl<Ctx> MonitoringSemantics<SExprFloat, PossiblyUnknown<f32>, Ctx, Value>
+    for TypedUntimedLolaSemantics
+where
+    Ctx: StreamContext<Value>,
+{
+    fn to_async_stream(expr: SExprFloat, ctx: &Ctx) -> OutputStream<PossiblyUnknown<f32>> {
         match expr {
             SExprFloat::Val(v) => mc::val(v),
             SExprFloat::BinOp(e1, e2, op) => {
@@ -106,11 +111,12 @@ impl MonitoringSemantics<SExprFloat, PossiblyUnknown<f32>, Value> for TypedUntim
     }
 }
 
-impl MonitoringSemantics<SExprStr, PossiblyUnknown<String>, Value> for TypedUntimedLolaSemantics {
-    fn to_async_stream(
-        expr: SExprStr,
-        ctx: &dyn StreamContext<Value>,
-    ) -> OutputStream<PossiblyUnknown<String>> {
+impl<Ctx> MonitoringSemantics<SExprStr, PossiblyUnknown<String>, Ctx, Value>
+    for TypedUntimedLolaSemantics
+where
+    Ctx: StreamContext<Value>,
+{
+    fn to_async_stream(expr: SExprStr, ctx: &Ctx) -> OutputStream<PossiblyUnknown<String>> {
         match expr {
             SExprStr::Val(v) => mc::val(v),
             SExprStr::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
@@ -144,11 +150,12 @@ impl MonitoringSemantics<SExprStr, PossiblyUnknown<String>, Value> for TypedUnti
     }
 }
 
-impl MonitoringSemantics<SExprUnit, PossiblyUnknown<()>, Value> for TypedUntimedLolaSemantics {
-    fn to_async_stream(
-        expr: SExprUnit,
-        ctx: &dyn StreamContext<Value>,
-    ) -> OutputStream<PossiblyUnknown<()>> {
+impl<Ctx> MonitoringSemantics<SExprUnit, PossiblyUnknown<()>, Ctx, Value>
+    for TypedUntimedLolaSemantics
+where
+    Ctx: StreamContext<Value>,
+{
+    fn to_async_stream(expr: SExprUnit, ctx: &Ctx) -> OutputStream<PossiblyUnknown<()>> {
         match expr {
             SExprUnit::Val(v) => mc::val(v),
             SExprUnit::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
@@ -170,11 +177,12 @@ impl MonitoringSemantics<SExprUnit, PossiblyUnknown<()>, Value> for TypedUntimed
     }
 }
 
-impl MonitoringSemantics<SExprBool, PossiblyUnknown<bool>, Value> for TypedUntimedLolaSemantics {
-    fn to_async_stream(
-        expr: SExprBool,
-        ctx: &dyn StreamContext<Value>,
-    ) -> OutputStream<PossiblyUnknown<bool>> {
+impl<Ctx> MonitoringSemantics<SExprBool, PossiblyUnknown<bool>, Ctx, Value>
+    for TypedUntimedLolaSemantics
+where
+    Ctx: StreamContext<Value>,
+{
+    fn to_async_stream(expr: SExprBool, ctx: &Ctx) -> OutputStream<PossiblyUnknown<bool>> {
         match expr {
             SExprBool::Val(b) => mc::val(b),
             SExprBool::EqInt(e1, e2) => {

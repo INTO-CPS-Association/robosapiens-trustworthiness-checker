@@ -286,8 +286,8 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
     )
 }
 
-pub fn dynamic(
-    ctx: &dyn StreamContext<Value>,
+pub fn dynamic<Ctx: StreamContext<Value>>(
+    ctx: &Ctx,
     mut eval_stream: OutputStream<Value>,
     vs: Option<EcoVec<VarName>>,
     history_length: usize,
@@ -337,7 +337,7 @@ pub fn dynamic(
                 Value::Str(s) => {
                     let expr = lola_expression.parse_next(&mut s.as_ref())
                         .expect("Invalid dynamic str");
-                    let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast());
+                    let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, &subcontext);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
                     subcontext.lazy_advance_clock().await;
@@ -357,7 +357,7 @@ pub fn dynamic(
     })
 }
 
-pub fn var(ctx: &dyn StreamContext<Value>, x: VarName) -> OutputStream<Value> {
+pub fn var(ctx: &impl StreamContext<Value>, x: VarName) -> OutputStream<Value> {
     match ctx.var(&x) {
         Some(x) => x,
         None => {
@@ -369,7 +369,7 @@ pub fn var(ctx: &dyn StreamContext<Value>, x: VarName) -> OutputStream<Value> {
 // Defer for an UntimedLolaExpression using the lola_expression parser
 #[instrument(skip(ctx, prop_stream))]
 pub fn defer(
-    ctx: &dyn StreamContext<Value>,
+    ctx: &impl StreamContext<Value>,
     mut prop_stream: OutputStream<Value>,
     history_length: usize,
 ) -> OutputStream<Value> {
@@ -389,7 +389,7 @@ pub fn defer(
                     // We have a string to evaluate so do so
                     let expr = lola_expression.parse_next(&mut defer_s.as_ref())
                         .expect("Invalid dynamic str");
-                    eval_output_stream = Some(UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()));
+                    eval_output_stream = Some(UntimedLolaSemantics::to_async_stream(expr, &subcontext));
                     debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
                     subcontext.start_auto_clock().await;
                     break;
@@ -604,7 +604,7 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{SyncStreamContext, Value};
+    use crate::core::{StreamContext, Value};
     use crate::runtime::asynchronous::Context;
     use futures::stream;
     use macro_rules_attribute::apply;

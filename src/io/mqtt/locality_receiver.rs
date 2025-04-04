@@ -28,7 +28,7 @@ impl MQTTLocalityReceiver {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl LocalityReceiver for MQTTLocalityReceiver {
     async fn receive(&self) -> Result<impl LocalitySpec + 'static, Box<dyn std::error::Error>> {
         let (client, mut stream) =

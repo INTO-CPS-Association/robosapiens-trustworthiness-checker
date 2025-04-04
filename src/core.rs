@@ -267,20 +267,14 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     }
 }
 
+#[async_trait(?Send)]
 pub trait StreamContext<Val: StreamData>: 'static {
     fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>>;
+    fn subcontext(&self, history_length: usize) -> Self;
 
-    fn restricted_subcontext(
-        &self,
-        vs: EcoVec<VarName>,
-        history_length: usize,
-    ) -> Box<dyn SyncStreamContext<Val>>;
-}
+    fn restricted_subcontext(&self, vs: EcoVec<VarName>, history_length: usize) -> Self;
 
-#[async_trait(?Send)]
-pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + 'static {
     /// Advance the clock used by the context by one step, letting all
     /// streams to progress (blocking)
     async fn advance_clock(&mut self);
@@ -299,14 +293,15 @@ pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + 'static {
     /// Get the current value of the clock (this may not guarantee
     /// that all stream have reached this time)
     fn clock(&self) -> usize;
-
-    // This allows TimedStreamContext to be used as a StreamContext
-    // This is necessary due to https://github.com/rust-lang/rust/issues/65991
-    fn upcast(&self) -> &dyn StreamContext<Val>;
 }
 
-pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + 'static {
-    fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
+pub trait MonitoringSemantics<Expr, Val, Ctx, CVal = Val>: Clone + 'static
+where
+    Val: StreamData,
+    CVal: StreamData,
+    Ctx: StreamContext<CVal>,
+{
+    fn to_async_stream(expr: Expr, ctx: &Ctx) -> OutputStream<Val>;
 }
 
 pub trait Specification {
@@ -325,7 +320,6 @@ pub trait Specification {
 // output file name, etc.) whilst provide_streams is called by the runtime to
 // finish the setup of the output handler by providing the streams to be output,
 // and finally run is called to start the output handler.
-#[async_trait(?Send)]
 pub trait OutputHandler {
     type Val: StreamData;
 

@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 
 use crate::VarName;
-use crate::core::{OutputStream, StreamContext, SyncStreamContext};
+use crate::core::{OutputStream, StreamContext};
 use crate::core::{StreamData, Value};
 use crate::distributed::distribution_graphs::{LabelledDistributionGraph, NodeName};
 use crate::runtime::asynchronous::{Context as AsyncCtx, VarManager};
@@ -22,26 +21,48 @@ pub struct DistributedContext {
     executor: Rc<LocalExecutor<'static>>,
 }
 
+#[async_trait(?Send)]
 impl StreamContext<Value> for DistributedContext {
     fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {
         self.ctx.var(&x)
     }
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn crate::core::SyncStreamContext<Value>> {
-        self.ctx.subcontext(history_length)
+    fn subcontext(&self, history_length: usize) -> Self {
+        let graph_manager = Rc::new(RefCell::new(self.graph_manager.borrow_mut().as_mut().map(
+            |graph_manager| {
+                VarManager::new(
+                    self.executor.clone(),
+                    graph_manager.var_name(),
+                    graph_manager.subscribe(),
+                )
+            },
+        )));
+
+        DistributedContext {
+            ctx: self.ctx.subcontext(history_length),
+            graph_manager,
+            executor: self.executor.clone(),
+        }
     }
 
-    fn restricted_subcontext(
-        &self,
-        vs: ecow::EcoVec<VarName>,
-        history_length: usize,
-    ) -> Box<dyn crate::core::SyncStreamContext<Value>> {
-        self.ctx.restricted_subcontext(vs, history_length)
-    }
-}
+    fn restricted_subcontext(&self, vs: ecow::EcoVec<VarName>, history_length: usize) -> Self {
+        let graph_manager = Rc::new(RefCell::new(self.graph_manager.borrow_mut().as_mut().map(
+            |graph_manager| {
+                VarManager::new(
+                    self.executor.clone(),
+                    graph_manager.var_name(),
+                    graph_manager.subscribe(),
+                )
+            },
+        )));
 
-#[async_trait(?Send)]
-impl SyncStreamContext<Value> for DistributedContext {
+        DistributedContext {
+            ctx: self.ctx.restricted_subcontext(vs, history_length),
+            graph_manager,
+            executor: self.executor.clone(),
+        }
+    }
+
     async fn advance_clock(&mut self) {
         self.ctx.advance_clock().await;
         // Tick the graph_manager
@@ -78,10 +99,6 @@ impl SyncStreamContext<Value> for DistributedContext {
 
     fn clock(&self) -> usize {
         self.ctx.clock()
-    }
-
-    fn upcast(&self) -> &dyn StreamContext<Value> {
-        self.ctx.upcast()
     }
 }
 
@@ -151,7 +168,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::{SyncStreamContext, Value},
+        core::{StreamContext, Value},
         distributed::distribution_graphs::DistributionGraph,
     };
     use futures::stream;
