@@ -1,6 +1,5 @@
 use crate::OutputStream;
 use crate::core::StreamData;
-use crate::core::Value;
 use crate::lang::dynamic_lola::type_checker::PossiblyUnknown;
 use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
 use futures::stream::LocalBoxStream;
@@ -8,19 +7,6 @@ use futures::{
     StreamExt,
     stream::{self},
 };
-use std::fmt::Debug;
-
-pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
-    stream: OutputStream<Value>,
-) -> OutputStream<T> {
-    Box::pin(stream.map(|x| x.try_into().expect("Type error")))
-}
-
-pub fn from_typed_stream<T: Into<Value> + StreamData>(
-    stream: OutputStream<T>,
-) -> OutputStream<Value> {
-    Box::pin(stream.map(|x| x.into()))
-}
 
 pub fn unknown_lift1<S: StreamData, R: StreamData>(
     f: impl CloneFn1<S, R>,

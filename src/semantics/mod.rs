@@ -1,5 +1,5 @@
 pub mod untimed_typed_lola;
-pub use untimed_typed_lola::TypedUntimedLolaSemantics;
+pub use untimed_typed_lola::semantics::TypedUntimedLolaSemantics;
 pub mod untimed_untyped_lola;
 pub use untimed_untyped_lola::UntimedLolaSemantics;
 pub mod distributed;
@@ -10,7 +10,7 @@ mod tests {
 
     use crate::{
         Value, lang::dynamic_lola::type_checker::PossiblyUnknown,
-        semantics::untimed_typed_lola::to_typed_stream,
+        semantics::untimed_typed_lola::helpers::to_typed_stream,
     };
 
     use super::*;
