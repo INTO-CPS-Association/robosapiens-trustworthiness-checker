@@ -1,7 +1,7 @@
 use crate::core::StreamData;
 use crate::core::Value;
 use crate::lang::dynamic_lola::parser::lola_expression;
-use crate::semantics::untimed_untyped_lola::UntimedLolaSemantics;
+use crate::semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics;
 use crate::{MonitoringSemantics, OutputStream, StreamContext, VarName};
 use async_stream::stream;
 use core::panic;
