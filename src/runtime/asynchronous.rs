@@ -601,8 +601,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::Value;
+
     use super::*;
 
+    use futures::stream;
     use macro_rules_attribute::apply;
     use smol_macros::test as smol_test;
     use test_log::test;
@@ -668,5 +671,44 @@ mod tests {
 
         assert_eq!(output1, vec![3, 4]);
         assert_eq!(output2, vec![3, 4]);
+    }
+
+    #[test(apply(smol_test))]
+    #[ignore = "Hangs - bug with stream termination with subcontexts"]
+    async fn test_subctx_regression(executor: Rc<LocalExecutor<'static>>) {
+        fn mock_indirection<Ctx: StreamContext<Value>>(
+            ctx: &Ctx,
+            x: VarName,
+        ) -> OutputStream<Value> {
+            let mut subcontext = ctx.subcontext(10);
+            Box::pin(stream! {
+                let mut var_stream = subcontext.var(&x).unwrap();
+                subcontext.advance_clock().await;
+                while let Some(current) = var_stream.next().await {
+                    yield current;
+                    subcontext.advance_clock().await;
+                }
+            })
+        }
+
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let mut ctx: Context<Value> = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut var_stream = mock_indirection(&ctx, "x".into());
+        ctx.start_auto_clock().await;
+        let exp: Vec<Value> = vec![1.into(), 2.into(), 3.into()];
+        // THIS DOES NOT WORK:
+        // let res: Vec<_> = var_stream.collect().await;
+        // assert_eq!(exp, res);
+        //
+        // THIS WORKS:
+        for exp_v in exp {
+            let val = var_stream.next().await;
+            assert_eq!(val, Some(exp_v));
+        }
+        // IF WE DO THIS THEN EVERYTHING HANGS
+        // = must be an error with subcontexts not knowing when the parent context's streams
+        // terminate
+        let val = var_stream.next().await;
+        assert_eq!(val, Some(1.into()));
     }
 }
