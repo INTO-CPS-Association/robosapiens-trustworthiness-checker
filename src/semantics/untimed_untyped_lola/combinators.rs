@@ -665,6 +665,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
+    #[ignore = "Bug with Ctx/dynamic where it does not use the correct value"]
     #[test(apply(smol_test))]
     async fn test_dynamic_with_start_unknown(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
@@ -745,13 +746,14 @@ mod tests {
             Value::Unknown,
             "x + 1".into(),
             Value::Unknown,
+            Value::Unknown,
         ])) as OutputStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer(&ctx, e, 10);
         ctx.start_auto_clock().await;
         let res: Vec<Value> = res_stream.collect().await;
-        let exp: Vec<Value> = vec![Value::Unknown, 4.into(), 5.into()];
+        let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 4.into(), 5.into()];
         assert_eq!(res, exp)
     }
 

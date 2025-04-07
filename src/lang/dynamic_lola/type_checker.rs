@@ -1007,7 +1007,6 @@ mod tests {
         assert!(results.eq(expected.into_iter()));
     }
 
-    // #[ignore = "String concatenation not implemented yet"]
     #[test]
     fn test_str_plus_ok() {
         // Checks that if we add two Strings together it results in typed AST after semantic analysis
