@@ -266,6 +266,8 @@ impl<V: StreamData> VarManager<V> {
                 None => {
                     *clock_ref.borrow_mut() += 1;
                     info!("Stopped distributing data due to end of input stream");
+                    // Remove references to subscribers to let rx's know that streams have ended
+                    *subscribers_ref.borrow_mut() = vec![];
                     return false;
                 }
             }
