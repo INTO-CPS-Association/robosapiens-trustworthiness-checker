@@ -1,4 +1,5 @@
 use crate::OutputStream;
+use crate::core::AbstractMonitorBuilder;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::OutputHandler;
@@ -181,27 +182,58 @@ impl ValStreamCollection {
     }
 }
 
-/// A monitor that uses constraints to resolve output values based on a global
-/// store of constraints. This is based on the original semantics of LOLA
-/// but expanded to support dynamic properties.
-pub struct ConstraintBasedMonitor {
-    executor: Rc<LocalExecutor<'static>>,
-    stream_collection: ValStreamCollection,
-    model: LOLASpecification,
-    output_handler: Box<dyn OutputHandler<Val = Value>>,
-    has_inputs: bool,
-    dependencies: DependencyManager,
+struct ConstraintBasedMonitorBuilder {
+    executor: Option<Rc<LocalExecutor<'static>>>,
+    model: Option<LOLASpecification>,
+    input: Option<Box<dyn InputProvider<Val = Value>>>,
+    output: Option<Box<dyn OutputHandler<Val = Value>>>,
+    dependencies: Option<DependencyManager>,
 }
 
-#[async_trait(?Send)]
-impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
-    fn new(
-        executor: Rc<LocalExecutor<'static>>,
-        model: LOLASpecification,
-        input: &mut dyn InputProvider<Val = Value>,
-        output: Box<dyn OutputHandler<Val = Value>>,
-        dependencies: DependencyManager,
-    ) -> Self {
+impl AbstractMonitorBuilder<LOLASpecification, Value> for ConstraintBasedMonitorBuilder {
+    type Mon = ConstraintBasedMonitor;
+
+    fn new() -> Self {
+        Self {
+            executor: None,
+            model: None,
+            input: None,
+            output: None,
+            dependencies: None,
+        }
+    }
+
+    fn executor(mut self, executor: Rc<LocalExecutor<'static>>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    fn model(mut self, model: LOLASpecification) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    fn input(mut self, input: Box<dyn InputProvider<Val = Value>>) -> Self {
+        self.input = Some(input);
+        self
+    }
+
+    fn output(mut self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
+        self.output = Some(output);
+        self
+    }
+
+    fn dependencies(mut self, dependencies: DependencyManager) -> Self {
+        self.dependencies = Some(dependencies);
+        self
+    }
+
+    fn build(self) -> ConstraintBasedMonitor {
+        let executor = self.executor.unwrap();
+        let model = self.model.unwrap();
+        let mut input = self.input.unwrap();
+        let output = self.output.unwrap();
+        let dependencies = self.dependencies.unwrap();
         let input_streams = model
             .input_vars()
             .iter()
@@ -222,7 +254,40 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
             dependencies,
         }
     }
+}
 
+/// A monitor that uses constraints to resolve output values based on a global
+/// store of constraints. This is based on the original semantics of LOLA
+/// but expanded to support dynamic properties.
+pub struct ConstraintBasedMonitor {
+    executor: Rc<LocalExecutor<'static>>,
+    stream_collection: ValStreamCollection,
+    model: LOLASpecification,
+    output_handler: Box<dyn OutputHandler<Val = Value>>,
+    has_inputs: bool,
+    dependencies: DependencyManager,
+}
+
+impl ConstraintBasedMonitor {
+    pub fn new(
+        executor: Rc<LocalExecutor<'static>>,
+        model: LOLASpecification,
+        input: Box<dyn InputProvider<Val = Value>>,
+        output: Box<dyn OutputHandler<Val = Value>>,
+        dependencies: DependencyManager,
+    ) -> Self {
+        ConstraintBasedMonitorBuilder::new()
+            .executor(executor)
+            .model(model)
+            .input(input)
+            .output(output)
+            .dependencies(dependencies)
+            .build()
+    }
+}
+
+#[async_trait(?Send)]
+impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
     fn spec(&self) -> &LOLASpecification {
         &self.model
     }

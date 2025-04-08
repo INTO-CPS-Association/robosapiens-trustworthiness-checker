@@ -23,14 +23,14 @@ fn output_handler(
 
 #[test(apply(smol_test))]
 async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams1();
+    let input_streams = input_streams1();
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -44,14 +44,14 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams1();
+    let input_streams = input_streams1();
     let spec = lola_specification(&mut spec_simple_modulo_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -65,14 +65,14 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_float();
+    let input_streams = input_streams_float();
     let spec = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -91,14 +91,14 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_simple_add(100);
+    let input_streams = input_streams_simple_add(100);
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -109,15 +109,15 @@ async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>
 
 #[test(apply(smol_test))]
 async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams1();
+    let input_streams = input_streams1();
     let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
     let outputs = {
         let mut output_handler = output_handler(executor.clone(), spec.clone());
         let outputs = output_handler.get_output();
-        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
             executor.clone(),
             spec.clone(),
-            &mut input_streams,
+            Box::new(input_streams),
             output_handler,
             create_dependency_manager(DependencyKind::Empty, spec),
         );
@@ -133,14 +133,14 @@ async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'st
 
 #[test(apply(smol_test))]
 async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+    let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
     let spec = lola_specification(&mut spec_count_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -159,14 +159,14 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams2();
+    let input_streams = input_streams2();
     let spec = lola_specification(&mut spec_dynamic_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -183,14 +183,14 @@ async fn test_eval_monitor(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams2();
+    let input_streams = input_streams2();
     let spec = lola_specification(&mut spec_dynamic_restricted_monitor()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -207,15 +207,15 @@ async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams1();
+    let input_streams = input_streams1();
     let mut spec = "in x\nin y\nout r1\nout r2\nr1 =x+y\nr2 = x * y";
     let spec = lola_specification(&mut spec).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -233,14 +233,14 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = maple_valid_input_stream(10);
+    let input_streams = maple_valid_input_stream(10);
     let spec = lola_specification(&mut spec_maple_sequence()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec.clone()),
     );
@@ -272,14 +272,14 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_defer_1();
+    let input_streams = input_streams_defer_1();
     let spec = lola_specification(&mut spec_defer()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -310,14 +310,14 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_defer_2();
+    let input_streams = input_streams_defer_2();
     let spec = lola_specification(&mut spec_defer()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -348,14 +348,14 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_defer_3();
+    let input_streams = input_streams_defer_3();
     let spec = lola_specification(&mut spec_defer()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -386,14 +386,14 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_defer_4();
+    let input_streams = input_streams_defer_4();
     let spec = lola_specification(&mut spec_defer()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -424,14 +424,14 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_indexing();
+    let input_streams = input_streams_indexing();
     let spec = lola_specification(&mut spec_future_indexing()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );
@@ -451,14 +451,14 @@ async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
 
 #[test(apply(smol_test))]
 async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
-    let mut input_streams = input_streams_indexing();
+    let input_streams = input_streams_indexing();
     let spec = lola_specification(&mut spec_past_indexing()).unwrap();
     let mut output_handler = output_handler(executor.clone(), spec.clone());
     let outputs = output_handler.get_output();
-    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         spec.clone(),
-        &mut input_streams,
+        Box::new(input_streams),
         output_handler,
         create_dependency_manager(DependencyKind::Empty, spec),
     );

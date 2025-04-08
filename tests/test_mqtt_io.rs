@@ -179,10 +179,10 @@ mod tests {
             )
             .unwrap(),
         );
-        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
             executor.clone(),
             spec.clone(),
-            &mut input_streams,
+            Box::new(input_streams),
             output_handler,
             create_dependency_manager(DependencyKind::Empty, spec),
         );
@@ -229,10 +229,10 @@ mod tests {
             )
             .unwrap(),
         );
-        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
             executor.clone(),
             spec.clone(),
-            &mut input_streams,
+            Box::new(input_streams),
             output_handler,
             create_dependency_manager(DependencyKind::Empty, spec),
         );
@@ -290,10 +290,10 @@ mod tests {
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
-        let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
             executor.clone(),
             model.clone(),
-            &mut input_provider,
+            Box::new(input_provider),
             Box::new(output_handler),
             create_dependency_manager(DependencyKind::Empty, model),
         );
@@ -370,10 +370,10 @@ mod tests {
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
-        let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+        let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
             executor.clone(),
             model.clone(),
-            &mut input_provider,
+            Box::new(input_provider),
             Box::new(output_handler),
             create_dependency_manager(DependencyKind::Empty, model),
         );

@@ -7,12 +7,13 @@ use smol::LocalExecutor;
 use tracing::{info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::core::OutputHandler;
+use trustworthiness_checker::core::{AbstractMonitorBuilder, OutputHandler};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
+use trustworthiness_checker::runtime::asynchronous::{AsyncMonitorBuilder, Context};
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, Monitor, io::file::parse_file};
 use trustworthiness_checker::{InputProvider, Value, VarName};
@@ -124,7 +125,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         None => model,
     };
 
-    let mut input_streams: Box<dyn InputProvider<Val = tc::Value>> = {
+    let input_streams: Box<dyn InputProvider<Val = tc::Value>> = {
         if let Some(input_file) = input_mode.input_file {
             let input_file_parser = match language {
                 Language::Lola => tc::lang::untimed_input::untimed_input_file,
@@ -246,42 +247,42 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     // Get the outputs from the Monitor
     let task = match (runtime, semantics) {
         (Runtime::Async, Semantics::Untimed) => {
-            let runner = Box::new(tc::runtime::asynchronous::AsyncMonitorRunner::<
+            let runner = AsyncMonitorBuilder::<
+                _,
+                Context<Value>,
                 _,
                 _,
                 tc::semantics::UntimedLolaSemantics,
-                _,
-            >::new(
-                executor.clone(),
-                model.clone(),
-                &mut *input_streams,
-                output_handler,
-                create_dependency_manager(DependencyKind::Empty, model),
-            ));
+            >::new()
+            .executor(executor.clone())
+            .model(model.clone())
+            .input(input_streams)
+            .output(output_handler)
+            .build();
             executor.spawn(runner.run())
         }
         (Runtime::Async, Semantics::TypedUntimed) => {
             let typed_model = type_check(model.clone()).expect("Model failed to type check");
 
-            let runner = tc::runtime::asynchronous::AsyncMonitorRunner::<
+            let runner = AsyncMonitorBuilder::<
+                _,
+                Context<Value>,
                 _,
                 _,
                 tc::semantics::TypedUntimedLolaSemantics,
-                _,
-            >::new(
-                executor.clone(),
-                typed_model,
-                &mut *input_streams,
-                output_handler,
-                create_dependency_manager(DependencyKind::Empty, model),
-            );
+            >::new()
+            .executor(executor.clone())
+            .model(typed_model)
+            .input(input_streams)
+            .output(output_handler)
+            .build();
             executor.spawn(runner.run())
         }
         (Runtime::Constraints, Semantics::Untimed) => {
             let runner = tc::runtime::constraints::ConstraintBasedMonitor::new(
                 executor.clone(),
                 model.clone(),
-                &mut *input_streams,
+                input_streams,
                 output_handler,
                 create_dependency_manager(DependencyKind::DepGraph, model),
             );

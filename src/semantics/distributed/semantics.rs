@@ -10,8 +10,8 @@ use super::combinators::DistributedContext;
 #[derive(Clone)]
 pub struct DistributedSemantics;
 
-impl MonitoringSemantics<DistSExpr, Value, DistributedContext> for DistributedSemantics {
-    fn to_async_stream(expr: DistSExpr, ctx: &DistributedContext) -> OutputStream<Value> {
+impl MonitoringSemantics<DistSExpr, Value, DistributedContext<Value>> for DistributedSemantics {
+    fn to_async_stream(expr: DistSExpr, ctx: &DistributedContext<Value>) -> OutputStream<Value> {
         match expr {
             DistSExpr::Val(v) => mc::val(v),
             DistSExpr::BinOp(e1, e2, op) => {

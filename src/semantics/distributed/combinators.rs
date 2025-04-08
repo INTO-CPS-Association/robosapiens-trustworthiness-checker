@@ -3,10 +3,10 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::VarName;
-use crate::core::{OutputStream, StreamContext};
+use crate::core::{AbstractContextBuilder, OutputStream, StreamContext};
 use crate::core::{StreamData, Value};
 use crate::distributed::distribution_graphs::{LabelledDistributionGraph, NodeName};
-use crate::runtime::asynchronous::{Context as AsyncCtx, VarManager};
+use crate::runtime::asynchronous::{Context as AsyncCtx, ContextBuilder, VarManager};
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -14,16 +14,94 @@ use smol::LocalExecutor;
 
 impl StreamData for LabelledDistributionGraph {}
 
-pub struct DistributedContext {
-    ctx: AsyncCtx<Value>,
+pub struct DistributedContextBuilder<Val: StreamData> {
+    async_ctx: ContextBuilder<Val>,
+    graph_name: Option<String>,
+    graph_stream: Option<OutputStream<LabelledDistributionGraph>>,
+}
+
+impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> {
+    type Ctx = DistributedContext<Val>;
+    type Val = Val;
+
+    fn new() -> Self {
+        Self {
+            async_ctx: ContextBuilder::new(),
+            graph_stream: None,
+            graph_name: None,
+        }
+    }
+
+    fn executor(mut self, executor: Rc<LocalExecutor<'static>>) -> Self {
+        self.async_ctx = self.async_ctx.executor(executor);
+        self
+    }
+
+    fn var_names(mut self, var_names: Vec<VarName>) -> Self {
+        self.async_ctx = self.async_ctx.var_names(var_names);
+        self
+    }
+
+    fn input_streams(mut self, input_streams: Vec<OutputStream<Val>>) -> Self {
+        self.async_ctx = self.async_ctx.input_streams(input_streams);
+        self
+    }
+
+    fn history_length(mut self, history_length: usize) -> Self {
+        self.async_ctx = self.async_ctx.history_length(history_length);
+        self
+    }
+
+    fn partial_clone(&self) -> Self {
+        Self {
+            async_ctx: self.async_ctx.partial_clone(),
+            graph_name: self.graph_name.clone(),
+            graph_stream: None,
+        }
+    }
+
+    fn build(self) -> DistributedContext<Val> {
+        let ctx = self.async_ctx.build();
+        let executor = ctx.executor.clone();
+        let graph_stream = self.graph_stream.unwrap();
+        let graph_name = self.graph_name.unwrap_or("graph".into());
+        let graph_manager = Rc::new(RefCell::new(Some(VarManager::new(
+            ctx.executor.clone(),
+            graph_name.into(),
+            graph_stream,
+        ))));
+        DistributedContext {
+            ctx,
+            graph_manager,
+            executor,
+        }
+    }
+}
+
+impl<Val: StreamData> DistributedContextBuilder<Val> {
+    fn graph_stream(mut self, graph_stream: OutputStream<LabelledDistributionGraph>) -> Self {
+        self.graph_stream = Some(graph_stream);
+        self
+    }
+
+    fn graph_name(mut self, graph_name: String) -> Self {
+        self.graph_name = Some(graph_name);
+        self
+    }
+}
+
+pub struct DistributedContext<Val: StreamData> {
+    ctx: AsyncCtx<Val>,
     /// Essentially a shared_ptr that we can at some time take ownership of
     graph_manager: Rc<RefCell<Option<VarManager<LabelledDistributionGraph>>>>,
     executor: Rc<LocalExecutor<'static>>,
 }
 
 #[async_trait(?Send)]
-impl StreamContext<Value> for DistributedContext {
-    fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {
+impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
+    type Builder = DistributedContextBuilder<Val>;
+
+    fn var(&self, x: &VarName) -> Option<OutputStream<Val>> {
         self.ctx.var(&x)
     }
 
@@ -102,14 +180,14 @@ impl StreamContext<Value> for DistributedContext {
     }
 }
 
-impl DistributedContext {
+impl<Val: StreamData> DistributedContext<Val> {
     const GRAPH_NAME: &'static str = "graph";
 
     #[allow(unused)]
     fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
-        input_streams: Vec<OutputStream<Value>>,
+        input_streams: Vec<OutputStream<Val>>,
         history_length: usize,
         graph_stream: OutputStream<LabelledDistributionGraph>,
     ) -> Self {
@@ -139,10 +217,10 @@ impl DistributedContext {
     }
 }
 
-pub fn monitored_at(
+pub fn monitored_at<Val: StreamData>(
     var_name: VarName,
     label: NodeName,
-    ctx: &DistributedContext,
+    ctx: &DistributedContext<Val>,
 ) -> OutputStream<Value> {
     let mut graph_stream = ctx.graph().unwrap();
 
@@ -201,7 +279,7 @@ mod tests {
     #[test(apply(smol_test))]
     async fn test_monitor_at_stream(executor: Rc<LocalExecutor<'static>>) {
         // Just a little test to check that we can do our tests... :-)
-        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let z = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
 
@@ -227,13 +305,13 @@ mod tests {
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
-        let mut ctx = DistributedContext::new(
-            executor.clone(),
-            vec!["x".into(), "y".into(), "z".into()],
-            vec![x, y, z],
-            10,
-            graph_stream,
-        );
+        let mut ctx = DistributedContextBuilder::new()
+            .executor(executor.clone())
+            .var_names(vec!["x".into(), "y".into(), "z".into()])
+            .input_streams(vec![x, y, z])
+            .history_length(10)
+            .graph_stream(graph_stream)
+            .build();
 
         let res_x = monitored_at("x".into(), "B".into(), &ctx);
         ctx.start_auto_clock().await;

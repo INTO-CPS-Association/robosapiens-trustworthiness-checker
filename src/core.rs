@@ -267,8 +267,30 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     }
 }
 
+/// Abstract builder of contexts
+pub trait AbstractContextBuilder {
+    type Val: StreamData;
+    type Ctx: StreamContext<Self::Val>;
+
+    fn new() -> Self;
+
+    fn executor(self, executor: Rc<LocalExecutor<'static>>) -> Self;
+
+    fn var_names(self, var_names: Vec<VarName>) -> Self;
+
+    fn history_length(self, history_length: usize) -> Self;
+
+    fn input_streams(self, streams: Vec<OutputStream<Self::Val>>) -> Self;
+
+    fn partial_clone(&self) -> Self;
+
+    fn build(self) -> Self::Ctx;
+}
+
 #[async_trait(?Send)]
 pub trait StreamContext<Val: StreamData>: 'static {
+    type Builder: AbstractContextBuilder<Val = Val, Ctx = Self>;
+
     fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
 
     fn subcontext(&self, history_length: usize) -> Self;
@@ -334,6 +356,24 @@ pub trait OutputHandler {
     fn run(&mut self) -> LocalBoxFuture<'static, ()>;
 }
 
+pub trait AbstractMonitorBuilder<M, V: StreamData> {
+    type Mon: Monitor<M, V>;
+
+    fn new() -> Self;
+
+    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self;
+
+    fn model(self, model: M) -> Self;
+
+    fn input(self, input: Box<dyn InputProvider<Val = V>>) -> Self;
+
+    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
+
+    fn dependencies(self, dependencies: DependencyManager) -> Self;
+
+    fn build(self) -> Self::Mon;
+}
+
 /*
  * A runtime monitor for a model/specification of type M over streams with
  * values of type V.
@@ -344,14 +384,6 @@ pub trait OutputHandler {
  */
 #[async_trait(?Send)]
 pub trait Monitor<M, V: StreamData> {
-    fn new(
-        executor: Rc<LocalExecutor<'static>>,
-        model: M,
-        input: &mut dyn InputProvider<Val = V>,
-        output: Box<dyn OutputHandler<Val = V>>,
-        dependencies: DependencyManager,
-    ) -> Self;
-
     fn spec(&self) -> &M;
 
     // Should usually wait on the output provider
