@@ -317,7 +317,7 @@ pub fn dynamic<Ctx: StreamContext<Value>>(
                 if prev_data.eval_val == current || current == Value::Unknown {
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
-                    subcontext.advance_clock().await;
+                    subcontext.tick().await;
 
                     if let Some(eval_res) = prev_data.eval_output_stream.next().await {
                         yield eval_res;
@@ -330,7 +330,7 @@ pub fn dynamic<Ctx: StreamContext<Value>>(
             match current {
                 Value::Unknown => {
                     // Consume a sample from the subcontext but return Unknown (aka. Waiting)
-                    subcontext.advance_clock().await;
+                    subcontext.tick().await;
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
@@ -340,7 +340,7 @@ pub fn dynamic<Ctx: StreamContext<Value>>(
                     let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, &subcontext);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
-                    subcontext.advance_clock().await;
+                    subcontext.tick().await;
                     if let Some(eval_res) = eval_output_stream.next().await {
                         yield eval_res;
                     } else {
@@ -391,7 +391,7 @@ pub fn defer(
                         .expect("Invalid dynamic str");
                     eval_output_stream = Some(UntimedLolaSemantics::to_async_stream(expr, &subcontext));
                     debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
-                    subcontext.start_auto_clock().await;
+                    subcontext.run().await;
                     break;
                 }
                 Value::Unknown => {
@@ -399,7 +399,7 @@ pub fn defer(
                     info!("Defer waiting on unknown");
                     if i >= history_length {
                         info!(?i, ?history_length, "Advancing subcontext to clean history");
-                        subcontext.advance_clock().await;
+                        subcontext.tick().await;
                     }
                     i += 1;
                     yield Value::Unknown;
@@ -413,7 +413,7 @@ pub fn defer(
             // Wind forward the stream to the current time
             let time_progressed = i.min(history_length);
             debug!(?i, ?time_progressed, ?history_length, "Time progressed");
-            // subcontext.advance_clock();
+            // subcontext.tick();
             let mut eval_output_stream = eval_output_stream.skip(time_progressed);
 
             // Yield the saved value until the inner stream is done
@@ -646,7 +646,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic(&ctx, e, None, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
         assert_eq!(res, exp)
@@ -659,7 +659,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic(&ctx, e, None, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
         assert_eq!(res, exp)
@@ -675,7 +675,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic(&ctx, e, None, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-unknown value
         let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 5.into()];
@@ -692,7 +692,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic(&ctx, e, None, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-unknown value
         let exp: Vec<Value> = vec![2.into(), 3.into(), 5.into()];
@@ -706,7 +706,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer(&ctx, e, 2);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
@@ -719,7 +719,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer(&ctx, e, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
         assert_eq!(res, exp)
@@ -732,7 +732,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer(&ctx, e, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, 4.into()];
         assert_eq!(res, exp)
@@ -750,7 +750,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer(&ctx, e, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 4.into(), 5.into()];
         assert_eq!(res, exp)
@@ -763,7 +763,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer(&ctx, e, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, Value::Unknown];
         assert_eq!(res, exp)
@@ -964,7 +964,7 @@ mod tests {
         let i = Box::pin(stream::iter(vec![0.into(), 1.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["i".into()], vec![i], 10);
         let res_stream = lindex(list(x), var(&ctx, "i".into()));
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![1.into(), 4.into()];
         assert_eq!(res, exp)

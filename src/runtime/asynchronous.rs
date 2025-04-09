@@ -609,7 +609,7 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
             .build()
     }
 
-    async fn advance_clock(&mut self) {
+    async fn tick(&mut self) {
         join_all(
             self.var_managers
                 .borrow_mut()
@@ -624,7 +624,7 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
         self.clock
     }
 
-    async fn start_auto_clock(&mut self) {
+    async fn run(&mut self) {
         if !self.is_clock_started() {
             let mut var_managers = self.var_managers.borrow_mut();
             for (_, var_manager) in mem::take(&mut *var_managers).into_iter() {
@@ -832,7 +832,7 @@ impl<
 
         executor
             .spawn(async move {
-                context.start_auto_clock().await;
+                context.run().await;
             })
             .detach();
 
@@ -973,10 +973,10 @@ mod tests {
             let mut subcontext = ctx.subcontext(10);
             Box::pin(stream! {
                 let mut var_stream = subcontext.var(&x).unwrap();
-                subcontext.advance_clock().await;
+                subcontext.tick().await;
                 while let Some(current) = var_stream.next().await {
                     yield current;
-                    subcontext.advance_clock().await;
+                    subcontext.tick().await;
                 }
             })
         }
@@ -984,7 +984,7 @@ mod tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx: Context<Value> = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let var_stream = mock_indirection(&ctx, "x".into());
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let exp: Vec<Value> = vec![1.into(), 2.into(), 3.into()];
         // If this hangs then we have regressed - previously it meant that subcontexts cannot
         // figure out when streams end

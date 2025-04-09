@@ -141,8 +141,8 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
         }
     }
 
-    async fn advance_clock(&mut self) {
-        self.ctx.advance_clock().await;
+    async fn tick(&mut self) {
+        self.ctx.tick().await;
         // Tick the graph_manager
         self.graph_manager
             .borrow_mut()
@@ -152,9 +152,9 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
             .await;
     }
 
-    async fn start_auto_clock(&mut self) {
+    async fn run(&mut self) {
         if !self.ctx.is_clock_started() {
-            self.ctx.start_auto_clock().await;
+            self.ctx.run().await;
             let graph_manager = mem::take(&mut *self.graph_manager.borrow_mut()).unwrap();
             self.executor.spawn(graph_manager.run()).detach();
         }
@@ -260,7 +260,7 @@ mod tests {
         let exp = vec![Value::Int(2), Value::Int(4)];
         let res_stream =
             crate::semantics::untimed_untyped_lola::combinators::dynamic(&ctx, e, None, 10);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         assert_eq!(res, exp);
     }
@@ -303,7 +303,7 @@ mod tests {
             .build();
 
         let res_x = monitored_at("x".into(), "B".into(), &ctx);
-        ctx.start_auto_clock().await;
+        ctx.run().await;
         let res_x: Vec<_> = res_x.take(3).collect().await;
 
         assert_eq!(res_x, vec![true.into(), true.into(), true.into()]);
