@@ -21,8 +21,6 @@ pub enum SExprAbs {
         Box<Self>,
         // Index i
         usize,
-        // Default c
-        Value,
     ),
 
     // Arithmetic Stream expression
@@ -172,9 +170,40 @@ fn binop_table(v1: Value, v2: Value, op: SBinOp) -> Value {
                 Str(s1)
             }
         },
-        (Str(s1), Str(s2), COp(sop)) => match sop {
-            CompBinOp::Eq => Bool(s1 == s2),
-            CompBinOp::Le => Bool(s1 <= s2),
+        (Int(v1), Int(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2),
+            CompBinOp::Le => Bool(v1 <= v2),
+            CompBinOp::Lt => Bool(v1 < v2),
+            CompBinOp::Ge => Bool(v1 >= v2),
+            CompBinOp::Gt => Bool(v1 > v2),
+        },
+        (Float(v1), Int(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2 as f32),
+            CompBinOp::Le => Bool(v1 <= v2 as f32),
+            CompBinOp::Lt => Bool(v1 < v2 as f32),
+            CompBinOp::Ge => Bool(v1 >= v2 as f32),
+            CompBinOp::Gt => Bool(v1 > v2 as f32),
+        },
+        (Int(v1), Float(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool((v1 as f32) == v2),
+            CompBinOp::Le => Bool((v1 as f32) <= v2),
+            CompBinOp::Lt => Bool((v1 as f32) < v2),
+            CompBinOp::Ge => Bool((v1 as f32) >= v2),
+            CompBinOp::Gt => Bool((v1 as f32) > v2),
+        },
+        (Float(v1), Float(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2),
+            CompBinOp::Le => Bool(v1 <= v2),
+            CompBinOp::Lt => Bool(v1 < v2),
+            CompBinOp::Ge => Bool(v1 >= v2),
+            CompBinOp::Gt => Bool(v1 > v2),
+        },
+        (Str(v1), Str(v2), COp(sop)) => match sop {
+            CompBinOp::Eq => Bool(v1 == v2),
+            CompBinOp::Le => Bool(v1 <= v2),
+            CompBinOp::Lt => Bool(v1 < v2),
+            CompBinOp::Ge => Bool(v1 >= v2),
+            CompBinOp::Gt => Bool(v1 > v2),
         },
         (v1, v2, op) => {
             unreachable!(
@@ -195,16 +224,15 @@ impl SExpr {
                 op.clone(),
             ),
             SExpr::Var(name) => SExprAbs::Var(base_time, name.clone()),
-            SExpr::SIndex(expr, offset, default) => {
+            SExpr::SIndex(expr, offset) => {
                 // Determine if it is something that can eventually be solved. If not, transform it to a lit
                 let absolute_time = base_time as isize + offset;
                 if absolute_time < 0 {
-                    SExprAbs::Val(default.clone())
+                    SExprAbs::Val(Value::Unknown)
                 } else {
                     SExprAbs::SIndex(
                         Box::new(expr.to_absolute(base_time)),
                         absolute_time.abs() as usize,
-                        default.clone(),
                     )
                 }
             }
@@ -213,7 +241,8 @@ impl SExpr {
                 Box::new(if_expr.to_absolute(base_time)),
                 Box::new(else_expr.to_absolute(base_time)),
             ),
-            SExpr::Eval(_) => todo!(),
+            SExpr::Dynamic(_) => todo!(),
+            SExpr::RestrictedDynamic(_, _) => todo!(),
             SExpr::Defer(_) => SExprAbs::Val(Value::Unknown),
             SExpr::Update(lhs, _) => lhs.to_absolute(base_time),
             SExpr::Default(expr, default) => SExprAbs::Default(
@@ -286,17 +315,13 @@ impl Simplifiable for SExprAbs {
                     Resolved(Value::Unknown)
                 }
             }
-            SExprAbs::SIndex(expr, idx_time, default) => {
+            SExprAbs::SIndex(expr, idx_time) => {
                 // Should not be negative at this stage since it was indexed...
                 let uidx_time = *idx_time as usize;
                 if uidx_time <= base_time {
                     expr.simplify(uidx_time, store, var, deps)
                 } else {
-                    Unresolved(Box::new(SExprAbs::SIndex(
-                        expr.clone(),
-                        *idx_time,
-                        default.clone(),
-                    )))
+                    Unresolved(Box::new(SExprAbs::SIndex(expr.clone(), *idx_time)))
                 }
             }
             SExprAbs::If(bexpr, if_expr, else_expr) => {
@@ -356,7 +381,7 @@ impl SExpr {
                     .or_else(|| store.get_from_input_streams(&name, &base_time));
                 val.is_some() && val != Some(&Value::Unknown)
             }
-            SExpr::SIndex(expr, rel_time, _) => {
+            SExpr::SIndex(expr, rel_time) => {
                 let new_time = (base_time as isize) + *rel_time;
                 if new_time < 0 {
                     true
@@ -370,7 +395,8 @@ impl SExpr {
                     && else_expr.is_solveable(base_time, store)
             }
             SExpr::Defer(sexpr) => sexpr.is_solveable(base_time, store),
-            SExpr::Eval(_) => todo!(),
+            SExpr::Dynamic(_) => todo!(),
+            SExpr::RestrictedDynamic(_, _) => todo!(),
             SExpr::Update(_, rhs) => {
                 // Technically: (is_solveable(lhs) && is_solveable(rhs)) || is_solveable(rhs)
                 // Remember: Solveable means the it can be solved indefinitely not just at current
@@ -421,21 +447,18 @@ impl Simplifiable for SExpr {
                 }
             }
             SExpr::Var(name) => Unresolved(Box::new(SExpr::Var(name.clone()))),
-            SExpr::SIndex(expr, rel_time, default) => {
+            SExpr::SIndex(expr, rel_time) => {
                 if *rel_time == 0 {
                     expr.simplify(base_time, store, var, deps)
                 } else {
                     // Attempt to partially solve the expression and return unresolved
                     match expr.simplify(base_time, store, var, deps) {
-                        Unresolved(expr) => Unresolved(Box::new(SExpr::SIndex(
-                            expr.clone(),
-                            *rel_time,
-                            default.clone(),
-                        ))),
+                        Unresolved(expr) => {
+                            Unresolved(Box::new(SExpr::SIndex(expr.clone(), *rel_time)))
+                        }
                         Resolved(val) => Unresolved(Box::new(SExpr::SIndex(
                             Box::new(SExpr::Val(val)),
                             *rel_time,
-                            default.clone(),
                         ))),
                     }
                 }
@@ -455,7 +478,8 @@ impl Simplifiable for SExpr {
                     ),
                 }
             }
-            SExpr::Eval(_) => todo!(),
+            SExpr::Dynamic(_) => todo!(),
+            SExpr::RestrictedDynamic(_, _) => todo!(),
             SExpr::Defer(expr) => {
                 // Important to remember here that what we return here is the new "state" of the
                 // defer in `output_exprs`.

@@ -12,7 +12,7 @@ use std::{mem, task};
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
-use trustworthiness_checker::distributed::distribution_graphs::LabelledConcDistributionGraph;
+use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,
 };
@@ -200,18 +200,18 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     )
     .expect("Failed to create output handler 2");
 
-    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model1.clone(),
-        &mut input_provider_1,
+        Box::new(input_provider_1),
         Box::new(output_handler_1),
         create_dependency_manager(DependencyKind::Empty, model1),
     );
 
-    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model2.clone(),
-        &mut input_provider_2,
+        Box::new(input_provider_2),
         Box::new(output_handler_2),
         create_dependency_manager(DependencyKind::Empty, model2),
     );
@@ -335,18 +335,18 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     )
     .expect("Failed to create output handler 2");
 
-    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model1.clone(),
-        &mut input_provider_1,
+        Box::new(input_provider_1),
         Box::new(output_handler_1),
         create_dependency_manager(DependencyKind::Empty, model1),
     );
 
-    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model2.clone(),
-        &mut input_provider_2,
+        Box::new(input_provider_2),
         Box::new(output_handler_2),
         create_dependency_manager(DependencyKind::Empty, model2),
     );
@@ -401,7 +401,7 @@ async fn localisation_distribution_graphs_test(
 
     let file_content =
         smol::fs::read_to_string("examples/simple_add_distribution_graph.json").await?;
-    let dist_graph: LabelledConcDistributionGraph = serde_json::from_str(&file_content)?;
+    let dist_graph: LabelledDistributionGraph = serde_json::from_str(&file_content)?;
 
     let xs = vec![Value::Int(1), Value::Int(2)];
     let ys = vec![Value::Int(3), Value::Int(4)];
@@ -473,18 +473,18 @@ async fn localisation_distribution_graphs_test(
     )
     .expect("Failed to create output handler 2");
 
-    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model1.clone(),
-        &mut input_provider_1,
+        Box::new(input_provider_1),
         Box::new(output_handler_1),
         create_dependency_manager(DependencyKind::Empty, model1),
     );
 
-    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(
+    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model2.clone(),
-        &mut input_provider_2,
+        Box::new(input_provider_2),
         Box::new(output_handler_2),
         create_dependency_manager(DependencyKind::Empty, model2),
     );

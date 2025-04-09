@@ -1,3 +1,4 @@
+use ecow::EcoVec;
 use winnow::Parser;
 use winnow::Result;
 use winnow::combinator::*;
@@ -55,13 +56,9 @@ fn sindex(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         integer,
         _: loop_ms_or_lb_or_lc,
-        _: ',',
-        _: loop_ms_or_lb_or_lc,
-        val,
-        _: loop_ms_or_lb_or_lc,
         _: ']'
     )
-    .map(|(e, i, d)| SExpr::SIndex(Box::new(e), i, d))
+    .map(|(e, i)| SExpr::SIndex(Box::new(e), i))
     .parse_next(s)
 }
 
@@ -148,10 +145,10 @@ fn when(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
-fn eval(s: &mut &str) -> Result<SExpr> {
+fn dynamic(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
-        _: "eval",
+        _: alt(("dynamic", "eval")),
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
@@ -160,7 +157,45 @@ fn eval(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(e,)| SExpr::Eval(Box::new(e)))
+    .map(|(e,)| SExpr::Dynamic(Box::new(e)))
+    .parse_next(s)
+}
+
+fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: alt(("dynamic", "eval")),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: literal(","),
+        _: loop_ms_or_lb_or_lc,
+        var_set,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(e, vs)| SExpr::RestrictedDynamic(Box::new(e), vs))
+    .parse_next(s)
+}
+
+fn var_set(s: &mut &str) -> Result<EcoVec<VarName>> {
+    seq!((
+        _: whitespace,
+        _: '{',
+        _: loop_ms_or_lb_or_lc,
+        separated(0.., ident, seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc)),
+        _: loop_ms_or_lb_or_lc,
+        _: '}',
+        _: whitespace,
+    ))
+    .map(|(names,): (Vec<_>,)| {
+        names
+            .into_iter()
+            .map(|name: &str| VarName::from(name))
+            .collect::<EcoVec<_>>()
+    })
     .parse_next(s)
 }
 
@@ -330,15 +365,27 @@ fn tan(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
-
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> Result<SExpr> {
+    // Break up the large alt into smaller groups to avoid exceeding the trait implementation limit
     delimited(
         whitespace,
         alt((
-            sindex, lindex, lappend, lconcat, lhead, ltail, not, eval, sval, ifelse, defer, update,
-            sin, cos, tan, 
-            default, when, is_defined, sexpr_list, var, paren
+            // Group 1
+            alt((
+                sindex,
+                lindex,
+                lappend,
+                lconcat,
+                lhead,
+                ltail,
+                not,
+                restricted_dynamic,
+            )),
+            // Group 2
+            alt((dynamic, sval, ifelse, defer, update, sin, cos, tan)),
+            // Group 3
+            alt((default, when, is_defined, sexpr_list, var, paren)),
         )),
         whitespace,
     )
@@ -350,13 +397,16 @@ enum BinaryPrecedences {
     Concat,
     Or,
     And,
+    Le,
+    Ge,
+    Lt,
+    Gt,
+    Eq,
     Add,
     Sub,
     Mul,
     Div,
     Mod,
-    Le,
-    Eq,
 }
 impl BinaryPrecedences {
     pub fn next(&self) -> Option<Self> {
@@ -364,14 +414,17 @@ impl BinaryPrecedences {
         match self {
             Concat => Some(Or),
             Or => Some(And),
-            And => Some(Sub),
+            And => Some(Le),
+            Le => Some(Ge),
+            Ge => Some(Lt),
+            Lt => Some(Gt),
+            Gt => Some(Eq),
+            Eq => Some(Sub),
             Sub => Some(Add),
             Add => Some(Mul),
             Mul => Some(Div),
             Div => Some(Mod),
-            Mod => Some(Le),
-            Le => Some(Eq),
-            Eq => None,
+            Mod => None,
         }
     }
 
@@ -381,13 +434,16 @@ impl BinaryPrecedences {
             Concat => "++",
             Or => "||",
             And => "&&",
+            Le => "<=",
+            Ge => ">=",
+            Lt => "<",
+            Gt => ">",
+            Eq => "==",
             Add => "+",
             Sub => "-",
             Mul => "*",
             Div => "/",
             Mod => "%",
-            Le => "<=",
-            Eq => "==",
         }
     }
 
@@ -397,13 +453,16 @@ impl BinaryPrecedences {
             Concat => SBinOp::SOp(StrBinOp::Concat),
             Or => SBinOp::BOp(BoolBinOp::Or),
             And => SBinOp::BOp(BoolBinOp::And),
+            Le => SBinOp::COp(CompBinOp::Le),
+            Ge => SBinOp::COp(CompBinOp::Ge),
+            Lt => SBinOp::COp(CompBinOp::Lt),
+            Gt => SBinOp::COp(CompBinOp::Gt),
+            Eq => SBinOp::COp(CompBinOp::Eq),
             Add => SBinOp::NOp(NumericalBinOp::Add),
             Sub => SBinOp::NOp(NumericalBinOp::Sub),
             Mul => SBinOp::NOp(NumericalBinOp::Mul),
             Div => SBinOp::NOp(NumericalBinOp::Div),
             Mod => SBinOp::NOp(NumericalBinOp::Mod),
-            Le => SBinOp::COp(CompBinOp::Le),
-            Eq => SBinOp::COp(CompBinOp::Eq),
         }
     }
 
@@ -450,7 +509,7 @@ pub fn sexpr(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
-fn type_annotation(s: &mut &str) -> Result<StreamType> {
+pub(crate) fn type_annotation(s: &mut &str) -> Result<StreamType> {
     seq!((
         _: whitespace,
         _: literal(":"),
@@ -469,7 +528,7 @@ fn type_annotation(s: &mut &str) -> Result<StreamType> {
     .parse_next(s)
 }
 
-fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
+pub(crate) fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     seq!((
         _: whitespace,
         _: literal("in"),
@@ -482,11 +541,11 @@ fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     .parse_next(s)
 }
 
-fn input_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
+pub(crate) fn input_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
     separated(0.., input_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
+pub(crate) fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     seq!((
         _: whitespace,
         _: literal("out"),
@@ -499,11 +558,11 @@ fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
     .parse_next(s)
 }
 
-fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
+pub(crate) fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
     separated(0.., output_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
+pub(crate) fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     seq!((
         _: whitespace,
         ident,
@@ -517,7 +576,7 @@ fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     .parse_next(s)
 }
 
-fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
+pub(crate) fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
     separated(0.., var_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
@@ -630,30 +689,25 @@ mod tests {
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"(x)[-1, 0]".to_string()).into())?,
-            SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1, Value::Int(0),),
+            sexpr(&mut (*"(x)[-1]".to_string()).into())?,
+            SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1),
         );
         assert_eq!(
-            sexpr(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
+            sexpr(&mut (*"(x + y)[-3]".to_string()).into())?,
             SExpr::SIndex(
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
                     Box::new(SExpr::Var("y".into()),),
                     SBinOp::NOp(NumericalBinOp::Add),
                 )),
-                -3,
-                Value::Int(2),
+                -3
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
+            sexpr(&mut (*"1 + (x)[-1]".to_string()).into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::SIndex(
-                    Box::new(SExpr::Var("x".into())),
-                    -1,
-                    Value::Int(0),
-                ),),
+                Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1),),
                 SBinOp::NOp(NumericalBinOp::Add),
             )
         );
@@ -780,7 +834,7 @@ mod tests {
     fn test_parse_lola_count() -> Result<(), ContextError> {
         let input = "\
             out x\n\
-            x = 1 + (x)[-1, 0]";
+            x = 1 + (x)[-1]";
         let count_spec = LOLASpecification {
             input_vars: vec![],
             output_vars: vec!["x".into()],
@@ -788,11 +842,7 @@ mod tests {
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::SIndex(
-                        Box::new(SExpr::Var("x".into())),
-                        -1,
-                        Value::Int(0),
-                    )),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -803,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_eval() -> Result<(), ContextError> {
+    fn test_parse_lola_dynamic() -> Result<(), ContextError> {
         let input = "\
             in x\n\
             in y\n\
@@ -811,7 +861,7 @@ mod tests {
             out z\n\
             out w\n\
             z = x + y\n\
-            w = eval(s)";
+            w = dynamic(s)";
         let eval_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into(), "s".into()],
             output_vars: vec!["z".into(), "w".into()],
@@ -824,7 +874,7 @@ mod tests {
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
-                ("w".into(), SExpr::Eval(Box::new(SExpr::Var("s".into())))),
+                ("w".into(), SExpr::Dynamic(Box::new(SExpr::Var("s".into())))),
             ]),
             type_annotations: BTreeMap::new(),
         };
@@ -959,12 +1009,12 @@ mod tests {
         );
         // Time index
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x [-1, 0 ]")),
-            r#"Ok(SIndex(Var(VarName::new("x")), -1, Int(0)))"#
+            presult_to_string(&sexpr(&mut "x [-1]")),
+            r#"Ok(SIndex(Var(VarName::new("x")), -1))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x[1,0]")),
-            r#"Ok(SIndex(Var(VarName::new("x")), 1, Int(0)))"#
+            presult_to_string(&sexpr(&mut "x[1 ]")),
+            r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
         );
         // Paren
         assert_eq!(presult_to_string(&sexpr(&mut "  (1)  ")), "Ok(Val(Int(1)))");
@@ -1066,12 +1116,12 @@ mod tests {
         );
         // Time index in arithmetic expression
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x[0, 1] + y[-1, 0]")),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0, Int(1)), SIndex(Var(VarName::new("y")), -1, Int(0)), NOp(Add)))"#
+            presult_to_string(&sexpr(&mut "x[0] + y[-1]")),
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), -1), NOp(Add)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x[1, 2] * (y + 3)")),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1, Int(2)), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)))"#
+            presult_to_string(&sexpr(&mut "x[1] * (y + 3)")),
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)))"#
         );
         // Complex expression with nested if-then-else and mixed operations
         assert_eq!(
@@ -1307,22 +1357,22 @@ mod tests {
 
     fn counter_inf() -> (&'static str, &'static str) {
         (
-            "out z\nz = z[-1, 0] + 1",
-            r#"Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new("z")], exprs: {VarName::new("z"): BinOp(SIndex(Var(VarName::new("z")), -1, Int(0)), Val(Int(1)), NOp(Add))}, type_annotations: {} })"#,
+            "out z\nz = default(z[-1], 0) + 1",
+            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
-            "in x\nout z\nz = z[-1, 0] + x",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(SIndex(Var(VarName::new(\"z\")), -1, Int(0)), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
+            "in x\nout z\nz = default(z[-1], 0) + x",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
-            "in x\nin y\nout z\nout a\nz = x[1, 0]\na = y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"a\")], exprs: {VarName::new(\"a\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1, Int(0))}, type_annotations: {} })",
+            "in x\nin y\nout z\nout a\nz = x[1]\na = y",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"a\")], exprs: {VarName::new(\"a\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1)}, type_annotations: {} })",
         )
     }
 

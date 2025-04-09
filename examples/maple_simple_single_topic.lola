@@ -5,9 +5,9 @@ out p: Bool
 out l: Bool
 out e: Bool
 out maple : Bool
-m = (stage == "m") && e[-1, true]
-a = (stage == "a") && m[-1, false]
-p = (stage == "p") && a[-1, false]
-l = (stage == "l") && p[-1, false]
-e = (stage == "e") && l[-1, false]
+m = (stage == "m") && default(e[-1], true)
+a = (stage == "a") && default(m[-1], false)
+p = (stage == "p") && default(a[-1], false)
+l = (stage == "l") && default(p[-1], false)
+e = (stage == "e") && default(l[-1], false)
 maple = m || a || p || l || e

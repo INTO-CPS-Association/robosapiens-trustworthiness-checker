@@ -128,7 +128,7 @@ impl DepGraph {
                         });
                     }
                 }
-                SExpr::SIndex(sexpr, idx, _) => {
+                SExpr::SIndex(sexpr, idx) => {
                     steps.push(*idx);
                     deps_impl(sexpr, steps, map, current_node);
                 }
@@ -142,7 +142,8 @@ impl DepGraph {
                     vec.iter()
                         .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node));
                 }
-                SExpr::Eval(sexpr)
+                SExpr::Dynamic(sexpr)
+                | SExpr::RestrictedDynamic(sexpr, _)
                 | SExpr::Not(sexpr)
                 | SExpr::LHead(sexpr)
                 | SExpr::LTail(sexpr)
@@ -288,15 +289,15 @@ mod tests {
     fn specs() -> BTreeMap<&'static str, &'static str> {
         BTreeMap::from([
             ("single_no_inp", "out x\nx = 42"),
-            ("single_inp_past", "in a\nout x\nx = a[-1, 0]"),
-            ("multi_out_past", "in a\nout x\nout y\nx = a\ny = a[-1, 0]"),
+            ("single_inp_past", "in a\nout x\nx = a[-1]"),
+            ("multi_out_past", "in a\nout x\nout y\nx = a\ny = a[-1]"),
             ("multi_dependent", "in a\nout x\nout y\nx = a\ny = x"),
             (
                 "multi_dependent_past",
-                "in a\nout x\nout y\nx = a[-1, 0]\ny = x[-1, 0]",
+                "in a\nout x\nout y\nx = a[-1]\ny = x[-1]",
             ),
-            ("multi_same_dependent", "in a\nout x\nx = a + a[-1, 0]"),
-            ("recursion", "out z\nz = z[-1, 0]"),
+            ("multi_same_dependent", "in a\nout x\nx = a + a[-1]"),
+            ("recursion", "out z\nz = default(z[-1], 0)"),
         ])
     }
 
@@ -579,7 +580,7 @@ mod tests {
         let mut graph = DepGraph::new(spec);
         graph.add_dependency(
             &"x".into(),
-            &SExpr::SIndex(Box::new(SExpr::Var("a".into())), -1, 0.into()),
+            &SExpr::SIndex(Box::new(SExpr::Var("a".into())), -1),
         );
         let graph = graph.graph;
         assert_eq!(graph.node_count(), 3);

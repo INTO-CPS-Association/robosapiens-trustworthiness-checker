@@ -10,6 +10,9 @@ default-run = "trustworthiness_checker"
 crate-type = ["lib"]
 bench = false
 
+[build-dependencies]
+lalrpop = "0.22.1"
+
 [dependencies]
 # console-subscriber = "0.4.0"
 winnow = "0.7.3"
@@ -48,6 +51,8 @@ ecow = {version="0.2.3", features=["serde"]}
 async_cell = "0.2.2"
 ordered-float = "5.0.0"
 approx = "0.5.1"
+lalrpop-util = { version = "0.21.0", features = ["lexer", "unicode"] }
+contracts = "0.6.3"
 
 [profile.release]
 lto = "fat"

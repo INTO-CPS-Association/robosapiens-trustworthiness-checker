@@ -15,8 +15,15 @@ pub enum Semantics {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Runtime {
     Async,
-    Queuing,
     Constraints,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum ParserMode {
+    /// Parser Combinator using Winnow
+    Combinator,
+    /// LALR parser using lalrpop
+    LALR,
 }
 
 #[derive(Args)]
@@ -84,6 +91,8 @@ pub struct Cli {
     #[command(flatten)]
     pub output_mode: OutputMode,
 
+    #[arg(long)]
+    pub parser_mode: Option<ParserMode>,
     #[arg(long)]
     pub language: Option<Language>,
     #[arg(long)]

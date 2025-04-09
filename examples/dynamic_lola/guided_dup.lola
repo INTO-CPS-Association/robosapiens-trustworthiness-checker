@@ -8,7 +8,7 @@ out result
 // Old spec is just S = x
 S = x
 // R is Rcond, where the cond is "x == 3"
-R = when(T) && (x == 3 || R[-1, false]) // Eventually, after T was not Unknown
+R = when(T) && (x == 3 || default(R[-1], false)) // Eventually, after T was not Unknown
 // When we haven't received a new spec T, and R is not true, yield from old spec
 // Note: the when below is technically redundant
 result = if !(when(T) && R) then S else defer(T)

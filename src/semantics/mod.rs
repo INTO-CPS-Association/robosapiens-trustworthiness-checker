@@ -1,15 +1,21 @@
 pub mod untimed_typed_lola;
-pub use untimed_typed_lola::TypedUntimedLolaSemantics;
+pub use untimed_typed_lola::semantics::TypedUntimedLolaSemantics;
 pub mod untimed_untyped_lola;
-pub use untimed_untyped_lola::UntimedLolaSemantics;
+pub use untimed_untyped_lola::semantics::UntimedLolaSemantics;
 pub mod distributed;
 
 #[cfg(test)]
 mod tests {
-    use crate::Value;
+    use std::pin::Pin;
+
+    use crate::{
+        Value, lang::dynamic_lola::type_checker::PossiblyUnknown,
+        semantics::untimed_typed_lola::helpers::to_typed_stream,
+    };
 
     use super::*;
     use approx::relative_eq;
+    use futures::Stream;
     use proptest::prelude::*;
     use smol::stream::{self, StreamExt};
     use test_log::test;
@@ -21,10 +27,10 @@ mod tests {
     proptest! {
         #[test]
         fn test_typed_untyped_not(xs: Vec<bool>) {
-            let xs_typed_stream = Box::pin(stream::iter(xs.clone().into_iter()));
             let xs_untyped_stream = Box::pin(stream::iter(xs.clone().into_iter()).map(Value::Bool));
+            let xs_typed_stream  = to_typed_stream(xs_untyped_stream.clone());
 
-            let ys_typed = tc::not(xs_typed_stream).map(Value::Bool);
+            let ys_typed = tc::not(xs_typed_stream).map(Into::<Value>::into);
             let ys_typed: Vec<_> = smol::block_on(ys_typed.collect());
             let ys_untyped = uc::not(xs_untyped_stream);
             let ys_untyped: Vec<_> = smol::block_on(ys_untyped.collect());
@@ -52,13 +58,13 @@ mod tests {
 
             for (typed_op, untyped_op) in ops {
                 // Create distinct typed and untyped input and output streams
-                let xs_typed_stream = Box::pin(stream::iter(xs.clone().into_iter()));
                 let xs_untyped_stream = Box::pin(stream::iter(xs.clone().into_iter()).map(Value::Int));
-                let ys_typed_stream = Box::pin(stream::iter(ys.clone().into_iter()));
+                let xs_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<i64>>>> = to_typed_stream(xs_untyped_stream.clone());
                 let ys_untyped_stream = Box::pin(stream::iter(ys.clone().into_iter()).map(Value::Int));
+                let ys_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<i64>>>> = to_typed_stream(ys_untyped_stream.clone());
 
                 // Apply the typed and untyped operators to the input streams
-                let zs_typed = typed_op(xs_typed_stream, ys_typed_stream).map(Value::Int);
+                let zs_typed = typed_op(xs_typed_stream, ys_typed_stream).map(Into::<Value>::into);
                 let zs_typed: Vec<_> = smol::block_on(zs_typed.collect());
                 let zs_untyped = untyped_op(xs_untyped_stream, ys_untyped_stream);
                 let zs_untyped: Vec<_> = smol::block_on(zs_untyped.collect());
@@ -86,13 +92,13 @@ mod tests {
 
             for (op_name, typed_op, untyped_op) in ops {
                 // Create distinct typed and untyped input and output streams
-                let xs_typed_stream = Box::pin(stream::iter(xs.clone().into_iter()));
                 let xs_untyped_stream = Box::pin(stream::iter(xs.clone().into_iter()).map(Value::Float));
-                let ys_typed_stream = Box::pin(stream::iter(ys.clone().into_iter()));
+                let xs_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<f32>>>> = to_typed_stream(xs_untyped_stream.clone());
                 let ys_untyped_stream = Box::pin(stream::iter(ys.clone().into_iter()).map(Value::Float));
+                let ys_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<f32>>>> = to_typed_stream(ys_untyped_stream.clone());
 
                 // Apply the typed and untyped operators to the input streams
-                let zs_typed = typed_op(xs_typed_stream, ys_typed_stream).map(Value::Float);
+                let zs_typed = typed_op(xs_typed_stream, ys_typed_stream).map(Into::<Value>::into);
                 let zs_typed: Vec<_> = smol::block_on(zs_typed.collect());
                 let zs_untyped = untyped_op(xs_untyped_stream, ys_untyped_stream);
                 let zs_untyped: Vec<_> = smol::block_on(zs_untyped.collect());

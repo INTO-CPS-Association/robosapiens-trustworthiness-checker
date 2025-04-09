@@ -1,0 +1,137 @@
+use std::str::FromStr;
+use ecow::EcoString;
+
+use crate::lang::dynamic_lola::ast::{SExpr, SBinOp, NumericalBinOp, CompBinOp};
+use crate::core::{Value, VarName};
+
+grammar;
+
+// Parser inspired by: https://github.com/Storyyeller/cubiml-demo/blob/master/src/grammar.lalr
+
+// Tokens ////////////////////////////////////////////////////////////
+match {
+    r"\s*" => { }, // Ignore whitespace
+    r"//[^\n\r]*[\n\r]*" => { }, // Ignore `// comments`
+    r#"\(\*[^*]*\*+(?:[^\)*][^*]*\*+)*\)"# => { },  // Ignore `(* comments *)`
+} else {
+    _
+}
+
+Ident: VarName = <s:r"[a-z_]\w*"> => VarName::from(s);
+Int: i64 = <s:r"-?[0-9]+"> => i64::from_str(s).unwrap();
+Float: f32 = <s:r"-?(?:0|[1-9][0-9]*)\.[0-9]*(?:[eE]-?[0-9]+)?"> => f32::from_str(s).unwrap();
+Bool: bool = {
+    "true" => true,
+    "false" => false
+};
+String: EcoString = <s:r#""[^\\"\n\r]*(?:\\[tn'"\\][^\\"\n\r]*)*""#> => s.into();
+
+// Macros ////////////////////////////////////////////////////////////
+Box<T>: Box<T> = {
+    <T> => Box::new(<>),
+}
+
+// A list of elements separated by Sep
+SepList<T, Sep>: Vec<T> = {
+    <v:(<T> Sep)*> <e:T> => {
+        let mut v = v;
+        v.push(e);
+        v
+    }
+};
+
+// An optional list of elements separated by Sep
+SepListOpt<T, Sep>: Vec<T> = {
+    SepList<T, Sep>,
+    => Vec::new(),
+};
+
+// Expressions ///////////////////////////////////////////////////////
+
+IdentSExpr : SExpr = {
+    Ident => SExpr::Var(<>),
+};
+
+MultExprHelp: SBinOp  = {
+    "*" => SBinOp::NOp(NumericalBinOp::Mul),
+    "/" => SBinOp::NOp(NumericalBinOp::Div),
+};
+
+MultExpr: SExpr = {
+    <lhs: Box<MultExpr>> <op: MultExprHelp> <rhs: Box<Atom>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    Atom
+};
+
+AddExprHelp: SBinOp  = {
+    "+" => SBinOp::NOp(NumericalBinOp::Add),
+    "-" => SBinOp::NOp(NumericalBinOp::Sub),
+};
+
+AddExpr: SExpr = {
+    <lhs: Box<AddExpr>> <op: AddExprHelp> <rhs: Box<MultExpr>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    MultExpr
+};
+
+CompExprHelp: SBinOp = {
+    "<=" => SBinOp::COp(CompBinOp::Le),
+    "==" => SBinOp::COp(CompBinOp::Eq),
+}
+
+CompExpr: SExpr = {
+    <lhs: Box<CompExpr>> <op: CompExprHelp> <rhs: Box<AddExpr>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    AddExpr
+};
+
+SIndexHelp: Box<SExpr> = {
+    Box<Literal>,
+    Box<IdentSExpr>,
+    Box<Paren>
+};
+
+SIndex: SExpr = {
+    <expr: SIndexHelp> "[" <idx: Int> "]" => {
+        SExpr::SIndex(expr, idx.try_into().unwrap())
+    },
+};
+
+LiteralVal: Value = {
+    Int => Value::Int(<>),
+    Float => Value::Float(<>),
+    Bool => Value::Bool(<>),
+    String => Value::Str(<>),
+}
+
+Literal: SExpr = {
+    LiteralVal => SExpr::Val(<>),
+};
+
+Paren: SExpr = {
+    "(" <Expr> ")"
+};
+
+Atom: SExpr = {
+    SIndex,
+    Literal,
+    IdentSExpr,
+}
+
+pub Expr: SExpr = {
+    CompExpr,
+    "(" <Expr> ")"
+};
+
+pub InputDecl: SExpr = {
+    "in " <var: IdentSExpr> => var,
+};
+
+pub OutputDecl: SExpr = {
+    "out " <var: IdentSExpr> => var,
+};
+
+// TODO: Figure out how to turn this into a LOLASpecification. Probably need some helper function

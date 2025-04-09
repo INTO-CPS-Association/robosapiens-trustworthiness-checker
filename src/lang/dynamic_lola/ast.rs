@@ -1,3 +1,5 @@
+use ecow::EcoVec;
+
 use crate::core::{Specification, VarName};
 use crate::core::{StreamType, Value};
 use std::{
@@ -81,6 +83,9 @@ pub enum StrBinOp {
 pub enum CompBinOp {
     Eq,
     Le,
+    Ge,
+    Lt,
+    Gt,
 }
 
 // Stream BinOp
@@ -121,8 +126,6 @@ pub enum SExpr {
         Box<Self>,
         // Index i
         isize,
-        // Default c
-        Value,
     ),
 
     // Arithmetic Stream expression
@@ -132,10 +135,15 @@ pub enum SExpr {
 
     Var(VarName),
 
-    // Eval
-    Eval(Box<Self>),
+    // Dynamic, continuously updatable properties
+    Dynamic(Box<Self>),
+    RestrictedDynamic(Box<Self>, EcoVec<VarName>),
+    // Deferred properties
     Defer(Box<Self>),
+    // Update between properties
     Update(Box<Self>, Box<Self>),
+    // Default value for properties (replaces Unknown with an alternative
+    // stream)
     Default(Box<Self>, Box<Self>),
     IsDefined(Box<Self>), // True when .0 is not Unknown
     When(Box<Self>),      // Becomes true after the first time .0 is not Unknown
@@ -167,7 +175,7 @@ impl SExpr {
                 inputs.extend(e2.inputs());
                 inputs
             }
-            SIndex(s, _, _) => s.inputs(),
+            SIndex(s, _) => s.inputs(),
             Val(_) => vec![],
             BinOp(e1, e2, _) => {
                 let mut inputs = e1.inputs();
@@ -176,7 +184,9 @@ impl SExpr {
             }
             Var(v) => vec![v.clone()],
             Not(b) => b.inputs(),
-            Eval(e) => e.inputs(),
+            // TODO: is this correct?
+            Dynamic(e) => e.inputs(),
+            RestrictedDynamic(_, vs) => vs.iter().cloned().collect(),
             Defer(e) => e.inputs(),
             Update(e1, e2) => {
                 let mut inputs = e1.inputs();
@@ -289,7 +299,7 @@ impl Display for SExpr {
         use SExpr::*;
         match self {
             If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
-            SIndex(s, i, c) => write!(f, "{}[{},{}]", s, i, c),
+            SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Val(n) => write!(f, "{}", n),
             BinOp(e1, e2, NOp(NumericalBinOp::Add)) => write!(f, "({} + {})", e1, e2),
             BinOp(e1, e2, NOp(NumericalBinOp::Sub)) => write!(f, "({} - {})", e1, e2),
@@ -301,9 +311,21 @@ impl Display for SExpr {
             BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Eq)) => write!(f, "({} == {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Le)) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Lt)) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Ge)) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Gt)) => write!(f, "({} <= {})", e1, e2),
             Not(b) => write!(f, "!{}", b),
             Var(v) => write!(f, "{}", v),
-            Eval(e) => write!(f, "eval({})", e),
+            Dynamic(e) => write!(f, "dynamic({})", e),
+            RestrictedDynamic(e, vs) => write!(
+                f,
+                "dynamic({}, {{{}}})",
+                e,
+                vs.iter()
+                    .map(|v| format!("{}", v))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
             Defer(e) => write!(f, "defer({})", e),
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
             Default(e, v) => write!(f, "default({}, {})", e, v),

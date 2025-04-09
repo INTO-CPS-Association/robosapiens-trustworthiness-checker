@@ -2,5 +2,5 @@ in x
 in y
 out z
 out a
-z = x[1, 0]
+z = x[1]
 a = y

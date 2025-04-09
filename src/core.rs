@@ -267,14 +267,36 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     }
 }
 
-pub trait StreamContext<Val: StreamData>: 'static {
-    fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
+/// Abstract builder of contexts
+pub trait AbstractContextBuilder {
+    type Val: StreamData;
+    type Ctx: StreamContext<Self::Val>;
 
-    fn subcontext(&self, history_length: usize) -> Box<dyn SyncStreamContext<Val>>;
+    fn new() -> Self;
+
+    fn executor(self, executor: Rc<LocalExecutor<'static>>) -> Self;
+
+    fn var_names(self, var_names: Vec<VarName>) -> Self;
+
+    fn history_length(self, history_length: usize) -> Self;
+
+    fn input_streams(self, streams: Vec<OutputStream<Self::Val>>) -> Self;
+
+    fn partial_clone(&self) -> Self;
+
+    fn build(self) -> Self::Ctx;
 }
 
 #[async_trait(?Send)]
-pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + 'static {
+pub trait StreamContext<Val: StreamData>: 'static {
+    type Builder: AbstractContextBuilder<Val = Val, Ctx = Self>;
+
+    fn var(&self, x: &VarName) -> Option<OutputStream<Val>>;
+
+    fn subcontext(&self, history_length: usize) -> Self;
+
+    fn restricted_subcontext(&self, vs: EcoVec<VarName>, history_length: usize) -> Self;
+
     /// Advance the clock used by the context by one step, letting all
     /// streams to progress (blocking)
     async fn advance_clock(&mut self);
@@ -293,14 +315,15 @@ pub trait SyncStreamContext<Val: StreamData>: StreamContext<Val> + 'static {
     /// Get the current value of the clock (this may not guarantee
     /// that all stream have reached this time)
     fn clock(&self) -> usize;
-
-    // This allows TimedStreamContext to be used as a StreamContext
-    // This is necessary due to https://github.com/rust-lang/rust/issues/65991
-    fn upcast(&self) -> &dyn StreamContext<Val>;
 }
 
-pub trait MonitoringSemantics<Expr, Val, CVal = Val>: Clone + 'static {
-    fn to_async_stream(expr: Expr, ctx: &dyn StreamContext<CVal>) -> OutputStream<Val>;
+pub trait MonitoringSemantics<Expr, Val, Ctx, CVal = Val>: Clone + 'static
+where
+    Val: StreamData,
+    CVal: StreamData,
+    Ctx: StreamContext<CVal>,
+{
+    fn to_async_stream(expr: Expr, ctx: &Ctx) -> OutputStream<Val>;
 }
 
 pub trait Specification {
@@ -319,7 +342,6 @@ pub trait Specification {
 // output file name, etc.) whilst provide_streams is called by the runtime to
 // finish the setup of the output handler by providing the streams to be output,
 // and finally run is called to start the output handler.
-#[async_trait(?Send)]
 pub trait OutputHandler {
     type Val: StreamData;
 
@@ -334,6 +356,24 @@ pub trait OutputHandler {
     fn run(&mut self) -> LocalBoxFuture<'static, ()>;
 }
 
+pub trait AbstractMonitorBuilder<M, V: StreamData> {
+    type Mon: Monitor<M, V>;
+
+    fn new() -> Self;
+
+    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self;
+
+    fn model(self, model: M) -> Self;
+
+    fn input(self, input: Box<dyn InputProvider<Val = V>>) -> Self;
+
+    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
+
+    fn dependencies(self, dependencies: DependencyManager) -> Self;
+
+    fn build(self) -> Self::Mon;
+}
+
 /*
  * A runtime monitor for a model/specification of type M over streams with
  * values of type V.
@@ -344,14 +384,6 @@ pub trait OutputHandler {
  */
 #[async_trait(?Send)]
 pub trait Monitor<M, V: StreamData> {
-    fn new(
-        executor: Rc<LocalExecutor<'static>>,
-        model: M,
-        input: &mut dyn InputProvider<Val = V>,
-        output: Box<dyn OutputHandler<Val = V>>,
-        dependencies: DependencyManager,
-    ) -> Self;
-
     fn spec(&self) -> &M;
 
     // Should usually wait on the output provider

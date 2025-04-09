@@ -174,35 +174,46 @@ pub fn spec_typed_string_concat() -> &'static str {
 #[allow(dead_code)]
 pub fn spec_typed_count_monitor() -> &'static str {
     "out x: Int\n\
-     x = 1 + (x)[-1, 0]"
+     x = 1 + default(x[-1], 0)"
 }
 
 #[allow(dead_code)]
-pub fn spec_typed_eval_monitor() -> &'static str {
+pub fn spec_typed_dynamic_monitor() -> &'static str {
     "in x: Int\n\
     in y: Int\n\
     in s: Str\n\
     out z: Int\n\
     out w: Int\n\
     z = x + y\n\
-    w = eval(s)"
+    w = dynamic(s)"
 }
 
 #[allow(dead_code)]
 pub fn spec_count_monitor() -> &'static str {
     "out x\n\
-     x = 1 + (x)[-1, 0]"
+     x = 1 + default(x[-1], 0)"
 }
 
 #[allow(dead_code)]
-pub fn spec_eval_monitor() -> &'static str {
+pub fn spec_dynamic_monitor() -> &'static str {
     "in x\n\
     in y\n\
     in s\n\
     out z\n\
     out w\n\
     z = x + y\n\
-    w = eval(s)"
+    w = dynamic(s)"
+}
+
+#[allow(dead_code)]
+pub fn spec_dynamic_restricted_monitor() -> &'static str {
+    "in x\n\
+    in y\n\
+    in s\n\
+    out z\n\
+    out w\n\
+    z = x + y\n\
+    w = dynamic(s, {x,y})"
 }
 
 #[allow(dead_code)]
@@ -214,11 +225,11 @@ pub fn spec_maple_sequence() -> &'static str {
      out l: Bool\n
      out e: Bool\n
      out maple : Bool\n
-     m = (stage == \"m\") && e[-1, true]\n
-     a = (stage == \"a\") && m[-1, false]\n
-     p = (stage == \"p\") && a[-1, false]\n
-     l = (stage == \"l\") && p[-1, false]\n
-     e = (stage == \"e\") && l[-1, false]\n
+     m = (stage == \"m\") && default(e[-1], true)\n
+     a = (stage == \"a\") && default(m[-1], false)\n
+     p = (stage == \"p\") && default(a[-1], false)\n
+     l = (stage == \"l\") && default(p[-1], false)\n
+     e = (stage == \"e\") && default(l[-1], false)\n
      maple = m || a || p || l || e"
 }
 
@@ -409,7 +420,7 @@ pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
         "e".into(),
         Box::pin(futures::stream::iter((0..5).map(|i| {
             if i == 2 {
-                Value::Str("x[-1, 0]".into())
+                Value::Str("x[-1]".into())
             } else {
                 Value::Unknown
             }
@@ -433,7 +444,7 @@ pub fn spec_future_indexing() -> &'static str {
      in y
      out z
      out a
-     z = x[1, 0]
+     z = x[1]
      a = y"
 }
 
@@ -442,7 +453,7 @@ pub fn spec_past_indexing() -> &'static str {
     "in x
      in y
      out z
-     z = x[-1, 42]"
+     z = x[-1]"
 }
 
 #[allow(dead_code)]

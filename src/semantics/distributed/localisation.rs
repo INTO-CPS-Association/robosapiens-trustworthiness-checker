@@ -5,7 +5,7 @@ use tracing::info;
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 
 use crate::VarName;
-use crate::distributed::distribution_graphs::{LabelledConcDistributionGraph, NodeName};
+use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
 
 pub trait LocalitySpec {
     fn local_vars(&self) -> Vec<VarName>;
@@ -16,7 +16,7 @@ impl LocalitySpec for Vec<VarName> {
         self.clone()
     }
 }
-impl LocalitySpec for (NodeName, &LabelledConcDistributionGraph) {
+impl<W> LocalitySpec for (NodeName, &GenericLabelledDistributionGraph<W>) {
     /// Returns the local variables of the node.
     /// Panics if the node does not exist in the graph.
     fn local_vars(&self) -> Vec<VarName> {
@@ -27,7 +27,7 @@ impl LocalitySpec for (NodeName, &LabelledConcDistributionGraph) {
             .clone()
     }
 }
-impl LocalitySpec for (NodeName, LabelledConcDistributionGraph) {
+impl<W> LocalitySpec for (NodeName, GenericLabelledDistributionGraph<W>) {
     fn local_vars(&self) -> Vec<VarName> {
         (self.0.clone(), &self.1).local_vars()
     }

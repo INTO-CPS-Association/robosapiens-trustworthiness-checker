@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::VarName;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
 pub struct NodeName(String);
 
 impl Display for NodeName {
@@ -30,24 +30,20 @@ impl From<String> for NodeName {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-pub enum EdgeLabel {
-    Internal,
-    Physical { dist: f64, latency: f64 },
-}
-
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct NodeLabel {
     monitors: Vec<VarName>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct ConcDistributionGraph {
+pub struct GenericDistributionGraph<Weight> {
     pub central_monitor: NodeIndex,
-    pub graph: DiGraph<NodeName, EdgeLabel>,
+    pub graph: DiGraph<NodeName, Weight>,
 }
 
-impl ConcDistributionGraph {
+pub type DistributionGraph = GenericDistributionGraph<u64>;
+
+impl<W> GenericDistributionGraph<W> {
     pub fn get_node_index_by_name(&self, name: &NodeName) -> Option<NodeIndex> {
         self.graph
             .node_indices()
@@ -79,20 +75,22 @@ where
     a_ns.eq(b_ns) && a_es.eq(b_es)
 }
 
-impl PartialEq for ConcDistributionGraph {
+impl<W: PartialEq> PartialEq for GenericDistributionGraph<W> {
     fn eq(&self, other: &Self) -> bool {
         self.central_monitor == other.central_monitor && graph_eq(&self.graph, &other.graph)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-pub struct LabelledConcDistributionGraph {
-    pub dist_graph: ConcDistributionGraph,
+pub struct GenericLabelledDistributionGraph<W> {
+    pub dist_graph: GenericDistributionGraph<W>,
     pub var_names: Vec<VarName>,
     pub node_labels: BTreeMap<NodeIndex, Vec<VarName>>,
 }
 
-impl LabelledConcDistributionGraph {
+pub type LabelledDistributionGraph = GenericLabelledDistributionGraph<u64>;
+
+impl<W> GenericLabelledDistributionGraph<W> {
     pub fn monitors_at_node(&self, node: NodeIndex) -> Option<&Vec<VarName>> {
         self.node_labels.get(&node)
     }
@@ -116,13 +114,13 @@ pub mod generation {
         }
     }
 
-    pub fn arb_conc_distribution_graph() -> impl Strategy<Value = ConcDistributionGraph> {
+    pub fn arb_conc_distribution_graph() -> impl Strategy<Value = DistributionGraph> {
         (
             any::<NodeName>(),
             prop::collection::hash_set("[a-z]", 1..=10),
         )
             .prop_map(|(central_monitor, nodes)| {
-                let mut graph = DiGraph::new();
+                let mut graph: Graph<NodeName, u64> = DiGraph::new();
                 let central_monitor = graph.add_node(central_monitor);
                 for node in nodes {
                     graph.add_node(node.into());
@@ -130,7 +128,7 @@ pub mod generation {
                 let mut edges = vec![];
                 for node in graph.node_indices() {
                     if node != central_monitor {
-                        edges.push((central_monitor, node, EdgeLabel::Internal));
+                        edges.push((central_monitor, node, 0));
                     }
                 }
                 let graph_clone = graph.clone();
@@ -142,30 +140,21 @@ pub mod generation {
                             graph_clone
                                 .node_indices()
                                 .filter(move |&other| other != node && other != central_monitor)
-                                .map(move |other| {
-                                    (
-                                        node,
-                                        other,
-                                        EdgeLabel::Physical {
-                                            dist: 1.0,
-                                            latency: 2.0,
-                                        },
-                                    )
-                                })
+                                .map(move |other| (node, other, 1))
                         }),
                 );
                 for (source, target, label) in edges {
                     graph.add_edge(source, target, label);
                 }
-                ConcDistributionGraph {
+                DistributionGraph {
                     central_monitor,
                     graph,
                 }
             })
     }
 
-    pub fn arb_labelled_conc_distribution_graph()
-    -> impl Strategy<Value = LabelledConcDistributionGraph> {
+    pub fn arb_labelled_conc_distribution_graph() -> impl Strategy<Value = LabelledDistributionGraph>
+    {
         (
             arb_conc_distribution_graph(),
             prop::collection::hash_set("[a-z]", 1..=10),
@@ -178,7 +167,7 @@ pub mod generation {
                         var_names.clone().into_iter().map(|x| x.into()).collect(),
                     );
                 }
-                LabelledConcDistributionGraph {
+                GenericLabelledDistributionGraph {
                     dist_graph,
                     var_names: var_names.into_iter().map(|x| x.into()).collect(),
                     node_labels,
@@ -198,27 +187,19 @@ mod tests {
         let a = graph.add_node("A".into());
         let b = graph.add_node("B".into());
         let c = graph.add_node("C".into());
-        graph.add_edge(a, b, EdgeLabel::Internal);
-        graph.add_edge(
-            b,
-            c,
-            EdgeLabel::Physical {
-                dist: 1.0,
-                latency: 2.0,
-            },
-        );
-        let dist_graph = ConcDistributionGraph {
+        graph.add_edge(a, b, 0);
+        graph.add_edge(b, c, 0);
+        let dist_graph = DistributionGraph {
             central_monitor: a,
             graph,
         };
-        let labelled_graph = LabelledConcDistributionGraph {
+        let labelled_graph = LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["a".into(), "b".into(), "c".into()],
             node_labels: BTreeMap::new(),
         };
         let serialized = serde_json::to_string(&labelled_graph).unwrap();
-        let deserialized: LabelledConcDistributionGraph =
-            serde_json::from_str(&serialized).unwrap();
+        let deserialized: LabelledDistributionGraph = serde_json::from_str(&serialized).unwrap();
         assert_eq!(labelled_graph, deserialized);
     }
 
@@ -228,20 +209,13 @@ mod tests {
         let a = graph.add_node("A".into());
         let b = graph.add_node("B".into());
         let c = graph.add_node("C".into());
-        graph.add_edge(a, b, EdgeLabel::Internal);
-        graph.add_edge(
-            b,
-            c,
-            EdgeLabel::Physical {
-                dist: 1.0,
-                latency: 2.0,
-            },
-        );
-        let dist_graph = ConcDistributionGraph {
+        graph.add_edge(a, b, 0);
+        graph.add_edge(b, c, 1);
+        let dist_graph = DistributionGraph {
             central_monitor: a,
             graph,
         };
-        let labelled_dist_graph = LabelledConcDistributionGraph {
+        let labelled_dist_graph = LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["a".into(), "b".into(), "c".into()],
             node_labels: [(2.into(), vec!["a".into(), "b".into()])]
@@ -259,8 +233,8 @@ mod tests {
                     ],
                     "edge_property": "directed",
                     "edges": [
-                        [0, 1, {"Internal": null}],
-                        [1, 2, {"Physical": {"dist": 1.0, "latency": 2.0}}]
+                        [0, 1, 0],
+                        [1, 2, 1]
                     ]
                 }
             },
@@ -268,7 +242,7 @@ mod tests {
             "node_labels": {"2": ["a", "b"]}
         }"#;
         assert_eq!(
-            serde_json::from_str::<LabelledConcDistributionGraph>(dist_graph_serialized).unwrap(),
+            serde_json::from_str::<LabelledDistributionGraph>(dist_graph_serialized).unwrap(),
             labelled_dist_graph
         );
     }
@@ -279,20 +253,13 @@ mod tests {
         let a = graph.add_node("A".into());
         let b = graph.add_node("B".into());
         let c = graph.add_node("B".into());
-        graph.add_edge(a, b, EdgeLabel::Internal);
-        graph.add_edge(
-            b,
-            c,
-            EdgeLabel::Physical {
-                dist: 1.0,
-                latency: 2.0,
-            },
-        );
-        let dist_graph = ConcDistributionGraph {
+        graph.add_edge(a, b, 0);
+        graph.add_edge(b, c, 1);
+        let dist_graph = DistributionGraph {
             central_monitor: a,
             graph,
         };
-        let labelled_dist_graph = LabelledConcDistributionGraph {
+        let labelled_dist_graph = LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["a".into(), "b".into(), "c".into()],
             node_labels: [(2.into(), vec!["a".into(), "b".into()])]

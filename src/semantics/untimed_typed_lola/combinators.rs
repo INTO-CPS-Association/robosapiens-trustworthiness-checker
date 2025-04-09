@@ -1,60 +1,89 @@
-use crate::core::Value;
-use crate::core::{StreamContext, StreamData};
-use crate::lang::dynamic_lola::parser::lola_expression;
-use crate::semantics::UntimedLolaSemantics;
-use crate::semantics::untimed_untyped_lola::combinators::{lift1, lift2, lift3};
-use crate::{MonitoringSemantics, OutputStream};
+use crate::OutputStream;
+use crate::core::StreamData;
+use crate::lang::dynamic_lola::type_checker::PossiblyUnknown;
+use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
 use futures::stream::LocalBoxStream;
 use futures::{
     StreamExt,
     stream::{self},
 };
-use std::fmt::Debug;
-use winnow::Parser;
 
-pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
-    stream: OutputStream<Value>,
-) -> OutputStream<T> {
-    Box::pin(stream.map(|x| x.try_into().expect("Type error")))
+pub fn unknown_lift1<S: StreamData, R: StreamData>(
+    f: impl CloneFn1<S, R>,
+    x_mon: OutputStream<PossiblyUnknown<S>>,
+) -> OutputStream<PossiblyUnknown<R>> {
+    let f = f.clone();
+    Box::pin(x_mon.map(move |x| match x {
+        PossiblyUnknown::Known(x) => PossiblyUnknown::Known(f(x)),
+        PossiblyUnknown::Unknown => PossiblyUnknown::Unknown,
+    }))
 }
 
-pub fn from_typed_stream<T: Into<Value> + StreamData>(
-    stream: OutputStream<T>,
-) -> OutputStream<Value> {
-    Box::pin(stream.map(|x| x.into()))
+// Note that this might not cover all cases. Certain operators may want to yield
+// the known value if either x or y is known.
+pub fn unknown_lift2<S: StreamData, R: StreamData, U: StreamData>(
+    f: impl CloneFn2<S, R, U>,
+    x_mon: OutputStream<PossiblyUnknown<S>>,
+    y_mon: OutputStream<PossiblyUnknown<R>>,
+) -> OutputStream<PossiblyUnknown<U>> {
+    let f = f.clone();
+    Box::pin(x_mon.zip(y_mon).map(move |(x, y)| match (x, y) {
+        (PossiblyUnknown::Known(x), PossiblyUnknown::Known(y)) => PossiblyUnknown::Known(f(x, y)),
+        _ => PossiblyUnknown::Unknown,
+    }))
 }
 
-pub fn and(x: OutputStream<bool>, y: OutputStream<bool>) -> OutputStream<bool> {
-    lift2(|x, y| x && y, x, y)
+pub fn and(
+    x: OutputStream<PossiblyUnknown<bool>>,
+    y: OutputStream<PossiblyUnknown<bool>>,
+) -> OutputStream<PossiblyUnknown<bool>> {
+    unknown_lift2(|x, y| x && y, x, y)
 }
 
-pub fn or(x: OutputStream<bool>, y: OutputStream<bool>) -> OutputStream<bool> {
-    lift2(|x, y| x || y, x, y)
+pub fn or(
+    x: OutputStream<PossiblyUnknown<bool>>,
+    y: OutputStream<PossiblyUnknown<bool>>,
+) -> OutputStream<PossiblyUnknown<bool>> {
+    unknown_lift2(|x, y| x || y, x, y)
 }
 
-pub fn not(x: OutputStream<bool>) -> OutputStream<bool> {
-    lift1(|x| !x, x)
+pub fn not(x: OutputStream<PossiblyUnknown<bool>>) -> OutputStream<PossiblyUnknown<bool>> {
+    unknown_lift1(|x| !x, x)
 }
 
-pub fn eq<X: Eq + StreamData>(x: OutputStream<X>, y: OutputStream<X>) -> OutputStream<bool> {
-    lift2(|x, y| x == y, x, y)
+pub fn eq<X: Eq + StreamData>(
+    x: OutputStream<PossiblyUnknown<X>>,
+    y: OutputStream<PossiblyUnknown<X>>,
+) -> OutputStream<PossiblyUnknown<bool>> {
+    unknown_lift2(|x, y| x == y, x, y)
 }
 
-pub fn le(x: OutputStream<i64>, y: OutputStream<i64>) -> OutputStream<bool> {
-    lift2(|x, y| x <= y, x, y)
+pub fn le(
+    x: OutputStream<PossiblyUnknown<i64>>,
+    y: OutputStream<PossiblyUnknown<i64>>,
+) -> OutputStream<PossiblyUnknown<bool>> {
+    unknown_lift2(|x, y| x <= y, x, y)
 }
 
 pub fn val<X: StreamData>(x: X) -> OutputStream<X> {
     Box::pin(stream::repeat(x.clone()))
 }
 
-// Should this return a dyn ConcreteStreamData?
 pub fn if_stm<X: StreamData>(
-    x: OutputStream<bool>,
-    y: OutputStream<X>,
-    z: OutputStream<X>,
-) -> OutputStream<X> {
-    lift3(|x, y, z| if x { y } else { z }, x, y, z)
+    x: OutputStream<PossiblyUnknown<bool>>,
+    y: OutputStream<PossiblyUnknown<X>>,
+    z: OutputStream<PossiblyUnknown<X>>,
+) -> OutputStream<PossiblyUnknown<X>> {
+    Box::pin(x.zip(y).zip(z).map(move |((x, y), z)| match x {
+        PossiblyUnknown::Known(x) => {
+            if x {
+                y
+            } else {
+                z
+            }
+        }
+        PossiblyUnknown::Unknown => PossiblyUnknown::Unknown,
+    }))
 }
 
 // NOTE: For past-time indexing there is a trade-off between allowing recursive definitions with infinite streams
@@ -77,22 +106,31 @@ pub fn sindex<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream
     }
 }
 
-pub fn plus<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+pub fn plus<T>(
+    x: OutputStream<PossiblyUnknown<T>>,
+    y: OutputStream<PossiblyUnknown<T>>,
+) -> OutputStream<PossiblyUnknown<T>>
 where
     T: std::ops::Add<Output = T> + StreamData,
 {
-    lift2(|x, y| x + y, x, y)
+    unknown_lift2(|x, y| x + y, x, y)
 }
 
-pub fn modulo<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+pub fn modulo<T>(
+    x: OutputStream<PossiblyUnknown<T>>,
+    y: OutputStream<PossiblyUnknown<T>>,
+) -> OutputStream<PossiblyUnknown<T>>
 where
     T: std::ops::Rem<Output = T> + StreamData,
 {
-    lift2(|x, y| x % y, x, y)
+    unknown_lift2(|x, y| x % y, x, y)
 }
 
-pub fn concat(x: OutputStream<String>, y: OutputStream<String>) -> OutputStream<String> {
-    lift2(
+pub fn concat(
+    x: OutputStream<PossiblyUnknown<String>>,
+    y: OutputStream<PossiblyUnknown<String>>,
+) -> OutputStream<PossiblyUnknown<String>> {
+    unknown_lift2(
         |mut x, y| {
             x.push_str(&y);
             x
@@ -102,76 +140,46 @@ pub fn concat(x: OutputStream<String>, y: OutputStream<String>) -> OutputStream<
     )
 }
 
-pub fn minus<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+pub fn minus<T>(
+    x: OutputStream<PossiblyUnknown<T>>,
+    y: OutputStream<PossiblyUnknown<T>>,
+) -> OutputStream<PossiblyUnknown<T>>
 where
     T: std::ops::Sub<Output = T> + StreamData,
 {
-    lift2(|x, y| x - y, x, y)
+    unknown_lift2(|x, y| x - y, x, y)
 }
 
-pub fn mult<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+pub fn mult<T>(
+    x: OutputStream<PossiblyUnknown<T>>,
+    y: OutputStream<PossiblyUnknown<T>>,
+) -> OutputStream<PossiblyUnknown<T>>
 where
     T: std::ops::Mul<Output = T> + StreamData,
 {
-    lift2(|x, y| x * y, x, y)
+    unknown_lift2(|x, y| x * y, x, y)
 }
 
-pub fn div<T>(x: OutputStream<T>, y: OutputStream<T>) -> OutputStream<T>
+pub fn div<T>(
+    x: OutputStream<PossiblyUnknown<T>>,
+    y: OutputStream<PossiblyUnknown<T>>,
+) -> OutputStream<PossiblyUnknown<T>>
 where
     T: std::ops::Div<Output = T> + StreamData,
 {
-    lift2(|x, y| x / y, x, y)
+    unknown_lift2(|x, y| x / y, x, y)
 }
 
-pub fn eval<T: TryFrom<Value, Error = ()> + StreamData>(
-    ctx: &dyn StreamContext<Value>,
-    x: OutputStream<String>,
-    history_length: usize,
-) -> OutputStream<T> {
-    // Create a subcontext with a history window length of 10
-    let subcontext = ctx.subcontext(history_length);
-    /*unfold() creates a Stream from a seed value.*/
-    Box::pin(stream::unfold(
-        (subcontext, x, None::<(String, OutputStream<T>)>),
-        |(mut subcontext, mut x, last)| async move {
-            /* x.next() returns None if we are done unfolding. Return in that case.*/
-            let current = x.next().await?;
-
-            // If the evaled statement has not stopped, continue using the
-            // existing stream
-            if let Some((prev, mut es)) = last {
-                if prev == current {
-                    // println!("prev == current == {:?}", current);
-                    subcontext.advance_clock().await;
-                    let eval_res = es.next().await;
-                    // println!("returning val from existing stream: {:?}", eval_res);
-                    return match eval_res {
-                        Some(eval_res) => {
-                            // println!("eval producing {:?}", eval_res);
-                            Some((eval_res, (subcontext, x, Some((current, es)))))
-                        }
-                        None => {
-                            println!("Eval stream ended");
-                            None
-                        }
-                    };
-                }
-            }
-
-            let s_parse = &mut current.as_str();
-            let expr = match lola_expression.parse(s_parse) {
-                Ok(expr) => expr,
-                Err(_) => unimplemented!("Invalid eval str"),
-            };
-            let es = { UntimedLolaSemantics::to_async_stream(expr, subcontext.upcast()) };
-            let mut es = to_typed_stream(es);
-            // println!("new eval stream");
-            subcontext.advance_clock().await;
-            let eval_res = es.next().await?;
-            // println!("eval producing {:?}", eval_res);
-            return Some((eval_res, (subcontext, x, Some((current, es)))));
-        },
-    )) as OutputStream<T>
+// Evaluates to a placeholder value whenever Unknown is received.
+pub fn default<T: 'static>(
+    x: OutputStream<PossiblyUnknown<T>>,
+    d: OutputStream<PossiblyUnknown<T>>,
+) -> OutputStream<PossiblyUnknown<T>> {
+    let xs = x.zip(d).map(|(x, d)| match x {
+        PossiblyUnknown::Known(x) => PossiblyUnknown::Known(x),
+        PossiblyUnknown::Unknown => d,
+    });
+    Box::pin(xs) as LocalBoxStream<'static, PossiblyUnknown<T>>
 }
 
 #[cfg(test)]
@@ -183,28 +191,44 @@ mod tests {
 
     #[test(apply(smol_test))]
     async fn test_not() {
-        let x: OutputStream<bool> = Box::pin(stream::iter(vec![true, false].into_iter()));
-        let z: Vec<bool> = vec![false, true];
-        let res: Vec<bool> = not(x).collect().await;
+        let x: OutputStream<PossiblyUnknown<bool>> = Box::pin(stream::iter(
+            vec![PossiblyUnknown::Known(true), PossiblyUnknown::Known(false)].into_iter(),
+        ));
+        let z: Vec<PossiblyUnknown<bool>> =
+            vec![PossiblyUnknown::Known(false), PossiblyUnknown::Known(true)];
+        let res: Vec<PossiblyUnknown<bool>> = not(x).collect().await;
         assert_eq!(res, z);
     }
 
     #[test(apply(smol_test))]
     async fn test_plus() {
-        let x: OutputStream<i64> = Box::pin(stream::iter(vec![1, 3].into_iter()));
-        let y: OutputStream<i64> = Box::pin(stream::iter(vec![2, 4].into_iter()));
-        let z: Vec<i64> = vec![3, 7];
-        let res: Vec<i64> = plus(x, y).collect().await;
+        let x: OutputStream<PossiblyUnknown<i64>> = Box::pin(stream::iter(
+            vec![PossiblyUnknown::Known(1), PossiblyUnknown::Known(3)].into_iter(),
+        ));
+        let y: OutputStream<PossiblyUnknown<i64>> = Box::pin(stream::iter(
+            vec![PossiblyUnknown::Known(2), PossiblyUnknown::Known(4)].into_iter(),
+        ));
+        let z: Vec<PossiblyUnknown<i64>> =
+            vec![PossiblyUnknown::Known(3), PossiblyUnknown::Known(7)];
+        let res: Vec<PossiblyUnknown<i64>> = plus(x, y).collect().await;
         assert_eq!(res, z);
     }
 
     #[test(apply(smol_test))]
     async fn test_str_plus() {
-        let x: OutputStream<String> =
-            Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
-        let y: OutputStream<String> = Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]));
-        let exp: Vec<String> = vec!["hello world".into(), "olleh dlrow".into()];
-        let res: Vec<String> = concat(x, y).collect().await;
+        let x: OutputStream<PossiblyUnknown<String>> = Box::pin(stream::iter(vec![
+            PossiblyUnknown::Known("hello ".into()),
+            PossiblyUnknown::Known("olleh ".into()),
+        ]));
+        let y: OutputStream<PossiblyUnknown<String>> = Box::pin(stream::iter(vec![
+            PossiblyUnknown::Known("world".into()),
+            PossiblyUnknown::Known("dlrow".into()),
+        ]));
+        let exp: Vec<PossiblyUnknown<String>> = vec![
+            PossiblyUnknown::Known("hello world".into()),
+            PossiblyUnknown::Known("olleh dlrow".into()),
+        ];
+        let res: Vec<PossiblyUnknown<String>> = concat(x, y).collect().await;
         assert_eq!(res, exp)
     }
 }

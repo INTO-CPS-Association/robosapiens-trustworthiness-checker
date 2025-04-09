@@ -1,3 +1,3 @@
 pub mod asynchronous;
 pub mod constraints;
-pub mod queuing;
+pub mod distributed;

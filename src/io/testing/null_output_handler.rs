@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use async_trait::async_trait;
 use futures::{StreamExt, future::LocalBoxFuture};
 use smol::LocalExecutor;
 
@@ -27,7 +26,6 @@ impl<V: StreamData> NullOutputHandler<V> {
     }
 }
 
-#[async_trait]
 impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
     type Val = V;
 

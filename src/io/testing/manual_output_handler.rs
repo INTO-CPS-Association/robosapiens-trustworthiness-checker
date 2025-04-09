@@ -1,7 +1,6 @@
 use std::{mem, rc::Rc};
 
 use async_stream::stream;
-use async_trait::async_trait;
 use async_unsync::{bounded, oneshot};
 use futures::future::{LocalBoxFuture, join_all};
 use smol::LocalExecutor;
@@ -57,7 +56,6 @@ impl<V: StreamData> ManualOutputHandler<V> {
     }
 }
 
-#[async_trait(?Send)]
 impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
     type Val = V;
 
@@ -141,7 +139,6 @@ pub struct AsyncManualOutputHandler<V: StreamData> {
     output_receiver: Option<bounded::Receiver<(VarName, V)>>,
 }
 
-#[async_trait]
 impl<V: StreamData> OutputHandler for AsyncManualOutputHandler<V> {
     type Val = V;
 

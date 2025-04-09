@@ -8,10 +8,8 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
-use trustworthiness_checker::benches_common::monitor_outputs_typed_queuing;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_constraints;
-use trustworthiness_checker::benches_common::monitor_outputs_untyped_queuing;
 use trustworthiness_checker::dep_manage::interface::create_dependency_manager;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::lola_fixtures::maple_valid_input_stream;
@@ -117,39 +115,6 @@ fn from_elem(c: &mut Criterion) {
                 })
             },
         );
-        group.bench_with_input(
-            BenchmarkId::new("maple_sequence_untyped_queuing", size),
-            &(&spec, &dep_manager),
-            |b, &(spec, dep_manager)| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
-                    monitor_outputs_untyped_queuing(
-                        local_smol_executor.executor.clone(),
-                        spec.clone(),
-                        input_stream_fn(),
-                        dep_manager.clone(),
-                    )
-                })
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("maple_sequence_typed_queuing", size),
-            &(&spec_typed, &dep_manager),
-            |b, &(spec_typed, dep_manager)| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
-                    monitor_outputs_typed_queuing(
-                        local_smol_executor.executor.clone(),
-                        spec_typed.clone(),
-                        input_stream_fn(),
-                        dep_manager.clone(),
-                    )
-                })
-            },
-        );
-        // group.bench_with_input(
-        //     BenchmarkId::new("maple_sequence_baseline", size),
-        //     &size,
-        //     |b, &size| b.to_async(&tokio_rt).iter(|| baseline(size)),
-        // );
     }
     group.finish();
 }

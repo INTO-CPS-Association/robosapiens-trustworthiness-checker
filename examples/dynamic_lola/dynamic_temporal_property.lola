@@ -1,0 +1,9 @@
+in prop
+in pos
+out clock
+out propTimestamp
+out verdict
+clock = if is_defined(pos) then default(clock[-1], 0) + 1 else default(clock[-1], 0) // is_defined used to bind the clock to the position
+verdict = eval(prop)
+propTimestamp = if is_defined(prop) then clock else default(propTimestamp[-1], 0)
+
