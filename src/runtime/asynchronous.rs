@@ -620,13 +620,6 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
         self.clock += 1;
     }
 
-    async fn lazy_advance_clock(&mut self) {
-        for (_, var_manager) in self.var_managers.borrow_mut().iter_mut() {
-            self.executor.spawn(var_manager.tick()).detach();
-        }
-        self.clock += 1;
-    }
-
     fn clock(&self) -> usize {
         self.clock
     }

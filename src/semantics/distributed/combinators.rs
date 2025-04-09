@@ -152,17 +152,6 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
             .await;
     }
 
-    async fn lazy_advance_clock(&mut self) {
-        self.ctx.lazy_advance_clock().await;
-        // Should be done lazily - but we don't care
-        self.graph_manager
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .tick()
-            .await;
-    }
-
     async fn start_auto_clock(&mut self) {
         if !self.ctx.is_clock_started() {
             self.ctx.start_auto_clock().await;

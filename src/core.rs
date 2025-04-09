@@ -301,10 +301,6 @@ pub trait StreamContext<Val: StreamData>: 'static {
     /// streams to progress (blocking)
     async fn advance_clock(&mut self);
 
-    /// Try to advance clock used by the context by one step, letting all
-    /// streams to progress (non-blocking, don't care if anything happens)
-    async fn lazy_advance_clock(&mut self);
-
     /// Set the clock to automatically advance, allowing all substreams
     /// to progress freely (limited only by buffering)
     async fn start_auto_clock(&mut self);
