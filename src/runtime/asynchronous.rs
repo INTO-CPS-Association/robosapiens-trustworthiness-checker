@@ -1,6 +1,7 @@
 use core::panic;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 use std::mem;
 use std::rc::Rc;
@@ -95,7 +96,10 @@ pub struct VarManager<V: StreamData> {
     subscribers: Rc<RefCell<Vec<bounded::Sender<V>>>>,
     /// The current clock value of the variable
     clock: Rc<RefCell<usize>>,
+    id: u16,
 }
+
+static COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
 impl<V: StreamData> VarManager<V> {
     pub fn new(
@@ -108,6 +112,7 @@ impl<V: StreamData> VarManager<V> {
         let clock = Rc::new(RefCell::new(0));
         let subscribers = Rc::new(RefCell::new(vec![]));
         let outstanding_sub_requests = Rc::new(RefCell::new(0));
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             executor,
             var,
@@ -117,6 +122,7 @@ impl<V: StreamData> VarManager<V> {
             outstanding_sub_requests,
             subscribers,
             clock,
+            id,
         }
     }
 
@@ -130,8 +136,9 @@ impl<V: StreamData> VarManager<V> {
         let var_stage_ref = self.var_stage.clone();
         let outstanding_sub_requests_ref = self.outstanding_sub_requests.clone();
         let var = self.var.clone();
+        let id = self.id.clone();
 
-        debug!(?var, "Subscribing to variable");
+        debug!(?var, "VarManager {id}: Subscribing to variable");
 
         // Create a oneshot channel to send the output stream to the subscriber
         let (output_tx, output_rx) = oneshot::channel().into_split();
@@ -154,20 +161,26 @@ impl<V: StreamData> VarManager<V> {
         self.executor
             .spawn(async move {
                 if current_var_stage == VarStage::Closed {
-                    panic!("Cannot subscribe to a variable in the closed stage");
+                    panic!("VarManager {id}: Cannot subscribe to a variable in the closed stage");
                 }
 
                 while current_var_stage == VarStage::Gathering {
-                    debug!(?var, "Waiting for context stage to move to open or closed");
+                    debug!(
+                        ?var,
+                        "VarManager {id}: Waiting for context stage to move to open or closed"
+                    );
                     smol::future::yield_now().await;
                     current_var_stage = var_stage_ref.get_shared().await;
-                    debug!(?var, "var stage changed {}", current_var_stage);
+                    debug!(
+                        ?var,
+                        "VarManager {id}: var stage changed {}", current_var_stage
+                    );
                 }
 
                 let res = if current_var_stage == VarStage::Closed
                     && subscribers_ref.borrow().len() == 1
                 {
-                    debug!("Directly sending stream to single subscriber");
+                    debug!("VarManager {id}: Directly sending stream to single subscriber");
                     // Take the stream out of the RefCell by replacing it with None
                     let mut input_ref = input_stream_ref.borrow_mut();
                     let stream = input_ref.take().unwrap();
@@ -176,21 +189,30 @@ impl<V: StreamData> VarManager<V> {
                 } else if current_var_stage == VarStage::Open
                     || current_var_stage == VarStage::Closed
                 {
-                    debug!("Sending stream to subscriber");
+                    debug!("VarManager {id}: Sending stream to subscriber");
                     output_tx
                         .send(Box::pin(stream! {
-                            while let Some(data) = rx.recv().await {
-                                yield data;
+                            let id = id;
+                            loop {
+                                debug!("VarManager {id}: Waiting to forward to subs");
+                                if let Some(data) = rx.recv().await {
+                                    debug!("VarManager {id}: Forwarding {:?} to subs", data);
+                                    yield data;
+                                }
+                                else {
+                                    debug!("VarManager {id}: Stream ended - no more to forward to subs");
+                                    return;
+                                }
                             }
                         }) as OutputStream<V>)
                         .unwrap();
-                    debug!("done sending stream to subscriber");
+                    debug!("VarManager {id}: done sending stream to subscriber");
                 } else {
                     unreachable!()
                 };
 
                 if *outstanding_sub_requests_ref.borrow() == 1 {
-                    debug!("Adding permit back to semaphore");
+                    debug!("VarManager {id}: Adding permit back to semaphore");
                     semaphore.add_permits(1);
                 };
                 *outstanding_sub_requests_ref.borrow_mut() -= 1;
@@ -217,55 +239,59 @@ impl<V: StreamData> VarManager<V> {
         let clock_ref = self.clock.clone();
         let var = self.var.clone();
         let var_stage = self.var_stage.clone();
+        let id = self.id;
 
         // Return a future which will actually do the distribution
         Box::pin(async move {
             // Move to the open stage if we are in the gathering stage and we
             // have been ticked
             if var_stage.get().await == VarStage::Gathering {
-                debug!("Moving to open stage from tick");
+                debug!("VarManager {id}: Moving to open stage from tick");
                 var_stage.set(VarStage::Open);
             }
 
-            debug!(?var, "Waiting for permit");
+            debug!(?var, "VarManager {id}: Waiting for permit");
             let _permit = semaphore.acquire().await.unwrap();
-            debug!(?var, "Acquired permit");
+            debug!(?var, "VarManager {id}: Acquired permit");
 
-            debug!(?var, "Distributing single");
+            debug!(?var, "VarManager {id}: Distributing single");
 
             let mut binding = input_stream_ref.borrow_mut();
             let input_stream = match binding.as_mut() {
                 Some(stream) => stream,
                 None => {
-                    debug!("Input stream is none; stopping distribution");
+                    debug!("VarManager {id}: Input stream is none; stopping distribution");
                     return false;
                 }
             };
 
             if var_stage.get().await == VarStage::Closed && subscribers_ref.borrow().is_empty() {
-                debug!("No subscribers; stopping distribution");
+                debug!("VarManager {id}: No subscribers; stopping distribution");
                 return false;
             }
 
             match input_stream.next().await {
                 Some(data) => {
-                    debug!(?data, "Distributing data");
+                    debug!(?data, "VarManager {id}: Distributing data");
                     *clock_ref.borrow_mut() += 1;
                     let mut to_delete = vec![];
+
                     for (i, child_sender) in subscribers_ref.borrow().iter().enumerate() {
                         if let Err(_) = child_sender.send(data.clone()).await {
-                            info!("Stopping distributing to receiver since it has been dropped");
+                            info!(
+                                "VarManager {id}: Stopping distributing to receiver since it has been dropped"
+                            );
                             to_delete.push(i);
                         }
                     }
                     for i in to_delete.iter().rev() {
                         subscribers_ref.borrow_mut().remove(*i);
                     }
-                    debug!("Distributed data");
+                    debug!("VarManager {id}: Distributed data");
                 }
                 None => {
                     *clock_ref.borrow_mut() += 1;
-                    info!("Stopped distributing data due to end of input stream");
+                    info!("VarManager {id}: Stopped distributing data due to end of input stream");
                     // Remove references to subscribers to let rx's know that streams have ended
                     *subscribers_ref.borrow_mut() = vec![];
                     return false;
@@ -280,7 +306,7 @@ impl<V: StreamData> VarManager<V> {
     /// is exhausted
     pub fn run(self) -> LocalBoxFuture<'static, ()> {
         // Move to the closed stage since the variable is now running
-        debug!("Moving to closed stage from run");
+        debug!("VarManager {}: Moving to closed stage from run", self.id);
         self.var_stage.set(VarStage::Closed);
 
         // Return a future which will run the tick function until it returns
@@ -340,6 +366,21 @@ fn store_history<V: StreamData>(
     })
 }
 
+#[derive(Debug)]
+pub struct ContextId {
+    id: u16,
+    parent_id: Option<u16>,
+}
+
+impl Display for ContextId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.parent_id {
+            Some(id) => write!(f, "(id: {}, parent: {})", self.id, id),
+            None => write!(f, "(id: {}, parent: None)", self.id),
+        }
+    }
+}
+
 /// A context which consumes data for a set of variables and makes
 /// it available when evaluating a deferred expression
 //
@@ -358,6 +399,8 @@ pub struct Context<Val: StreamData> {
     clock: usize,
     /// Variable manangers
     var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Val>>>>,
+    // Identifier - used for log messages
+    id: ContextId,
     /// The builder used to construct us
     builder: ContextBuilder<Val>,
 }
@@ -375,6 +418,7 @@ pub struct ContextBuilder<Val> {
     var_names: Option<Vec<VarName>>,
     input_streams: Option<Vec<OutputStream<Val>>>,
     history_length: Option<usize>,
+    id: Option<ContextId>,
 }
 
 impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
@@ -387,6 +431,7 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
             var_names: None,
             input_streams: None,
             history_length: None,
+            id: None,
         }
     }
 
@@ -449,6 +494,25 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
             );
         }
 
+        let id = self.id.unwrap_or_else(|| {
+            let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ContextId {
+                id,
+                parent_id: None,
+            }
+        });
+
+        let manager_ids: Vec<_> = var_managers
+            .borrow_mut()
+            .iter()
+            .map(|(var, manager)| (var.to_string(), manager.id.clone()))
+            .collect();
+
+        debug!(
+            "ContextBuilder: Building Context with id {id}, and var_managers with ids: {:?}",
+            manager_ids
+        );
+
         Context {
             executor,
             var_names,
@@ -456,7 +520,16 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
             clock,
             var_managers,
             builder,
+            id,
         }
+    }
+}
+
+impl<Val> ContextBuilder<Val> {
+    fn id(mut self, id: u16, parent_id: Option<u16>) -> Self {
+        let id = ContextId { id, parent_id };
+        self.id = Some(id);
+        self
     }
 }
 
@@ -482,7 +555,10 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
 
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
         if self.is_clock_started() {
-            panic!("Cannot request a stream after the clock has started");
+            panic!(
+                "Context {}: Cannot request a stream after the clock has started",
+                self.id
+            );
         }
 
         let mut var_managers = self.var_managers.borrow_mut();
@@ -498,11 +574,15 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
             .map(|var| self.var(var).unwrap())
             .collect();
 
+        let id_num = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let parent_id = self.id.id;
+
         // Recursively create a new context based on ourself
         self.builder
             .partial_clone()
             .input_streams(input_streams)
             .history_length(history_length)
+            .id(id_num, Some(parent_id))
             .build()
     }
 

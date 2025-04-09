@@ -590,19 +590,21 @@ pub fn lola_specification(s: &mut &str) -> Result<LOLASpecification> {
         var_decls,
         _: loop_ms_or_lb_or_lc,
     ))
-    .map(|(input_vars, output_vars, exprs)| LOLASpecification {
-        input_vars: input_vars.iter().map(|(name, _)| name.clone()).collect(),
-        output_vars: output_vars.iter().map(|(name, _)| name.clone()).collect(),
-        exprs: exprs.into_iter().collect(),
-        type_annotations: input_vars
-            .iter()
-            .chain(output_vars.iter())
-            .cloned()
-            .filter_map(|(name, typ)| match typ {
-                Some(typ) => Some((name, typ)),
-                None => None,
-            })
-            .collect(),
+    .map(|(input_vars, output_vars, exprs)| {
+        LOLASpecification::new(
+            input_vars.iter().map(|(name, _)| name.clone()).collect(),
+            output_vars.iter().map(|(name, _)| name.clone()).collect(),
+            exprs.into_iter().collect(),
+            input_vars
+                .iter()
+                .chain(output_vars.iter())
+                .cloned()
+                .filter_map(|(name, typ)| match typ {
+                    Some(typ) => Some((name, typ)),
+                    None => None,
+                })
+                .collect(),
+        )
     })
     .parse_next(s)
 }
@@ -862,10 +864,10 @@ mod tests {
             out w\n\
             z = x + y\n\
             w = dynamic(s)";
-        let eval_spec = LOLASpecification {
-            input_vars: vec!["x".into(), "y".into(), "s".into()],
-            output_vars: vec!["z".into(), "w".into()],
-            exprs: BTreeMap::from([
+        let eval_spec = LOLASpecification::new(
+            vec!["x".into(), "y".into(), "s".into()],
+            vec!["z".into(), "w".into()],
+            BTreeMap::from([
                 (
                     "z".into(),
                     SExpr::BinOp(
@@ -876,8 +878,8 @@ mod tests {
                 ),
                 ("w".into(), SExpr::Dynamic(Box::new(SExpr::Var("s".into())))),
             ]),
-            type_annotations: BTreeMap::new(),
-        };
+            BTreeMap::new(),
+        );
         assert_eq!(lola_specification(&mut (*input).into())?, eval_spec);
         Ok(())
     }

@@ -70,12 +70,12 @@ impl Localisable for LOLASpecification {
         info!("Old input vars: {:?}", input_vars);
         info!("New input vars: {:?}", new_input_vars);
 
-        LOLASpecification {
-            input_vars: new_input_vars,
+        LOLASpecification::new(
+            new_input_vars,
             output_vars,
             exprs,
-            type_annotations: self.type_annotations.clone(),
-        }
+            self.type_annotations.clone(),
+        )
     }
 }
 
@@ -97,54 +97,54 @@ mod tests {
 
     #[test]
     fn test_localise_specification_1() {
-        let spec = LOLASpecification {
-            input_vars: vec!["a".into(), "b".into()],
-            output_vars: vec!["c".into(), "d".into(), "e".into()],
-            exprs: vec![
+        let spec = LOLASpecification::new(
+            vec!["a".into(), "b".into()],
+            vec!["c".into(), "d".into(), "e".into()],
+            vec![
                 ("c".into(), SExpr::Var("a".into())),
                 ("d".into(), SExpr::Not(Box::new(SExpr::Var("a".into())))),
                 ("e".into(), SExpr::Not(Box::new(SExpr::Var("d".into())))),
             ]
             .into_iter()
             .collect(),
-            type_annotations: BTreeMap::new(),
-        };
+            BTreeMap::new(),
+        );
         let restricted_vars = vec!["c".into(), "e".into()];
         let localised_spec = spec.localise(&restricted_vars);
         assert_eq!(
             localised_spec,
-            LOLASpecification {
-                input_vars: vec!["a".into(), "d".into()],
-                output_vars: vec!["c".into(), "e".into()],
-                exprs: vec![
+            LOLASpecification::new(
+                vec!["a".into(), "d".into()],
+                vec!["c".into(), "e".into()],
+                vec![
                     ("c".into(), SExpr::Var("a".into())),
                     ("e".into(), SExpr::Not(Box::new(SExpr::Var("d".into())))),
                 ]
                 .into_iter()
                 .collect(),
-                type_annotations: BTreeMap::new(),
-            }
+                BTreeMap::new(),
+            )
         )
     }
 
     #[test]
     fn test_localise_specification_2() {
-        let spec = LOLASpecification {
-            input_vars: vec!["a".into()],
-            output_vars: vec!["i".into()],
-            exprs: vec![].into_iter().collect(),
-            type_annotations: BTreeMap::new(),
-        };
+        let spec = LOLASpecification::new(
+            vec!["a".into()],
+            vec!["i".into()],
+            vec![].into_iter().collect(),
+            BTreeMap::new(),
+        );
         let restricted_vars = vec![];
         let localised_spec = spec.localise(&restricted_vars);
         assert_eq!(
             localised_spec,
-            LOLASpecification {
-                input_vars: vec![],
-                output_vars: vec![],
-                exprs: vec![].into_iter().collect(),
-                type_annotations: BTreeMap::new(),
-            }
+            LOLASpecification::new(
+                vec![],
+                vec![],
+                vec![].into_iter().collect(),
+                BTreeMap::new(),
+            )
         )
     }
 
@@ -159,10 +159,10 @@ mod tests {
 
         assert_eq!(
             local_spec1,
-            LOLASpecification {
-                input_vars: vec!["x".into(), "y".into()],
-                output_vars: vec!["w".into()],
-                exprs: vec![(
+            LOLASpecification::new(
+                vec!["x".into(), "y".into()],
+                vec!["w".into()],
+                vec![(
                     "w".into(),
                     SExpr::BinOp(
                         Box::new(SExpr::Var("x".into())),
@@ -172,16 +172,16 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
-                type_annotations: BTreeMap::new(),
-            }
+                BTreeMap::new(),
+            )
         );
 
         assert_eq!(
             local_spec2,
-            LOLASpecification {
-                input_vars: vec!["z".into(), "w".into()],
-                output_vars: vec!["v".into()],
-                exprs: vec![(
+            LOLASpecification::new(
+                vec!["z".into(), "w".into()],
+                vec!["v".into()],
+                vec![(
                     "v".into(),
                     SExpr::BinOp(
                         Box::new(SExpr::Var("z".into())),
@@ -191,8 +191,8 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
-                type_annotations: BTreeMap::new(),
-            }
+                BTreeMap::new(),
+            )
         );
     }
 

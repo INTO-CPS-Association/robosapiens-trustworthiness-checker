@@ -300,25 +300,24 @@ pub fn dynamic<Ctx: StreamContext<Value>>(
 
     // Build an output stream for dynamic of x over the subcontext
     Box::pin(stream! {
-            // Store the previous value of the stream we are evaluating so we can
-            // check when it changes
-            struct PrevData {
-                // The previous property provided
-                eval_val: Value,
-                // The output stream for dynamic
-                eval_output_stream: OutputStream<Value>
-            }
-            let mut prev_data: Option<PrevData> = None;
-            while let Some(current) = eval_stream.next().await {
-                // If we have a previous value and it is the same as the current
-                // value or if the current value is unknown (not provided),
+        // Store the previous value of the stream we are evaluating so we can
+        // check when it changes
+        struct PrevData {
+            // The previous property provided
+            eval_val: Value,
+            // The output stream for dynamic
+            eval_output_stream: OutputStream<Value>
+        }
+        let mut prev_data: Option<PrevData> = None;
+        while let Some(current) = eval_stream.next().await {
+            // If we have a previous value and it is the same as the current
+            // value or if the current value is unknown (not provided),
             // continue using the existing stream as our output
             if let Some(prev_data) = &mut prev_data {
                 if prev_data.eval_val == current || current == Value::Unknown {
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
-                    debug!("advancing dynamic clock");
-                    subcontext.lazy_advance_clock().await;
+                    subcontext.advance_clock().await;
 
                     if let Some(eval_res) = prev_data.eval_output_stream.next().await {
                         yield eval_res;
@@ -331,16 +330,17 @@ pub fn dynamic<Ctx: StreamContext<Value>>(
             match current {
                 Value::Unknown => {
                     // Consume a sample from the subcontext but return Unknown (aka. Waiting)
-                    subcontext.lazy_advance_clock().await; // Currently must be lazy -- test on actual example files to replicate
+                    subcontext.advance_clock().await;
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
                     let expr = lola_expression.parse_next(&mut s.as_ref())
                         .expect("Invalid dynamic str");
+                    debug!("Dynamic evaluated to expression {:?}", expr);
                     let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, &subcontext);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
-                    subcontext.lazy_advance_clock().await;
+                    subcontext.advance_clock().await;
                     if let Some(eval_res) = eval_output_stream.next().await {
                         yield eval_res;
                     } else {
@@ -665,7 +665,6 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[ignore = "Bug with Ctx/dynamic where it does not use the correct value"]
     #[test(apply(smol_test))]
     async fn test_dynamic_with_start_unknown(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![

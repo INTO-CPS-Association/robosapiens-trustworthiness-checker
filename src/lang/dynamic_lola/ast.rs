@@ -239,6 +239,138 @@ pub struct LOLASpecification {
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
+impl LOLASpecification {
+    // NOTE: This is a hack that ensures that when we create subcontexts for usage in DUPs,
+    // the subcontexts do not refer to the lhs of assignments.
+    // I.e., if we have an assignment `z = dynamic(s)` then the subcontext provided for
+    // `dynamic(s)` does not allow access to `z`.
+    // This is necessary in order to allow the clock to advance correctly.
+    // This is an incomplete solution as it unnecessarily restricts the DUP `s = "w[-1]"`
+    // which should be legal.
+    //
+    // TODO: Get rid of this hack. What we need to do is:
+    // 1. Introduce dependency graphs as a general language feature that the contexts have access to
+    //    (have them as properties inside the Contexts)
+    // 2. When creating subcontexts, only allow variables that do not introduce
+    // zero-weight cycles.
+    //    2.5. Given the specification `y = dynamic(s); x = dynamic(s)`, this also needs to disallow
+    //    the `dynamic(s)` subcontext for `y` to access `x`, and disallow the
+    //    the `dynamic(s)` subcontext for `x` to access `y`.
+    // 3. Step 2. may require more information than just a dependency graph provides,
+    // as it might need information about subexpressions. E.g., something like
+    // `z = dynamic(s)` should disallow the context in `dynamic(s)` to access `z`,
+    // but something like `z = (dynamic(s))[-1]` should allow the subcontext of `dynamic(s)`
+    // to access `z`, because the subcontext is delayed by the SIndex.
+    // 3.5. We discussed whether this should be in statements, live in Context, etc. Might require
+    //   a lot of thought.
+    // 4. Profit - this hack is no longer needed and we have a more correct solution
+    fn fix_dynamic(
+        input_vars: &Vec<VarName>,
+        output_vars: &Vec<VarName>,
+        exprs: &BTreeMap<VarName, SExpr>,
+    ) -> BTreeMap<VarName, SExpr> {
+        // Helper function to do the changes...
+        fn traverse_expr(expr: SExpr, vars: &EcoVec<VarName>) -> SExpr {
+            match expr {
+                // Fixes:
+                SExpr::Dynamic(sexpr) => {
+                    SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), vars.clone())
+                }
+                SExpr::RestrictedDynamic(sexpr, eco_vec) => {
+                    // Cannot contain anything that is not inside `vars`
+                    let new_restricted = eco_vec
+                        .iter()
+                        .cloned()
+                        .filter(|var| vars.contains(var))
+                        .collect();
+                    SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), new_restricted)
+                }
+                // Terminators:
+                SExpr::Var(v) => SExpr::Var(v.clone()),
+                SExpr::Val(v) => SExpr::Val(v.clone()),
+                // Unary:
+                SExpr::When(sexpr) => SExpr::When(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::Not(sexpr) => SExpr::Not(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::SIndex(sexpr, i) => SExpr::SIndex(Box::new(traverse_expr(*sexpr, vars)), i),
+                SExpr::Sin(sexpr) => SExpr::Sin(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::Cos(sexpr) => SExpr::Cos(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::Tan(sexpr) => SExpr::Tan(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::LHead(sexpr) => SExpr::LHead(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::Defer(sexpr) => SExpr::Defer(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(traverse_expr(*sexpr, vars))),
+                // Binary:
+                SExpr::BinOp(sexpr, sexpr1, sbin_op) => SExpr::BinOp(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                    sbin_op.clone(),
+                ),
+                SExpr::LIndex(sexpr, sexpr1) => SExpr::LIndex(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                ),
+                SExpr::LAppend(sexpr, sexpr1) => SExpr::LAppend(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                ),
+                SExpr::LConcat(sexpr, sexpr1) => SExpr::LConcat(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                ),
+                SExpr::Update(sexpr, sexpr1) => SExpr::Update(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                ),
+                SExpr::Default(sexpr, sexpr1) => SExpr::Default(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                ),
+                // Ternary:
+                SExpr::If(sexpr, sexpr1, sexpr2) => SExpr::If(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr2, vars)),
+                ),
+                // Collection
+                SExpr::List(sexprs) => SExpr::List(
+                    sexprs
+                        .iter()
+                        .cloned()
+                        .map(|sexpr| traverse_expr(sexpr, vars))
+                        .collect(),
+                ),
+            }
+        }
+        let vars: EcoVec<VarName> = input_vars
+            .iter()
+            .cloned()
+            .chain(output_vars.iter().cloned())
+            .collect();
+        exprs
+            .iter()
+            .map(|(name, expr)| {
+                let vars: EcoVec<VarName> = vars.iter().cloned().filter(|n| name != n).collect();
+                (name.clone(), traverse_expr(expr.clone(), &vars))
+            })
+            .collect()
+    }
+
+    pub fn new(
+        input_vars: Vec<VarName>,
+        output_vars: Vec<VarName>,
+        exprs: BTreeMap<VarName, SExpr>,
+        type_annotations: BTreeMap<VarName, StreamType>,
+    ) -> Self {
+        let exprs = Self::fix_dynamic(&input_vars, &output_vars, &exprs);
+        LOLASpecification {
+            input_vars,
+            output_vars,
+            exprs,
+            type_annotations,
+        }
+    }
+}
+
 impl Debug for LOLASpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // Format the expressions map ordered lexicographically by key
