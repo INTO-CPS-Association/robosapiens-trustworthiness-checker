@@ -1,14 +1,15 @@
 // Run with: cargo run -- examples/distributed/mqtt_dist_echo.lola --input-map-mqtt-topics RVData
 in RVData
 out echo
-out timestamp
 out sourceRobotId
-out sourceRobotPose
 out nearbyRobotIds
 out nearbyRobotPoses
+out sourceRobotPose
+out timestamp
 echo = RVData
-timestamp = List.get(RVData, 0)
-sourceRobotId = List.get(RVData, 1)
-sourceRobotPose = List.get(RVData, 2)
-nearbyRobotIds = List.get(RVData, 3)
-nearbyRobotPoses = List.get(RVData, 4)
+// Output is alphabetically sorted
+nearbyRobotIds = List.get(List.get(RVData, 0), 1)
+nearbyRobotPoses = List.get(List.get(RVData, 1), 1)
+sourceRobotId = List.get(List.get(RVData, 2), 1)
+sourceRobotPose = List.get(List.get(RVData, 3), 1)
+timestamp = List.get(List.get(RVData, 4), 1)

@@ -1,13 +1,11 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 // Fork of the MQTTInputProvider that accepts Values in a key-value format
-// but discards the key information for use in the runtimes.
-// The idea is to generalize this, but for now it is hardcoded to the distributed RV paper format
 
-use ecow::{EcoString, EcoVec, eco_vec};
+use ecow::eco_vec;
 use futures::StreamExt;
 use paho_mqtt as mqtt;
-use serde::Deserialize;
+use serde_json::Value as JValue;
 use smol::LocalExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
@@ -23,88 +21,35 @@ use crate::{InputProvider, OutputStream, Value, core::VarName};
 
 const QOS: i32 = 1;
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Point {
-    x: f64,
-    y: f64,
-    z: f64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Quaternion {
-    x: f64,
-    y: f64,
-    z: f64,
-    w: f64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Pose {
-    position: Point,
-    orientation: Quaternion,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct MessageFormat {
-    timestamp: f64,
-    source_robot_id: EcoString,
-    source_robot_pose: Pose,
-    nearby_robot_ids: EcoVec<EcoString>,
-    nearby_robot_poses: EcoVec<Pose>,
-}
-
 trait ToValue {
     fn to_value(self) -> Value;
 }
 
-impl ToValue for f64 {
+impl ToValue for JValue {
     fn to_value(self) -> Value {
-        Value::Float(self as f32)
-    }
-}
-
-impl ToValue for EcoString {
-    fn to_value(self) -> Value {
-        Value::Str(self)
-    }
-}
-
-impl ToValue for Point {
-    fn to_value(self) -> Value {
-        eco_vec![self.x, self.y, self.z].to_value()
-    }
-}
-
-impl ToValue for Quaternion {
-    fn to_value(self) -> Value {
-        eco_vec![self.x, self.y, self.z, self.w].to_value()
-    }
-}
-
-impl ToValue for Pose {
-    fn to_value(self) -> Value {
-        Value::List(eco_vec![
-            self.position.to_value(),
-            self.orientation.to_value()
-        ])
-    }
-}
-
-impl<T: ToValue + Clone> ToValue for EcoVec<T> {
-    fn to_value(self) -> Value {
-        Value::List(self.iter().map(|v| v.clone().to_value()).collect())
-    }
-}
-
-impl ToValue for MessageFormat {
-    fn to_value(self) -> Value {
-        Value::List(eco_vec![
-            self.timestamp.to_value(),
-            self.source_robot_id.to_value(),
-            self.source_robot_pose.to_value(),
-            self.nearby_robot_ids.to_value(),
-            self.nearby_robot_poses.to_value()
-        ])
+        match self {
+            JValue::Null => Value::Unit,
+            JValue::Bool(val) => Value::Bool(val),
+            JValue::Number(num) => {
+                if num.is_i64() {
+                    Value::Int(num.as_i64().unwrap())
+                } else if num.is_u64() {
+                    panic!("Number too large")
+                } else {
+                    // Guaranteed to be f64 at this point
+                    Value::Float(num.as_f64().unwrap() as f32)
+                }
+            }
+            JValue::String(val) => Value::Str(val.into()),
+            JValue::Array(vals) => Value::List(vals.iter().map(|v| v.clone().to_value()).collect()),
+            // Objects currently represented of list of key-value pairs. Since we don't have pairs
+            // it becomes Lists of 2-value Lists
+            JValue::Object(vals) => Value::List(
+                vals.iter()
+                    .map(|(k, v)| Value::List(eco_vec![k.clone().into(), v.clone().to_value()]))
+                    .collect(),
+            ),
+        }
     }
 }
 
@@ -204,15 +149,15 @@ impl MapMQTTInputProvider {
                 while let Some(msg) = stream.next().await {
                     // Process the message
                     debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-                    let message_value = serde_json::from_str::<MessageFormat>(&msg.payload_str())
-                        .expect(
-                            format!(
-                                "Failed to parse value {:?} sent from MQTT",
-                                msg.payload_str()
-                            )
-                            .as_str(),
-                        );
-                    let value = message_value.to_value();
+                    let jvalue = serde_json::from_str::<JValue>(&msg.payload_str()).expect(
+                        format!(
+                            "Failed to parse value {:?} sent from MQTT",
+                            msg.payload_str()
+                        )
+                        .as_str(),
+                    );
+                    info!("JValue: {:?}", jvalue);
+                    let value = jvalue.to_value();
                     if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
                         sender
                             .send(value)
