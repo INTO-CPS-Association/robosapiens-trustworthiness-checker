@@ -140,8 +140,7 @@ pub fn check(
         .map(|path| {
             constraints
                 .iter()
-                .map(|constraint| check_path_constraint(&path, node_labels, &constraint))
-                .all(|b| b)
+                .all(|constraint| check_path_constraint(&path, node_labels, constraint))
         })
         .collect()
 }
@@ -164,10 +163,10 @@ mod tests {
         let e = graph.add_node("E".into());
         let f = graph.add_node("F".into());
 
-        graph.extend_with_edges(&[(a, b), (b, c), (c, d), (d, e), (e, f)]);
+        graph.extend_with_edges([(a, b), (b, c), (c, d), (d, e), (e, f)]);
 
         #[allow(unused)]
-        let var_names = vec!["x".to_string(), "y".to_string(), "z".to_string()];
+        let var_names = ["x".to_string(), "y".to_string(), "z".to_string()];
 
         let dist_graph = GenericDistributionGraph {
             graph,

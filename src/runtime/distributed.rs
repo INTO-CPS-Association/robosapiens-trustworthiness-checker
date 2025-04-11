@@ -1,11 +1,10 @@
 use std::rc::Rc;
 
 use async_trait::async_trait;
-use petgraph::visit::GraphRef;
 use smol::{LocalExecutor, stream::repeat};
 
 use crate::{
-    Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext,
+    Monitor, MonitoringSemantics, Specification, StreamContext,
     core::{AbstractContextBuilder, AbstractMonitorBuilder, OutputHandler, StreamData},
     dep_manage::interface::DependencyManager,
     distributed::distribution_graphs::LabelledDistributionGraph,

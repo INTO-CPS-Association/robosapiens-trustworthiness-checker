@@ -24,7 +24,7 @@ pub struct DepGraph {
 
 impl DepGraph {
     #[allow(dead_code)]
-    pub fn as_dot_graph<'a>(&'a self) -> Dot<'a, &'a GraphType> {
+    pub fn as_dot_graph(&self) -> Dot<'_, &GraphType> {
         self.as_dot_graph_with_config(&[])
     }
 
@@ -149,7 +149,7 @@ impl DepGraph {
                 | SExpr::LTail(sexpr)
                 | SExpr::IsDefined(sexpr)
                 | SExpr::When(sexpr)
-                | SExpr::Defer(sexpr) 
+                | SExpr::Defer(sexpr)
                 | SExpr::Sin(sexpr)
                 | SExpr::Cos(sexpr)
                 | SExpr::Tan(sexpr) => deps_impl(sexpr, steps, map, current_node),
@@ -173,8 +173,8 @@ impl DepGraph {
 
     // Traverses the sexpr and returns a map of its dependencies to other variables
     pub fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
-        let graph = DepGraph::sexpr_dependencies_impl(sexpr, &root_name);
-        graph
+        
+        DepGraph::sexpr_dependencies_impl(sexpr, root_name)
     }
 
     #[allow(dead_code)]
@@ -237,12 +237,12 @@ impl DependencyResolver for DepGraph {
     }
 
     fn add_dependency(&mut self, var: &VarName, sexpr: &SExpr) {
-        let expr_deps = DepGraph::sexpr_dependencies(sexpr, &var);
+        let expr_deps = DepGraph::sexpr_dependencies(sexpr, var);
         self.merge_graphs(&expr_deps);
     }
 
     fn remove_dependency(&mut self, name: &VarName, sexpr: &SExpr) {
-        let expr_deps = DepGraph::sexpr_dependencies(sexpr, &name);
+        let expr_deps = DepGraph::sexpr_dependencies(sexpr, name);
         self.diff_graphs(&expr_deps);
     }
 
@@ -717,7 +717,7 @@ mod tests {
             let is_cyclic = is_cyclic_directed(&depgraph.graph);
             // For boolean expressions, the graph should be productive if
             // and only if it is acyclic, since there are no time indexes
-            assert!(depgraph.is_productive() == !is_cyclic);
+            assert!(depgraph.is_productive() != is_cyclic);
         }
 
         #[test]

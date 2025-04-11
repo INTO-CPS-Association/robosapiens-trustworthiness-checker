@@ -51,7 +51,7 @@ fn node_name(s: &mut &str) -> Result<NodeName> {
 
 // Same as `val` but returns SExpr::Val
 fn sval(s: &mut &str) -> Result<SExpr> {
-    val.map(|v| SExpr::Val(v)).parse_next(s)
+    val.map(SExpr::Val).parse_next(s)
 }
 
 fn sindex(s: &mut &str) -> Result<SExpr> {
@@ -434,7 +434,18 @@ fn atom(s: &mut &str) -> Result<SExpr> {
                 restricted_dynamic,
             )),
             // Group 2
-            alt((dynamic, sval, ifelse, defer, update, monitored_at, dist, sin, cos, tan)),
+            alt((
+                dynamic,
+                sval,
+                ifelse,
+                defer,
+                update,
+                monitored_at,
+                dist,
+                sin,
+                cos,
+                tan,
+            )),
             // Group 3
             alt((default, when, is_defined, sexpr_list, var, paren)),
         )),
@@ -543,11 +554,11 @@ fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<S
             None => Box::new(|i: &mut &str| atom.parse_next(i)),
         };
         let lit = current_op.get_lit();
-        let res = separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
+        
+        separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
             SExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
         })
-        .parse_next(s);
-        res
+        .parse_next(s)
     }
 }
 
@@ -650,10 +661,7 @@ pub fn lola_specification(s: &mut &str) -> Result<LOLASpecification> {
                 .iter()
                 .chain(output_vars.iter())
                 .cloned()
-                .filter_map(|(name, typ)| match typ {
-                    Some(typ) => Some((name, typ)),
-                    None => None,
-                })
+                .filter_map(|(name, typ)| typ.map(|typ| (name, typ)))
                 .collect(),
         )
     })

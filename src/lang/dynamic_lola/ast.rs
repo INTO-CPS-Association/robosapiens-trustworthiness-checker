@@ -299,9 +299,7 @@ impl LOLASpecification {
                 SExpr::RestrictedDynamic(sexpr, eco_vec) => {
                     // Cannot contain anything that is not inside `vars`
                     let new_restricted = eco_vec
-                        .iter()
-                        .cloned()
-                        .filter(|var| vars.contains(var))
+                        .iter().filter(|&var| vars.contains(var)).cloned()
                         .collect();
                     SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), new_restricted)
                 }
@@ -371,7 +369,7 @@ impl LOLASpecification {
         exprs
             .iter()
             .map(|(name, expr)| {
-                let vars: EcoVec<VarName> = vars.iter().cloned().filter(|n| name != n).collect();
+                let vars: EcoVec<VarName> = vars.iter().filter(|&n| name != n).cloned().collect();
                 (name.clone(), traverse_expr(expr.clone(), &vars))
             })
             .collect()
@@ -597,7 +595,7 @@ mod tests {
             let valid_inputs: Vec<VarName> = vec!["a".into(), "b".into()];
             let inputs = e.inputs();
             for input in inputs.iter() {
-                assert!(valid_inputs.contains(&input));
+                assert!(valid_inputs.contains(input));
             }
         }
     }

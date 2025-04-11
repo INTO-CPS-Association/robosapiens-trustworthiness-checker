@@ -36,7 +36,7 @@ use crate::dep_manage::interface::DependencyManager;
 // trade-off given how significant this is for symbolic computations and
 // how unwieldy any solution without global sharing is.
 thread_local! {
-    static VAR_LIST: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static VAR_LIST: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 // Anything inside a stream should be clonable in O(1) time in order for the

@@ -110,7 +110,7 @@ pub mod generation {
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(_args: ()) -> Self::Strategy {
-            "[a-z]{1,10}".prop_map(|s| NodeName(s)).boxed()
+            "[a-z]{1,10}".prop_map(NodeName).boxed()
         }
     }
 
@@ -276,7 +276,7 @@ mod tests {
     proptest! {
         #[test]
         fn test_prop_get_node_index_by_name_prop(node_index in 0usize..10usize, dist_graph in generation::arb_conc_distribution_graph()) {
-            if let Some(_) = dist_graph.graph.node_indices().find(|&node| node.index() == node_index) {
+            if dist_graph.graph.node_indices().any(|node| node.index() == node_index) {
                 let node_name_ref = &dist_graph.graph[NodeIndex::new(node_index)];
                 let indexed_node_index = dist_graph.get_node_index_by_name(node_name_ref).unwrap();
                 prop_assert_eq!(dist_graph.graph[indexed_node_index].clone(), node_name_ref.clone());
@@ -285,7 +285,7 @@ mod tests {
 
         #[test]
         fn test_prop_get_node_index_by_name_labelled_prop(node_index in 0usize..10usize, dist_graph in generation::arb_conc_distribution_graph()) {
-            if let Some(_) = dist_graph.graph.node_indices().find(|&node| node.index() == node_index) {
+            if dist_graph.graph.node_indices().any(|node| node.index() == node_index) {
                 let node_name_ref = &dist_graph.graph[NodeIndex::new(node_index)];
                 let indexed_node_index = dist_graph.get_node_index_by_name(node_name_ref).unwrap();
                 prop_assert_eq!(dist_graph.graph[indexed_node_index].clone(), node_name_ref.clone());
@@ -294,7 +294,7 @@ mod tests {
 
         #[test]
         fn test_prop_monitors_at_node(node_index in 0usize..10usize, labelled_dist_graph in generation::arb_labelled_conc_distribution_graph()) {
-            if let Some(_) = labelled_dist_graph.dist_graph.graph.node_indices().find(|&node| node.index() == node_index) {
+            if labelled_dist_graph.dist_graph.graph.node_indices().any(|node| node.index() == node_index) {
                 let node_name_ref = &labelled_dist_graph.dist_graph.graph[NodeIndex::new(node_index)];
                 let indexed_node_index = labelled_dist_graph.get_node_index_by_name(node_name_ref).unwrap();
                 prop_assert_eq!(labelled_dist_graph.monitors_at_node(indexed_node_index), Some(&labelled_dist_graph.node_labels[&indexed_node_index]));

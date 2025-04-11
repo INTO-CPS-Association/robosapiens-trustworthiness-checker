@@ -319,7 +319,7 @@ mod tests {
             let valid_inputs: Vec<VarName> = vec!["a".into(), "b".into()];
             let inputs = e.inputs();
             for input in inputs.iter() {
-                assert!(valid_inputs.contains(&input));
+                assert!(valid_inputs.contains(input));
             }
         }
     }

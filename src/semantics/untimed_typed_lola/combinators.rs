@@ -97,7 +97,7 @@ pub fn if_stm<X: StreamData>(
 // x.next()
 pub fn sindex<X: StreamData>(x: OutputStream<X>, i: isize, c: X) -> OutputStream<X> {
     let c = c.clone();
-    let n = i.abs() as usize;
+    let n = i.unsigned_abs();
     let cs = stream::repeat(c).take(n);
     if i < 0 {
         Box::pin(cs.chain(x)) as LocalBoxStream<'static, X>

@@ -58,6 +58,7 @@ pub type SExprStream = SyncStream<SExprAbs>;
 
 #[derive(Debug, Clone)]
 // A ConstraintStore is the environment for the streams
+#[derive(Default)]
 pub struct ConstraintStore {
     pub input_streams: ValStream,
     pub output_exprs: BTreeMap<VarName, SExpr>,
@@ -73,16 +74,6 @@ pub fn model_constraints(model: LOLASpecification) -> ConstraintStore {
     constraints
 }
 
-impl Default for ConstraintStore {
-    fn default() -> Self {
-        ConstraintStore {
-            input_streams: BTreeMap::new(),
-            output_exprs: BTreeMap::new(),
-            outputs_resolved: BTreeMap::new(),
-            outputs_unresolved: BTreeMap::new(),
-        }
-    }
-}
 
 impl ConstraintStore {
     // Looks up the variable name inside the map. Returns the value at the given index if the var and value exists.
@@ -232,7 +223,7 @@ impl SExpr {
                 } else {
                     SExprAbs::SIndex(
                         Box::new(expr.to_absolute(base_time)),
-                        absolute_time.abs() as usize,
+                        absolute_time.unsigned_abs(),
                     )
                 }
             }
@@ -305,13 +296,13 @@ impl Simplifiable for SExprAbs {
             SExprAbs::Var(_, var_name) => {
                 // Check if we have a value inside resolved or input values
                 if let Some(v) = store
-                    .get_from_outputs_resolved(&var_name, &base_time)
-                    .or_else(|| store.get_from_input_streams(&var_name, &base_time))
+                    .get_from_outputs_resolved(var_name, &base_time)
+                    .or_else(|| store.get_from_input_streams(var_name, &base_time))
                 {
                     return Resolved(v.clone());
                 }
                 // Otherwise it must be inside unresolved
-                if let Some(expr) = store.get_from_outputs_unresolved(&var_name, &base_time) {
+                if let Some(expr) = store.get_from_outputs_unresolved(var_name, &base_time) {
                     Unresolved(Box::new(expr.clone()))
                 } else {
                     Resolved(Value::Unknown)
@@ -319,7 +310,7 @@ impl Simplifiable for SExprAbs {
             }
             SExprAbs::SIndex(expr, idx_time) => {
                 // Should not be negative at this stage since it was indexed...
-                let uidx_time = *idx_time as usize;
+                let uidx_time = { *idx_time };
                 if uidx_time <= base_time {
                     expr.simplify(uidx_time, store, var, deps)
                 } else {
@@ -379,8 +370,8 @@ impl SExpr {
                 // NOTE: Might return false if the Var simply hasn't been resolved yet
                 // (i.e. it is in `outputs_unresolved`)
                 let val = store
-                    .get_from_outputs_resolved(&name, &base_time)
-                    .or_else(|| store.get_from_input_streams(&name, &base_time));
+                    .get_from_outputs_resolved(name, &base_time)
+                    .or_else(|| store.get_from_input_streams(name, &base_time));
                 val.is_some() && val != Some(&Value::Unknown)
             }
             SExpr::SIndex(expr, rel_time) => {
@@ -564,7 +555,7 @@ impl Simplifiable for SExpr {
                 }
             }
             SExpr::Default(sexpr, default) => match sexpr.simplify(base_time, store, var, deps) {
-                Resolved(v) if v == Value::Unknown => default.simplify(base_time, store, var, deps),
+                Resolved(Value::Unknown) => default.simplify(base_time, store, var, deps),
                 Resolved(v) => Resolved(v),
                 Unresolved(sexpr) => Unresolved(Box::new(SExpr::Default(sexpr, default.clone()))),
             },

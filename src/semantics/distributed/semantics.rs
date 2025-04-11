@@ -1,7 +1,6 @@
 use crate::SExpr;
 use crate::core::Value;
 use crate::core::{MonitoringSemantics, OutputStream};
-use crate::lang::dist_lang::ast::DistSExpr;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_untyped_lola::combinators as mc;

@@ -16,12 +16,12 @@ pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)].into_iter()))
+        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)]))
             as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)].into_iter()))
+        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)]))
             as OutputStream<Value>,
     );
     input_streams
@@ -32,18 +32,18 @@ pub fn input_streams2() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)].into_iter()))
+        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)]))
             as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)].into_iter()))
+        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)]))
             as OutputStream<Value>,
     );
     input_streams.insert(
         "s".into(),
         Box::pin(stream::iter(
-            vec![Value::Str("x+y".into()), Value::Str("x+y".into())].into_iter(),
+            vec![Value::Str("x+y".into()), Value::Str("x+y".into())],
         )) as OutputStream<Value>,
     );
     input_streams
@@ -54,12 +54,12 @@ pub fn input_streams3() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)].into_iter()))
+        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)]))
             as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)].into_iter())),
+        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)])),
     );
     input_streams
 }
@@ -70,13 +70,13 @@ pub fn input_streams4() -> BTreeMap<VarName, OutputStream<Value>> {
     input_streams.insert(
         "x".into(),
         Box::pin(stream::iter(
-            vec![Value::Str("a".into()), Value::Str("c".into())].into_iter(),
+            vec![Value::Str("a".into()), Value::Str("c".into())],
         )) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
         Box::pin(stream::iter(
-            vec![Value::Str("b".into()), Value::Str("d".into())].into_iter(),
+            vec![Value::Str("b".into()), Value::Str("d".into())],
         )),
     );
     input_streams
@@ -88,13 +88,13 @@ pub fn input_streams5() -> BTreeMap<VarName, OutputStream<Value>> {
     input_streams.insert(
         "x".into(),
         Box::pin(stream::iter(
-            vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)].into_iter(),
+            vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
         )) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
         Box::pin(stream::iter(
-            vec![Value::Bool(true), Value::Bool(true), Value::Bool(false)].into_iter(),
+            vec![Value::Bool(true), Value::Bool(true), Value::Bool(false)],
         )),
     );
     input_streams
@@ -106,13 +106,13 @@ pub fn input_streams_float() -> BTreeMap<VarName, OutputStream<Value>> {
     input_streams.insert(
         "x".into(),
         Box::pin(stream::iter(
-            vec![Value::Float(1.3), Value::Float(3.4)].into_iter(),
+            vec![Value::Float(1.3), Value::Float(3.4)],
         )) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
         Box::pin(stream::iter(
-            vec![Value::Float(2.4), Value::Float(4.3)].into_iter(),
+            vec![Value::Float(2.4), Value::Float(4.3)],
         )) as OutputStream<Value>,
     );
     input_streams
@@ -336,7 +336,7 @@ pub fn input_streams_defer_1() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 15
     input_streams.insert(
         "x".into(),
-        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i)))) as OutputStream<Value>,
+        Box::pin(futures::stream::iter((0..15).map(Value::Int))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -361,7 +361,7 @@ pub fn input_streams_defer_2() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 15
     input_streams.insert(
         "x".into(),
-        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i)))) as OutputStream<Value>,
+        Box::pin(futures::stream::iter((0..15).map(Value::Int))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -386,7 +386,7 @@ pub fn input_streams_defer_3() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 15
     input_streams.insert(
         "x".into(),
-        Box::pin(futures::stream::iter((0..15).map(|i| Value::Int(i)))) as OutputStream<Value>,
+        Box::pin(futures::stream::iter((0..15).map(Value::Int))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -412,7 +412,7 @@ pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 5
     input_streams.insert(
         "x".into(),
-        Box::pin(futures::stream::iter((0..5).map(|i| Value::Int(i)))) as OutputStream<Value>,
+        Box::pin(futures::stream::iter((0..5).map(Value::Int))) as OutputStream<Value>,
     );
 
     // Create e stream with the defer expression
@@ -463,13 +463,13 @@ pub fn input_streams_indexing() -> impl InputProvider<Val = Value> {
     // Create x stream with values 1 through 6
     input_streams.insert(
         "x".into(),
-        Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i)))) as OutputStream<Value>,
+        Box::pin(futures::stream::iter((0..6).map(Value::Int))) as OutputStream<Value>,
     );
 
     // Create x stream with values 1 through 6
     input_streams.insert(
         "y".into(),
-        Box::pin(futures::stream::iter((0..6).map(|i| Value::Int(i)))) as OutputStream<Value>,
+        Box::pin(futures::stream::iter((0..6).map(Value::Int))) as OutputStream<Value>,
     );
 
     input_streams

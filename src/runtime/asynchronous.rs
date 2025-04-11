@@ -136,7 +136,7 @@ impl<V: StreamData> VarManager<V> {
         let var_stage_ref = self.var_stage.clone();
         let outstanding_sub_requests_ref = self.outstanding_sub_requests.clone();
         let var = self.var.clone();
-        let id = self.id.clone();
+        let id = self.id;
 
         debug!(?var, "VarManager {id}: Subscribing to variable");
 
@@ -177,7 +177,7 @@ impl<V: StreamData> VarManager<V> {
                     );
                 }
 
-                let res = if current_var_stage == VarStage::Closed
+                if current_var_stage == VarStage::Closed
                     && subscribers_ref.borrow().len() == 1
                 {
                     debug!("VarManager {id}: Directly sending stream to single subscriber");
@@ -217,7 +217,7 @@ impl<V: StreamData> VarManager<V> {
                 };
                 *outstanding_sub_requests_ref.borrow_mut() -= 1;
 
-                res
+                
             })
             .detach();
 
@@ -277,7 +277,7 @@ impl<V: StreamData> VarManager<V> {
                     let mut to_delete = vec![];
 
                     for (i, child_sender) in subscribers_ref.borrow().iter().enumerate() {
-                        if let Err(_) = child_sender.send(data.clone()).await {
+                        if child_sender.send(data.clone()).await.is_err() {
                             info!(
                                 "VarManager {id}: Stopping distributing to receiver since it has been dropped"
                             );
@@ -446,12 +446,12 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
     }
 
     fn history_length(mut self, history_length: usize) -> Self {
-        self.history_length = Some(history_length.into());
+        self.history_length = Some(history_length);
         self
     }
 
     fn input_streams(mut self, streams: Vec<OutputStream<Self::Val>>) -> Self {
-        self.input_streams = Some(streams.into());
+        self.input_streams = Some(streams);
         self
     }
 
@@ -505,7 +505,7 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
         let manager_ids: Vec<_> = var_managers
             .borrow_mut()
             .iter()
-            .map(|(var, manager)| (var.to_string(), manager.id.clone()))
+            .map(|(var, manager)| (var.to_string(), manager.id))
             .collect();
 
         debug!(
@@ -778,8 +778,8 @@ impl<
             .collect();
 
         let input_streams = input_vars.iter().map(|var| {
-            let stream = input_streams.input_stream(var).unwrap();
-            stream
+            
+            input_streams.input_stream(var).unwrap()
         });
 
         // Create deferred streams based on each of the output variables
@@ -792,13 +792,13 @@ impl<
         let output_txs: BTreeMap<_, _> = output_vars
             .iter()
             .cloned()
-            .zip(output_txs.into_iter())
+            .zip(output_txs)
             .collect();
         let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
 
         // Combine the input and output streams into a single map
         let streams: Vec<OutputStream<Val>> =
-            input_streams.chain(output_streams.into_iter()).collect();
+            input_streams.chain(output_streams).collect();
 
         let mut context = context_builder
             .executor(executor.clone())
@@ -812,20 +812,16 @@ impl<
             .output_vars()
             .iter()
             .map(|var| {
-                context.var(var).expect(
-                    format!("Failed to find expression for var {}", var.name().as_str()).as_str(),
-                )
+                context.var(var).unwrap_or_else(|| panic!("Failed to find expression for var {}", var.name().as_str()))
             })
             .collect();
 
         // Send outputs computed based on the context to the
         // output handler
         for (var, tx) in output_txs {
-            let expr = model.var_expr(&var).expect(
-                format!("Failed to find expression for var {}", var.name().as_str()).as_str(),
-            );
+            let expr = model.var_expr(&var).unwrap_or_else(|| panic!("Failed to find expression for var {}", var.name().as_str()));
             let stream = S::to_async_stream(expr, &context);
-            if let Err(_) = tx.send(stream) {
+            if tx.send(stream).is_err() {
                 warn!(?var, "Failed to send stream for var to requester");
             }
         }

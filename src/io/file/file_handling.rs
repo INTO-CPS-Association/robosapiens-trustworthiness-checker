@@ -37,9 +37,9 @@ pub async fn parse_file<O: Clone + Debug>(
 ) -> Result<O, Box<dyn Error>> {
     let contents = smol::fs::read_to_string(file).await?;
     debug!(name: "Parsing file", 
-        contents=?parser.parse_next(&mut contents.as_str().into()).unwrap());
+        contents=?parser.parse_next(&mut contents.as_str()).unwrap());
     parser
-        .parse(contents.as_str().into())
+        .parse(contents.as_str())
         .map_err(|e| Box::new(FileParseError::new(e.to_string())) as Box<dyn Error>)
 }
 

@@ -9,7 +9,7 @@ fn input_file_data_iter(
     key: VarName,
 ) -> impl Iterator<Item = Value> + 'static {
     let keys = data.keys();
-    let max_key = keys.max().unwrap_or(&0).clone();
+    let max_key = *keys.max().unwrap_or(&0);
     (0..=max_key).map(move |time| match data.get(&time) {
         Some(data_for_time) => match data_for_time.get(&key.clone()) {
             Some(value) => value.clone(),

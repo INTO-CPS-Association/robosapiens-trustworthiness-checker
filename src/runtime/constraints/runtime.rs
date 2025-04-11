@@ -58,7 +58,7 @@ impl ConstraintBasedRuntime {
             self.store
                 .input_streams
                 .entry(name.clone())
-                .or_insert(Vec::new())
+                .or_default()
                 .push((self.time, val.clone()));
         }
 
@@ -95,7 +95,7 @@ impl ConstraintBasedRuntime {
             self.store
                 .outputs_unresolved
                 .entry(name.clone())
-                .or_insert(Vec::new())
+                .or_default()
                 .push((self.time, expr.to_absolute(self.time)));
         }
     }
@@ -115,13 +115,13 @@ impl ConstraintBasedRuntime {
                             self.store
                                 .outputs_resolved
                                 .entry(name.clone())
-                                .or_insert(Vec::new())
+                                .or_default()
                                 .push((*idx_time, v.clone()));
                         }
                         SimplifyResult::Unresolved(e) => {
                             new_unresolved
                                 .entry(name.clone())
-                                .or_insert(Vec::new())
+                                .or_default()
                                 .push((*idx_time, *e));
                         }
                     }
@@ -145,9 +145,7 @@ impl ConstraintBasedRuntime {
                 // Modify the collection in place
                 values.retain(|(time, _)| {
                     longest_dep
-                        .checked_add(*time)
-                        // Overflow means that data for this var should always be kept - hence the true
-                        .map_or(true, |t| t >= self.time)
+                        .checked_add(*time).is_none_or(|t| t >= self.time)
                 });
             }
         }

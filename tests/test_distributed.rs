@@ -2,11 +2,20 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use macro_rules_attribute::apply;
 use petgraph::graph::DiGraph;
-use smol::{stream::{self, StreamExt}, LocalExecutor};
+use smol::{
+    LocalExecutor,
+    stream::{self, StreamExt},
+};
 use smol_macros::test as smol_test;
 use test_log::test;
 use trustworthiness_checker::{
-    core::AbstractMonitorBuilder, distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph}, io::{mqtt::output_handler, testing::ManualOutputHandler}, lola_specification, runtime::distributed::{DistAsyncMonitorBuilder, DistributedMonitorRunner}, semantics::{distributed::semantics::DistributedSemantics, UntimedLolaSemantics}, Monitor, MonitoringSemantics, OutputStream, Value
+    Monitor, OutputStream, Value,
+    core::AbstractMonitorBuilder,
+    distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
+    io::testing::ManualOutputHandler,
+    lola_specification,
+    runtime::distributed::DistAsyncMonitorBuilder,
+    semantics::distributed::semantics::DistributedSemantics,
 };
 use winnow::Parser;
 
@@ -14,9 +23,7 @@ use winnow::Parser;
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     // Just a little test to check that we can do our tests... :-)
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-    let input_handler = BTreeMap::from([
-        ("x".into(), x),
-    ]);
+    let input_handler = BTreeMap::from([("x".into(), x)]);
 
     let mut graph = DiGraph::new();
     let a = graph.add_node("A".into());

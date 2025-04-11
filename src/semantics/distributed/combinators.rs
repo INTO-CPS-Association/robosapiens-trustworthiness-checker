@@ -102,7 +102,7 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
     type Builder = DistributedContextBuilder<Val>;
 
     fn var(&self, x: &VarName) -> Option<OutputStream<Val>> {
-        self.ctx.var(&x)
+        self.ctx.var(x)
     }
 
     fn subcontext(&self, history_length: usize) -> Self {

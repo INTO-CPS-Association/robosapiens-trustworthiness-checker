@@ -72,7 +72,7 @@ fn var(s: &mut &str) -> Result<DistConstraintBody> {
 
 // Same as `val` but returns dist_constraint_body::Val
 fn sval(s: &mut &str) -> Result<DistConstraintBody> {
-    val.map(|v| DistConstraintBody::Val(v)).parse_next(s)
+    val.map(DistConstraintBody::Val).parse_next(s)
 }
 
 fn sindex(s: &mut &str) -> Result<DistConstraintBody> {
@@ -447,11 +447,11 @@ fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<D
                 None => Box::new(|i: &mut &str| atom.parse_next(i)),
             };
         let lit = current_op.get_lit();
-        let res = separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
+        
+        separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
             DistConstraintBody::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
         })
-        .parse_next(s);
-        res
+        .parse_next(s)
     }
 }
 

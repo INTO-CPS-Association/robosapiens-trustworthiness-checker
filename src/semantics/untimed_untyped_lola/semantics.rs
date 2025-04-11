@@ -109,8 +109,12 @@ where
                 let lst = Self::to_async_stream(*lst, ctx);
                 mc::ltail(lst)
             }
-            SExpr::MonitoredAt(_, _) => unimplemented!("Function monitored_at only supported in distributed semantics"),
-            SExpr::Dist(_, _) => unimplemented!("Function dist only supported in distributed semantics"),
+            SExpr::MonitoredAt(_, _) => {
+                unimplemented!("Function monitored_at only supported in distributed semantics")
+            }
+            SExpr::Dist(_, _) => {
+                unimplemented!("Function dist only supported in distributed semantics")
+            }
             SExpr::Sin(v) => {
                 let v = Self::to_async_stream(*v, ctx);
                 mc::sin(v)

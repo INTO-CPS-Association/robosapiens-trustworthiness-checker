@@ -1,6 +1,5 @@
 use clap::Parser;
 use std::path::PathBuf;
-use tokio;
 use tracing::{info, instrument};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};

@@ -27,7 +27,7 @@ pub fn lift1<S: StreamData, R: StreamData>(
 ) -> OutputStream<R> {
     let f = f.clone();
 
-    Box::pin(x_mon.map(move |x| f(x)))
+    Box::pin(x_mon.map(f))
 }
 
 pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
@@ -120,7 +120,7 @@ pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Int(a), Value::Float(b)) => Value::Bool((a as f32) < b),
             (Value::Float(a), Value::Int(b)) => Value::Bool(a < b as f32),
             (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a < b),
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(!a & b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a < b),
             _ => panic!("Invalid comparison"),
         },
@@ -152,7 +152,7 @@ pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Int(a), Value::Float(b)) => Value::Bool((a as f32) > b),
             (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f32),
             (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a > b),
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a & !b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a > b),
             _ => panic!("Invalid comparison"),
         },
@@ -193,7 +193,7 @@ pub fn if_stm(
 // currently at x[0]. However, with recursive streams that puts us in a deadlock when calling
 // x.next()
 pub fn sindex(x: OutputStream<Value>, i: isize) -> OutputStream<Value> {
-    let n = i.abs() as usize;
+    let n = i.unsigned_abs();
     let cs = stream::repeat(Value::Unknown).take(n);
     if i < 0 {
         Box::pin(cs.chain(x)) as LocalBoxStream<'static, Value>
@@ -427,7 +427,7 @@ pub fn defer(
 // Evaluates to the l.h.s. until the r.h.s. provides a value.
 // Then continues evaluating the r.h.s. (even if it provides Unknown)
 pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
-    return Box::pin(stream! {
+    Box::pin(stream! {
         while let (Some(x_val), Some(y_val)) = join!(x.next(), y.next()) {
             match (x_val, y_val) {
                 (x_val, Value::Unknown) => {
@@ -442,7 +442,7 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
         while let Some(y_val) = y.next().await {
             yield y_val;
         }
-    });
+    })
 }
 
 // Evaluates to a placeholder value whenever Unknown is received.
@@ -468,7 +468,7 @@ pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
                 break;
             }
         }
-        while let Some(_) = x.next().await {
+        while x.next().await.is_some() {
             yield Value::Bool(true);
         }
     })

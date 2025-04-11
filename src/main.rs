@@ -93,7 +93,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             local_topics: None,
             distributed_work: true,
         } => {
-            let local_node = cli.local_node.expect("Local node not specified").into();
+            let local_node = cli.local_node.expect("Local node not specified");
             info!("Waiting for work assignment on node {}", local_node);
             let receiver =
                 tc::io::mqtt::MQTTLocalityReceiver::new(MQTT_HOSTNAME.to_string(), local_node);

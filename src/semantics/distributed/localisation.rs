@@ -23,7 +23,7 @@ impl<W> LocalitySpec for (NodeName, &GenericLabelledDistributionGraph<W>) {
         let node_index = self.1.get_node_index_by_name(&self.0).unwrap();
         self.1
             .monitors_at_node(node_index)
-            .expect(format!("Node index {:?} does not exist in the graph", node_index).as_str())
+            .unwrap_or_else(|| panic!("Node index {:?} does not exist in the graph", node_index))
             .clone()
     }
 }
@@ -57,14 +57,14 @@ impl Localisable for LOLASpecification {
         }
         output_vars.retain(|v| local_vars.contains(v));
         exprs.retain(|v, _| local_vars.contains(v));
-        let expr_input_vars: HashSet<_> = exprs.iter().map(|(_, e)| e.inputs()).flatten().collect();
+        let expr_input_vars: HashSet<_> = exprs.values().flat_map(|e| e.inputs()).collect();
         info!("Expr input vars: {:?}", expr_input_vars);
         // We keep the order from the original input vars,
         // but remove variable that are not needed locally
         let new_input_vars: Vec<_> = input_vars
             .iter()
             .cloned()
-            .chain(to_remove.into_iter())
+            .chain(to_remove)
             .filter(|v| expr_input_vars.contains(v))
             .collect();
         info!("Old input vars: {:?}", input_vars);

@@ -344,8 +344,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
                     format!(
                         "Stream expression {:?} not assigned a type before semantic analysis",
                         self
-                    )
-                    .into(),
+                    ),
                 ));
                 Err(())
             }
@@ -429,8 +428,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                     format!(
                         "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
                         op, ste1, ste2
-                    )
-                    .into(),
+                    ),
                 ));
                 Err(())
             }
@@ -474,8 +472,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
                             format!(
                                 "Cannot create if-expression with two different types: {:?} and {:?}",
                                 stenum1, stenum2
-                            )
-                                .into(),
+                            ),
                         ));
                         Err(())
                     }
@@ -528,8 +525,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
                             format!(
                                 "Cannot create if-expression with two different types: {:?} and {:?}",
                                 stenum1, stenum2
-                            )
-                                .into(),
+                            ),
                         ));
                         Err(())
                     }
@@ -572,8 +568,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, isize) {
                         format!(
                             "Mismatched type in Stream Index expression, expression and default does not match: {:?}",
                             se
-                        )
-                            .into(),
+                        ),
                     ));
                     Err(())
                 }
@@ -602,7 +597,7 @@ impl TypeCheckableHelper<SExprTE> for VarName {
             },
             None => {
                 errs.push(SemanticError::UndeclaredVariable(
-                    format!("Usage of undeclared variable: {:?}", self).into(),
+                    format!("Usage of undeclared variable: {:?}", self),
                 ));
                 Err(())
             }
@@ -681,7 +676,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::Cos(_) => todo!(),
             SExpr::Tan(_) => todo!(),
             SExpr::MonitoredAt(_, _) => todo!(),
-            SExpr::Dist(_, _) => todo!()
+            SExpr::Dist(_, _) => todo!(),
         }
     }
 }
@@ -850,12 +845,10 @@ mod tests {
     #[test]
     fn test_vals_ok() {
         // Checks that vals returns the expected typed AST after semantic analysis
-        let vals = vec![
-            SExprV::Val(Value::Int(1)),
+        let vals = [SExprV::Val(Value::Int(1)),
             SExprV::Val(Value::Str("".into())),
             SExprV::Val(Value::Bool(true)),
-            SExprV::Val(Value::Unit),
-        ];
+            SExprV::Val(Value::Unit)];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprInt::Val(PossiblyUnknown::Known(1)))),
@@ -881,8 +874,7 @@ mod tests {
     #[test]
     fn test_plus_err_ident_types() {
         // Checks that if we add two identical types together that are not addable,
-        let vals = vec![
-            SExprV::BinOp(
+        let vals = [SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Bool(false))),
                 Box::new(SExprV::Val(Value::Bool(false))),
                 SBinOp::NOp(NumericalBinOp::Add),
@@ -891,8 +883,7 @@ mod tests {
                 Box::new(SExprV::Val(Value::Unit)),
                 Box::new(SExprV::Val(Value::Unit)),
                 SBinOp::NOp(NumericalBinOp::Add),
-            ),
-        ];
+            )];
         let results = vals
             .iter()
             .map(TypeCheckable::type_check_with_default)
@@ -947,8 +938,7 @@ mod tests {
     #[test]
     fn test_plus_err_unknown() {
         // Checks that if either value is unknown then Plus does not generate further errors
-        let vals = vec![
-            SExprV::BinOp(
+        let vals = [SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Int(0))),
                 Box::new(SExprV::Val(Value::Unknown)),
                 SBinOp::NOp(NumericalBinOp::Add),
@@ -962,8 +952,7 @@ mod tests {
                 Box::new(SExprV::Val(Value::Unknown)),
                 Box::new(SExprV::Val(Value::Unknown)),
                 SBinOp::NOp(NumericalBinOp::Add),
-            ),
-        ];
+            )];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected_err_lens = vec![1, 1, 2];
 

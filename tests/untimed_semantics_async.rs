@@ -408,14 +408,12 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
     // defer(e) which stops if e stops.
     //
     // See also: Comment on sindex combinator.
-    let expected_outputs = vec![
-        (0, vec![Value::Unknown]),
+    let expected_outputs = [(0, vec![Value::Unknown]),
         (1, vec![Value::Unknown]),
         (2, vec![Value::Int(1)]),
         (3, vec![Value::Int(2)]),
         (4, vec![Value::Int(3)]),
-        (5, vec![Value::Int(4)]),
-    ];
+        (5, vec![Value::Int(4)])];
     assert_eq!(outputs.len(), expected_outputs.len());
     for (x, y) in outputs.iter().zip(expected_outputs.iter()) {
         assert_eq!(x, y);
