@@ -8,6 +8,7 @@ use super::super::core::parser::*;
 use super::ast::*;
 use crate::core::StreamType;
 use crate::core::VarName;
+use crate::distributed::distribution_graphs::NodeName;
 
 // This is the top-level parser for LOLA expressions
 pub fn lola_expression(s: &mut &str) -> Result<SExpr> {
@@ -37,9 +38,15 @@ fn sexpr_list(s: &mut &str) -> Result<SExpr> {
 }
 
 fn var(s: &mut &str) -> Result<SExpr> {
-    ident
-        .map(|name: &str| SExpr::Var(name.into()))
-        .parse_next(s)
+    var_name.map(SExpr::Var).parse_next(s)
+}
+
+fn var_name(s: &mut &str) -> Result<VarName> {
+    ident.map(|name: &str| name.into()).parse_next(s)
+}
+
+fn node_name(s: &mut &str) -> Result<NodeName> {
+    ident.map(|name: &str| name.into()).parse_next(s)
 }
 
 // Same as `val` but returns SExpr::Val
@@ -318,6 +325,50 @@ fn ltail(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+fn var_or_nodename(s: &mut &str) -> Result<VarOrNodeName> {
+    ident.map(|w: &str| VarOrNodeName(w.into())).parse_next(s)
+}
+
+fn monitored_at(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "monitored_at",
+        _: loop_ms_or_lb_or_lc,
+        _: "(",
+        _: loop_ms_or_lb_or_lc,
+        var_name,
+        _: loop_ms_or_lb_or_lc,
+        _: ",",
+        _: loop_ms_or_lb_or_lc,
+        node_name,
+        _: loop_ms_or_lb_or_lc,
+        _: ")",
+        _: whitespace,
+    ))
+    .map(|(u, v)| SExpr::MonitoredAt(u, v))
+    .parse_next(s)
+}
+
+fn dist(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "dist",
+        _: loop_ms_or_lb_or_lc,
+        _: "(",
+        _: loop_ms_or_lb_or_lc,
+        var_or_nodename,
+        _: loop_ms_or_lb_or_lc,
+        _: ",",
+        _: loop_ms_or_lb_or_lc,
+        var_or_nodename,
+        _: loop_ms_or_lb_or_lc,
+        _: ")",
+        _: whitespace,
+    ))
+    .map(|(u, v)| SExpr::Dist(u, v))
+    .parse_next(s)
+}
+
 /// Trigonometric functions
 fn sin(s: &mut &str) -> Result<SExpr> {
     seq!((
@@ -383,7 +434,7 @@ fn atom(s: &mut &str) -> Result<SExpr> {
                 restricted_dynamic,
             )),
             // Group 2
-            alt((dynamic, sval, ifelse, defer, update, sin, cos, tan)),
+            alt((dynamic, sval, ifelse, defer, update, monitored_at, dist, sin, cos, tan)),
             // Group 3
             alt((default, when, is_defined, sexpr_list, var, paren)),
         )),

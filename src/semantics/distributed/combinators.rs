@@ -79,12 +79,12 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
 }
 
 impl<Val: StreamData> DistributedContextBuilder<Val> {
-    fn graph_stream(mut self, graph_stream: OutputStream<LabelledDistributionGraph>) -> Self {
+    pub fn graph_stream(mut self, graph_stream: OutputStream<LabelledDistributionGraph>) -> Self {
         self.graph_stream = Some(graph_stream);
         self
     }
 
-    fn graph_name(mut self, graph_name: String) -> Self {
+    pub fn graph_name(mut self, graph_name: String) -> Self {
         self.graph_name = Some(graph_name);
         self
     }
@@ -208,23 +208,18 @@ impl<Val: StreamData> DistributedContext<Val> {
 
 pub fn monitored_at<Val: StreamData>(
     var_name: VarName,
-    label: NodeName,
+    node_name: NodeName,
     ctx: &DistributedContext<Val>,
 ) -> OutputStream<Value> {
     let mut graph_stream = ctx.graph().unwrap();
 
     Box::pin(stream! {
-        loop {
-            if let Some(graph) = graph_stream.next().await {
-                let idx = graph.get_node_index_by_name(&label).expect("Label not inside graph");
-                let res = graph.node_labels
-                    .get(&idx)
-                    .is_some_and(|vec| vec.iter().any(|name| *name == var_name));
-                yield Value::Bool(res);
-            }
-            else {
-                break;
-            }
+        while let Some(graph) = graph_stream.next().await {
+            let idx = graph.get_node_index_by_name(&node_name).expect("Label not inside graph");
+            let res = graph.node_labels
+                .get(&idx)
+                .is_some_and(|vec| vec.iter().any(|name| *name == var_name));
+            yield Value::Bool(res);
         }
     })
 }

@@ -2,6 +2,7 @@ use ecow::EcoVec;
 
 use crate::core::{Specification, VarName};
 use crate::core::{StreamType, Value};
+use crate::distributed::distribution_graphs::NodeName;
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
@@ -116,6 +117,15 @@ impl From<&str> for SBinOp {
 }
 
 #[derive(Clone, PartialEq, Debug)]
+pub struct VarOrNodeName(pub String);
+
+impl Display for VarOrNodeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
 pub enum SExpr {
     // if-then-else
     If(Box<Self>, Box<Self>, Box<Self>),
@@ -163,6 +173,10 @@ pub enum SExpr {
     Sin(Box<Self>),
     Cos(Box<Self>),
     Tan(Box<Self>),
+
+    // Distribution Constraint Specific
+    MonitoredAt(VarName, NodeName),
+    Dist(VarOrNodeName, VarOrNodeName),
 }
 
 impl SExpr {
@@ -206,6 +220,12 @@ impl SExpr {
                     inputs.extend(e.inputs());
                 }
                 inputs
+            }
+            MonitoredAt(_, _) => {
+                vec![]
+            }
+            Dist(_, _) => {
+                vec![]
             }
             LIndex(e, i) => {
                 let mut inputs = e.inputs();
@@ -295,6 +315,8 @@ impl LOLASpecification {
                 SExpr::Sin(sexpr) => SExpr::Sin(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Cos(sexpr) => SExpr::Cos(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Tan(sexpr) => SExpr::Tan(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::MonitoredAt(v, n) => SExpr::MonitoredAt(v, n),
+                SExpr::Dist(v, u) => SExpr::Dist(v, u),
                 SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::LHead(sexpr) => SExpr::LHead(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Defer(sexpr) => SExpr::Defer(Box::new(traverse_expr(*sexpr, vars))),
@@ -448,6 +470,12 @@ impl Display for SExpr {
             BinOp(e1, e2, COp(CompBinOp::Gt)) => write!(f, "({} <= {})", e1, e2),
             Not(b) => write!(f, "!{}", b),
             Var(v) => write!(f, "{}", v),
+            MonitoredAt(u, v) => {
+                write!(f, "monitored_at({}, {})", u, v)
+            }
+            Dist(u, v) => {
+                write!(f, "dist({}, {})", u, v)
+            }
             Dynamic(e) => write!(f, "dynamic({})", e),
             RestrictedDynamic(e, vs) => write!(
                 f,

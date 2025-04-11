@@ -137,7 +137,7 @@ impl DepGraph {
                     deps_impl(then, steps, map, current_node);
                     deps_impl(els, steps, map, current_node);
                 }
-                SExpr::Val(_) => {}
+                SExpr::Val(_) | SExpr::MonitoredAt(_, _) | SExpr::Dist(_, _) => {}
                 SExpr::List(vec) => {
                     vec.iter()
                         .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node));

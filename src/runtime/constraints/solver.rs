@@ -261,6 +261,8 @@ impl SExpr {
             SExpr::Sin(_) => todo!(),
             SExpr::Cos(_) => todo!(),
             SExpr::Tan(_) => todo!(),
+            SExpr::MonitoredAt(_, _) => todo!(),
+            SExpr::Dist(_, _) => todo!(),
         }
     }
 }
@@ -416,6 +418,8 @@ impl SExpr {
             SExpr::Sin(_) => todo!(),
             SExpr::Cos(_) => todo!(),
             SExpr::Tan(_) => todo!(),
+            SExpr::MonitoredAt(_, _) => todo!(),
+            SExpr::Dist(_, _) => todo!(),
         }
     }
 }
@@ -576,6 +580,8 @@ impl Simplifiable for SExpr {
             SExpr::Sin(_) => todo!(),
             SExpr::Cos(_) => todo!(),
             SExpr::Tan(_) => todo!(),
+            SExpr::MonitoredAt(_, _) => todo!(),
+            SExpr::Dist(_, _) => todo!(),
         }
     }
 }

@@ -670,7 +670,7 @@ where
 }
 
 pub struct AsyncMonitorBuilder<
-    M,
+    M: Specification<Expr = Expr>,
     Ctx: StreamContext<V>,
     V: StreamData,
     Expr,
