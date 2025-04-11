@@ -166,6 +166,23 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
                 .await
                 .expect("MQTT input provider failed to start");
             Box::new(mqtt_input_provider)
+        } else if let Some(input_map_mqtt_topics) = input_mode.input_map_mqtt_topics {
+            let var_topics = input_map_mqtt_topics
+                .iter()
+                .map(|topic| (VarName::new(topic), topic.clone()))
+                .collect();
+            let mut map_mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
+                executor.clone(),
+                MQTT_HOSTNAME,
+                var_topics,
+            )
+            .expect("Map MQTT input provider could not be created");
+            map_mqtt_input_provider
+                .started
+                .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+                .await
+                .expect("Map MQTT input provider failed to start");
+            Box::new(map_mqtt_input_provider)
         } else if input_mode.mqtt_input {
             let var_topics = model
                 .input_vars

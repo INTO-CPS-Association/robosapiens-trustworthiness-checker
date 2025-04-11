@@ -35,6 +35,9 @@ pub struct InputMode {
     #[clap(long, value_delimiter = ' ', num_args = 1..)]
     pub input_mqtt_topics: Option<Vec<String>>,
 
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    pub input_map_mqtt_topics: Option<Vec<String>>,
+
     #[clap(long)]
     pub mqtt_input: bool,
 
