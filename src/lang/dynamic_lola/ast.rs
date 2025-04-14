@@ -125,6 +125,24 @@ impl Display for VarOrNodeName {
     }
 }
 
+impl Into<VarName> for VarOrNodeName {
+    fn into(self) -> VarName {
+        self.0.into()
+    }
+}
+
+impl Into<NodeName> for VarOrNodeName {
+    fn into(self) -> NodeName {
+        self.0.into()
+    }
+}
+
+impl Into<String> for VarOrNodeName {
+    fn into(self) -> String {
+        self.0
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum SExpr {
     // if-then-else
@@ -299,7 +317,9 @@ impl LOLASpecification {
                 SExpr::RestrictedDynamic(sexpr, eco_vec) => {
                     // Cannot contain anything that is not inside `vars`
                     let new_restricted = eco_vec
-                        .iter().filter(|&var| vars.contains(var)).cloned()
+                        .iter()
+                        .filter(|&var| vars.contains(var))
+                        .cloned()
                         .collect();
                     SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), new_restricted)
                 }

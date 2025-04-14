@@ -173,7 +173,6 @@ impl DepGraph {
 
     // Traverses the sexpr and returns a map of its dependencies to other variables
     pub fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
-        
         DepGraph::sexpr_dependencies_impl(sexpr, root_name)
     }
 

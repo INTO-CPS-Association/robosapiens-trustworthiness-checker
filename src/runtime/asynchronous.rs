@@ -216,8 +216,6 @@ impl<V: StreamData> VarManager<V> {
                     semaphore.add_permits(1);
                 };
                 *outstanding_sub_requests_ref.borrow_mut() -= 1;
-
-                
             })
             .detach();
 
@@ -547,6 +545,10 @@ impl<Val: StreamData> Context<Val> {
             .history_length(history_length)
             .build()
     }
+
+    pub fn var_names(&self) -> &Vec<VarName> {
+        &self.var_names
+    }
 }
 
 #[async_trait(?Send)]
@@ -777,10 +779,9 @@ impl<
             .cloned()
             .collect();
 
-        let input_streams = input_vars.iter().map(|var| {
-            
-            input_streams.input_stream(var).unwrap()
-        });
+        let input_streams = input_vars
+            .iter()
+            .map(|var| input_streams.input_stream(var).unwrap());
 
         // Create deferred streams based on each of the output variables
         let output_oneshots: Vec<_> = output_vars
@@ -789,16 +790,11 @@ impl<
             .map(|_| oneshot::channel::<OutputStream<Val>>().into_split())
             .collect();
         let (output_txs, output_rxs): (Vec<_>, Vec<_>) = output_oneshots.into_iter().unzip();
-        let output_txs: BTreeMap<_, _> = output_vars
-            .iter()
-            .cloned()
-            .zip(output_txs)
-            .collect();
+        let output_txs: BTreeMap<_, _> = output_vars.iter().cloned().zip(output_txs).collect();
         let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
 
         // Combine the input and output streams into a single map
-        let streams: Vec<OutputStream<Val>> =
-            input_streams.chain(output_streams).collect();
+        let streams: Vec<OutputStream<Val>> = input_streams.chain(output_streams).collect();
 
         let mut context = context_builder
             .executor(executor.clone())
@@ -812,14 +808,18 @@ impl<
             .output_vars()
             .iter()
             .map(|var| {
-                context.var(var).unwrap_or_else(|| panic!("Failed to find expression for var {}", var.name().as_str()))
+                context.var(var).unwrap_or_else(|| {
+                    panic!("Failed to find expression for var {}", var.name().as_str())
+                })
             })
             .collect();
 
         // Send outputs computed based on the context to the
         // output handler
         for (var, tx) in output_txs {
-            let expr = model.var_expr(&var).unwrap_or_else(|| panic!("Failed to find expression for var {}", var.name().as_str()));
+            let expr = model.var_expr(&var).unwrap_or_else(|| {
+                panic!("Failed to find expression for var {}", var.name().as_str())
+            });
             let stream = S::to_async_stream(expr, &context);
             if tx.send(stream).is_err() {
                 warn!(?var, "Failed to send stream for var to requester");

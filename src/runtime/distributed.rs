@@ -96,10 +96,17 @@ where
 
     fn build(self) -> Self::Mon {
         let static_dist_graph = self.static_dist_graph.expect("Static dist graph stream");
+        let node_names = static_dist_graph
+            .dist_graph
+            .graph
+            .node_weights()
+            .cloned()
+            .collect::<Vec<_>>();
         let dist_graph_stream = Box::pin(repeat(static_dist_graph));
         let context_builder = self
             .context_builder
-            .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream));
+            .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
+            .node_names(node_names);
         let async_monitor = self
             .async_monitor_builder
             .context_builder(context_builder)

@@ -121,7 +121,7 @@ impl MonitoringSemantics<SExpr, Value, DistributedContext<Value>> for Distribute
                 mc::tan(v)
             }
             SExpr::MonitoredAt(var_name, label) => dist_mc::monitored_at(var_name, label, ctx),
-            SExpr::Dist(_u, _v) => todo!("Dist combinator not implemented yet"),
+            SExpr::Dist(u, v) => dist_mc::dist(u, v, ctx),
         }
     }
 }

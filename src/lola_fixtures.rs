@@ -16,13 +16,11 @@ pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)]))
-            as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)])) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)]))
-            as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)])) as OutputStream<Value>,
     );
     input_streams
 }
@@ -32,19 +30,18 @@ pub fn input_streams2() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)]))
-            as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)])) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)]))
-            as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)])) as OutputStream<Value>,
     );
     input_streams.insert(
         "s".into(),
-        Box::pin(stream::iter(
-            vec![Value::Str("x+y".into()), Value::Str("x+y".into())],
-        )) as OutputStream<Value>,
+        Box::pin(stream::iter(vec![
+            Value::Str("x+y".into()),
+            Value::Str("x+y".into()),
+        ])) as OutputStream<Value>,
     );
     input_streams
 }
@@ -54,8 +51,7 @@ pub fn input_streams3() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)]))
-            as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)])) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
@@ -69,15 +65,17 @@ pub fn input_streams4() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(
-            vec![Value::Str("a".into()), Value::Str("c".into())],
-        )) as OutputStream<Value>,
+        Box::pin(stream::iter(vec![
+            Value::Str("a".into()),
+            Value::Str("c".into()),
+        ])) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(
-            vec![Value::Str("b".into()), Value::Str("d".into())],
-        )),
+        Box::pin(stream::iter(vec![
+            Value::Str("b".into()),
+            Value::Str("d".into()),
+        ])),
     );
     input_streams
 }
@@ -87,15 +85,19 @@ pub fn input_streams5() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(
-            vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
-        )) as OutputStream<Value>,
+        Box::pin(stream::iter(vec![
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Bool(true),
+        ])) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(
-            vec![Value::Bool(true), Value::Bool(true), Value::Bool(false)],
-        )),
+        Box::pin(stream::iter(vec![
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(false),
+        ])),
     );
     input_streams
 }
@@ -105,15 +107,11 @@ pub fn input_streams_float() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(
-            vec![Value::Float(1.3), Value::Float(3.4)],
-        )) as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Float(1.3), Value::Float(3.4)])) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(
-            vec![Value::Float(2.4), Value::Float(4.3)],
-        )) as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Float(2.4), Value::Float(4.3)])) as OutputStream<Value>,
     );
     input_streams
 }

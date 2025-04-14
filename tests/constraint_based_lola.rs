@@ -14,15 +14,11 @@ pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(stream::iter(
-            vec![Value::Int(1), 3.into(), 5.into()],
-        )) as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Int(1), 3.into(), 5.into()])) as OutputStream<Value>,
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(stream::iter(
-            vec![Value::Int(2), 4.into(), 6.into()],
-        )) as OutputStream<Value>,
+        Box::pin(stream::iter(vec![Value::Int(2), 4.into(), 6.into()])) as OutputStream<Value>,
     );
     input_streams
 }

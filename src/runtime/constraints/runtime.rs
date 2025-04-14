@@ -145,7 +145,8 @@ impl ConstraintBasedRuntime {
                 // Modify the collection in place
                 values.retain(|(time, _)| {
                     longest_dep
-                        .checked_add(*time).is_none_or(|t| t >= self.time)
+                        .checked_add(*time)
+                        .is_none_or(|t| t >= self.time)
                 });
             }
         }

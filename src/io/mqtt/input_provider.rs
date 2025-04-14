@@ -113,8 +113,12 @@ impl MQTTInputProvider {
                 while let Some(msg) = stream.next().await {
                     // Process the message
                     debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-                    let value = serde_json::from_str(&msg.payload_str()).unwrap_or_else(|_| panic!("Failed to parse value {:?} sent from MQTT",
-                            msg.payload_str()));
+                    let value = serde_json::from_str(&msg.payload_str()).unwrap_or_else(|_| {
+                        panic!(
+                            "Failed to parse value {:?} sent from MQTT",
+                            msg.payload_str()
+                        )
+                    });
                     if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
                         sender
                             .send(value)

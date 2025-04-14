@@ -554,7 +554,7 @@ fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<S
             None => Box::new(|i: &mut &str| atom.parse_next(i)),
         };
         let lit = current_op.get_lit();
-        
+
         separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
             SExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
         })

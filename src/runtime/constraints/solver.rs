@@ -74,7 +74,6 @@ pub fn model_constraints(model: LOLASpecification) -> ConstraintStore {
     constraints
 }
 
-
 impl ConstraintStore {
     // Looks up the variable name inside the map. Returns the value at the given index if the var and value exists.
     pub fn get_value_from_stream<'a, T: Clone>(
