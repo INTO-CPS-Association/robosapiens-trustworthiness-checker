@@ -101,8 +101,8 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f32 <= b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a <= b as f32),
+            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 <= b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a <= b as f64),
             (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
@@ -117,8 +117,8 @@ pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f32) < b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a < b as f32),
+            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) < b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a < b as f64),
             (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(!a & b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a < b),
@@ -133,8 +133,8 @@ pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f32 >= b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f32),
+            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 >= b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f64),
             (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a >= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
@@ -149,8 +149,8 @@ pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x > y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f32) > b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f32),
+            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) > b),
+            (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f64),
             (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a & !b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a > b),
@@ -206,8 +206,8 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 + y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f32),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 + y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
             (x, y) => panic!("Invalid addition with types: {:?}, {:?}", x, y),
         },
@@ -220,8 +220,8 @@ pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 % y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x % y as f32),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 % y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x % y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x % y),
             (x, y) => panic!("Invalid modulo with types: {:?}, {:?}", x, y),
         },
@@ -234,8 +234,8 @@ pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Val
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 - y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x - y as f32),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 - y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x - y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
             _ => panic!("Invalid subtraction"),
         },
@@ -248,8 +248,8 @@ pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 * y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x * y as f32),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 * y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x * y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
             _ => panic!("Invalid multiplication"),
         },
@@ -262,8 +262,8 @@ pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
     lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f32 / y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x / y as f32),
+            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 / y),
+            (Value::Float(x), Value::Int(y)) => Value::Float(x / y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
             _ => panic!("Invalid multiplication"),
         },

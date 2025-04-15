@@ -54,7 +54,7 @@ pub enum PossiblyUnknown<T> {
 
 impl StreamData for PossiblyUnknown<bool> {}
 impl StreamData for PossiblyUnknown<i64> {}
-impl StreamData for PossiblyUnknown<f32> {}
+impl StreamData for PossiblyUnknown<f64> {}
 impl StreamData for PossiblyUnknown<String> {}
 impl StreamData for PossiblyUnknown<()> {}
 
@@ -68,7 +68,7 @@ impl TryFrom<Value> for PossiblyUnknown<i64> {
         }
     }
 }
-impl TryFrom<Value> for PossiblyUnknown<f32> {
+impl TryFrom<Value> for PossiblyUnknown<f64> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
@@ -118,8 +118,8 @@ impl From<PossiblyUnknown<i64>> for Value {
     }
 }
 
-impl From<PossiblyUnknown<f32>> for Value {
-    fn from(value: PossiblyUnknown<f32>) -> Self {
+impl From<PossiblyUnknown<f64>> for Value {
+    fn from(value: PossiblyUnknown<f64>) -> Self {
         match value {
             PossiblyUnknown::Known(v) => Value::Float(v),
             PossiblyUnknown::Unknown => Value::Unknown,
@@ -211,7 +211,7 @@ pub enum SExprFloat {
     ),
 
     // Arithmetic Stream expression
-    Val(PossiblyUnknown<f32>),
+    Val(PossiblyUnknown<f64>),
 
     BinOp(Box<Self>, Box<Self>, FloatBinOp),
 

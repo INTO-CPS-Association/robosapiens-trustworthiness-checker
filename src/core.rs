@@ -44,12 +44,10 @@ thread_local! {
 // EcoVec instead of String and Vec. These types are essentially references
 // which allow mutation in place if there is only one reference to the data or
 // copy-on-write if there is more than one reference.
-// Floats are represented as f32 since this is the most common type in
-// Ros messages (e.g. LaserScan).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Int(i64),
-    Float(f32),
+    Float(f64),
     Str(EcoString),
     Bool(bool),
     List(EcoVec<Value>),
@@ -68,7 +66,7 @@ impl TryFrom<Value> for i64 {
         }
     }
 }
-impl TryFrom<Value> for f32 {
+impl TryFrom<Value> for f64 {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
@@ -113,8 +111,8 @@ impl From<i64> for Value {
         Value::Int(value)
     }
 }
-impl From<f32> for Value {
-    fn from(value: f32) -> Self {
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
         Value::Float(value)
     }
 }
@@ -168,7 +166,7 @@ pub trait StreamData: Clone + Debug + 'static {}
 
 // Trait defining the allowed types for expression values
 impl StreamData for i64 {}
-impl StreamData for f32 {}
+impl StreamData for f64 {}
 impl StreamData for String {}
 impl StreamData for bool {}
 impl StreamData for () {}

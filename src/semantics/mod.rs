@@ -75,7 +75,7 @@ mod tests {
         }
 
         #[test]
-        fn test_typed_untyped_float_float(xs: Vec<f32>, ys: Vec<f32>) {
+        fn test_typed_untyped_float_float(xs: Vec<f64>, ys: Vec<f64>) {
             // Construct function pointers to the typed and untyped combinators
             let mut tc_plus = tc::plus;
             let mut tc_minus = tc::minus;
@@ -93,9 +93,9 @@ mod tests {
             for (op_name, typed_op, untyped_op) in ops {
                 // Create distinct typed and untyped input and output streams
                 let xs_untyped_stream = Box::pin(stream::iter(xs.clone().into_iter()).map(Value::Float));
-                let xs_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<f32>>>> = to_typed_stream(xs_untyped_stream.clone());
+                let xs_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<f64>>>> = to_typed_stream(xs_untyped_stream.clone());
                 let ys_untyped_stream = Box::pin(stream::iter(ys.clone().into_iter()).map(Value::Float));
-                let ys_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<f32>>>> = to_typed_stream(ys_untyped_stream.clone());
+                let ys_typed_stream : Pin<Box<dyn Stream<Item = PossiblyUnknown<f64>>>> = to_typed_stream(ys_untyped_stream.clone());
 
                 // Apply the typed and untyped operators to the input streams
                 let zs_typed = typed_op(xs_typed_stream, ys_typed_stream).map(Into::<Value>::into);

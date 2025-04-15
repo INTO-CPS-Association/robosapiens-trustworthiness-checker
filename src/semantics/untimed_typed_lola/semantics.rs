@@ -20,7 +20,7 @@ where
                 from_typed_stream::<PossiblyUnknown<i64>>(Self::to_async_stream(e, ctx))
             }
             SExprTE::Float(e) => {
-                from_typed_stream::<PossiblyUnknown<f32>>(Self::to_async_stream(e, ctx))
+                from_typed_stream::<PossiblyUnknown<f64>>(Self::to_async_stream(e, ctx))
             }
             SExprTE::Str(e) => {
                 from_typed_stream::<PossiblyUnknown<String>>(Self::to_async_stream(e, ctx))
@@ -73,12 +73,12 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprFloat, PossiblyUnknown<f32>, Ctx, Value>
+impl<Ctx> MonitoringSemantics<SExprFloat, PossiblyUnknown<f64>, Ctx, Value>
     for TypedUntimedLolaSemantics
 where
     Ctx: StreamContext<Value>,
 {
-    fn to_async_stream(expr: SExprFloat, ctx: &Ctx) -> OutputStream<PossiblyUnknown<f32>> {
+    fn to_async_stream(expr: SExprFloat, ctx: &Ctx) -> OutputStream<PossiblyUnknown<f64>> {
         match expr {
             SExprFloat::Val(v) => mc::val(v),
             SExprFloat::BinOp(e1, e2, op) => {

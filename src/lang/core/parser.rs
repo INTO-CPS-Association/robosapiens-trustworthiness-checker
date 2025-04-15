@@ -42,13 +42,13 @@ pub fn val(s: &mut &str) -> Result<Value> {
             // an integer
             // We also specifically excude integrers from being parsed as floats
             // (e.g. 1.0 is a float, 1 is an integer)
-            float.with_taken().verify_map(|(x, s): (f32, &str)| {
+            float.with_taken().verify_map(|(x, s): (f64, &str)| {
                 match (integer::<&str, i64, ContextError>).parse(s) {
                     Ok(_i) => None,
                     Err(_) => Some(Value::Float(x)),
                 }
             }),
-            // This is a separate case, since a i64 could overflow a f32
+            // This is a separate case, since a i64 could overflow a f64
             integer.map(Value::Int),
             string.map(|s: &str| Value::Str(s.into())),
             literal("true").map(|_| Value::Bool(true)),

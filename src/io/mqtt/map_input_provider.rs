@@ -37,7 +37,7 @@ impl ToValue for JValue {
                     panic!("Number too large")
                 } else {
                     // Guaranteed to be f64 at this point
-                    Value::Float(num.as_f64().unwrap() as f32)
+                    Value::Float(num.as_f64().unwrap())
                 }
             }
             JValue::String(val) => Value::Str(val.into()),
