@@ -678,11 +678,11 @@ pub struct AsyncMonitorBuilder<
     Expr,
     S: MonitoringSemantics<Expr, V, Ctx>,
 > {
-    executor: Option<Rc<LocalExecutor<'static>>>,
-    model: Option<M>,
-    input: Option<Box<dyn InputProvider<Val = V>>>,
-    output: Option<Box<dyn OutputHandler<Val = V>>>,
-    context_builder: Option<Ctx::Builder>,
+    pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
+    pub(super) model: Option<M>,
+    pub(super) input: Option<Box<dyn InputProvider<Val = V>>>,
+    pub(super) output: Option<Box<dyn OutputHandler<Val = V>>>,
+    pub(super) context_builder: Option<Ctx::Builder>,
     expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
 }

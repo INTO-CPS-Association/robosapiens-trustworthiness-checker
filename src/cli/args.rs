@@ -78,6 +78,9 @@ pub struct DistributionMode {
     pub local_topics: Option<Vec<String>>,
 
     #[clap(long)]
+    pub mqtt_centralised_distributed: Option<Vec<String>>,
+
+    #[clap(long)]
     #[clap(requires = "local_node")]
     pub distributed_work: bool,
 }

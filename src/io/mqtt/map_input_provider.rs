@@ -130,9 +130,8 @@ impl MapMQTTInputProvider {
                     .await
                     .unwrap();
                 info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
-                let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
                 loop {
-                    match client.subscribe_many(&topics, &qos).await {
+                    match client.subscribe_many_same_qos(&topics, QOS).await {
                         Ok(_) => break,
                         Err(e) => {
                             warn!(name: "Failed to subscribe to topics", ?topics, err=?e);

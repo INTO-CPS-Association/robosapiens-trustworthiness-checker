@@ -62,12 +62,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distribution_graph: _,
             local_topics: _,
             distributed_work: _,
+            mqtt_centralised_distributed: _,
         } => None,
         trustworthiness_checker::cli::args::DistributionMode {
             centralised: false,
             distribution_graph: Some(s),
             local_topics: _,
             distributed_work: _,
+            mqtt_centralised_distributed: _,
         } => {
             let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
             let distribution_graph: LabelledDistributionGraph =
@@ -81,6 +83,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distribution_graph: None,
             local_topics: Some(topics),
             distributed_work: _,
+            mqtt_centralised_distributed: _,
         } => Some(Box::new(
             topics
                 .into_iter()
@@ -92,6 +95,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distribution_graph: None,
             local_topics: None,
             distributed_work: true,
+            mqtt_centralised_distributed: _,
         } => {
             let local_node = cli.local_node.expect("Local node not specified");
             info!("Waiting for work assignment on node {}", local_node);

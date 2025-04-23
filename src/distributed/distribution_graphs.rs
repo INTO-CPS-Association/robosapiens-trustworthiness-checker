@@ -5,12 +5,13 @@
 
 use std::{collections::BTreeMap, fmt::Display};
 
+use contracts::requires;
 use petgraph::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::VarName;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Default, Ord, PartialOrd)]
 pub struct NodeName(String);
 
 impl NodeName {
@@ -304,10 +305,53 @@ pub mod generation {
     }
 }
 
+pub type Pos = (f64, f64, f64);
+
+fn position_distance(x: &Pos, y: &Pos) -> f64 {
+    ((x.0 - y.0).powi(2) + (x.1 - y.1).powi(2) + (x.2 - y.2).powi(2)).sqrt()
+}
+
+#[requires(locations.contains(&central_monitor))]
+pub fn dist_graph_from_positions(
+    central_monitor: NodeName,
+    locations: Vec<NodeName>,
+    positions: Vec<Pos>,
+) -> DistributionGraph {
+    let mut graph = DiGraph::new();
+    let mut node_indices = BTreeMap::new();
+    for location in locations.iter() {
+        let node_index = graph.add_node(location.clone());
+        node_indices.insert(location.clone(), node_index);
+    }
+    for i in 0..locations.len() {
+        for j in i + 1..locations.len() {
+            let dist = position_distance(&positions[i], &positions[j]) as u64;
+            graph.add_edge(
+                node_indices[&locations[i]],
+                node_indices[&locations[j]],
+                dist,
+            );
+            graph.add_edge(
+                node_indices[&locations[j]],
+                node_indices[&locations[i]],
+                dist,
+            );
+        }
+    }
+    let central_monitor = *node_indices
+        .get(&central_monitor)
+        .expect("Central monitor not found in locations");
+    DistributionGraph {
+        central_monitor,
+        graph,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::{prop_assert_eq, proptest};
+    use tracing::info;
 
     #[test]
     fn test_serialize_deserialize() {
@@ -373,6 +417,30 @@ mod tests {
             serde_json::from_str::<LabelledDistributionGraph>(dist_graph_serialized).unwrap(),
             labelled_dist_graph
         );
+    }
+
+    #[test]
+    fn test_graph_from_locations() {
+        let central_monitor = NodeName::new("A");
+        let locations = vec![NodeName::new("A"), NodeName::new("B")];
+        let positions = vec![(0.0, 0.0, 0.0), (2.0, 2.0, 0.0)];
+        let mut graph = DiGraph::new();
+        graph.add_node(NodeName::new("A"));
+        graph.add_node(NodeName::new("B"));
+        graph.add_edge(NodeIndex::new(0), NodeIndex::new(1), 2);
+        graph.add_edge(NodeIndex::new(1), NodeIndex::new(0), 2);
+        let dist_graph_expected = DistributionGraph {
+            central_monitor: NodeIndex::new(0),
+            graph,
+        };
+        let dist_graph =
+            dist_graph_from_positions(central_monitor.clone(), locations.clone(), positions);
+        assert_eq!(
+            dist_graph.central_monitor,
+            dist_graph_expected.central_monitor
+        );
+        info!("Got graph: {:?}", dist_graph.graph);
+        assert!(graph_eq(&dist_graph.graph, &dist_graph_expected.graph));
     }
 
     #[test]

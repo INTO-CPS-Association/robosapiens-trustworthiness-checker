@@ -327,6 +327,13 @@ pub trait Specification {
 
     fn output_vars(&self) -> Vec<VarName>;
 
+    fn var_names(&self) -> Vec<VarName> {
+        self.input_vars()
+            .into_iter()
+            .chain(self.output_vars().into_iter())
+            .collect()
+    }
+
     fn var_expr(&self, var: &VarName) -> Option<Self::Expr>;
 }
 
