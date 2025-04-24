@@ -5,6 +5,7 @@ use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use test_log::test;
+use trustworthiness_checker::core::Runnable;
 #[macro_use]
 extern crate approx;
 

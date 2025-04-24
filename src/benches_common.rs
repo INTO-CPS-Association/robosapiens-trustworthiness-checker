@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use crate::core::Runnable;
 use crate::LOLASpecification;
 use crate::Monitor;
 use crate::OutputStream;

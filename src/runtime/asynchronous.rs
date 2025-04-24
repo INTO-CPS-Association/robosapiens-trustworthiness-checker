@@ -23,13 +23,13 @@ use tracing::info;
 use tracing::instrument;
 use tracing::warn;
 
-use crate::core::AbstractContextBuilder;
 use crate::core::AbstractMonitorBuilder;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::MonitoringSemantics;
 use crate::core::OutputHandler;
 use crate::core::Specification;
+use crate::core::{AbstractContextBuilder, Runnable};
 use crate::core::{OutputStream, StreamContext, StreamData, VarName};
 use crate::dep_manage::interface::DependencyManager;
 use crate::stream_utils::oneshot_to_stream;
@@ -878,9 +878,18 @@ where
     fn spec(&self) -> &M {
         &self.model
     }
+}
 
+#[async_trait(?Send)]
+impl<Expr, Val, S, M, Ctx> Runnable for AsyncMonitorRunner<Expr, Val, S, M, Ctx>
+where
+    Val: StreamData,
+    Ctx: StreamContext<Val>,
+    S: MonitoringSemantics<Expr, Val, Ctx, Val>,
+    M: Specification<Expr = Expr>,
+{
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
-    async fn run(mut self) {
+    async fn run_boxed(mut self: Box<Self>) {
         self.output_handler.provide_streams(self.output_streams);
         self.output_handler.run().await;
     }

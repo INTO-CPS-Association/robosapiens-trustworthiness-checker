@@ -53,6 +53,7 @@ mod tests {
     use smol_macros::test as smol_test;
     use test_log::test;
 
+    use trustworthiness_checker::core::Runnable;
     use trustworthiness_checker::dep_manage::interface::{
         DependencyKind, create_dependency_manager,
     };

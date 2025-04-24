@@ -12,6 +12,7 @@ use std::{mem, task};
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
+use trustworthiness_checker::core::Runnable;
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,

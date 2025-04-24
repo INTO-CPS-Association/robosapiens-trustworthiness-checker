@@ -6,6 +6,7 @@ use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use test_log::test;
+use trustworthiness_checker::core::Runnable;
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::semantics::UntimedLolaSemantics;

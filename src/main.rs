@@ -7,20 +7,19 @@ use smol::LocalExecutor;
 use tracing::{info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::core::{AbstractMonitorBuilder, OutputHandler};
+use trustworthiness_checker::VarName;
+use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
-use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
-use trustworthiness_checker::runtime::asynchronous::{AsyncMonitorBuilder, Context};
+use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
-use trustworthiness_checker::{self as tc, Monitor, io::file::parse_file};
-use trustworthiness_checker::{InputProvider, Value, VarName};
+use trustworthiness_checker::{self as tc, io::file::parse_file};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
-use trustworthiness_checker::cli::args::{Cli, Language, ParserMode, Runtime, Semantics};
+use trustworthiness_checker::cli::args::{Cli, Language, ParserMode};
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::io::ros::{
@@ -44,13 +43,18 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
 
     let cli = Cli::parse();
 
-    // let model = std::fs::read_to_string(cli.model).expect("Model file could not be read");
     let input_mode = cli.input_mode;
+
+    let builder = RuntimeBuilder::new();
 
     let parser = cli.parser_mode.unwrap_or(ParserMode::Combinator);
     let language = cli.language.unwrap_or(Language::Lola);
-    let semantics = cli.semantics.unwrap_or(Semantics::Untimed);
-    let runtime = cli.runtime.unwrap_or(Runtime::Async);
+
+    let builder = builder.executor(executor.clone());
+
+    let builder = builder.maybe_semantics(cli.semantics);
+
+    let builder = builder.maybe_runtime(cli.runtime);
 
     let model_parser = match language {
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
@@ -129,7 +133,18 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         None => model,
     };
 
-    let input_streams: Box<dyn InputProvider<Val = tc::Value>> = {
+    // Create the dependency manager
+    let builder = builder.dependencies(create_dependency_manager(
+        DependencyKind::DepGraph,
+        model.clone(),
+    ));
+
+    let output_var_names = model.output_vars.clone();
+    let input_var_names = model.input_vars.clone();
+    let builder = builder.model(model);
+
+    // Create the input provider
+    let builder = builder.input({
         if let Some(input_file) = input_mode.input_file {
             let input_file_parser = match language {
                 Language::Lola => tc::lang::untimed_input::untimed_input_file,
@@ -188,8 +203,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
                 .expect("Map MQTT input provider failed to start");
             Box::new(map_mqtt_input_provider)
         } else if input_mode.mqtt_input {
-            let var_topics = model
-                .input_vars
+            let var_topics = input_var_names
                 .iter()
                 .map(|var| (var.clone(), var.into()))
                 .collect();
@@ -205,10 +219,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         } else {
             panic!("Input provider not specified")
         }
-    };
+    });
 
-    let output_var_names = model.output_vars.clone();
-    let output_handler: Box<dyn OutputHandler<Val = Value>> = match cli.output_mode {
+    // Create the output handler
+    let builder = builder.output(match cli.output_mode {
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: true,
             output_mqtt_topics: None,
@@ -216,7 +230,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             output_ros_topics: None,
         } => Box::new(StdoutOutputHandler::<tc::Value>::new(
             executor.clone(),
-            model.output_vars.clone(),
+            output_var_names,
         )),
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: false,
@@ -228,7 +242,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
                 .into_iter()
                 // Only include topics that are in the output_vars
                 // this is necessary for localisation support
-                .filter(|topic| model.output_vars.contains(&VarName::new(topic.as_str())))
+                .filter(|topic| output_var_names.contains(&VarName::new(topic.as_str())))
                 .map(|topic| (topic.clone().into(), topic))
                 .collect();
             Box::new(
@@ -242,8 +256,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             mqtt_output: true,
             output_ros_topics: None,
         } => {
-            let topics = model
-                .output_vars
+            let topics = output_var_names
                 .iter()
                 .map(|var| (var.clone(), var.into()))
                 .collect();
@@ -261,56 +274,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         // Default to stdout
         _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
             executor.clone(),
-            model.output_vars.clone(),
+            output_var_names.clone(),
         )),
-    };
+    });
 
-    // Get the outputs from the Monitor
-    let task = match (runtime, semantics) {
-        (Runtime::Async, Semantics::Untimed) => {
-            let runner = AsyncMonitorBuilder::<
-                _,
-                Context<Value>,
-                _,
-                _,
-                tc::semantics::UntimedLolaSemantics,
-            >::new()
-            .executor(executor.clone())
-            .model(model.clone())
-            .input(input_streams)
-            .output(output_handler)
-            .build();
-            executor.spawn(runner.run())
-        }
-        (Runtime::Async, Semantics::TypedUntimed) => {
-            let typed_model = type_check(model.clone()).expect("Model failed to type check");
-
-            let runner = AsyncMonitorBuilder::<
-                _,
-                Context<Value>,
-                _,
-                _,
-                tc::semantics::TypedUntimedLolaSemantics,
-            >::new()
-            .executor(executor.clone())
-            .model(typed_model)
-            .input(input_streams)
-            .output(output_handler)
-            .build();
-            executor.spawn(runner.run())
-        }
-        (Runtime::Constraints, Semantics::Untimed) => {
-            let runner = tc::runtime::constraints::ConstraintBasedMonitor::new(
-                executor.clone(),
-                model.clone(),
-                input_streams,
-                output_handler,
-                create_dependency_manager(DependencyKind::DepGraph, model),
-            );
-            executor.spawn(runner.run())
-        }
-        _ => unimplemented!(),
-    };
-
-    task.await
+    // Create the runtime
+    let monitor = builder.build();
+    monitor.run().await;
 }

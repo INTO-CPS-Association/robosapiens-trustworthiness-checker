@@ -1,21 +1,11 @@
 use clap::{Args, Parser, ValueEnum};
 
+use crate::core::{Runtime, Semantics};
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Language {
     /// LOLA + Eval language
     Lola,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-pub enum Semantics {
-    Untimed,
-    TypedUntimed,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-pub enum Runtime {
-    Async,
-    Constraints,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]

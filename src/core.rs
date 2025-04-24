@@ -6,6 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use clap::ValueEnum;
 use ecow::EcoString;
 use ecow::EcoVec;
 use futures::future::LocalBoxFuture;
@@ -178,6 +179,19 @@ pub enum StreamType {
     Str,
     Bool,
     Unit,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum Semantics {
+    Untimed,
+    TypedUntimed,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum Runtime {
+    Async,
+    Constraints,
+    Distributed,
 }
 
 // Could also do this with async steams
@@ -358,21 +372,116 @@ pub trait OutputHandler {
 }
 
 pub trait AbstractMonitorBuilder<M, V: StreamData> {
-    type Mon: Monitor<M, V>;
+    type Mon: Runnable;
 
     fn new() -> Self;
 
     fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self;
 
+    fn maybe_executor(self, ex: Option<Rc<LocalExecutor<'static>>>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(ex) = ex {
+            self.executor(ex)
+        } else {
+            self
+        }
+    }
+
     fn model(self, model: M) -> Self;
+
+    fn maybe_model(self, model: Option<M>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(model) = model {
+            self.model(model)
+        } else {
+            self
+        }
+    }
 
     fn input(self, input: Box<dyn InputProvider<Val = V>>) -> Self;
 
+    fn maybe_input(self, input: Option<Box<dyn InputProvider<Val = V>>>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(input) = input {
+            self.input(input)
+        } else {
+            self
+        }
+    }
+
     fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
+
+    fn maybe_output(self, output: Option<Box<dyn OutputHandler<Val = V>>>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(output) = output {
+            self.output(output)
+        } else {
+            self
+        }
+    }
 
     fn dependencies(self, dependencies: DependencyManager) -> Self;
 
+    fn maybe_dependencies(self, dependencies: Option<DependencyManager>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(dependencies) = dependencies {
+            self.dependencies(dependencies)
+        } else {
+            self
+        }
+    }
+
     fn build(self) -> Self::Mon;
+}
+
+#[async_trait(?Send)]
+impl Runnable for Box<dyn Runnable> {
+    async fn run_boxed(mut self: Box<Self>) {
+        Runnable::run_boxed(self).await;
+    }
+
+    async fn run(mut self: Self) {
+        Runnable::run_boxed(self).await;
+    }
+}
+
+#[async_trait(?Send)]
+impl<M, V: StreamData> Runnable for Box<dyn Monitor<M, V>> {
+    async fn run_boxed(mut self: Box<Self>) {
+        Runnable::run_boxed(self).await;
+    }
+
+    async fn run(mut self: Self) {
+        Runnable::run_boxed(self).await;
+    }
+}
+
+#[async_trait(?Send)]
+impl<M, V: StreamData> Monitor<M, V> for Box<dyn Monitor<M, V>> {
+    fn spec(&self) -> &M {
+        self.as_ref().spec()
+    }
+}
+
+#[async_trait(?Send)]
+pub trait Runnable {
+    // Should usually wait on the output provider
+    async fn run(mut self)
+    where Self: Sized {
+        Box::new(self).run_boxed().await;
+    }
+
+    async fn run_boxed(mut self: Box<Self>);
 }
 
 /*
@@ -384,11 +493,13 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
  * to borrow from the input provider without worrying about lifetimes.
  */
 #[async_trait(?Send)]
-pub trait Monitor<M, V: StreamData> {
+pub trait Monitor<M, V: StreamData>: Runnable {
     fn spec(&self) -> &M;
-
-    // Should usually wait on the output provider
-    async fn run(mut self);
-
-    // fn monitor_outputs(&mut self) -> BoxStream<'static, BTreeMap<VarName, V>>;
 }
+
+// #[async_trait(?Send)]
+// impl<M, V: StreamData, Mon: Monitor<M, V>> Runnable for Mon {
+//     async fn run(mut self) {
+//         self.run().await;
+//     }
+// }

@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::{
     Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext, VarName,
-    core::{AbstractContextBuilder, AbstractMonitorBuilder, OutputHandler, StreamData},
+    core::{AbstractContextBuilder, AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
     dep_manage::interface::DependencyManager,
     distributed::distribution_graphs::{
         DistributionGraph, GenericLabelledDistributionGraph, LabelledDistributionGraph, NodeName,
@@ -233,8 +233,20 @@ where
     fn spec(&self) -> &M {
         self.async_monitor.spec()
     }
+}
 
-    async fn run(self) {
+#[async_trait(?Send)]
+impl<Expr, M, S, V> Runnable for DistributedMonitorRunner<Expr, V, S, M>
+where
+    M: Specification<Expr = Expr>,
+    S: MonitoringSemantics<Expr, V, DistributedContext<V>>,
+    V: StreamData,
+{
+    async fn run_boxed(self: Box<Self>) {
+        self.async_monitor.run().await;
+    }
+
+    async fn run(self: Self) {
         self.async_monitor.run().await;
     }
 }

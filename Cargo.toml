@@ -53,6 +53,7 @@ ordered-float = "5.0.0"
 approx = "0.5.1"
 lalrpop-util = { version = "0.21.0", features = ["lexer", "unicode"] }
 contracts = "0.6.3"
+static_assertions = "1.1.0"
 
 [profile.release]
 lto = "fat"

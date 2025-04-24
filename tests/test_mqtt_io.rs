@@ -119,6 +119,7 @@ mod tests {
     use tracing::info_span;
     use trustworthiness_checker::{
         Monitor, Value, VarName,
+        core::Runnable,
         dep_manage::interface::{DependencyKind, create_dependency_manager},
         io::{
             mqtt::{MQTTInputProvider, MQTTOutputHandler},

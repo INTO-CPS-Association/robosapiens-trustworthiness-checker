@@ -3,6 +3,7 @@ use crate::core::AbstractMonitorBuilder;
 use crate::core::InputProvider;
 use crate::core::Monitor;
 use crate::core::OutputHandler;
+use crate::core::Runnable;
 use crate::core::Specification;
 use crate::core::Value;
 use crate::core::VarName;
@@ -181,7 +182,7 @@ impl ValStreamCollection {
     }
 }
 
-struct ConstraintBasedMonitorBuilder {
+pub struct ConstraintBasedMonitorBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<LOLASpecification>,
     input: Option<Box<dyn InputProvider<Val = Value>>>,
@@ -285,13 +286,15 @@ impl ConstraintBasedMonitor {
     }
 }
 
-#[async_trait(?Send)]
 impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
     fn spec(&self) -> &LOLASpecification {
         &self.model
     }
+}
 
-    async fn run(mut self) {
+#[async_trait(?Send)]
+impl Runnable for ConstraintBasedMonitor {
+    async fn run_boxed(mut self: Box<Self>) {
         let outputs = self.output_streams();
         self.output_handler.provide_streams(outputs);
         self.output_handler.run().await;
