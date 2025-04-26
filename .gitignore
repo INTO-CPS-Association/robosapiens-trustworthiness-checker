@@ -2,3 +2,6 @@ target
 Cargo.lock
 .idea
 *.code-workspace
+distributed_graph.png
+flamegraph.svg
+perf.data
