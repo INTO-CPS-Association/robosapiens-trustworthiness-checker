@@ -4,16 +4,18 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::core::Runnable;
 use crate::LOLASpecification;
-use crate::Monitor;
 use crate::OutputStream;
 use crate::Value;
 use crate::VarName;
 use crate::core::AbstractMonitorBuilder;
+use crate::core::Runnable;
+use crate::core::Runtime;
+use crate::core::Semantics;
 use crate::dep_manage::interface::DependencyManager;
 use crate::io::testing::null_output_handler::NullOutputHandler;
 use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
+use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
 use crate::runtime::asynchronous::Context;
 use crate::runtime::constraints::runtime::ConstraintBasedMonitor;
@@ -28,7 +30,9 @@ pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
     Box::pin(stream.map(|x| x.try_into().expect("Type error")))
 }
 
-pub async fn monitor_outputs_untyped_constraints(
+pub async fn monitor_runtime_outputs(
+    runtime: Runtime,
+    semantics: Semantics,
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
@@ -38,14 +42,33 @@ pub async fn monitor_outputs_untyped_constraints(
         executor.clone(),
         spec.output_vars.clone(),
     ));
-    let async_monitor = ConstraintBasedMonitor::new(
-        executor.clone(),
-        spec.clone(),
-        Box::new(input_streams),
-        output_handler,
+    let monitor = RuntimeBuilder::new()
+        .runtime(runtime)
+        .semantics(semantics)
+        .executor(executor)
+        .model(spec)
+        .output(output_handler)
+        .input(Box::new(input_streams))
+        .dependencies(dep_manager)
+        .build();
+    monitor.run().await;
+}
+
+pub async fn monitor_outputs_untyped_constraints(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: LOLASpecification,
+    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+    dep_manager: DependencyManager,
+) {
+    monitor_runtime_outputs(
+        Runtime::Constraints,
+        Semantics::Untimed,
+        executor,
+        spec,
+        input_streams,
         dep_manager,
-    );
-    async_monitor.run().await;
+    )
+    .await;
 }
 
 pub async fn monitor_outputs_untyped_async(
@@ -54,26 +77,15 @@ pub async fn monitor_outputs_untyped_async(
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
     dep_manager: DependencyManager,
 ) {
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-
-    let async_monitor = AsyncMonitorBuilder::<
-        _,
-        Context<Value>,
-        _,
-        _,
-        crate::semantics::UntimedLolaSemantics,
-    >::new()
-    .executor(executor.clone())
-    .model(spec.clone())
-    .input(Box::new(input_streams))
-    .output(output_handler)
-    .dependencies(dep_manager)
-    .build();
-
-    async_monitor.run().await;
+    monitor_runtime_outputs(
+        Runtime::Async,
+        Semantics::Untimed,
+        executor,
+        spec,
+        input_streams,
+        dep_manager,
+    )
+    .await;
 }
 
 pub async fn monitor_outputs_typed_async(
@@ -82,6 +94,8 @@ pub async fn monitor_outputs_typed_async(
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
     dep_manager: DependencyManager,
 ) {
+    // Currently cannot be deduplicated since it includes the type
+    // checking
     let output_handler = Box::new(NullOutputHandler::new(
         executor.clone(),
         spec.output_vars.clone(),

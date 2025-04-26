@@ -5,7 +5,6 @@ use crate::{
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistributionGraph, NodeName, Pos, dist_graph_from_positions,
     },
-    semantics::distributed::localisation,
 };
 
 use super::client::provide_mqtt_client_with_subscription;
@@ -16,6 +15,7 @@ use paho_mqtt as mqtt;
 use serde_json::Value as JValue;
 use smol::{LocalExecutor, stream::StreamExt};
 use tracing::{info, warn};
+use tracing_subscriber::fmt::format;
 
 const QOS: i32 = 1;
 
@@ -44,9 +44,10 @@ impl MQTTDistGraphProvider {
                         acc.push(pos);
                         Some(acc)
                     }
-                    (_, _) => None,
+                    _ => None
                 }
             }) {
+                info!("Received positions: {:?}", poss);
                 yield poss;
             }
         }) as OutputStream<Vec<Pos>>);
@@ -72,8 +73,12 @@ impl MQTTDistGraphProvider {
                 while let Some(msg) = output.next().await {
                     let topic = msg.topic();
                     if let Some(index) = topics.iter().position(|t| t == topic) {
-                        if let Ok(Some(pos)) = serde_json::from_str::<JValue>(&msg.payload_str())
-                            .map(|x| x.get("source_robot_pose").cloned())
+                        if let Ok(Some(Some(pos))) =
+                            serde_json::from_str::<JValue>(&msg.payload_str()).map(|x| {
+                                x.get("source_robot_pose")
+                                    .cloned()
+                                    .map(|y| y.get("position").cloned())
+                            })
                         {
                             let pos = match (pos.get("x"), pos.get("y"), pos.get("z")) {
                                 (Some(x), Some(y), Some(z)) => Some((
@@ -87,10 +92,16 @@ impl MQTTDistGraphProvider {
                             match pos {
                                 Some(pos) => {
                                     info!("Parsed position from topic {}: {:?}", topic, pos);
-                                    location_txs[index].send(pos).await.unwrap();
+                                    location_txs[index].send(pos).await.expect(
+                                        format!(
+                                            "Failed to send position for topic = {} at index {}",
+                                            topic, index,
+                                        )
+                                        .as_str(),
+                                    );
                                 }
                                 None => warn!(
-                                    "Failed to parse position from topic {}: {}",
+                                    "Failed to parse inner position from topic {}: {}",
                                     topic,
                                     msg.payload_str()
                                 ),
@@ -116,6 +127,7 @@ impl MQTTDistGraphProvider {
     }
 
     pub fn locations_stream(&mut self) -> OutputStream<Vec<Pos>> {
+        info!("Taking locations stream");
         Box::pin(mem::take(&mut self.position_stream).unwrap())
     }
 

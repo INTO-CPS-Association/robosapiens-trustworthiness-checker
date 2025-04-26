@@ -67,7 +67,7 @@ pub struct DistributionMode {
     #[clap(long)]
     pub local_topics: Option<Vec<String>>,
 
-    #[clap(long)]
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
     pub mqtt_centralised_distributed: Option<Vec<String>>,
 
     #[clap(long)]

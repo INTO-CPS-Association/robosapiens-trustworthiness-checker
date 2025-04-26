@@ -3,6 +3,7 @@ pub use untimed_typed_lola::semantics::TypedUntimedLolaSemantics;
 pub mod untimed_untyped_lola;
 pub use untimed_untyped_lola::semantics::UntimedLolaSemantics;
 pub mod distributed;
+pub use distributed::semantics::DistributedSemantics;
 
 #[cfg(test)]
 mod tests {

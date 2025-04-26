@@ -1,4 +1,6 @@
+use static_assertions::assert_obj_safe;
 use std::collections::HashSet;
+use std::fmt::Debug;
 
 use tracing::info;
 
@@ -7,16 +9,18 @@ use crate::lang::dynamic_lola::ast::LOLASpecification;
 use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
 
-pub trait LocalitySpec {
+pub trait LocalitySpec: Debug {
     fn local_vars(&self) -> Vec<VarName>;
 }
+
+assert_obj_safe!(LocalitySpec);
 
 impl LocalitySpec for Vec<VarName> {
     fn local_vars(&self) -> Vec<VarName> {
         self.clone()
     }
 }
-impl<W> LocalitySpec for (NodeName, &GenericLabelledDistributionGraph<W>) {
+impl<W: Debug> LocalitySpec for (NodeName, &GenericLabelledDistributionGraph<W>) {
     /// Returns the local variables of the node.
     /// Panics if the node does not exist in the graph.
     fn local_vars(&self) -> Vec<VarName> {
@@ -27,11 +31,12 @@ impl<W> LocalitySpec for (NodeName, &GenericLabelledDistributionGraph<W>) {
             .clone()
     }
 }
-impl<W> LocalitySpec for (NodeName, GenericLabelledDistributionGraph<W>) {
+impl<W: Debug + Clone> LocalitySpec for (NodeName, GenericLabelledDistributionGraph<W>) {
     fn local_vars(&self) -> Vec<VarName> {
         (self.0.clone(), &self.1).local_vars()
     }
 }
+
 impl LocalitySpec for Box<dyn LocalitySpec> {
     fn local_vars(&self) -> Vec<VarName> {
         self.as_ref().local_vars()

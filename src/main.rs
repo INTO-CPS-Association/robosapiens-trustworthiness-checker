@@ -4,7 +4,7 @@ use std::rc::Rc;
 // #![deny(warnings)]
 use clap::Parser;
 use smol::LocalExecutor;
-use tracing::{info, info_span};
+use tracing::{debug, info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::VarName;
@@ -14,12 +14,15 @@ use trustworthiness_checker::distributed::distribution_graphs::LabelledDistribut
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::runtime::RuntimeBuilder;
+use trustworthiness_checker::runtime::builder::DistributionMode;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, io::file::parse_file};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
-use trustworthiness_checker::cli::args::{Cli, Language, ParserMode};
+use trustworthiness_checker::cli::args::{
+    Cli, DistributionMode as CliDistMode, Language, ParserMode,
+};
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::io::ros::{
@@ -60,46 +63,48 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
     };
 
-    let locality_mode: Option<Box<dyn LocalitySpec>> = match cli.distribution_mode {
-        trustworthiness_checker::cli::args::DistributionMode {
+    debug!("Choosing distribution mode");
+    let builder = builder.distribution_mode(match cli.distribution_mode {
+        CliDistMode {
             centralised: true,
-            distribution_graph: _,
-            local_topics: _,
-            distributed_work: _,
-            mqtt_centralised_distributed: _,
-        } => None,
-        trustworthiness_checker::cli::args::DistributionMode {
-            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            distributed_work: false,
+            mqtt_centralised_distributed: None,
+        } => DistributionMode::CentralMonitor,
+        CliDistMode {
+            centralised: _,
             distribution_graph: Some(s),
             local_topics: _,
             distributed_work: _,
-            mqtt_centralised_distributed: _,
+            mqtt_centralised_distributed: None,
         } => {
+            debug!("centralised mode");
             let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
             let distribution_graph: LabelledDistributionGraph =
                 serde_json::from_str(&f).expect("Distribution graph could not be parsed");
             let local_node = cli.local_node.expect("Local node not specified").into();
 
-            Some(Box::new((local_node, distribution_graph)))
+            DistributionMode::LocalMonitor(Box::new((local_node, distribution_graph)))
         }
-        trustworthiness_checker::cli::args::DistributionMode {
-            centralised: false,
-            distribution_graph: None,
+        CliDistMode {
+            centralised: _,
+            distribution_graph: _,
             local_topics: Some(topics),
             distributed_work: _,
-            mqtt_centralised_distributed: _,
-        } => Some(Box::new(
+            mqtt_centralised_distributed: None,
+        } => DistributionMode::LocalMonitor(Box::new(
             topics
                 .into_iter()
                 .map(|v| v.into())
                 .collect::<Vec<tc::VarName>>(),
         )),
-        trustworthiness_checker::cli::args::DistributionMode {
-            centralised: false,
-            distribution_graph: None,
-            local_topics: None,
+        CliDistMode {
+            centralised: _,
+            distribution_graph: _,
+            local_topics: _,
             distributed_work: true,
-            mqtt_centralised_distributed: _,
+            mqtt_centralised_distributed: None,
         } => {
             let local_node = cli.local_node.expect("Local node not specified");
             info!("Waiting for work assignment on node {}", local_node);
@@ -110,10 +115,20 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
                 .await
                 .expect("Work could not be received");
             info!("Received work: {:?}", locality.local_vars());
-            Some(Box::new(locality))
+            DistributionMode::LocalMonitor(Box::new(locality))
+        }
+        CliDistMode {
+            centralised: _,
+            distribution_graph: _,
+            local_topics: _,
+            distributed_work: _,
+            mqtt_centralised_distributed: Some(locations),
+        } => {
+            debug!("setting up distributed centralised mode");
+            DistributionMode::DistributedCentralised(locations)
         }
         _ => unreachable!(),
-    };
+    });
 
     let model = match parser {
         ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
@@ -124,13 +139,12 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
 
     // Localise the model to contain only the local variables (if needed)
-    let model = match locality_mode {
-        Some(locality_mode) => {
-            let model = model.localise(&locality_mode);
-            info!(name: "Localised model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
-            model
-        }
-        None => model,
+    let model = if let DistributionMode::LocalMonitor(locality_mode) = &builder.distribution_mode {
+        let model = model.localise(locality_mode);
+        info!(name: "Localised model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
+        model
+    } else {
+        model
     };
 
     // Create the dependency manager

@@ -9,7 +9,7 @@ use serde_json::Value as JValue;
 use smol::LocalExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Level, debug, error, info, info_span, instrument, warn};
+use tracing::{Level, debug, debug_span, error, info, info_span, instrument, warn};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use tokio_util::sync::CancellationToken;
@@ -123,7 +123,7 @@ impl MapMQTTInputProvider {
             .spawn(async move {
                 let var_topics = var_topics_clone;
                 let mqtt_input_span =
-                    info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
+                    debug_span!("InputProvider MQTT startup task", ?host, ?var_topics);
                 let _enter = mqtt_input_span.enter();
                 // Create and connect to the MQTT client
                 let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone())
@@ -155,7 +155,7 @@ impl MapMQTTInputProvider {
                                 msg.payload_str()
                             )
                         });
-                    info!("JValue: {:?}", jvalue);
+                    debug!("JValue: {:?}", jvalue);
                     let value = jvalue.to_value();
                     if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
                         sender

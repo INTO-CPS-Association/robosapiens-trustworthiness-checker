@@ -3,11 +3,21 @@
  *   of an individual robot)?
  */
 
-use std::{collections::BTreeMap, fmt::Display};
+use std::{collections::BTreeMap, fmt::Display, process::ExitStatus};
+use thiserror::Error;
 
-use contracts::requires;
-use petgraph::prelude::*;
+use petgraph::{
+    dot::{Config, Dot},
+    prelude::*,
+    visit::NodeFilteredEdgeReferences,
+};
 use serde::{Deserialize, Serialize};
+use smol::{
+    fs::{self, File},
+    io::AsyncWriteExt,
+    process::Command,
+};
+use tracing::{debug, info, warn};
 
 use crate::VarName;
 
@@ -229,6 +239,134 @@ impl Distance<TaggedVarOrNodeName, TaggedVarOrNodeName, u64>
     }
 }
 
+#[derive(Error, Debug)]
+pub enum GraphPlottingError {
+    FileCreationError(std::io::Error, String),
+    RenameError(std::io::Error, String),
+    DotError(String, Option<i32>, String),
+    WriteError(std::io::Error, String),
+    IOError(std::io::Error, String),
+}
+
+impl Display for GraphPlottingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(match self {
+            GraphPlottingError::FileCreationError(err, path) => {
+                write!(f, "Error creating file {}: {}", path, err)?
+            }
+            GraphPlottingError::RenameError(err, path) => {
+                write!(f, "Error renaming file {}: {}", path, err)?
+            }
+            GraphPlottingError::DotError(err, status, path) => write!(
+                f,
+                "Error generating dot file {}: {} (status: {})",
+                path,
+                err,
+                match status {
+                    Some(status) => status.to_string(),
+                    None => "n/a".to_string(),
+                }
+            )?,
+            GraphPlottingError::WriteError(err, path) => {
+                write!(f, "Error writing to file {}: {}", path, err)?
+            }
+            GraphPlottingError::IOError(err, path) => write!(
+                f,
+                "I/O error occurred while processing file {}: {}",
+                path, err
+            )?,
+        })
+    }
+}
+
+pub fn plottable_graph(input: LabelledDistributionGraph) -> DiGraph<String, u64> {
+    let node_map = |node: NodeIndex, node_name: &NodeName| {
+        let label_str: String =
+            input
+                .node_labels
+                .get(&node)
+                .unwrap()
+                .iter()
+                .fold(String::new(), |acc, label| {
+                    if acc.is_empty() {
+                        format!("{}", label)
+                    } else {
+                        format!("{}, {}", acc, label)
+                    }
+                });
+        Some(format!("{} {{{}}}", node_name, label_str))
+    };
+
+    let edge_map = |_: EdgeIndex, weight: &u64| Some(*weight);
+
+    input.dist_graph.graph.filter_map(node_map, edge_map)
+}
+
+pub async fn graph_to_dot(
+    input: LabelledDistributionGraph,
+    file_path: &str,
+) -> Result<(), GraphPlottingError> {
+    let graph = plottable_graph(input);
+    let dot = Dot::new(&graph);
+    let mut file = File::create(file_path)
+        .await
+        .map_err(|e| GraphPlottingError::FileCreationError(e, file_path.to_string()))?;
+    let dot_string = dot.to_string();
+    let bytes_to_write = dot_string.as_bytes();
+    file.write_all(bytes_to_write)
+        .await
+        .map_err(|e| GraphPlottingError::WriteError(e, file_path.to_string()))?;
+    debug!(
+        "Wrote dot file {} with countents {}",
+        file_path,
+        dot.to_string()
+    );
+    file.sync_all()
+        .await
+        .map_err(|e| GraphPlottingError::IOError(e, file_path.to_string()))?;
+    Ok(())
+}
+
+pub async fn graph_to_png(
+    input: LabelledDistributionGraph,
+    file_path: &str,
+) -> Result<(), GraphPlottingError> {
+    let dot_path = "/tmp/graph_visualization.dot";
+    let png_path = "/tmp/graph_visualization.png";
+    graph_to_dot(input, dot_path)
+        .await
+        .expect(format!("Failed to Write dot file {}", dot_path).as_str());
+    let mut command = Command::new("dot");
+    command.arg("-Tpng").arg(dot_path).arg("-o").arg(png_path);
+    let status = (match command.status().await {
+        Ok(status) => match status.code() {
+            Some(code) if code == 0 => Ok(code),
+            Some(code) => Err(GraphPlottingError::DotError(
+                format!("dot command exited with code {}", code),
+                Some(code),
+                dot_path.to_string(),
+            )),
+            None => Err(GraphPlottingError::DotError(
+                "dot command terminated by signal".to_string(),
+                None,
+                dot_path.to_string(),
+            )),
+        },
+        Err(err) => {
+            return Err(GraphPlottingError::DotError(
+                format!("Failed to execute dot command with error: {}", err),
+                None,
+                dot_path.to_string(),
+            ));
+        }
+    })?;
+    info!("Command status: {:?}", status);
+    fs::rename(png_path, file_path)
+        .await
+        .map_err(|e| GraphPlottingError::RenameError(e, dot_path.to_string()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 pub mod generation {
     use super::*;
@@ -311,7 +449,7 @@ fn position_distance(x: &Pos, y: &Pos) -> f64 {
     ((x.0 - y.0).powi(2) + (x.1 - y.1).powi(2) + (x.2 - y.2).powi(2)).sqrt()
 }
 
-#[requires(locations.contains(&central_monitor))]
+// #[requires(locations.contains(&central_monitor))]
 pub fn dist_graph_from_positions(
     central_monitor: NodeName,
     locations: Vec<NodeName>,
@@ -338,9 +476,19 @@ pub fn dist_graph_from_positions(
             );
         }
     }
-    let central_monitor = *node_indices
-        .get(&central_monitor)
-        .expect("Central monitor not found in locations");
+    // Add edges from central monitor to all nodes if the central monitor is not already
+    // a node with a defined position
+    let central_monitor = match node_indices.get(&central_monitor) {
+        Some(central_monitor) => *central_monitor,
+        None => {
+            let central_monitor = graph.add_node(central_monitor.clone());
+            for node_index in node_indices.values() {
+                graph.add_edge(*node_index, central_monitor, 0);
+                graph.add_edge(central_monitor, *node_index, 0);
+            }
+            central_monitor
+        }
+    };
     DistributionGraph {
         central_monitor,
         graph,

@@ -779,9 +779,11 @@ impl<
             .cloned()
             .collect();
 
-        let input_streams = input_vars
-            .iter()
-            .map(|var| input_streams.input_stream(var).unwrap());
+        let input_streams = input_vars.iter().map(|var| {
+            input_streams
+                .input_stream(var)
+                .expect(format!("Input stream not found for {}", var).as_str())
+        });
 
         // Create deferred streams based on each of the output variables
         let output_oneshots: Vec<_> = output_vars

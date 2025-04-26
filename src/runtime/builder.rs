@@ -1,17 +1,21 @@
+use std::fmt::Debug;
 use std::rc::Rc;
 
 use smol::LocalExecutor;
+use tracing::debug;
 
 use crate::{
     LOLASpecification, Monitor, Value,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
     lang::dynamic_lola::type_checker::{TypedLOLASpecification, type_check},
+    semantics::distributed::{combinators::DistributedContext, localisation::LocalitySpec},
 };
 
 use super::{
     asynchronous::{AsyncMonitorBuilder, Context},
     constraints::runtime::ConstraintBasedMonitorBuilder,
+    distributed::DistAsyncMonitorBuilder,
 };
 
 use static_assertions::assert_obj_safe;
@@ -131,14 +135,33 @@ impl<
     }
 }
 
+pub enum DistributionMode {
+    CentralMonitor,
+    LocalMonitor(Box<dyn LocalitySpec>), // Local topics
+    DistributedCentralised(Vec<String>), // All locations
+}
+
+impl Debug for DistributionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DistributionMode::CentralMonitor => write!(f, "CentralMonitor"),
+            DistributionMode::LocalMonitor(_) => write!(f, "LocalMonitor"),
+            DistributionMode::DistributedCentralised(locations) => {
+                write!(f, "DistributedCentralised({:?})", locations)
+            }
+        }
+    }
+}
+
 pub struct GenericMonitorBuilder<M, V: StreamData> {
-    executor: Option<Rc<LocalExecutor<'static>>>,
-    model: Option<M>,
-    input: Option<Box<dyn crate::InputProvider<Val = V>>>,
-    output: Option<Box<dyn OutputHandler<Val = V>>>,
-    dependencies: Option<DependencyManager>,
-    runtime: Runtime,
-    semantics: Semantics,
+    pub executor: Option<Rc<LocalExecutor<'static>>>,
+    pub model: Option<M>,
+    pub input: Option<Box<dyn crate::InputProvider<Val = V>>>,
+    pub output: Option<Box<dyn OutputHandler<Val = V>>>,
+    pub dependencies: Option<DependencyManager>,
+    pub runtime: Runtime,
+    pub semantics: Semantics,
+    pub distribution_mode: DistributionMode,
 }
 
 impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
@@ -163,6 +186,20 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
             None => self,
         }
     }
+
+    pub fn distribution_mode(self, dist_mode: DistributionMode) -> Self {
+        Self {
+            distribution_mode: dist_mode,
+            ..self
+        }
+    }
+
+    pub fn maybe_distribution_mod(self, dist_mode: Option<DistributionMode>) -> Self {
+        match dist_mode {
+            Some(dist_mode) => self.distribution_mode(dist_mode),
+            None => self,
+        }
+    }
 }
 
 impl AbstractMonitorBuilder<LOLASpecification, Value>
@@ -177,6 +214,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             input: None,
             output: None,
             dependencies: None,
+            distribution_mode: DistributionMode::CentralMonitor,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
         }
@@ -239,15 +277,35 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                 (Runtime::Constraints, Semantics::Untimed) => {
                     Box::new(ConstraintBasedMonitorBuilder::new())
                 }
-                // (Runtime::Distributed, Semantics::Untimed) => {
-                //     Box::new(AsyncMonitorBuilder::<
-                //         M,
-                //         Context<V>,
-                //         V,
-                //         _,
-                //         crate::semantics::UntimedLolaSemantics,
-                //     >::new())
-                // }
+                (Runtime::Distributed, Semantics::Untimed) => {
+                    debug!(
+                        "Setting up distributed runtime with distribution_mode = {:?}",
+                        self.distribution_mode
+                    );
+                    let builder = DistAsyncMonitorBuilder::<
+                        LOLASpecification,
+                        DistributedContext<Value>,
+                        Value,
+                        _,
+                        crate::semantics::DistributedSemantics,
+                    >::new();
+
+                    let builder = match self.distribution_mode {
+                        DistributionMode::CentralMonitor => builder,
+                        DistributionMode::LocalMonitor(_) => {
+                            todo!("Local monitor not implemented here yet")
+                        }
+                        DistributionMode::DistributedCentralised(locations) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_centralised_dist_graph(locations)
+                        }
+                    };
+
+                    Box::new(builder)
+                }
                 _ => {
                     panic!("Unsupported runtime and semantics combination");
                 }

@@ -5,7 +5,7 @@ use smol::{
     LocalExecutor,
     stream::{StreamExt, repeat},
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext, VarName,
@@ -13,6 +13,7 @@ use crate::{
     dep_manage::interface::DependencyManager,
     distributed::distribution_graphs::{
         DistributionGraph, GenericLabelledDistributionGraph, LabelledDistributionGraph, NodeName,
+        graph_to_png,
     },
     io::mqtt::dist_graph_provider::{self, MQTTDistGraphProvider},
     semantics::distributed::combinators::{DistributedContext, DistributedContextBuilder},
@@ -112,7 +113,7 @@ where
     }
 
     fn build(self) -> Self::Mon {
-        let dist_graph_mode = self.dist_graph_mode.expect("Dist graph mode");
+        let dist_graph_mode = self.dist_graph_mode.expect("Dist graph mode not set");
         let executor = self
             .async_monitor_builder
             .executor
@@ -129,9 +130,10 @@ where
                 None,
             ),
             DistGraphMode::MQTTCentralised(locations) => {
+                debug!("Creating MQTT dist graph provider");
                 let mut dist_graph_provider = dist_graph_provider::MQTTDistGraphProvider::new(
                     executor.clone(),
-                    "central_node".to_string().into(),
+                    "central".to_string().into(),
                     locations.clone(),
                 )
                 .expect("Failed to create MQTT dist graph provider");
@@ -197,6 +199,7 @@ fn centralised_dist_graph_stream(
     central_node: NodeName,
     mut dist_graph_stream: OutputStream<DistributionGraph>,
 ) -> OutputStream<LabelledDistributionGraph> {
+    info!("Starting centralised_dist_graph_stream");
     Box::pin(async_stream::stream! {
         while let Some(graph) = dist_graph_stream.next().await {
             let labels = graph
@@ -217,7 +220,8 @@ fn centralised_dist_graph_stream(
                 var_names: var_names.clone(),
                 node_labels: labels,
             };
-            debug!("Labelled graph: {:?}", labelled_graph);
+            info!("Labelled graph: {:?}", labelled_graph);
+            graph_to_png(labelled_graph.clone(), "distributed_graph.png").await.unwrap();
             yield labelled_graph;
         }
     })
