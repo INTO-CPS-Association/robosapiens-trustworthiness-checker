@@ -9,7 +9,7 @@ use smol::{
 use smol_macros::test as smol_test;
 use test_log::test;
 use trustworthiness_checker::{
-    Monitor, OutputStream, Value,
+    OutputStream, Value,
     core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     io::testing::ManualOutputHandler,

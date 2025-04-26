@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, mem, rc::Rc};
 use crate::{
     OutputStream,
     distributed::distribution_graphs::{
-        DistributionGraph, LabelledDistributionGraph, NodeName, Pos, dist_graph_from_positions,
+        DistributionGraph, NodeName, Pos, dist_graph_from_positions,
     },
 };
 
@@ -15,7 +15,6 @@ use paho_mqtt as mqtt;
 use serde_json::Value as JValue;
 use smol::{LocalExecutor, stream::StreamExt};
 use tracing::{info, warn};
-use tracing_subscriber::fmt::format;
 
 const QOS: i32 = 1;
 

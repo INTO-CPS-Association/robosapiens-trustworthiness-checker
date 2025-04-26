@@ -15,11 +15,11 @@ use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::{
     TypedLOLASpecification, type_check,
 };
-use trustworthiness_checker::{
-    Monitor, VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
-};
 use trustworthiness_checker::{OutputStream, lola_fixtures::*};
 use trustworthiness_checker::{Value, semantics::TypedUntimedLolaSemantics};
+use trustworthiness_checker::{
+    VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
+};
 
 fn output_handler(
     executor: Rc<LocalExecutor<'static>>,

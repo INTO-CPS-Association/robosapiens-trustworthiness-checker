@@ -8,7 +8,7 @@ use trustworthiness_checker::runtime::constraints::ConstraintBasedMonitor;
 use trustworthiness_checker::{
     LOLASpecification, io::testing::ManualOutputHandler, lola_specification,
 };
-use trustworthiness_checker::{Monitor, Value, VarName};
+use trustworthiness_checker::{Value, VarName};
 
 pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();

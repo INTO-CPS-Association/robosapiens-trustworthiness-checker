@@ -3,21 +3,17 @@
  *   of an individual robot)?
  */
 
-use std::{collections::BTreeMap, fmt::Display, process::ExitStatus};
+use std::{collections::BTreeMap, fmt::Display};
 use thiserror::Error;
 
-use petgraph::{
-    dot::{Config, Dot},
-    prelude::*,
-    visit::NodeFilteredEdgeReferences,
-};
+use petgraph::{dot::Dot, prelude::*};
 use serde::{Deserialize, Serialize};
 use smol::{
     fs::{self, File},
     io::AsyncWriteExt,
     process::Command,
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::VarName;
 

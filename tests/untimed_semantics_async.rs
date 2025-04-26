@@ -10,10 +10,10 @@ use trustworthiness_checker::core::Runnable;
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::semantics::UntimedLolaSemantics;
-use trustworthiness_checker::{
-    Monitor, Value, VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
-};
 use trustworthiness_checker::{OutputStream, lola_fixtures::*};
+use trustworthiness_checker::{
+    Value, VarName, lola_specification, runtime::asynchronous::AsyncMonitorRunner,
+};
 
 fn output_handler(
     executor: Rc<LocalExecutor<'static>>,

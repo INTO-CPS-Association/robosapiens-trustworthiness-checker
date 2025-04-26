@@ -18,7 +18,6 @@ use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
 use crate::runtime::asynchronous::Context;
-use crate::runtime::constraints::runtime::ConstraintBasedMonitor;
 use crate::runtime::constraints::runtime::ConstraintBasedRuntime;
 use futures::StreamExt;
 use smol::LocalExecutor;

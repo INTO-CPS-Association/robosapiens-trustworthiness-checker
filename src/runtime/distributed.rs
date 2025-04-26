@@ -12,8 +12,7 @@ use crate::{
     core::{AbstractContextBuilder, AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
     dep_manage::interface::DependencyManager,
     distributed::distribution_graphs::{
-        DistributionGraph, GenericLabelledDistributionGraph, LabelledDistributionGraph, NodeName,
-        graph_to_png,
+        DistributionGraph, LabelledDistributionGraph, NodeName, graph_to_png,
     },
     io::mqtt::dist_graph_provider::{self, MQTTDistGraphProvider},
     semantics::distributed::combinators::{DistributedContext, DistributedContextBuilder},
@@ -190,6 +189,7 @@ where
 {
     pub(crate) async_monitor: AsyncMonitorRunner<Expr, Val, S, M, DistributedContext<Val>>,
     // TODO: should we be responsible for building the stream of graphs
+    #[allow(dead_code)]
     pub(crate) dist_graph_provider:
         Option<crate::io::mqtt::dist_graph_provider::MQTTDistGraphProvider>,
 }
