@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use async_trait::async_trait;
+use petgraph::graph::NodeIndex;
 use smol::{
     LocalExecutor,
     stream::{StreamExt, repeat},
@@ -23,6 +24,7 @@ use super::asynchronous::{AbstractAsyncMonitorBuilder, AsyncMonitorBuilder, Asyn
 pub enum DistGraphMode {
     Static(LabelledDistributionGraph),
     MQTTCentralised(BTreeMap<NodeName, String>),
+    MQTTRandom(BTreeMap<NodeName, String>),
 }
 
 pub struct DistAsyncMonitorBuilder<
@@ -52,6 +54,11 @@ impl<
 
     pub fn mqtt_centralised_dist_graph(mut self, locations: BTreeMap<NodeName, String>) -> Self {
         self.dist_graph_mode = Some(DistGraphMode::MQTTCentralised(locations));
+        self
+    }
+
+    pub fn mqtt_random_dist_graph(mut self, locations: BTreeMap<NodeName, String>) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::MQTTRandom(locations));
         self
     }
 }
@@ -136,15 +143,41 @@ where
                     locations.clone(),
                 )
                 .expect("Failed to create MQTT dist graph provider");
+                let var_names = self
+                    .async_monitor_builder
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .var_names();
                 let labelled_dist_graph_stream = centralised_dist_graph_stream(
-                    self.async_monitor_builder
-                        .model
-                        .as_ref()
-                        .unwrap()
-                        .var_names(),
+                    var_names,
                     dist_graph_provider.central_node.clone(),
                     dist_graph_provider.dist_graph_stream(),
                 );
+                let location_names = locations.keys().cloned().collect::<Vec<_>>();
+
+                (
+                    labelled_dist_graph_stream,
+                    location_names,
+                    Some(dist_graph_provider),
+                )
+            }
+            DistGraphMode::MQTTRandom(locations) => {
+                debug!("Creating random dist graph stream");
+                let mut dist_graph_provider = dist_graph_provider::MQTTDistGraphProvider::new(
+                    executor.clone(),
+                    "central".to_string().into(),
+                    locations.clone(),
+                )
+                .expect("Failed to create MQTT dist graph provider");
+                let var_names = self
+                    .async_monitor_builder
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .var_names();
+                let labelled_dist_graph_stream =
+                    random_dist_graph_stream(var_names, dist_graph_provider.dist_graph_stream());
                 let location_names = locations.keys().cloned().collect::<Vec<_>>();
 
                 (
@@ -219,6 +252,41 @@ fn centralised_dist_graph_stream(
                 dist_graph: graph,
                 var_names: var_names.clone(),
                 node_labels: labels,
+            };
+            info!("Labelled graph: {:?}", labelled_graph);
+            graph_to_png(labelled_graph.clone(), "distributed_graph.png").await.unwrap();
+            yield labelled_graph;
+        }
+    })
+}
+
+fn random_dist_graph_stream(
+    var_names: Vec<VarName>,
+    mut dist_graph_stream: OutputStream<DistributionGraph>,
+) -> OutputStream<LabelledDistributionGraph> {
+    info!("Starting random distribution graph stream");
+    Box::pin(async_stream::stream! {
+        while let Some(dist_graph) = dist_graph_stream.next().await {
+            info!("Received distribution graph: generating random labelling");
+            let node_indicies = dist_graph.graph.node_indices().collect::<Vec<_>>();
+            let location_map: BTreeMap<VarName, NodeIndex> = var_names.iter()
+                .map(|var| {
+                    let location_index: usize = rand::random_range(0..node_indicies.len());
+                    assert!(location_index < node_indicies.len());
+                    (var.clone(), node_indicies[location_index].clone())
+                }).collect();
+
+            let node_labels: BTreeMap<NodeIndex, Vec<VarName>> = dist_graph.graph
+                .node_indices()
+                .map(|idx| (idx,
+                    var_names.iter().filter(|var| location_map[var] == idx).cloned().collect()))
+                .collect();
+            info!("Generated random labelling: {:?}", node_labels);
+
+            let labelled_graph = LabelledDistributionGraph {
+                dist_graph,
+                var_names: var_names.clone(),
+                node_labels,
             };
             info!("Labelled graph: {:?}", labelled_graph);
             graph_to_png(labelled_graph.clone(), "distributed_graph.png").await.unwrap();

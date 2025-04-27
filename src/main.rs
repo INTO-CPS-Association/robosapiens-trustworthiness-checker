@@ -71,6 +71,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             local_topics: None,
             distributed_work: false,
             mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
         } => DistributionMode::CentralMonitor,
         CliDistMode {
             centralised: _,
@@ -78,6 +79,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             local_topics: _,
             distributed_work: _,
             mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
         } => {
             debug!("centralised mode");
             let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
@@ -93,6 +95,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             local_topics: Some(topics),
             distributed_work: _,
             mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
         } => DistributionMode::LocalMonitor(Box::new(
             topics
                 .into_iter()
@@ -105,6 +108,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             local_topics: _,
             distributed_work: true,
             mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
         } => {
             let local_node = cli.local_node.expect("Local node not specified");
             info!("Waiting for work assignment on node {}", local_node);
@@ -123,9 +127,21 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             local_topics: _,
             distributed_work: _,
             mqtt_centralised_distributed: Some(locations),
+            mqtt_randomized_distributed: None,
         } => {
             debug!("setting up distributed centralised mode");
             DistributionMode::DistributedCentralised(locations)
+        }
+        CliDistMode {
+            centralised: _,
+            distribution_graph: _,
+            local_topics: _,
+            distributed_work: _,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: Some(locations),
+        } => {
+            debug!("setting up distributed random mode");
+            DistributionMode::DistributedRandom(locations)
         }
         _ => unreachable!(),
     });

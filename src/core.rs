@@ -477,7 +477,9 @@ impl<M, V: StreamData> Monitor<M, V> for Box<dyn Monitor<M, V>> {
 pub trait Runnable {
     // Should usually wait on the output provider
     async fn run(mut self)
-    where Self: Sized {
+    where
+        Self: Sized,
+    {
         Box::new(self).run_boxed().await;
     }
 

@@ -62,6 +62,13 @@ impl<W> GenericDistributionGraph<W> {
             .node_indices()
             .find(|&node| self.graph[node] == *name)
     }
+
+    pub fn locations(&self) -> Vec<NodeName> {
+        self.graph
+            .node_indices()
+            .map(|node| self.graph[node].clone())
+            .collect()
+    }
 }
 
 /* From: https://github.com/petgraph/petgraph/issues/199 */

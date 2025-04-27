@@ -139,6 +139,7 @@ pub enum DistributionMode {
     CentralMonitor,
     LocalMonitor(Box<dyn LocalitySpec>), // Local topics
     DistributedCentralised(Vec<String>), // All locations
+    DistributedRandom(Vec<String>),      // All locations
 }
 
 impl Debug for DistributionMode {
@@ -148,6 +149,9 @@ impl Debug for DistributionMode {
             DistributionMode::LocalMonitor(_) => write!(f, "LocalMonitor"),
             DistributionMode::DistributedCentralised(locations) => {
                 write!(f, "DistributedCentralised({:?})", locations)
+            }
+            DistributionMode::DistributedRandom(locations) => {
+                write!(f, "DistributedRandom({:?})", locations)
             }
         }
     }
@@ -301,6 +305,13 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                                 .map(|loc| (loc.clone().into(), loc))
                                 .collect();
                             builder.mqtt_centralised_dist_graph(locations)
+                        }
+                        DistributionMode::DistributedRandom(locations) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_random_dist_graph(locations)
                         }
                     };
 
