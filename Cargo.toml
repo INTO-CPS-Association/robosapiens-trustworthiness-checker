@@ -17,7 +17,7 @@ lalrpop = "0.22.1"
 
 [dependencies]
 # console-subscriber = "0.4.0"
-winnow = "0.7.3"
+winnow = { version = "0.7.3", features = ["simd"] }
 futures = "0.3.31"
 tokio = { version = "1.43.0", features = ["full", "tracing"] }
 tokio-stream = { version = "0.1.17", features = ["full"] }
@@ -106,4 +106,8 @@ harness = false
 
 [[bench]]
 name = "dup_defer"
+harness = false
+
+[[bench]]
+name = "parsing"
 harness = false
