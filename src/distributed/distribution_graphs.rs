@@ -370,6 +370,141 @@ pub async fn graph_to_png(
     Ok(())
 }
 
+enum VarAssignmentsIter {
+    Done,
+    Base(std::option::IntoIter<BTreeMap<VarName, NodeName>>),
+    Rec {
+        rest_iter: Box<VarAssignmentsIter>,
+        locations: Vec<NodeName>,
+        first: VarName,
+        current_assignment: Option<BTreeMap<VarName, NodeName>>,
+        locs_iter: std::vec::IntoIter<NodeName>,
+    },
+}
+
+impl VarAssignmentsIter {
+    pub fn new(locations: Vec<NodeName>, var_names: Vec<VarName>) -> Self {
+        match var_names.as_slice() {
+            [] => VarAssignmentsIter::Base(Some(BTreeMap::<VarName, NodeName>::new()).into_iter()),
+            [first, rest @ ..] => {
+                let rest_iter = Box::new(VarAssignmentsIter::new(locations.clone(), rest.to_vec()));
+                VarAssignmentsIter::Rec {
+                    rest_iter,
+                    locations: locations.clone(),
+                    first: first.clone(),
+                    current_assignment: None,
+                    locs_iter: Vec::new().into_iter(),
+                }
+            }
+        }
+    }
+}
+
+impl Iterator for VarAssignmentsIter {
+    type Item = BTreeMap<VarName, NodeName>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            VarAssignmentsIter::Done => None,
+            VarAssignmentsIter::Base(iter) => iter.next(),
+            VarAssignmentsIter::Rec {
+                rest_iter,
+                locations,
+                first,
+                current_assignment,
+                locs_iter,
+            } => loop {
+                if let Some(assignment) = current_assignment.take() {
+                    if let Some(loc) = locs_iter.next() {
+                        let mut new_assignment = assignment.clone();
+                        new_assignment.insert(first.clone(), loc);
+                        *current_assignment = Some(assignment);
+                        return Some(new_assignment);
+                    }
+                }
+                match rest_iter.next() {
+                    Some(assignment) => {
+                        *current_assignment = Some(assignment);
+                        *locs_iter = locations.clone().into_iter();
+                    }
+                    None => {
+                        *self = VarAssignmentsIter::Done;
+                        return None;
+                    }
+                }
+            },
+        }
+    }
+}
+
+fn possible_var_assignments(
+    locations: Vec<NodeName>,
+    var_names: Vec<VarName>,
+) -> VarAssignmentsIter {
+    VarAssignmentsIter::new(locations, var_names)
+}
+
+pub struct PossibleLabelledDistGraphs {
+    base_graph: DistributionGraph,
+    var_names: Vec<VarName>,
+    locations: Vec<NodeName>,
+    assignments_iter: VarAssignmentsIter,
+}
+
+impl PossibleLabelledDistGraphs {
+    pub fn new(base_graph: DistributionGraph, var_names: Vec<VarName>) -> Self {
+        let locations = base_graph
+            .graph
+            .node_indices()
+            .map(|idx| base_graph.graph[idx].clone())
+            .collect::<Vec<_>>();
+        let assignments_iter = possible_var_assignments(locations.clone(), var_names.clone());
+        Self {
+            base_graph,
+            var_names,
+            locations,
+            assignments_iter,
+        }
+    }
+}
+
+impl Iterator for PossibleLabelledDistGraphs {
+    type Item = LabelledDistributionGraph;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.assignments_iter.next().map(|assignment| {
+            let node_labels = self
+                .locations
+                .iter()
+                .map(|loc| {
+                    (
+                        self.base_graph.get_node_index_by_name(loc).unwrap(),
+                        self.var_names
+                            .iter()
+                            .filter(|var| assignment[var] == *loc)
+                            .cloned()
+                            .collect(),
+                    )
+                })
+                .collect();
+            GenericLabelledDistributionGraph {
+                dist_graph: self.base_graph.clone(),
+                var_names: self.var_names.clone(),
+                node_labels,
+            }
+        })
+    }
+}
+
+/// Returns an iterator over all possible labellings of a distribution graph,
+/// assigning each variable in `var_names` to a node in the graph.
+pub fn possible_labelled_dist_graphs(
+    base_graph: DistributionGraph,
+    var_names: Vec<VarName>,
+) -> PossibleLabelledDistGraphs {
+    PossibleLabelledDistGraphs::new(base_graph, var_names)
+}
+
 #[cfg(test)]
 pub mod generation {
     use super::*;
@@ -618,6 +753,24 @@ mod tests {
             Some(&vec!["a".into(), "b".into()])
         );
         assert_eq!(labelled_dist_graph.monitors_at_node(1.into()), None);
+    }
+
+    #[test]
+    fn test_possible_labellings() {
+        let mut graph = DiGraph::new();
+        let a = graph.add_node("A".into());
+        let b = graph.add_node("B".into());
+        let c = graph.add_node("B".into());
+        graph.add_edge(a, b, 0);
+        graph.add_edge(b, c, 1);
+        let dist_graph = DistributionGraph {
+            central_monitor: a,
+            graph,
+        };
+        let var_names = vec!["x".into(), "y".into()];
+        let possible_labelled_dist_graphs: Vec<_> =
+            possible_labelled_dist_graphs(dist_graph.clone(), var_names).collect();
+        assert_eq!(possible_labelled_dist_graphs.len(), 9);
     }
 
     proptest! {

@@ -5,7 +5,7 @@ use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
-    LOLASpecification, Monitor, Value,
+    LOLASpecification, Monitor, Value, VarName,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
     lang::dynamic_lola::type_checker::{TypedLOLASpecification, type_check},
@@ -138,8 +138,20 @@ impl<
 pub enum DistributionMode {
     CentralMonitor,
     LocalMonitor(Box<dyn LocalitySpec>), // Local topics
-    DistributedCentralised(Vec<String>), // All locations
-    DistributedRandom(Vec<String>),      // All locations
+    DistributedCentralised(
+        /// Location names
+        Vec<String>,
+    ),
+    DistributedRandom(
+        /// Location names
+        Vec<String>,
+    ),
+    DistributedOptimizedStatic(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+    ),
 }
 
 impl Debug for DistributionMode {
@@ -152,6 +164,13 @@ impl Debug for DistributionMode {
             }
             DistributionMode::DistributedRandom(locations) => {
                 write!(f, "DistributedRandom({:?})", locations)
+            }
+            DistributionMode::DistributedOptimizedStatic(locations, dist_constraints) => {
+                write!(
+                    f,
+                    "DistributedOptimizedStatic({:?}, {:?})",
+                    locations, dist_constraints
+                )
             }
         }
     }
@@ -312,6 +331,16 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                                 .map(|loc| (loc.clone().into(), loc))
                                 .collect();
                             builder.mqtt_random_dist_graph(locations)
+                        }
+                        DistributionMode::DistributedOptimizedStatic(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
                         }
                     };
 

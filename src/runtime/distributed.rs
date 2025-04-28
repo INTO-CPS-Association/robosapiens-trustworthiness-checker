@@ -23,8 +23,20 @@ use super::asynchronous::{AbstractAsyncMonitorBuilder, AsyncMonitorBuilder, Asyn
 
 pub enum DistGraphMode {
     Static(LabelledDistributionGraph),
-    MQTTCentralised(BTreeMap<NodeName, String>),
-    MQTTRandom(BTreeMap<NodeName, String>),
+    MQTTCentralised(
+        /// Locations
+        BTreeMap<NodeName, String>,
+    ),
+    MQTTRandom(
+        /// Locations
+        BTreeMap<NodeName, String>,
+    ),
+    MQTTStaticOptimized(
+        /// Locations
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+    ),
 }
 
 pub struct DistAsyncMonitorBuilder<
@@ -59,6 +71,18 @@ impl<
 
     pub fn mqtt_random_dist_graph(mut self, locations: BTreeMap<NodeName, String>) -> Self {
         self.dist_graph_mode = Some(DistGraphMode::MQTTRandom(locations));
+        self
+    }
+
+    pub fn mqtt_optimized_static_dist_graph(
+        mut self,
+        locations: BTreeMap<NodeName, String>,
+        dist_constraints: Vec<VarName>,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::MQTTStaticOptimized(
+            locations,
+            dist_constraints,
+        ));
         self
     }
 }
@@ -185,6 +209,9 @@ where
                     location_names,
                     Some(dist_graph_provider),
                 )
+            }
+            DistGraphMode::MQTTStaticOptimized(_locations, _dist_constraints) => {
+                todo!("Unimplemented")
             }
         };
         let context_builder = self
