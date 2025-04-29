@@ -334,7 +334,7 @@ where
     fn to_async_stream(expr: Expr, ctx: &Ctx) -> OutputStream<Val>;
 }
 
-pub trait Specification {
+pub trait Specification: Clone + 'static {
     type Expr;
 
     fn input_vars(&self) -> Vec<VarName>;

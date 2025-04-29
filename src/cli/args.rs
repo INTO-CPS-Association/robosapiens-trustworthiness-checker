@@ -73,6 +73,10 @@ pub struct DistributionMode {
     #[clap(long, value_delimiter = ' ', num_args = 1..)]
     pub mqtt_randomized_distributed: Option<Vec<String>>,
 
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    #[clap(requires = "distribution_constraints")]
+    pub mqtt_static_optimized: Option<Vec<String>>,
+
     #[clap(long)]
     #[clap(requires = "local_node")]
     pub distributed_work: bool,
@@ -104,6 +108,9 @@ pub struct Cli {
 
     #[arg(long)]
     pub local_node: Option<String>,
+
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    pub distribution_constraints: Option<Vec<String>>,
 }
 
 #[derive(Parser)]

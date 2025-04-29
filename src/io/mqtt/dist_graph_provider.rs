@@ -1,4 +1,12 @@
-use std::{collections::BTreeMap, mem, rc::Rc};
+use std::{
+    collections::BTreeMap,
+    mem,
+    rc::Rc,
+    sync::{
+        LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use crate::{
     OutputStream,
@@ -14,7 +22,7 @@ use futures::future::join_all;
 use paho_mqtt as mqtt;
 use serde_json::Value as JValue;
 use smol::{LocalExecutor, stream::StreamExt};
-use tracing::{info, warn};
+use tracing::{debug, info, info_span, warn};
 
 const QOS: i32 = 1;
 
@@ -24,6 +32,8 @@ pub struct MQTTDistGraphProvider {
     pub locations: BTreeMap<NodeName, String>,
     position_stream: Option<OutputStream<Vec<Pos>>>,
 }
+
+static PROVIDER_ID: LazyLock<AtomicUsize> = LazyLock::new(|| 0.into());
 
 impl MQTTDistGraphProvider {
     pub fn new(
@@ -53,6 +63,11 @@ impl MQTTDistGraphProvider {
 
         executor
             .spawn(async move {
+                let provider_id = PROVIDER_ID.fetch_add(1, Ordering::Relaxed);
+                let span = info_span!("MQTTDistGraphProvider with ID {}", provider_id);
+                let _ = span.enter();
+                info!("MQTTDistGraphProvider with ID {}", provider_id);
+
                 let (client, mut output) =
                     provide_mqtt_client_with_subscription("localhost".to_string())
                         .await
@@ -90,14 +105,15 @@ impl MQTTDistGraphProvider {
 
                             match pos {
                                 Some(pos) => {
-                                    info!("Parsed position from topic {}: {:?}", topic, pos);
-                                    location_txs[index].send(pos).await.expect(
-                                        format!(
-                                            "Failed to send position for topic = {} at index {}",
-                                            topic, index,
+                                    debug!("Parsed position from topic {}: {:?}", topic, pos);
+                                    if let Err(_) = location_txs[index].send(pos).await {
+                                        warn!(
+                                            "Provider {} failed to send position for topic = {} at index {}",
+                                            provider_id,
+                                            topic,
+                                            index,
                                         )
-                                        .as_str(),
-                                    );
+                                    };
                                 }
                                 None => warn!(
                                     "Failed to parse inner position from topic {}: {}",

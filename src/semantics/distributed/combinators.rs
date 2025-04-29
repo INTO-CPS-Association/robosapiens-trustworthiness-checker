@@ -20,9 +20,11 @@ impl StreamData for LabelledDistributionGraph {}
 pub struct DistributedContextBuilder<Val: StreamData> {
     async_ctx_builder: ContextBuilder<Val>,
     async_ctx: Option<AsyncCtx<Val>>,
+    nested_async_ctx: Option<AsyncCtx<Val>>,
     graph_name: Option<String>,
     node_names: Option<Vec<NodeName>>,
     graph_stream: Option<OutputStream<LabelledDistributionGraph>>,
+    presupplied_ctx: Option<Box<DistributedContext<Val>>>,
 }
 
 impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> {
@@ -36,6 +38,8 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
             graph_stream: None,
             graph_name: None,
             node_names: None,
+            presupplied_ctx: None,
+            nested_async_ctx: None,
         }
     }
 
@@ -66,14 +70,23 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
             graph_name: self.graph_name.clone(),
             graph_stream: None,
             node_names: self.node_names.clone(),
+            presupplied_ctx: None,
+            nested_async_ctx: None,
         }
     }
 
     fn build(self) -> DistributedContext<Val> {
+        if let Some(presupplied_ctx) = self.presupplied_ctx {
+            return *presupplied_ctx;
+        }
+
         let builder = self.partial_clone();
         let ctx = match self.async_ctx {
             Some(ctx) => ctx,
-            None => self.async_ctx_builder.build(),
+            None => self
+                .async_ctx_builder
+                .maybe_nested(self.nested_async_ctx)
+                .build(),
         };
         let executor = ctx.executor.clone();
         let graph_stream = self.graph_stream.unwrap();
@@ -112,6 +125,16 @@ impl<Val: StreamData> DistributedContextBuilder<Val> {
 
     pub fn context(mut self, ctx: AsyncCtx<Val>) -> Self {
         self.async_ctx = Some(ctx);
+        self
+    }
+
+    pub fn presupplied_ctx(mut self, ctx: DistributedContext<Val>) -> Self {
+        self.presupplied_ctx = Some(Box::new(ctx));
+        self
+    }
+
+    pub fn nested(mut self, ctx: AsyncCtx<Val>) -> Self {
+        self.nested_async_ctx = Some(ctx);
         self
     }
 }

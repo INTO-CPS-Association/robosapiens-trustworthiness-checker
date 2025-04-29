@@ -1,9 +1,13 @@
 use core::panic;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
+use std::future::ready;
+use std::iter::once;
 use std::marker::PhantomData;
 use std::mem;
+use std::pin::Pin;
 use std::rc::Rc;
 
 use async_cell::unsync::AsyncCell;
@@ -397,8 +401,12 @@ pub struct Context<Val: StreamData> {
     clock: usize,
     /// Variable manangers
     var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Val>>>>,
-    // Identifier - used for log messages
+    /// Identifier - used for log messages
     id: ContextId,
+    /// Nested context --- Lets us construct a constext which wraps another context. Currently only
+    /// used to recursively start parent in distributed monitoring, and not used for subcontexts
+    /// (which start and stop independently from the parent)
+    nested: Option<Box<Context<Val>>>,
     /// The builder used to construct us
     builder: ContextBuilder<Val>,
 }
@@ -411,11 +419,12 @@ pub struct Context<Val: StreamData> {
 // and should make tests a little easier
 // (e.g. for the distributed runtime)
 // We could look into a crate that derives this in the future.
-pub struct ContextBuilder<Val> {
+pub struct ContextBuilder<Val: StreamData> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     var_names: Option<Vec<VarName>>,
     input_streams: Option<Vec<OutputStream<Val>>>,
     history_length: Option<usize>,
+    nested: Option<Box<Context<Val>>>,
     id: Option<ContextId>,
 }
 
@@ -429,6 +438,7 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
             var_names: None,
             input_streams: None,
             history_length: None,
+            nested: None,
             id: None,
         }
     }
@@ -477,6 +487,7 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
         let var_names = self.var_names.expect("Var names not supplied");
         let input_streams = self.input_streams.expect("Input streams not supplied");
         let history_length = self.history_length.unwrap_or(0);
+        let nested = self.nested;
         assert_eq!(var_names.len(), input_streams.len());
 
         let clock: usize = 0;
@@ -517,16 +528,27 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
             history_length,
             clock,
             var_managers,
+            nested,
             builder,
             id,
         }
     }
 }
 
-impl<Val> ContextBuilder<Val> {
-    fn id(mut self, id: u16, parent_id: Option<u16>) -> Self {
+impl<Val: StreamData> ContextBuilder<Val> {
+    pub fn id(mut self, id: u16, parent_id: Option<u16>) -> Self {
         let id = ContextId { id, parent_id };
         self.id = Some(id);
+        self
+    }
+
+    pub fn nested(mut self, nested: Context<Val>) -> Self {
+        self.nested = Some(Box::new(nested));
+        self
+    }
+
+    pub fn maybe_nested(mut self, nested: Option<Context<Val>>) -> Self {
+        self.nested = nested.map(Box::new);
         self
     }
 }
@@ -612,11 +634,18 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
     }
 
     async fn tick(&mut self) {
+        let nested_tick = match self.nested.as_mut() {
+            Some(nested) => nested.tick(),
+            None => Box::pin(ready(())),
+        };
         join_all(
-            self.var_managers
-                .borrow_mut()
-                .iter_mut()
-                .map(|(_, var_manager)| var_manager.tick()),
+            once(nested_tick).chain(self.var_managers.borrow_mut().iter_mut().map(
+                |(_, var_manager)| {
+                    Box::pin(async move {
+                        var_manager.tick().await;
+                    }) as Pin<Box<dyn Future<Output = ()>>>
+                },
+            )),
         )
         .await;
         self.clock += 1;
@@ -628,6 +657,10 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
 
     async fn run(&mut self) {
         if !self.is_clock_started() {
+            info!("Run for Context[id={}]", self.id);
+            if let Some(nested) = self.nested.as_mut() {
+                nested.run().await;
+            }
             let mut var_managers = self.var_managers.borrow_mut();
             for (_, var_manager) in mem::take(&mut *var_managers).into_iter() {
                 self.executor.spawn(var_manager.run()).detach();
@@ -685,6 +718,30 @@ pub struct AsyncMonitorBuilder<
     pub(super) context_builder: Option<Ctx::Builder>,
     expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
+}
+
+impl<
+    M: Specification<Expr = Expr>,
+    Ctx: StreamContext<V>,
+    V: StreamData,
+    Expr,
+    S: MonitoringSemantics<Expr, V, Ctx>,
+> AsyncMonitorBuilder<M, Ctx, V, Expr, S>
+{
+    pub fn partial_clone(&self) -> Self {
+        Self {
+            executor: self.executor.clone(),
+            model: self.model.clone(),
+            input: None,
+            output: None,
+            context_builder: self
+                .context_builder
+                .as_ref()
+                .map(|builder| builder.partial_clone()),
+            expr_t: PhantomData,
+            semantics_t: PhantomData,
+        }
+    }
 }
 
 pub trait AbstractAsyncMonitorBuilder<M, Ctx: StreamContext<V>, V: StreamData>:

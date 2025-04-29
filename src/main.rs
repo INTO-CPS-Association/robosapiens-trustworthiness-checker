@@ -72,6 +72,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distributed_work: false,
             mqtt_centralised_distributed: None,
             mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
         } => DistributionMode::CentralMonitor,
         CliDistMode {
             centralised: _,
@@ -80,6 +81,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distributed_work: _,
             mqtt_centralised_distributed: None,
             mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
         } => {
             debug!("centralised mode");
             let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
@@ -96,6 +98,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distributed_work: _,
             mqtt_centralised_distributed: None,
             mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
         } => DistributionMode::LocalMonitor(Box::new(
             topics
                 .into_iter()
@@ -109,6 +112,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distributed_work: true,
             mqtt_centralised_distributed: None,
             mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
         } => {
             let local_node = cli.local_node.expect("Local node not specified");
             info!("Waiting for work assignment on node {}", local_node);
@@ -128,6 +132,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distributed_work: _,
             mqtt_centralised_distributed: Some(locations),
             mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
         } => {
             debug!("setting up distributed centralised mode");
             DistributionMode::DistributedCentralised(locations)
@@ -139,9 +144,28 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
             distributed_work: _,
             mqtt_centralised_distributed: None,
             mqtt_randomized_distributed: Some(locations),
+            mqtt_static_optimized: None,
         } => {
             debug!("setting up distributed random mode");
             DistributionMode::DistributedRandom(locations)
+        }
+        CliDistMode {
+            centralised: _,
+            distribution_graph: _,
+            local_topics: _,
+            distributed_work: _,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: Some(locations),
+        } => {
+            info!("setting up static optimization mode");
+            let dist_constraints = cli
+                .distribution_constraints
+                .expect("Distribution constraints must be provided")
+                .into_iter()
+                .map(|x| x.into())
+                .collect();
+            DistributionMode::DistributedOptimizedStatic(locations, dist_constraints)
         }
         _ => unreachable!(),
     });

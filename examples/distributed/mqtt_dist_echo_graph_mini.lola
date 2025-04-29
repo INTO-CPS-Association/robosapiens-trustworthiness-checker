@@ -5,18 +5,8 @@ in tb3
 out tb1Echo
 out tb2Echo
 out tb3Echo
-out tb1SourceRobotId
-out tb1NearbyRobotIds
-out tb1NearbyRobotPoses
-out tb1SourceRobotPose
-out tb1Timestamp
 out graphConstraint1
 out graphConstraint2
-tb1NearbyRobotIds = List.get(List.get(tb1, 0), 1)
-tb1NearbyRobotPoses = List.get(List.get(tb1, 1), 1)
-tb1SourceRobotId= List.get(List.get(tb1, 2), 1)
-tb1SourceRobotPose = List.get(List.get(tb1, 3), 1)
-tb1Timestamp = List.get(List.get(tb1, 4), 1)
 tb1Echo = tb1
 tb2Echo = tb2
 tb3Echo = tb3
