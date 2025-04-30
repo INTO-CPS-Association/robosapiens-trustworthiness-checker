@@ -5,7 +5,7 @@ use async_unsync::{bounded, oneshot};
 use futures::future::{LocalBoxFuture, join_all};
 use smol::LocalExecutor;
 use tokio_stream::StreamExt;
-use tracing::{Level, debug, info, instrument};
+use tracing::{Level, debug, instrument};
 
 use crate::{
     core::{OutputHandler, OutputStream, StreamData, VarName},
@@ -81,7 +81,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
     fn run(&mut self) -> LocalBoxFuture<'static, ()> {
         let receivers: Vec<oneshot::Receiver<OutputStream<V>>> =
             mem::take(&mut self.stream_receivers).expect("Stream receivers not found");
-        info!(
+        debug!(
             name = "Running ManualOutputHandler",
             num_streams = receivers.len()
         );
@@ -112,7 +112,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
                         yield output;
                     } else {
                         // One of the streams has ended, so we should stop
-                        info!(
+                        debug!(
                             "Stopping ManualOutputHandler with len(nexts) = {}",
                             streams.len()
                         );

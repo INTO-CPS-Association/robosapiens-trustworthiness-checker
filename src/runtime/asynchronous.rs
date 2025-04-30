@@ -657,7 +657,7 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
 
     async fn run(&mut self) {
         if !self.is_clock_started() {
-            info!("Run for Context[id={}]", self.id);
+            debug!("Run for Context[id={}]", self.id);
             if let Some(nested) = self.nested.as_mut() {
                 nested.run().await;
             }

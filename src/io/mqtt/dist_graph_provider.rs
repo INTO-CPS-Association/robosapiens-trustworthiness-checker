@@ -66,7 +66,7 @@ impl MQTTDistGraphProvider {
                 let provider_id = PROVIDER_ID.fetch_add(1, Ordering::Relaxed);
                 let span = info_span!("MQTTDistGraphProvider with ID {}", provider_id);
                 let _ = span.enter();
-                info!("MQTTDistGraphProvider with ID {}", provider_id);
+                debug!("MQTTDistGraphProvider with ID {}", provider_id);
 
                 let (client, mut output) =
                     provide_mqtt_client_with_subscription("localhost".to_string())

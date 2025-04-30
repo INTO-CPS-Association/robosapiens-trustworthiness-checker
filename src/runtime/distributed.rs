@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::BTreeMap, mem, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc};
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -23,12 +23,13 @@ use crate::{
         mqtt::dist_graph_provider::{self, MQTTDistGraphProvider},
         testing::ManualOutputHandler,
     },
-    semantics::distributed::combinators::{DistributedContext, DistributedContextBuilder},
+    semantics::distributed::{
+        combinators::{DistributedContext, DistributedContextBuilder},
+        localisation::Localisable,
+    },
 };
 
-use super::asynchronous::{
-    AbstractAsyncMonitorBuilder, AsyncMonitorBuilder, AsyncMonitorRunner, Context, ContextBuilder,
-};
+use super::asynchronous::{AbstractAsyncMonitorBuilder, AsyncMonitorBuilder, AsyncMonitorRunner};
 
 #[derive(Debug, Clone)]
 pub enum DistGraphMode {
@@ -50,7 +51,7 @@ pub enum DistGraphMode {
 }
 
 impl<
-    M: Specification<Expr = Expr>,
+    M: Specification<Expr = Expr> + Localisable,
     S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
     Expr: 'static,
 > AbstractAsyncMonitorBuilder<M, DistributedContext<Value>, Value>
@@ -120,42 +121,47 @@ impl<
     }
 }
 impl<
-    M: Specification<Expr = Expr>,
+    M: Specification<Expr = Expr> + Localisable,
     S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
     Expr: 'static,
 > DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>
 {
     fn output_stream_for_graph(
         builder: Self,
+        dist_constraints: Vec<VarName>,
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
-        input_ctx: Rc<RefCell<Context<Value>>>,
+        // input_ctx: Rc<RefCell<Context<Value>>>,
         context_builder: &Option<DistributedContextBuilder<Value>>,
         executor: Rc<LocalExecutor<'static>>,
         labelled_graph: &LabelledDistributionGraph,
     ) -> OutputStream<Vec<Value>> {
         // Build a runtime for constructing the output stream
-        info!(
+        debug!(
             "Output stream for graph with input_vars: {:?} and output_vars: {:?}",
             input_vars, output_vars
         );
-        let ctx = input_ctx.borrow().subcontext(1);
-        let input_provider = Box::new(
-            input_vars
-                .iter()
-                .map(|var| {
-                    let var_clone = var.clone();
-                    (
-                        var.clone(),
-                        Box::pin(ctx.var(var).unwrap().map(move |x| {
-                            info!("forwarding input {:?} for {:?}", x, var_clone);
-                            x
-                        })) as OutputStream<Value>,
-                    )
-                })
-                .collect::<BTreeMap<_, _>>(),
-        );
-        let mut output_handler = ManualOutputHandler::new(executor.clone(), output_vars.clone());
+        // let ctx = input_ctx.borrow().subcontext(1);
+        let input_provider: Box<dyn InputProvider<Val = Value>> =
+            Box::new(BTreeMap::<VarName, OutputStream<Value>>::new());
+        // let input_provider = Box::new(
+        //     input_vars
+        //         .iter()
+        //         .map(|var| {
+        //             // let var_clone = var.clone();
+        //             (
+        //                 var.clone(),
+        //                 Box::pin(ctx.var(var).unwrap().map(move |x| {
+        //                     // info!("forwarding input {:?} for {:?}", x, var_clone);
+        //                     x
+        //                 })) as OutputStream<Value>,
+        //             )
+        //         })
+        //         .collect::<BTreeMap<_, _>>(),
+        // );
+        // let mut output_handler = ManualOutputHandler::new(executor.clone(), output_vars.clone());
+        let mut output_handler =
+            ManualOutputHandler::new(executor.clone(), dist_constraints.clone());
         let output_stream: OutputStream<Vec<Value>> =
             Box::pin(output_handler.get_output().map(|output| {
                 info!("Got output = {:?}", output);
@@ -165,8 +171,8 @@ impl<
         let context_builder = context_builder
             .as_ref()
             .map(|b| b.partial_clone())
-            .unwrap_or(DistributedContextBuilder::new().graph_stream(potential_dist_graph_stream))
-            .nested(ctx);
+            .unwrap_or(DistributedContextBuilder::new().graph_stream(potential_dist_graph_stream));
+        // .nested(ctx);
         let runtime = builder
             .context_builder(context_builder)
             .static_dist_graph(labelled_graph.clone())
@@ -187,7 +193,7 @@ impl<
         dist_constraints: Vec<VarName>,
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
-        input_ctx: Rc<RefCell<Context<Value>>>,
+        // input_ctx: Rc<RefCell<Context<Value>>>,
         context_builder: Option<DistributedContextBuilder<Value>>,
         executor: Rc<LocalExecutor<'static>>,
     ) -> OutputStream<LabelledDistributionGraph> {
@@ -195,20 +201,32 @@ impl<
         let dist_constraints = dist_constraints.clone();
         let context_builder = context_builder.map(|b| b.partial_clone());
         let executor = executor.clone();
-        let var_names: Vec<VarName> = input_vars
+        // let var_names: Vec<VarName> = input_vars
+        //     .iter()
+        //     .chain(output_vars.iter())
+        //     .filter(|name| !dist_constraints.contains(name))
+        //     .cloned()
+        //     .collect();
+        let non_dist_constraints: Vec<VarName> = output_vars
             .iter()
-            .chain(output_vars.iter())
+            .filter(|name| !dist_constraints.contains(name))
             .cloned()
             .collect();
+        let localised_spec = builder
+            .async_monitor_builder
+            .model
+            .as_ref()
+            .unwrap()
+            .localise(&dist_constraints);
+        let builder = builder.model(localised_spec);
 
         info!("Starting optimized distributed graph generation");
 
         Box::pin(async_stream::stream! {
-            for (i, graph) in possible_labelled_dist_graphs(initial_graph, var_names.clone()).enumerate() {
+            for (i, graph) in possible_labelled_dist_graphs(initial_graph, dist_constraints.clone(), non_dist_constraints).enumerate() {
                 // Clone everything needed for the async block
                 let builder = builder.partial_clone();
                 let dist_constraints = dist_constraints.clone();
-                let var_names = var_names.clone();
                 let context_builder = (&context_builder).as_ref().map(|b| b.partial_clone());
                 let executor = executor.clone();
 
@@ -216,23 +234,25 @@ impl<
 
                 let mut output_stream = Self::output_stream_for_graph(
                     builder,
+                    dist_constraints.clone(),
                     input_vars.clone(),
                     output_vars.clone(),
-                    input_ctx.clone(),
+                    // input_ctx.clone(),
                     &context_builder,
                     executor,
                     &graph,
                 );
 
-                info!("starting context");
-                input_ctx.borrow_mut().tick().await;
-                info!("getting first output");
+                // info!("starting context");
+                // input_ctx.borrow_mut().tick().await;
+                // info!("getting first output");
                 let first_output: Vec<Value> = output_stream.next().await.unwrap();
-                info!("got first output");
-                let dist_constraints_hold = var_names.iter().zip(first_output).all(|(var_name, res)| {
-                    dist_constraints.contains(var_name) && match res {
+                // info!("got first output");
+                let dist_constraints_hold = output_vars.iter().zip(first_output).all(|(var_name, res)| {
+                    // !dist_constraints.contains(var_name) ||
+                    match res {
                         Value::Bool(b) => {
-                            info!("True constraint");
+                            // info!("True constraint");
                             b
                         },
                         _ => {
@@ -241,6 +261,7 @@ impl<
                     }
                 });
                 if dist_constraints_hold {
+                    info!("Found matching graph!");
                     yield graph;
                 }
             }
@@ -252,7 +273,7 @@ impl<Expr: 'static, S, M> AbstractMonitorBuilder<M, Value>
     for DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>
 where
     S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
-    M: Specification<Expr = Expr>,
+    M: Specification<Expr = Expr> + Localisable,
 {
     type Mon = DistributedMonitorRunner<Expr, Value, S, M>;
 
@@ -281,7 +302,7 @@ where
     }
 
     fn output(mut self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
-        info!("Setting output handler");
+        debug!("Setting output handler");
         self.async_monitor_builder = self.async_monitor_builder.output(output);
         self
     }
@@ -290,7 +311,7 @@ where
         self
     }
 
-    fn build(mut self) -> Self::Mon {
+    fn build(self) -> Self::Mon {
         let dist_graph_mode = self
             .dist_graph_mode
             .as_ref()
@@ -379,37 +400,37 @@ where
                     .as_ref()
                     .unwrap()
                     .output_vars();
-                let mut input_provider = mem::take(&mut self.input).unwrap();
-                let input_streams = input_vars
-                    .iter()
-                    .map(|var| {
-                        input_provider
-                            .input_stream(var)
-                            .expect(format!("Missing input stream for var {}", var).as_str())
-                    })
-                    .collect();
-                let input_proxy_context = Rc::new(RefCell::new(
-                    ContextBuilder::new()
-                        .executor(executor.clone())
-                        .var_names(input_vars.clone())
-                        .history_length(0)
-                        .input_streams(input_streams)
-                        .build(),
-                ));
+                // let mut input_provider = mem::take(&mut self.input).unwrap();
+                // let input_streams = input_vars
+                //     .iter()
+                //     .map(|var| {
+                //         input_provider
+                //             .input_stream(var)
+                //             .expect(format!("Missing input stream for var {}", var).as_str())
+                //     })
+                //     .collect();
+                // let input_proxy_context = Rc::new(RefCell::new(
+                //     ContextBuilder::new()
+                //         .executor(executor.clone())
+                //         .var_names(input_vars.clone())
+                //         .history_length(0)
+                //         .input_streams(input_streams)
+                //         .build(),
+                // ));
                 // Recreate input provider based on proxy
-                self = self.input(Box::new(
-                    input_vars
-                        .iter()
-                        .map(|var| {
-                            (
-                                var.clone(),
-                                input_proxy_context.borrow().var(var).expect(
-                                    format!("Missing input stream for var {}", var).as_str(),
-                                ),
-                            )
-                        })
-                        .collect::<BTreeMap<_, _>>(),
-                ));
+                // self = self.input(Box::new(
+                //     input_vars
+                //         .iter()
+                //         .map(|var| {
+                //             (
+                //                 var.clone(),
+                //                 input_proxy_context.borrow().var(var).expect(
+                //                     format!("Missing input stream for var {}", var).as_str(),
+                //                 ),
+                //             )
+                //         })
+                //         .collect::<BTreeMap<_, _>>(),
+                // ));
 
                 let builder = self.partial_clone();
                 let context_builder = self.context_builder.as_ref().map(|b| b.partial_clone());
@@ -424,7 +445,7 @@ where
                         let mut labelled_dist_graphs: LocalBoxStream<LabelledDistributionGraph> =
                             Self::possible_labelled_dist_graph_stream(builder, initial_graph,
                             dist_constraints.clone(), input_vars.clone(), output_vars.clone(),
-                            input_proxy_context.clone(), context_builder, executor.clone());
+                            context_builder, executor.clone());
 
                         let chosen_dist_graph: LabelledDistributionGraph = match labelled_dist_graphs.next().await {
                             Some(dist_graph) => dist_graph,
@@ -432,6 +453,8 @@ where
                         };
 
                         yield chosen_dist_graph.clone();
+                        info!("Labelled optimized graph: {:?}", chosen_dist_graph);
+                        graph_to_png(chosen_dist_graph.clone(), "distributed_graph.png").await.unwrap();
 
                         while let Some(_) = dist_graph_stream.next().await {
                             yield chosen_dist_graph.clone();

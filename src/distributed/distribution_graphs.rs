@@ -3,7 +3,7 @@
  *   of an individual robot)?
  */
 
-use std::{collections::BTreeMap, fmt::Display};
+use std::{collections::BTreeMap, fmt::Display, iter::once};
 use thiserror::Error;
 
 use petgraph::{dot::Dot, prelude::*};
@@ -446,21 +446,32 @@ fn possible_var_assignments(
 
 pub struct PossibleLabelledDistGraphs {
     base_graph: DistributionGraph,
+    central_var_names: Vec<VarName>,
     var_names: Vec<VarName>,
     locations: Vec<NodeName>,
     assignments_iter: VarAssignmentsIter,
 }
 
 impl PossibleLabelledDistGraphs {
-    pub fn new(base_graph: DistributionGraph, var_names: Vec<VarName>) -> Self {
+    pub fn new(
+        base_graph: DistributionGraph,
+        central_var_names: Vec<VarName>,
+        var_names: Vec<VarName>,
+    ) -> Self {
         let locations = base_graph
             .graph
             .node_indices()
             .map(|idx| base_graph.graph[idx].clone())
             .collect::<Vec<_>>();
         let assignments_iter = possible_var_assignments(locations.clone(), var_names.clone());
+        info!(
+            ?var_names,
+            ?central_var_names,
+            "Iterating over potential graphs"
+        );
         Self {
             base_graph,
+            central_var_names,
             var_names,
             locations,
             assignments_iter,
@@ -486,6 +497,10 @@ impl Iterator for PossibleLabelledDistGraphs {
                             .collect(),
                     )
                 })
+                .chain(once((
+                    self.base_graph.central_monitor,
+                    self.central_var_names.clone(),
+                )))
                 .collect();
             GenericLabelledDistributionGraph {
                 dist_graph: self.base_graph.clone(),
@@ -500,9 +515,10 @@ impl Iterator for PossibleLabelledDistGraphs {
 /// assigning each variable in `var_names` to a node in the graph.
 pub fn possible_labelled_dist_graphs(
     base_graph: DistributionGraph,
+    central_var_names: Vec<VarName>,
     var_names: Vec<VarName>,
 ) -> PossibleLabelledDistGraphs {
-    PossibleLabelledDistGraphs::new(base_graph, var_names)
+    PossibleLabelledDistGraphs::new(base_graph, central_var_names, var_names)
 }
 
 #[cfg(test)]
@@ -769,7 +785,7 @@ mod tests {
         };
         let var_names = vec!["x".into(), "y".into()];
         let possible_labelled_dist_graphs: Vec<_> =
-            possible_labelled_dist_graphs(dist_graph.clone(), var_names).collect();
+            possible_labelled_dist_graphs(dist_graph.clone(), vec![], var_names).collect();
         assert_eq!(possible_labelled_dist_graphs.len(), 9);
     }
 

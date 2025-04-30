@@ -2,7 +2,7 @@ use static_assertions::assert_obj_safe;
 use std::collections::HashSet;
 use std::fmt::Debug;
 
-use tracing::info;
+use tracing::debug;
 
 use crate::lang::dynamic_lola::ast::LOLASpecification;
 
@@ -63,7 +63,7 @@ impl Localisable for LOLASpecification {
         output_vars.retain(|v| local_vars.contains(v));
         exprs.retain(|v, _| local_vars.contains(v));
         let expr_input_vars: HashSet<_> = exprs.values().flat_map(|e| e.inputs()).collect();
-        info!("Expr input vars: {:?}", expr_input_vars);
+        debug!("Expr input vars: {:?}", expr_input_vars);
         // We keep the order from the original input vars,
         // but remove variable that are not needed locally
         let new_input_vars: Vec<_> = input_vars
@@ -72,8 +72,8 @@ impl Localisable for LOLASpecification {
             .chain(to_remove)
             .filter(|v| expr_input_vars.contains(v))
             .collect();
-        info!("Old input vars: {:?}", input_vars);
-        info!("New input vars: {:?}", new_input_vars);
+        debug!("Old input vars: {:?}", input_vars);
+        debug!("New input vars: {:?}", new_input_vars);
 
         LOLASpecification::new(
             new_input_vars,
