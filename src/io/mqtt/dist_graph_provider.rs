@@ -146,11 +146,15 @@ impl MQTTDistGraphProvider {
         Box::pin(mem::take(&mut self.position_stream).unwrap())
     }
 
-    pub fn dist_graph_stream(&mut self) -> OutputStream<DistributionGraph> {
+    pub fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
         let central_node = self.central_node.clone();
         let locations = self.locations.keys().cloned().collect::<Vec<_>>();
         Box::pin(self.locations_stream().map(move |positions| {
-            dist_graph_from_positions(central_node.clone(), locations.clone(), positions)
+            Rc::new(dist_graph_from_positions(
+                central_node.clone(),
+                locations.clone(),
+                positions,
+            ))
         }))
     }
 }

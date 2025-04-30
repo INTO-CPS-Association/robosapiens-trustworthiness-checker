@@ -151,7 +151,7 @@ mod tests {
     use crate::distributed::distribution_graphs::{
         GenericDistributionGraph, LabelledDistributionGraph,
     };
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, rc::Rc};
 
     #[test]
     fn test_dist_graph_paths() {
@@ -168,10 +168,10 @@ mod tests {
         #[allow(unused)]
         let var_names = ["x".to_string(), "y".to_string(), "z".to_string()];
 
-        let dist_graph = GenericDistributionGraph {
+        let dist_graph = Rc::new(GenericDistributionGraph {
             graph,
             central_monitor: f,
-        };
+        });
 
         let labelled_dist_graph = LabelledDistributionGraph {
             var_names: vec!["x".into(), "y".into(), "z".into()],

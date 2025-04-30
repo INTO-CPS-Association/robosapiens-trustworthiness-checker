@@ -166,7 +166,7 @@ impl<
     /// and a distribution graph
     fn possible_labelled_dist_graph_stream(
         builder: Self,
-        initial_graph: DistributionGraph,
+        initial_graph: Rc<DistributionGraph>,
         dist_constraints: Vec<VarName>,
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
@@ -446,7 +446,7 @@ where
 fn centralised_dist_graph_stream(
     var_names: Vec<VarName>,
     central_node: NodeName,
-    mut dist_graph_stream: OutputStream<DistributionGraph>,
+    mut dist_graph_stream: OutputStream<Rc<DistributionGraph>>,
 ) -> OutputStream<LabelledDistributionGraph> {
     info!("Starting centralised_dist_graph_stream");
     Box::pin(async_stream::stream! {
@@ -478,7 +478,7 @@ fn centralised_dist_graph_stream(
 
 fn random_dist_graph_stream(
     var_names: Vec<VarName>,
-    mut dist_graph_stream: OutputStream<DistributionGraph>,
+    mut dist_graph_stream: OutputStream<Rc<DistributionGraph>>,
 ) -> OutputStream<LabelledDistributionGraph> {
     info!("Starting random distribution graph stream");
     Box::pin(async_stream::stream! {

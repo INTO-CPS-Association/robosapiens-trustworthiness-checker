@@ -3,7 +3,7 @@
  *   of an individual robot)?
  */
 
-use std::{collections::BTreeMap, fmt::Display, iter::once};
+use std::{collections::BTreeMap, fmt::Display, iter::once, rc::Rc};
 use thiserror::Error;
 
 use petgraph::{dot::Dot, prelude::*};
@@ -103,7 +103,7 @@ impl<W: PartialEq> PartialEq for GenericDistributionGraph<W> {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct GenericLabelledDistributionGraph<W> {
-    pub dist_graph: GenericDistributionGraph<W>,
+    pub dist_graph: Rc<GenericDistributionGraph<W>>,
     pub var_names: Vec<VarName>,
     pub node_labels: BTreeMap<NodeIndex, Vec<VarName>>,
 }
@@ -445,7 +445,7 @@ fn possible_var_assignments(
 }
 
 pub struct PossibleLabelledDistGraphs {
-    base_graph: DistributionGraph,
+    base_graph: Rc<DistributionGraph>,
     central_var_names: Vec<VarName>,
     var_names: Vec<VarName>,
     locations: Vec<NodeName>,
@@ -454,7 +454,7 @@ pub struct PossibleLabelledDistGraphs {
 
 impl PossibleLabelledDistGraphs {
     pub fn new(
-        base_graph: DistributionGraph,
+        base_graph: Rc<DistributionGraph>,
         central_var_names: Vec<VarName>,
         var_names: Vec<VarName>,
     ) -> Self {
@@ -514,7 +514,7 @@ impl Iterator for PossibleLabelledDistGraphs {
 /// Returns an iterator over all possible labellings of a distribution graph,
 /// assigning each variable in `var_names` to a node in the graph.
 pub fn possible_labelled_dist_graphs(
-    base_graph: DistributionGraph,
+    base_graph: Rc<DistributionGraph>,
     central_var_names: Vec<VarName>,
     var_names: Vec<VarName>,
 ) -> PossibleLabelledDistGraphs {
@@ -589,7 +589,7 @@ pub mod generation {
                     );
                 }
                 GenericLabelledDistributionGraph {
-                    dist_graph,
+                    dist_graph: Rc::new(dist_graph),
                     var_names: var_names.into_iter().map(|x| x.into()).collect(),
                     node_labels,
                 }
@@ -663,10 +663,10 @@ mod tests {
         let c = graph.add_node("C".into());
         graph.add_edge(a, b, 0);
         graph.add_edge(b, c, 0);
-        let dist_graph = DistributionGraph {
+        let dist_graph = Rc::new(DistributionGraph {
             central_monitor: a,
             graph,
-        };
+        });
         let labelled_graph = LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["a".into(), "b".into(), "c".into()],
@@ -685,10 +685,10 @@ mod tests {
         let c = graph.add_node("C".into());
         graph.add_edge(a, b, 0);
         graph.add_edge(b, c, 1);
-        let dist_graph = DistributionGraph {
+        let dist_graph = Rc::new(DistributionGraph {
             central_monitor: a,
             graph,
-        };
+        });
         let labelled_dist_graph = LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["a".into(), "b".into(), "c".into()],
@@ -731,10 +731,10 @@ mod tests {
         graph.add_node(NodeName::new("B"));
         graph.add_edge(NodeIndex::new(0), NodeIndex::new(1), 2);
         graph.add_edge(NodeIndex::new(1), NodeIndex::new(0), 2);
-        let dist_graph_expected = DistributionGraph {
+        let dist_graph_expected = Rc::new(DistributionGraph {
             central_monitor: NodeIndex::new(0),
             graph,
-        };
+        });
         let dist_graph =
             dist_graph_from_positions(central_monitor.clone(), locations.clone(), positions);
         assert_eq!(
@@ -753,10 +753,10 @@ mod tests {
         let c = graph.add_node("B".into());
         graph.add_edge(a, b, 0);
         graph.add_edge(b, c, 1);
-        let dist_graph = DistributionGraph {
+        let dist_graph = Rc::new(DistributionGraph {
             central_monitor: a,
             graph,
-        };
+        });
         let labelled_dist_graph = LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["a".into(), "b".into(), "c".into()],
@@ -779,10 +779,10 @@ mod tests {
         let c = graph.add_node("B".into());
         graph.add_edge(a, b, 0);
         graph.add_edge(b, c, 1);
-        let dist_graph = DistributionGraph {
+        let dist_graph = Rc::new(DistributionGraph {
             central_monitor: a,
             graph,
-        };
+        });
         let var_names = vec!["x".into(), "y".into()];
         let possible_labelled_dist_graphs: Vec<_> =
             possible_labelled_dist_graphs(dist_graph.clone(), vec![], var_names).collect();
