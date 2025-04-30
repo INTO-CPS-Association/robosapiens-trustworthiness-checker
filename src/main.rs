@@ -226,8 +226,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     let builder = builder.model(model.clone());
 
     // Create the input provider builder
-    let input_provider_builder: InputProviderBuilder = cli.input_mode.into();
-    let input_provider_builder = input_provider_builder
+    let input_provider_builder = InputProviderBuilder::new(cli.input_mode)
         .executor(executor.clone())
         .model(model)
         .lang(cli.language.clone().unwrap_or(Language::Lola));

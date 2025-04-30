@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::{
     LOLASpecification, Monitor, Value, VarName,
-    cli::args::{Cli, InputMode, Language},
+    cli::args::Cli,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
     io::InputProviderBuilder,
