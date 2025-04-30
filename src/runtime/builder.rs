@@ -10,6 +10,7 @@ use crate::{
     cli::args::{Cli, InputMode, Language},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
+    io::InputProviderBuilder,
     lang::dynamic_lola::type_checker::{TypedLOLASpecification, type_check},
     semantics::distributed::{contexts::DistributedContext, localisation::LocalitySpec},
 };
@@ -181,18 +182,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
     pub input: Option<Box<dyn crate::InputProvider<Val = V>>>,
-    pub input_fn: Option<(
-        InputMode,
-        Language,
-        LOLASpecification,
-        Rc<LocalExecutor<'static>>,
-        fn(
-            InputMode,
-            Language,
-            LOLASpecification,
-            Rc<LocalExecutor<'static>>,
-        ) -> LocalBoxFuture<'static, Box<dyn crate::InputProvider<Val = V>>>,
-    )>,
+    pub input_provider_builder: Option<InputProviderBuilder>,
     pub output: Option<Box<dyn OutputHandler<Val = V>>>,
     pub dependencies: Option<DependencyManager>,
     pub runtime: Runtime,
@@ -243,21 +233,9 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         }
     }
 
-    pub fn input_fn(
-        self,
-        input_mode: InputMode,
-        language: Language,
-        spec: LOLASpecification,
-        executor: Rc<LocalExecutor<'static>>,
-        in_fn: fn(
-            InputMode,
-            Language,
-            LOLASpecification,
-            Rc<LocalExecutor<'static>>,
-        ) -> LocalBoxFuture<'static, Box<dyn crate::InputProvider<Val = V>>>,
-    ) -> Self {
+    pub fn input_provider_builder(self, builder: InputProviderBuilder) -> Self {
         Self {
-            input_fn: Some((input_mode, language, spec, executor, in_fn)),
+            input_provider_builder: Some(builder),
             ..self
         }
     }
@@ -287,7 +265,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             executor: None,
             model: None,
             input: None,
-            input_fn: None,
+            input_provider_builder: None,
             output: None,
             dependencies: None,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -334,7 +312,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     }
 
     fn build(self) -> Self::Mon {
-        if self.distribution_mode_fn.is_some() || self.input_fn.is_some() {
+        if self.distribution_mode_fn.is_some() || self.input_provider_builder.is_some() {
             panic!("Call async_build instead");
         }
 
@@ -539,8 +517,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         } else {
             builder
         };
-        let builder = if let Some((input_mode, language, spec, executor, fun)) = self.input_fn {
-            let input = fun(input_mode, language, spec, executor).await;
+        let builder = if let Some(input_provider_builder) = self.input_provider_builder {
+            let input = input_provider_builder.async_build().await;
             builder.input(input)
         } else if let Some(input) = self.input {
             builder.input(input)

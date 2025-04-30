@@ -1,39 +1,37 @@
-use core::panic;
 use std::rc::Rc;
 
 // #![deny(warnings)]
 use clap::Parser;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
-use tracing::{debug, info, info_span};
+use tracing::{debug, info};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::core::{AbstractMonitorBuilder, OutputHandler, Runnable};
+use trustworthiness_checker::core::{
+    AbstractMonitorBuilder, MQTT_HOSTNAME, OutputHandler, Runnable,
+};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
-use trustworthiness_checker::io::file::input_provider;
+use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
 use trustworthiness_checker::runtime::distributed::SchedulerCommunication;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, io::file::parse_file};
-use trustworthiness_checker::{InputProvider, LOLASpecification, Value, VarName};
+use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, DistributionMode as CliDistMode, InputMode, Language, OutputMode, ParserMode,
-    SchedulingType,
+    Cli, DistributionMode as CliDistMode, Language, OutputMode, ParserMode, SchedulingType,
 };
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::io::ros::{
     input_provider::ROSInputProvider, ros_topic_stream_mapping,
 };
-
-const MQTT_HOSTNAME: &str = "localhost";
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -109,116 +107,6 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
                 centralised: true, ..
             } => DistributionMode::CentralMonitor,
             _ => unreachable!(),
-        }
-    })
-}
-
-fn create_input_providers(
-    input_mode: InputMode,
-    language: Language,
-    model: LOLASpecification,
-    executor: Rc<LocalExecutor<'static>>,
-) -> LocalBoxFuture<'static, Box<dyn InputProvider<Val = Value>>> {
-    Box::pin(async move {
-        match input_mode {
-            InputMode {
-                input_file: Some(input_file),
-                ..
-            } => {
-                let input_file_parser = match language {
-                    Language::Lola => tc::lang::untimed_input::untimed_input_file,
-                };
-                Box::new(
-                    tc::parse_file(input_file_parser, &input_file)
-                        .await
-                        .expect("Input file could not be parsed"),
-                ) as Box<dyn InputProvider<Val = Value>>
-            }
-            InputMode {
-                input_ros_topics: Some(_input_ros_topics),
-                ..
-            } => {
-                #[cfg(feature = "ros")]
-                {
-                    let input_mapping_str = std::fs::read_to_string(&_input_ros_topics)
-                        .expect("Input mapping file could not be read");
-                    let input_mapping =
-                        ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
-                            .expect("Input mapping file could not be parsed");
-                    Box::new(
-                        ROSInputProvider::new(executor.clone(), input_mapping)
-                            .expect("ROS input provider could not be created"),
-                    )
-                }
-                #[cfg(not(feature = "ros"))]
-                {
-                    unimplemented!("ROS support not enabled")
-                }
-            }
-            InputMode {
-                input_mqtt_topics: Some(input_mqtt_topics),
-                ..
-            } => {
-                let var_topics = input_mqtt_topics
-                    .iter()
-                    .map(|topic| (VarName::new(topic), topic.clone()))
-                    .collect();
-                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
-                    executor.clone(),
-                    MQTT_HOSTNAME,
-                    var_topics,
-                )
-                .expect("MQTT input provider could not be created");
-                mqtt_input_provider
-                    .started
-                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-                    .await
-                    .expect("MQTT input provider failed to start");
-                Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
-            }
-            InputMode {
-                input_map_mqtt_topics: Some(input_map_mqtt_topics),
-                ..
-            } => {
-                let var_topics = input_map_mqtt_topics
-                    .iter()
-                    .map(|topic| (VarName::new(topic), topic.clone()))
-                    .collect();
-                let mut map_mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
-                    executor.clone(),
-                    MQTT_HOSTNAME,
-                    var_topics,
-                )
-                .expect("Map MQTT input provider could not be created");
-                map_mqtt_input_provider
-                    .started
-                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-                    .await
-                    .expect("Map MQTT input provider failed to start");
-                Box::new(map_mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
-            }
-            InputMode {
-                mqtt_input: true, ..
-            } => {
-                let var_topics = model
-                    .input_vars
-                    .iter()
-                    .map(|var| (var.clone(), var.into()))
-                    .collect();
-                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
-                    executor.clone(),
-                    MQTT_HOSTNAME,
-                    var_topics,
-                )
-                .expect("MQTT input provider could not be created");
-                mqtt_input_provider
-                    .started
-                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-                    .await
-                    .expect("MQTT input provider failed to start");
-                Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
-            }
-            _ => panic!("Input provider not specified"),
         }
     })
 }
@@ -337,14 +225,13 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     let output_var_names = model.output_vars.clone();
     let builder = builder.model(model.clone());
 
-    // Create the input provider
-    let builder = builder.input_fn(
-        cli.input_mode.clone(),
-        language.clone(),
-        model.clone(),
-        executor.clone(),
-        create_input_providers,
-    );
+    // Create the input provider builder
+    let input_provider_builder: InputProviderBuilder = cli.input_mode.into();
+    let input_provider_builder = input_provider_builder
+        .executor(executor.clone())
+        .model(model)
+        .lang(cli.language.clone().unwrap_or(Language::Lola));
+    let builder = builder.input_provider_builder(input_provider_builder);
 
     // Create the output handler
     let builder = builder.output(create_output_handler(
