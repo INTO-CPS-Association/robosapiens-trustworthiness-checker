@@ -247,9 +247,9 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         }
     }
 
-    pub fn scheduler_mode(self, scheduler_mode: SchedulerCommunication) -> Self {
+    pub fn scheduler_mode(self, scheduler_mode: impl Into<SchedulerCommunication>) -> Self {
         Self {
-            scheduler_mode,
+            scheduler_mode: scheduler_mode.into(),
             ..self
         }
     }

@@ -17,7 +17,6 @@ use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
-use trustworthiness_checker::runtime::distributed::SchedulerCommunication;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, io::file::parse_file};
 use trustworthiness_checker::{Value, VarName};
@@ -25,7 +24,7 @@ use trustworthiness_checker::{Value, VarName};
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, DistributionMode as CliDistMode, Language, OutputMode, ParserMode, SchedulingType,
+    Cli, DistributionMode as CliDistMode, Language, OutputMode, ParserMode,
 };
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
@@ -191,10 +190,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
     };
 
-    let builder = builder.scheduler_mode(match cli.scheduling_mode {
-        SchedulingType::Mock => SchedulerCommunication::Null,
-        SchedulingType::MQTT => SchedulerCommunication::MQTT,
-    });
+    let builder = builder.scheduler_mode(cli.scheduling_mode.clone());
 
     debug!("Choosing distribution mode");
     let builder = builder.distribution_mode_fn(cli.clone(), create_dist_mode);
@@ -229,7 +225,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     let input_provider_builder = InputProviderBuilder::new(cli.input_mode)
         .executor(executor.clone())
         .model(model)
-        .lang(cli.language.clone().unwrap_or(Language::Lola));
+        .lang(language);
     let builder = builder.input_provider_builder(input_provider_builder);
 
     // Create the output handler

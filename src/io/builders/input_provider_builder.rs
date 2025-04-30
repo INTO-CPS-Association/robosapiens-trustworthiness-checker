@@ -33,7 +33,6 @@ pub struct InputProviderBuilder {
     spec: InputProviderSpec,
     lang: Option<Language>,
     input_vars: Option<Vec<VarName>>,
-    output_vars: Option<Vec<VarName>>,
     executor: Option<Rc<LocalExecutor<'static>>>,
 }
 
@@ -43,7 +42,6 @@ impl InputProviderBuilder {
             spec: spec.into(),
             lang: None,
             input_vars: None,
-            output_vars: None,
             executor: None,
         }
     }
@@ -71,7 +69,6 @@ impl InputProviderBuilder {
 
     pub fn model<Expr>(mut self, model: impl Specification<Expr = Expr>) -> Self {
         self.input_vars = Some(model.input_vars());
-        self.output_vars = Some(model.output_vars());
         self
     }
 
@@ -149,7 +146,7 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
+                let mut mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
                     self.executor.unwrap().clone(),
                     MQTT_HOSTNAME,
                     var_topics,

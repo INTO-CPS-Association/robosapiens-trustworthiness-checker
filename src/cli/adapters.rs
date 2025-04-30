@@ -1,6 +1,6 @@
-use crate::io::builders::InputProviderSpec;
+use crate::{io::builders::InputProviderSpec, runtime::distributed::SchedulerCommunication};
 
-use super::args::InputMode;
+use super::args::{InputMode, SchedulingType};
 
 impl From<InputMode> for InputProviderSpec {
     fn from(input_mode: InputMode) -> Self {
@@ -25,6 +25,15 @@ impl From<InputMode> for InputProviderSpec {
                 mqtt_input: true, ..
             } => InputProviderSpec::MQTT(None),
             _ => panic!("Input provider not specified"),
+        }
+    }
+}
+
+impl From<SchedulingType> for SchedulerCommunication {
+    fn from(scheduling_type: SchedulingType) -> Self {
+        match scheduling_type {
+            SchedulingType::Mock => SchedulerCommunication::Null,
+            SchedulingType::MQTT => SchedulerCommunication::MQTT,
         }
     }
 }
