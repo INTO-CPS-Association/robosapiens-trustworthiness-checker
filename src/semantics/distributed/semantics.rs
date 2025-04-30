@@ -1,11 +1,12 @@
 use crate::SExpr;
+use crate::core::OutputStream;
 use crate::core::Value;
-use crate::core::{MonitoringSemantics, OutputStream};
 use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
+use crate::semantics::MonitoringSemantics;
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_untyped_lola::combinators as mc;
 
-use super::combinators::DistributedContext;
+use super::contexts::DistributedContext;
 
 #[derive(Clone)]
 pub struct DistributedSemantics;

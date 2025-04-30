@@ -2,7 +2,8 @@ use crate::core::StreamData;
 use crate::core::Value;
 use crate::lang::dynamic_lola::parser::lola_expression;
 use crate::semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics;
-use crate::{MonitoringSemantics, OutputStream, StreamContext, VarName};
+use crate::semantics::{MonitoringSemantics, StreamContext};
+use crate::{OutputStream, VarName};
 use async_stream::stream;
 use core::panic;
 use ecow::EcoVec;
@@ -604,7 +605,7 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{StreamContext, Value};
+    use crate::core::Value;
     use crate::runtime::asynchronous::Context;
     use futures::stream;
     use macro_rules_attribute::apply;

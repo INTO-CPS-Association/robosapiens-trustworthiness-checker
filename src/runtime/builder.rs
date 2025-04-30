@@ -11,7 +11,7 @@ use crate::{
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
     lang::dynamic_lola::type_checker::{TypedLOLASpecification, type_check},
-    semantics::distributed::{combinators::DistributedContext, localisation::LocalitySpec},
+    semantics::distributed::{contexts::DistributedContext, localisation::LocalitySpec},
 };
 
 use super::{

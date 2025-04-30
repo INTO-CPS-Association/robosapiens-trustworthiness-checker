@@ -30,12 +30,12 @@ use tracing::warn;
 use crate::core::AbstractMonitorBuilder;
 use crate::core::InputProvider;
 use crate::core::Monitor;
-use crate::core::MonitoringSemantics;
 use crate::core::OutputHandler;
+use crate::core::Runnable;
 use crate::core::Specification;
-use crate::core::{AbstractContextBuilder, Runnable};
-use crate::core::{OutputStream, StreamContext, StreamData, VarName};
+use crate::core::{OutputStream, StreamData, VarName};
 use crate::dep_manage::interface::DependencyManager;
+use crate::semantics::{AbstractContextBuilder, MonitoringSemantics, StreamContext};
 use crate::stream_utils::oneshot_to_stream;
 
 /// Track the stage of a variable's lifecycle

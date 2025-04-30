@@ -3,10 +3,7 @@
 pub mod benches_common;
 pub mod core;
 pub use crate::core::Value;
-pub use core::{
-    InputProvider, Monitor, MonitoringSemantics, OutputStream, Specification, StreamContext,
-    VarName,
-};
+pub use core::{InputProvider, Monitor, OutputStream, Specification, VarName};
 pub mod cli;
 pub mod dep_manage;
 pub mod io;

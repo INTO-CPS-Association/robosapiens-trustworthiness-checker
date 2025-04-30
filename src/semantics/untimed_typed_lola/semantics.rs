@@ -1,11 +1,12 @@
 use super::combinators as mc;
 use super::helpers::{from_typed_stream, to_typed_stream};
+use crate::core::OutputStream;
 use crate::core::Value;
-use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
 use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dynamic_lola::type_checker::{
     PossiblyUnknown, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
 };
+use crate::semantics::{MonitoringSemantics, StreamContext};
 
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;

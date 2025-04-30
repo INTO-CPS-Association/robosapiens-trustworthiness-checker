@@ -1,9 +1,11 @@
 use super::combinators as mc;
+use crate::core::OutputStream;
 use crate::core::Value;
-use crate::core::{MonitoringSemantics, OutputStream, StreamContext};
 use crate::lang::dynamic_lola::ast::{
     BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
 };
+use crate::semantics::MonitoringSemantics;
+use crate::semantics::StreamContext;
 
 #[derive(Clone)]
 pub struct UntimedLolaSemantics;

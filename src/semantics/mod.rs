@@ -4,6 +4,8 @@ pub mod untimed_untyped_lola;
 pub use untimed_untyped_lola::semantics::UntimedLolaSemantics;
 pub mod distributed;
 pub use distributed::semantics::DistributedSemantics;
+pub mod async_interface;
+pub use async_interface::*;
 
 #[cfg(test)]
 mod tests {
