@@ -40,22 +40,8 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
     Box::pin(async move {
         match cli.distribution_mode {
             CliDistMode {
-                centralised: true,
-                distribution_graph: None,
-                local_topics: None,
-                distributed_work: false,
-                mqtt_centralised_distributed: None,
-                mqtt_randomized_distributed: None,
-                mqtt_static_optimized: None,
-            } => DistributionMode::CentralMonitor,
-            CliDistMode {
-                centralised: _,
                 distribution_graph: Some(s),
-                local_topics: _,
-                distributed_work: _,
-                mqtt_centralised_distributed: None,
-                mqtt_randomized_distributed: None,
-                mqtt_static_optimized: None,
+                ..
             } => {
                 debug!("centralised mode");
                 let f =
@@ -67,13 +53,8 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
                 DistributionMode::LocalMonitor(Box::new((local_node, distribution_graph)))
             }
             CliDistMode {
-                centralised: _,
-                distribution_graph: _,
                 local_topics: Some(topics),
-                distributed_work: _,
-                mqtt_centralised_distributed: None,
-                mqtt_randomized_distributed: None,
-                mqtt_static_optimized: None,
+                ..
             } => DistributionMode::LocalMonitor(Box::new(
                 topics
                     .into_iter()
@@ -81,13 +62,8 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
                     .collect::<Vec<tc::VarName>>(),
             )),
             CliDistMode {
-                centralised: _,
-                distribution_graph: _,
-                local_topics: _,
                 distributed_work: true,
-                mqtt_centralised_distributed: None,
-                mqtt_randomized_distributed: None,
-                mqtt_static_optimized: None,
+                ..
             } => {
                 let local_node = cli.local_node.expect("Local node not specified");
                 info!("Waiting for work assignment on node {}", local_node);
@@ -101,37 +77,22 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
                 DistributionMode::LocalMonitor(Box::new(locality))
             }
             CliDistMode {
-                centralised: _,
-                distribution_graph: _,
-                local_topics: _,
-                distributed_work: _,
                 mqtt_centralised_distributed: Some(locations),
-                mqtt_randomized_distributed: None,
-                mqtt_static_optimized: None,
+                ..
             } => {
                 debug!("setting up distributed centralised mode");
                 DistributionMode::DistributedCentralised(locations)
             }
             CliDistMode {
-                centralised: _,
-                distribution_graph: _,
-                local_topics: _,
-                distributed_work: _,
-                mqtt_centralised_distributed: None,
                 mqtt_randomized_distributed: Some(locations),
-                mqtt_static_optimized: None,
+                ..
             } => {
                 debug!("setting up distributed random mode");
                 DistributionMode::DistributedRandom(locations)
             }
             CliDistMode {
-                centralised: _,
-                distribution_graph: _,
-                local_topics: _,
-                distributed_work: _,
-                mqtt_centralised_distributed: None,
-                mqtt_randomized_distributed: None,
                 mqtt_static_optimized: Some(locations),
+                ..
             } => {
                 info!("setting up static optimization mode");
                 let dist_constraints = cli
@@ -142,6 +103,9 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
                     .collect();
                 DistributionMode::DistributedOptimizedStatic(locations, dist_constraints)
             }
+            CliDistMode {
+                centralised: true, ..
+            } => DistributionMode::CentralMonitor,
             _ => unreachable!(),
         }
     })
@@ -239,18 +203,14 @@ fn create_output_handler(
     match output_mode {
         trustworthiness_checker::cli::args::OutputMode {
             output_stdout: true,
-            output_mqtt_topics: None,
-            mqtt_output: false,
-            output_ros_topics: None,
+            ..
         } => Box::new(StdoutOutputHandler::<tc::Value>::new(
             executor.clone(),
             output_var_names,
         )),
         trustworthiness_checker::cli::args::OutputMode {
-            output_stdout: false,
             output_mqtt_topics: Some(topics),
-            mqtt_output: false,
-            output_ros_topics: None,
+            ..
         } => {
             let topics = topics
                 .into_iter()
@@ -265,10 +225,7 @@ fn create_output_handler(
             )
         }
         trustworthiness_checker::cli::args::OutputMode {
-            output_stdout: false,
-            output_mqtt_topics: None,
-            mqtt_output: true,
-            output_ros_topics: None,
+            mqtt_output: true, ..
         } => {
             let topics = output_var_names
                 .iter()
@@ -280,10 +237,8 @@ fn create_output_handler(
             )
         }
         trustworthiness_checker::cli::args::OutputMode {
-            output_stdout: false,
-            mqtt_output: false,
-            output_mqtt_topics: None,
             output_ros_topics: Some(_),
+            ..
         } => unimplemented!("ROS output not implemented"),
         // Default to stdout
         _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
