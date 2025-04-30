@@ -8,7 +8,7 @@ use smol::LocalExecutor;
 use tracing::{debug, info, info_span};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
+use trustworthiness_checker::core::{AbstractMonitorBuilder, OutputHandler, Runnable};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
@@ -231,6 +231,68 @@ fn create_input_providers(
     })
 }
 
+fn create_output_handler(
+    executor: Rc<LocalExecutor<'static>>,
+    output_var_names: Vec<VarName>,
+    output_mode: trustworthiness_checker::cli::args::OutputMode,
+) -> Box<dyn OutputHandler<Val = Value>> {
+    match output_mode {
+        trustworthiness_checker::cli::args::OutputMode {
+            output_stdout: true,
+            output_mqtt_topics: None,
+            mqtt_output: false,
+            output_ros_topics: None,
+        } => Box::new(StdoutOutputHandler::<tc::Value>::new(
+            executor.clone(),
+            output_var_names,
+        )),
+        trustworthiness_checker::cli::args::OutputMode {
+            output_stdout: false,
+            output_mqtt_topics: Some(topics),
+            mqtt_output: false,
+            output_ros_topics: None,
+        } => {
+            let topics = topics
+                .into_iter()
+                // Only include topics that are in the output_vars
+                // this is necessary for localisation support
+                .filter(|topic| output_var_names.contains(&VarName::new(topic.as_str())))
+                .map(|topic| (topic.clone().into(), topic))
+                .collect();
+            Box::new(
+                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
+                    .expect("MQTT output handler could not be created"),
+            )
+        }
+        trustworthiness_checker::cli::args::OutputMode {
+            output_stdout: false,
+            output_mqtt_topics: None,
+            mqtt_output: true,
+            output_ros_topics: None,
+        } => {
+            let topics = output_var_names
+                .iter()
+                .map(|var| (var.clone(), var.into()))
+                .collect();
+            Box::new(
+                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
+                    .expect("MQTT output handler could not be created"),
+            )
+        }
+        trustworthiness_checker::cli::args::OutputMode {
+            output_stdout: false,
+            mqtt_output: false,
+            output_mqtt_topics: None,
+            output_ros_topics: Some(_),
+        } => unimplemented!("ROS output not implemented"),
+        // Default to stdout
+        _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
+            executor.clone(),
+            output_var_names.clone(),
+        )),
+    }
+}
+
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) {
     tracing_subscriber::registry()
@@ -302,63 +364,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     );
 
     // Create the output handler
-    let builder = builder.output(match cli.output_mode {
-        trustworthiness_checker::cli::args::OutputMode {
-            output_stdout: true,
-            output_mqtt_topics: None,
-            mqtt_output: false,
-            output_ros_topics: None,
-        } => Box::new(StdoutOutputHandler::<tc::Value>::new(
-            executor.clone(),
-            output_var_names,
-        )),
-        trustworthiness_checker::cli::args::OutputMode {
-            output_stdout: false,
-            output_mqtt_topics: Some(topics),
-            mqtt_output: false,
-            output_ros_topics: None,
-        } => {
-            let topics = topics
-                .into_iter()
-                // Only include topics that are in the output_vars
-                // this is necessary for localisation support
-                .filter(|topic| output_var_names.contains(&VarName::new(topic.as_str())))
-                .map(|topic| (topic.clone().into(), topic))
-                .collect();
-            Box::new(
-                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
-                    .expect("MQTT output handler could not be created"),
-            )
-        }
-        trustworthiness_checker::cli::args::OutputMode {
-            output_stdout: false,
-            output_mqtt_topics: None,
-            mqtt_output: true,
-            output_ros_topics: None,
-        } => {
-            let topics = output_var_names
-                .iter()
-                .map(|var| (var.clone(), var.into()))
-                .collect();
-            Box::new(
-                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
-                    .expect("MQTT output handler could not be created"),
-            )
-        }
-        trustworthiness_checker::cli::args::OutputMode {
-            output_stdout: false,
-            mqtt_output: false,
-            output_mqtt_topics: None,
-            output_ros_topics: Some(_),
-        } => unimplemented!("ROS output not implemented"),
-        // Default to stdout
-        _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
-            executor.clone(),
-            output_var_names.clone(),
-        )),
-    });
+    let builder = builder.output(create_output_handler(
+        executor.clone(),
+        output_var_names,
+        cli.output_mode.clone(),
+    ));
 
     // Create the runtime
     let monitor = builder.async_build().await;
+
     monitor.run().await;
 }
