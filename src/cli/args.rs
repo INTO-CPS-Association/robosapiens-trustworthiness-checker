@@ -16,7 +16,7 @@ pub enum ParserMode {
     LALR,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 #[group(required = true, multiple = false)]
 pub struct InputMode {
     #[clap(long)]
@@ -36,7 +36,7 @@ pub struct InputMode {
     pub input_ros_topics: Option<String>,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 #[group(required = false, multiple = false)]
 pub struct OutputMode {
     #[clap(long)]
@@ -54,7 +54,7 @@ pub struct OutputMode {
     pub output_ros_topics: Option<String>,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 #[group(required = false, multiple = false)]
 pub struct DistributionMode {
     #[clap(long, default_value_t = true)]
@@ -115,7 +115,7 @@ impl Into<OsStr> for SchedulingType {
     }
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub struct Cli {
     pub model: String,
 

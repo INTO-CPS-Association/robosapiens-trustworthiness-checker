@@ -1,11 +1,13 @@
 use std::fmt::Debug;
 use std::rc::Rc;
 
+use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
     LOLASpecification, Monitor, Value, VarName,
+    cli::args::Cli,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
     lang::dynamic_lola::type_checker::{TypedLOLASpecification, type_check},
@@ -185,6 +187,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub runtime: Runtime,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
+    pub distribution_mode_fn: Option<(Cli, fn(Cli) -> LocalBoxFuture<'static, DistributionMode>)>,
     pub scheduler_mode: SchedulerCommunication,
 }
 
@@ -218,7 +221,18 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         }
     }
 
-    pub fn maybe_distribution_mod(self, dist_mode: Option<DistributionMode>) -> Self {
+    pub fn distribution_mode_fn(
+        self,
+        cli: Cli,
+        dist_mode_fn: fn(Cli) -> LocalBoxFuture<'static, DistributionMode>,
+    ) -> Self {
+        Self {
+            distribution_mode_fn: Some((cli, dist_mode_fn)),
+            ..self
+        }
+    }
+
+    pub fn maybe_distribution_mode(self, dist_mode: Option<DistributionMode>) -> Self {
         match dist_mode {
             Some(dist_mode) => self.distribution_mode(dist_mode),
             None => self,
@@ -246,6 +260,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             output: None,
             dependencies: None,
             distribution_mode: DistributionMode::CentralMonitor,
+            distribution_mode_fn: None,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
             scheduler_mode: SchedulerCommunication::Null,
@@ -288,6 +303,10 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     }
 
     fn build(self) -> Self::Mon {
+        if self.distribution_mode_fn.is_some() {
+            panic!("Call async_build instead");
+        }
+
         let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> =
             match (self.runtime, self.semantics) {
                 (Runtime::Async, Semantics::Untimed) => Box::new(AsyncMonitorBuilder::<
@@ -325,6 +344,116 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                     let builder = builder.scheduler_mode(self.scheduler_mode);
 
                     let builder = match self.distribution_mode {
+                        DistributionMode::CentralMonitor => builder,
+                        DistributionMode::LocalMonitor(_) => {
+                            todo!("Local monitor not implemented here yet")
+                        }
+                        DistributionMode::DistributedCentralised(locations) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_centralised_dist_graph(locations)
+                        }
+                        DistributionMode::DistributedRandom(locations) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_random_dist_graph(locations)
+                        }
+                        DistributionMode::DistributedOptimizedStatic(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
+                        }
+                    };
+
+                    Box::new(builder)
+                }
+                _ => {
+                    panic!("Unsupported runtime and semantics combination");
+                }
+            };
+
+        let builder = match self.executor {
+            Some(ex) => builder.executor(ex),
+            None => builder,
+        };
+        let builder = match self.dependencies {
+            Some(dependencies) => builder.dependencies(dependencies),
+            None => builder,
+        };
+        let builder = match self.model {
+            Some(model) => builder.model(model),
+            None => builder,
+        };
+        let builder = if let Some(output) = self.output {
+            builder.output(output)
+        } else {
+            builder
+        };
+        let builder = if let Some(input) = self.input {
+            builder.input(input)
+        } else {
+            builder
+        };
+
+        builder.build()
+    }
+}
+
+impl GenericMonitorBuilder<LOLASpecification, Value> {
+    pub async fn async_build(self) -> Box<dyn Runnable> {
+        let dist_mode = if self.distribution_mode_fn.is_some() {
+            let (cli, fun) = self.distribution_mode_fn.unwrap();
+            Some(fun(cli).await)
+        } else {
+            None
+        };
+
+        let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> =
+            match (self.runtime, self.semantics) {
+                (Runtime::Async, Semantics::Untimed) => Box::new(AsyncMonitorBuilder::<
+                    LOLASpecification,
+                    Context<Value>,
+                    Value,
+                    _,
+                    crate::semantics::UntimedLolaSemantics,
+                >::new()),
+                (Runtime::Async, Semantics::TypedUntimed) => {
+                    Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
+                        TypedLOLASpecification,
+                        Context<Value>,
+                        Value,
+                        _,
+                        crate::semantics::TypedUntimedLolaSemantics,
+                    >::new()))
+                }
+                (Runtime::Constraints, Semantics::Untimed) => {
+                    Box::new(ConstraintBasedMonitorBuilder::new())
+                }
+                (Runtime::Distributed, Semantics::Untimed) => {
+                    debug!(
+                        "Setting up distributed runtime with distribution_mode = {:?}",
+                        self.distribution_mode
+                    );
+                    let builder = DistAsyncMonitorBuilder::<
+                        LOLASpecification,
+                        DistributedContext<Value>,
+                        Value,
+                        _,
+                        crate::semantics::DistributedSemantics,
+                    >::new();
+
+                    let builder = builder.scheduler_mode(self.scheduler_mode);
+
+                    let builder = match dist_mode.unwrap_or(self.distribution_mode) {
                         DistributionMode::CentralMonitor => builder,
                         DistributionMode::LocalMonitor(_) => {
                             todo!("Local monitor not implemented here yet")

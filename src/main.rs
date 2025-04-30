@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 // #![deny(warnings)]
 use clap::Parser;
+use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use tracing::{debug, info, info_span};
 use tracing_subscriber::filter::EnvFilter;
@@ -35,6 +36,117 @@ const MQTT_HOSTNAME: &str = "localhost";
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
+fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
+    Box::pin(async move {
+        match cli.distribution_mode {
+            CliDistMode {
+                centralised: true,
+                distribution_graph: None,
+                local_topics: None,
+                distributed_work: false,
+                mqtt_centralised_distributed: None,
+                mqtt_randomized_distributed: None,
+                mqtt_static_optimized: None,
+            } => DistributionMode::CentralMonitor,
+            CliDistMode {
+                centralised: _,
+                distribution_graph: Some(s),
+                local_topics: _,
+                distributed_work: _,
+                mqtt_centralised_distributed: None,
+                mqtt_randomized_distributed: None,
+                mqtt_static_optimized: None,
+            } => {
+                debug!("centralised mode");
+                let f =
+                    std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
+                let distribution_graph: LabelledDistributionGraph =
+                    serde_json::from_str(&f).expect("Distribution graph could not be parsed");
+                let local_node = cli.local_node.expect("Local node not specified").into();
+
+                DistributionMode::LocalMonitor(Box::new((local_node, distribution_graph)))
+            }
+            CliDistMode {
+                centralised: _,
+                distribution_graph: _,
+                local_topics: Some(topics),
+                distributed_work: _,
+                mqtt_centralised_distributed: None,
+                mqtt_randomized_distributed: None,
+                mqtt_static_optimized: None,
+            } => DistributionMode::LocalMonitor(Box::new(
+                topics
+                    .into_iter()
+                    .map(|v| v.into())
+                    .collect::<Vec<tc::VarName>>(),
+            )),
+            CliDistMode {
+                centralised: _,
+                distribution_graph: _,
+                local_topics: _,
+                distributed_work: true,
+                mqtt_centralised_distributed: None,
+                mqtt_randomized_distributed: None,
+                mqtt_static_optimized: None,
+            } => {
+                let local_node = cli.local_node.expect("Local node not specified");
+                info!("Waiting for work assignment on node {}", local_node);
+                let receiver =
+                    tc::io::mqtt::MQTTLocalityReceiver::new(MQTT_HOSTNAME.to_string(), local_node);
+                let locality = receiver
+                    .receive()
+                    .await
+                    .expect("Work could not be received");
+                info!("Received work: {:?}", locality.local_vars());
+                DistributionMode::LocalMonitor(Box::new(locality))
+            }
+            CliDistMode {
+                centralised: _,
+                distribution_graph: _,
+                local_topics: _,
+                distributed_work: _,
+                mqtt_centralised_distributed: Some(locations),
+                mqtt_randomized_distributed: None,
+                mqtt_static_optimized: None,
+            } => {
+                debug!("setting up distributed centralised mode");
+                DistributionMode::DistributedCentralised(locations)
+            }
+            CliDistMode {
+                centralised: _,
+                distribution_graph: _,
+                local_topics: _,
+                distributed_work: _,
+                mqtt_centralised_distributed: None,
+                mqtt_randomized_distributed: Some(locations),
+                mqtt_static_optimized: None,
+            } => {
+                debug!("setting up distributed random mode");
+                DistributionMode::DistributedRandom(locations)
+            }
+            CliDistMode {
+                centralised: _,
+                distribution_graph: _,
+                local_topics: _,
+                distributed_work: _,
+                mqtt_centralised_distributed: None,
+                mqtt_randomized_distributed: None,
+                mqtt_static_optimized: Some(locations),
+            } => {
+                info!("setting up static optimization mode");
+                let dist_constraints = cli
+                    .distribution_constraints
+                    .expect("Distribution constraints must be provided")
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect();
+                DistributionMode::DistributedOptimizedStatic(locations, dist_constraints)
+            }
+            _ => unreachable!(),
+        }
+    })
+}
+
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) {
     tracing_subscriber::registry()
@@ -47,7 +159,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
 
     let cli = Cli::parse();
 
-    let input_mode = cli.input_mode;
+    let input_mode = cli.input_mode.clone();
 
     let builder = RuntimeBuilder::new();
 
@@ -70,111 +182,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     });
 
     debug!("Choosing distribution mode");
-    let builder = builder.distribution_mode(match cli.distribution_mode {
-        CliDistMode {
-            centralised: true,
-            distribution_graph: None,
-            local_topics: None,
-            distributed_work: false,
-            mqtt_centralised_distributed: None,
-            mqtt_randomized_distributed: None,
-            mqtt_static_optimized: None,
-        } => DistributionMode::CentralMonitor,
-        CliDistMode {
-            centralised: _,
-            distribution_graph: Some(s),
-            local_topics: _,
-            distributed_work: _,
-            mqtt_centralised_distributed: None,
-            mqtt_randomized_distributed: None,
-            mqtt_static_optimized: None,
-        } => {
-            debug!("centralised mode");
-            let f = std::fs::read_to_string(&s).expect("Distribution graph file could not be read");
-            let distribution_graph: LabelledDistributionGraph =
-                serde_json::from_str(&f).expect("Distribution graph could not be parsed");
-            let local_node = cli.local_node.expect("Local node not specified").into();
-
-            DistributionMode::LocalMonitor(Box::new((local_node, distribution_graph)))
-        }
-        CliDistMode {
-            centralised: _,
-            distribution_graph: _,
-            local_topics: Some(topics),
-            distributed_work: _,
-            mqtt_centralised_distributed: None,
-            mqtt_randomized_distributed: None,
-            mqtt_static_optimized: None,
-        } => DistributionMode::LocalMonitor(Box::new(
-            topics
-                .into_iter()
-                .map(|v| v.into())
-                .collect::<Vec<tc::VarName>>(),
-        )),
-        CliDistMode {
-            centralised: _,
-            distribution_graph: _,
-            local_topics: _,
-            distributed_work: true,
-            mqtt_centralised_distributed: None,
-            mqtt_randomized_distributed: None,
-            mqtt_static_optimized: None,
-        } => {
-            let local_node = cli.local_node.expect("Local node not specified");
-            info!("Waiting for work assignment on node {}", local_node);
-            let receiver =
-                tc::io::mqtt::MQTTLocalityReceiver::new(MQTT_HOSTNAME.to_string(), local_node);
-            let locality = receiver
-                .receive()
-                .await
-                .expect("Work could not be received");
-            info!("Received work: {:?}", locality.local_vars());
-            DistributionMode::LocalMonitor(Box::new(locality))
-        }
-        CliDistMode {
-            centralised: _,
-            distribution_graph: _,
-            local_topics: _,
-            distributed_work: _,
-            mqtt_centralised_distributed: Some(locations),
-            mqtt_randomized_distributed: None,
-            mqtt_static_optimized: None,
-        } => {
-            debug!("setting up distributed centralised mode");
-            DistributionMode::DistributedCentralised(locations)
-        }
-        CliDistMode {
-            centralised: _,
-            distribution_graph: _,
-            local_topics: _,
-            distributed_work: _,
-            mqtt_centralised_distributed: None,
-            mqtt_randomized_distributed: Some(locations),
-            mqtt_static_optimized: None,
-        } => {
-            debug!("setting up distributed random mode");
-            DistributionMode::DistributedRandom(locations)
-        }
-        CliDistMode {
-            centralised: _,
-            distribution_graph: _,
-            local_topics: _,
-            distributed_work: _,
-            mqtt_centralised_distributed: None,
-            mqtt_randomized_distributed: None,
-            mqtt_static_optimized: Some(locations),
-        } => {
-            info!("setting up static optimization mode");
-            let dist_constraints = cli
-                .distribution_constraints
-                .expect("Distribution constraints must be provided")
-                .into_iter()
-                .map(|x| x.into())
-                .collect();
-            DistributionMode::DistributedOptimizedStatic(locations, dist_constraints)
-        }
-        _ => unreachable!(),
-    });
+    let builder = builder.distribution_mode_fn(cli.clone(), create_dist_mode);
 
     let model = match parser {
         ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
@@ -339,6 +347,6 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     });
 
     // Create the runtime
-    let monitor = builder.build();
+    let monitor = builder.async_build().await;
     monitor.run().await;
 }
