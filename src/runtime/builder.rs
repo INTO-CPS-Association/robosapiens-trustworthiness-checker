@@ -15,7 +15,7 @@ use crate::{
 use super::{
     asynchronous::{AsyncMonitorBuilder, Context},
     constraints::runtime::ConstraintBasedMonitorBuilder,
-    distributed::DistAsyncMonitorBuilder,
+    distributed::{DistAsyncMonitorBuilder, SchedulerCommunication},
 };
 
 use static_assertions::assert_obj_safe;
@@ -185,6 +185,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub runtime: Runtime,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
+    pub scheduler_mode: SchedulerCommunication,
 }
 
 impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
@@ -223,6 +224,13 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
             None => self,
         }
     }
+
+    pub fn scheduler_mode(self, scheduler_mode: SchedulerCommunication) -> Self {
+        Self {
+            scheduler_mode,
+            ..self
+        }
+    }
 }
 
 impl AbstractMonitorBuilder<LOLASpecification, Value>
@@ -240,6 +248,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             distribution_mode: DistributionMode::CentralMonitor,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
+            scheduler_mode: SchedulerCommunication::Null,
         }
     }
 
@@ -312,6 +321,8 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                         _,
                         crate::semantics::DistributedSemantics,
                     >::new();
+
+                    let builder = builder.scheduler_mode(self.scheduler_mode);
 
                     let builder = match self.distribution_mode {
                         DistributionMode::CentralMonitor => builder,

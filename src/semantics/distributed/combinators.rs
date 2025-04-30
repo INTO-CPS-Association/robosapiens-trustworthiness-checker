@@ -25,6 +25,7 @@ pub struct DistributedContextBuilder<Val: StreamData> {
     node_names: Option<Vec<NodeName>>,
     graph_stream: Option<OutputStream<LabelledDistributionGraph>>,
     presupplied_ctx: Option<Box<DistributedContext<Val>>>,
+    built_callbacks: Vec<Box<dyn FnOnce(&mut DistributedContext<Val>)>>,
 }
 
 impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> {
@@ -40,6 +41,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
             node_names: None,
             presupplied_ctx: None,
             nested_async_ctx: None,
+            built_callbacks: vec![],
         }
     }
 
@@ -72,6 +74,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
             node_names: self.node_names.clone(),
             presupplied_ctx: None,
             nested_async_ctx: None,
+            built_callbacks: vec![],
         }
     }
 
@@ -97,13 +100,17 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
             graph_name.into(),
             graph_stream,
         ))));
-        DistributedContext {
+        let mut ret = DistributedContext {
             ctx,
             graph_manager,
             executor,
             node_names,
             builder,
+        };
+        for f in self.built_callbacks {
+            f(&mut ret);
         }
+        ret
     }
 }
 
@@ -135,6 +142,11 @@ impl<Val: StreamData> DistributedContextBuilder<Val> {
 
     pub fn nested(mut self, ctx: AsyncCtx<Val>) -> Self {
         self.nested_async_ctx = Some(ctx);
+        self
+    }
+
+    pub fn add_callback(mut self, callback: Box<dyn Fn(&mut DistributedContext<Val>)>) -> Self {
+        self.built_callbacks.push(callback);
         self
     }
 }
@@ -209,7 +221,7 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
 }
 
 impl<Val: StreamData> DistributedContext<Val> {
-    fn graph(&self) -> Option<OutputStream<LabelledDistributionGraph>> {
+    pub fn graph(&self) -> Option<OutputStream<LabelledDistributionGraph>> {
         if self.is_clock_started() {
             panic!("Cannot request a stream after the clock has started");
         }

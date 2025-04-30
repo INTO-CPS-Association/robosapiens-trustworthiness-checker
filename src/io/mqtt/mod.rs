@@ -9,3 +9,5 @@ pub use output_handler::MQTTOutputHandler;
 pub mod locality_receiver;
 pub use locality_receiver::MQTTLocalityReceiver;
 pub mod dist_graph_provider;
+pub mod scheduler_communicator;
+pub use scheduler_communicator::MQTTSchedulerCommunicator;

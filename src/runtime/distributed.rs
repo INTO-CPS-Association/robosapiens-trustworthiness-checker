@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, mem, rc::Rc};
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -15,12 +15,19 @@ use crate::{
     VarName,
     core::{AbstractContextBuilder, AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
     dep_manage::interface::DependencyManager,
-    distributed::distribution_graphs::{
-        DistributionGraph, LabelledDistributionGraph, NodeName, graph_to_png,
-        possible_labelled_dist_graphs,
+    distributed::{
+        distribution_graphs::{
+            DistributionGraph, LabelledDistributionGraph, NodeName, graph_to_png,
+            possible_labelled_dist_graphs,
+        },
+        dynamic_work_scheduler::{NullSchedulerCommunicator, Scheduler},
+        scheduling::SchedulerCommunicator,
     },
     io::{
-        mqtt::dist_graph_provider::{self, MQTTDistGraphProvider},
+        mqtt::{
+            MQTTSchedulerCommunicator,
+            dist_graph_provider::{self, MQTTDistGraphProvider},
+        },
         testing::ManualOutputHandler,
     },
     semantics::distributed::{
@@ -74,6 +81,7 @@ pub struct DistAsyncMonitorBuilder<
     input: Option<Box<dyn InputProvider<Val = V>>>,
     context_builder: Option<Ctx::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
+    scheduler_mode: Option<SchedulerCommunication>,
 }
 
 impl<
@@ -116,6 +124,7 @@ impl<
             async_monitor_builder: self.async_monitor_builder.partial_clone(),
             context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
             dist_graph_mode: self.dist_graph_mode.as_ref().map(|b| b.clone()),
+            scheduler_mode: self.scheduler_mode.as_ref().map(|b| b.clone()),
             input: None,
         }
     }
@@ -126,6 +135,11 @@ impl<
     Expr: 'static,
 > DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>
 {
+    pub fn scheduler_mode(mut self, scheduler_mode: SchedulerCommunication) -> Self {
+        self.scheduler_mode = Some(scheduler_mode);
+        self
+    }
+
     fn output_stream_for_graph(
         builder: Self,
         dist_constraints: Vec<VarName>,
@@ -233,6 +247,12 @@ impl<
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SchedulerCommunication {
+    Null,
+    MQTT,
+}
+
 impl<Expr: 'static, S, M> AbstractMonitorBuilder<M, Value>
     for DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>
 where
@@ -247,6 +267,7 @@ where
             context_builder: None,
             dist_graph_mode: None,
             input: None,
+            scheduler_mode: None,
         }
     }
 
@@ -367,6 +388,7 @@ where
 
                 let builder = self.partial_clone();
                 let context_builder = self.context_builder.as_ref().map(|b| b.partial_clone());
+                let executor_clone = executor.clone();
                 let labelled_dist_graph_stream: OutputStream<LabelledDistributionGraph> = Box::pin(
                     stream! {
                         let Some(initial_graph) = dist_graph_stream.next().await else {
@@ -378,7 +400,7 @@ where
                         let mut labelled_dist_graphs: LocalBoxStream<LabelledDistributionGraph> =
                             Self::possible_labelled_dist_graph_stream(builder, initial_graph,
                             dist_constraints.clone(), input_vars.clone(), output_vars.clone(),
-                            context_builder, executor.clone());
+                            context_builder, executor_clone);
 
                         let chosen_dist_graph: LabelledDistributionGraph = match labelled_dist_graphs.next().await {
                             Some(dist_graph) => dist_graph,
@@ -402,18 +424,40 @@ where
                 )
             }
         };
+        let scheduler_mode = self.scheduler_mode.unwrap_or(SchedulerCommunication::Null);
+        let scheduler_communicator = match scheduler_mode {
+            SchedulerCommunication::Null => {
+                Box::new(NullSchedulerCommunicator) as Box<dyn SchedulerCommunicator>
+            }
+            SchedulerCommunication::MQTT => {
+                Box::new(MQTTSchedulerCommunicator::new("localhost".into()))
+                    as Box<dyn SchedulerCommunicator>
+            }
+        };
+        let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
+            executor,
+            scheduler_communicator,
+        ))));
+        let scheduler_clone = scheduler.clone();
         let context_builder = self
             .context_builder
             .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
-            .node_names(node_names);
+            .node_names(node_names)
+            .add_callback(Box::new(move |ctx| {
+                let mut scheduler_borrow = scheduler_clone.borrow_mut();
+                let scheduler_ref = (&mut *scheduler_borrow).as_mut().unwrap();
+                scheduler_ref.dist_graph_stream(ctx.graph().unwrap());
+            }));
         let async_monitor = self
             .async_monitor_builder
             .maybe_input(self.input)
             .context_builder(context_builder)
             .build();
+
         DistributedMonitorRunner {
             async_monitor,
             dist_graph_provider,
+            scheduler: mem::take(&mut *scheduler.borrow_mut()).unwrap(),
         }
     }
 }
@@ -441,6 +485,7 @@ where
     #[allow(dead_code)]
     pub(crate) dist_graph_provider:
         Option<crate::io::mqtt::dist_graph_provider::MQTTDistGraphProvider>,
+    pub(crate) scheduler: Scheduler,
 }
 
 fn centralised_dist_graph_stream(
@@ -531,10 +576,12 @@ where
     V: StreamData,
 {
     async fn run_boxed(self: Box<Self>) {
+        self.scheduler.run();
         self.async_monitor.run().await;
     }
 
     async fn run(self: Self) {
+        self.scheduler.run();
         self.async_monitor.run().await;
     }
 }

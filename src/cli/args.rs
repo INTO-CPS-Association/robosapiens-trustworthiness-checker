@@ -1,4 +1,4 @@
-use clap::{Args, Parser, ValueEnum};
+use clap::{Args, Parser, ValueEnum, builder::OsStr};
 
 use crate::core::{Runtime, Semantics};
 
@@ -82,6 +82,39 @@ pub struct DistributionMode {
     pub distributed_work: bool,
 }
 
+#[derive(ValueEnum, Debug, Clone)]
+pub enum SchedulingType {
+    Mock,
+    MQTT,
+}
+
+impl Into<&'static str> for SchedulingType {
+    fn into(self) -> &'static str {
+        match self {
+            SchedulingType::Mock => "mock",
+            SchedulingType::MQTT => "mqtt",
+        }
+    }
+}
+
+impl Into<String> for SchedulingType {
+    fn into(self) -> String {
+        match self {
+            SchedulingType::Mock => "mock".to_string(),
+            SchedulingType::MQTT => "mqtt".to_string(),
+        }
+    }
+}
+
+impl Into<OsStr> for SchedulingType {
+    fn into(self) -> OsStr {
+        match self {
+            SchedulingType::Mock => (&"mock").into(),
+            SchedulingType::MQTT => (&"mqtt").into(),
+        }
+    }
+}
+
 #[derive(Parser)]
 pub struct Cli {
     pub model: String,
@@ -108,6 +141,9 @@ pub struct Cli {
 
     #[arg(long)]
     pub local_node: Option<String>,
+
+    #[arg(long, default_value = SchedulingType::Mock)]
+    pub scheduling_mode: SchedulingType,
 
     #[clap(long, value_delimiter = ' ', num_args = 1..)]
     pub distribution_constraints: Option<Vec<String>>,

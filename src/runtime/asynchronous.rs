@@ -694,7 +694,7 @@ where
     M: Specification<Expr = Expr>,
 {
     #[allow(dead_code)]
-    executor: Rc<LocalExecutor<'static>>,
+    pub executor: Rc<LocalExecutor<'static>>,
     model: M,
     output_handler: Box<dyn OutputHandler<Val = Val>>,
     output_streams: Vec<OutputStream<Val>>,

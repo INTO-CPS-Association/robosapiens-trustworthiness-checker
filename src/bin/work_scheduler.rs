@@ -4,9 +4,9 @@ use tracing::{info, instrument};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::distributed::{
-    distribution_graphs::LabelledDistributionGraph,
-    static_work_scheduler::{MQTTSchedulerCommunicator, static_work_scheduler},
+    distribution_graphs::LabelledDistributionGraph, static_work_scheduler::static_work_scheduler,
 };
+use trustworthiness_checker::io::mqtt::MQTTSchedulerCommunicator;
 
 /// Worker scheduler application for distributed monitoring
 ///
