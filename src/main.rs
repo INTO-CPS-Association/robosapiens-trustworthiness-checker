@@ -12,6 +12,7 @@ use trustworthiness_checker::core::{AbstractMonitorBuilder, OutputHandler, Runna
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
+use trustworthiness_checker::io::file::input_provider;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
@@ -23,7 +24,8 @@ use trustworthiness_checker::{InputProvider, LOLASpecification, Value, VarName};
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, DistributionMode as CliDistMode, InputMode, Language, ParserMode, SchedulingType,
+    Cli, DistributionMode as CliDistMode, InputMode, Language, OutputMode, ParserMode,
+    SchedulingType,
 };
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
@@ -118,79 +120,105 @@ fn create_input_providers(
     executor: Rc<LocalExecutor<'static>>,
 ) -> LocalBoxFuture<'static, Box<dyn InputProvider<Val = Value>>> {
     Box::pin(async move {
-        if let Some(input_file) = input_mode.input_file {
-            let input_file_parser = match language {
-                Language::Lola => tc::lang::untimed_input::untimed_input_file,
-            };
-            Box::new(
-                tc::parse_file(input_file_parser, &input_file)
-                    .await
-                    .expect("Input file could not be parsed"),
-            ) as Box<dyn InputProvider<Val = Value>>
-        } else if let Some(_input_ros_topics) = input_mode.input_ros_topics {
-            #[cfg(feature = "ros")]
-            {
-                let input_mapping_str = std::fs::read_to_string(&_input_ros_topics)
-                    .expect("Input mapping file could not be read");
-                let input_mapping = ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
-                    .expect("Input mapping file could not be parsed");
+        match input_mode {
+            InputMode {
+                input_file: Some(input_file),
+                ..
+            } => {
+                let input_file_parser = match language {
+                    Language::Lola => tc::lang::untimed_input::untimed_input_file,
+                };
                 Box::new(
-                    ROSInputProvider::new(executor.clone(), input_mapping)
-                        .expect("ROS input provider could not be created"),
+                    tc::parse_file(input_file_parser, &input_file)
+                        .await
+                        .expect("Input file could not be parsed"),
+                ) as Box<dyn InputProvider<Val = Value>>
+            }
+            InputMode {
+                input_ros_topics: Some(_input_ros_topics),
+                ..
+            } => {
+                #[cfg(feature = "ros")]
+                {
+                    let input_mapping_str = std::fs::read_to_string(&_input_ros_topics)
+                        .expect("Input mapping file could not be read");
+                    let input_mapping =
+                        ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
+                            .expect("Input mapping file could not be parsed");
+                    Box::new(
+                        ROSInputProvider::new(executor.clone(), input_mapping)
+                            .expect("ROS input provider could not be created"),
+                    )
+                }
+                #[cfg(not(feature = "ros"))]
+                {
+                    unimplemented!("ROS support not enabled")
+                }
+            }
+            InputMode {
+                input_mqtt_topics: Some(input_mqtt_topics),
+                ..
+            } => {
+                let var_topics = input_mqtt_topics
+                    .iter()
+                    .map(|topic| (VarName::new(topic), topic.clone()))
+                    .collect();
+                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
+                    executor.clone(),
+                    MQTT_HOSTNAME,
+                    var_topics,
                 )
+                .expect("MQTT input provider could not be created");
+                mqtt_input_provider
+                    .started
+                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+                    .await
+                    .expect("MQTT input provider failed to start");
+                Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
-            #[cfg(not(feature = "ros"))]
-            {
-                unimplemented!("ROS support not enabled")
+            InputMode {
+                input_map_mqtt_topics: Some(input_map_mqtt_topics),
+                ..
+            } => {
+                let var_topics = input_map_mqtt_topics
+                    .iter()
+                    .map(|topic| (VarName::new(topic), topic.clone()))
+                    .collect();
+                let mut map_mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
+                    executor.clone(),
+                    MQTT_HOSTNAME,
+                    var_topics,
+                )
+                .expect("Map MQTT input provider could not be created");
+                map_mqtt_input_provider
+                    .started
+                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+                    .await
+                    .expect("Map MQTT input provider failed to start");
+                Box::new(map_mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
-        } else if let Some(input_mqtt_topics) = input_mode.input_mqtt_topics {
-            let var_topics = input_mqtt_topics
-                .iter()
-                .map(|topic| (VarName::new(topic), topic.clone()))
-                .collect();
-            let mut mqtt_input_provider =
-                tc::io::mqtt::MQTTInputProvider::new(executor.clone(), MQTT_HOSTNAME, var_topics)
-                    .expect("MQTT input provider could not be created");
-            mqtt_input_provider
-                .started
-                .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-                .await
-                .expect("MQTT input provider failed to start");
-            Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
-        } else if let Some(input_map_mqtt_topics) = input_mode.input_map_mqtt_topics {
-            let var_topics = input_map_mqtt_topics
-                .iter()
-                .map(|topic| (VarName::new(topic), topic.clone()))
-                .collect();
-            let mut map_mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
-                executor.clone(),
-                MQTT_HOSTNAME,
-                var_topics,
-            )
-            .expect("Map MQTT input provider could not be created");
-            map_mqtt_input_provider
-                .started
-                .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-                .await
-                .expect("Map MQTT input provider failed to start");
-            Box::new(map_mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
-        } else if input_mode.mqtt_input {
-            let var_topics = model
-                .input_vars
-                .iter()
-                .map(|var| (var.clone(), var.into()))
-                .collect();
-            let mut mqtt_input_provider =
-                tc::io::mqtt::MQTTInputProvider::new(executor.clone(), MQTT_HOSTNAME, var_topics)
-                    .expect("MQTT input provider could not be created");
-            mqtt_input_provider
-                .started
-                .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-                .await
-                .expect("MQTT input provider failed to start");
-            Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
-        } else {
-            panic!("Input provider not specified")
+            InputMode {
+                mqtt_input: true, ..
+            } => {
+                let var_topics = model
+                    .input_vars
+                    .iter()
+                    .map(|var| (var.clone(), var.into()))
+                    .collect();
+                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
+                    executor.clone(),
+                    MQTT_HOSTNAME,
+                    var_topics,
+                )
+                .expect("MQTT input provider could not be created");
+                mqtt_input_provider
+                    .started
+                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+                    .await
+                    .expect("MQTT input provider failed to start");
+                Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
+            }
+            _ => panic!("Input provider not specified"),
         }
     })
 }
@@ -198,17 +226,17 @@ fn create_input_providers(
 fn create_output_handler(
     executor: Rc<LocalExecutor<'static>>,
     output_var_names: Vec<VarName>,
-    output_mode: trustworthiness_checker::cli::args::OutputMode,
+    output_mode: OutputMode,
 ) -> Box<dyn OutputHandler<Val = Value>> {
     match output_mode {
-        trustworthiness_checker::cli::args::OutputMode {
+        OutputMode {
             output_stdout: true,
             ..
         } => Box::new(StdoutOutputHandler::<tc::Value>::new(
             executor.clone(),
             output_var_names,
         )),
-        trustworthiness_checker::cli::args::OutputMode {
+        OutputMode {
             output_mqtt_topics: Some(topics),
             ..
         } => {
@@ -224,7 +252,7 @@ fn create_output_handler(
                     .expect("MQTT output handler could not be created"),
             )
         }
-        trustworthiness_checker::cli::args::OutputMode {
+        OutputMode {
             mqtt_output: true, ..
         } => {
             let topics = output_var_names
@@ -236,7 +264,7 @@ fn create_output_handler(
                     .expect("MQTT output handler could not be created"),
             )
         }
-        trustworthiness_checker::cli::args::OutputMode {
+        OutputMode {
             output_ros_topics: Some(_),
             ..
         } => unimplemented!("ROS output not implemented"),
