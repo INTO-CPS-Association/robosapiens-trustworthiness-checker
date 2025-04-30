@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use paho_mqtt::Message;
+use tracing::debug;
 
 use crate::{
     VarName,
@@ -28,8 +29,8 @@ impl SchedulerCommunicator for MQTTSchedulerCommunicator {
         let mqtt_client = provide_mqtt_client(self.mqtt_uri.clone()).await?;
         let work_msg = serde_json::to_string(&work)?;
         let work_topic = format!("start_monitors_at_{}", node);
+        debug!("Scheduler sending work on topic {:?}", work_topic);
         let work_msg = Message::new(work_topic, work_msg, 2);
-
         mqtt_client.publish(work_msg).await?;
 
         Ok(())

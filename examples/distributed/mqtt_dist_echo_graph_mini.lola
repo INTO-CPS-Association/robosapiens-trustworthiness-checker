@@ -11,4 +11,4 @@ tb1Echo = tb1
 tb2Echo = tb2
 tb3Echo = tb3
 graphConstraint1 = monitored_at(tb1Echo, tb1)
-graphConstraint2 = monitored_at(tb2Echo, tb2) && monitored_at(tb3Echo, tb3)
+graphConstraint2 = monitored_at(tb2Echo, tb2) && monitored_at(tb3Echo, tb2)

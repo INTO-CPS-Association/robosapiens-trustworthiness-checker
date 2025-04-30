@@ -5,6 +5,7 @@ use crate::VarName;
 use async_trait::async_trait;
 use smol::LocalExecutor;
 use smol::stream::StreamExt;
+use tracing::debug;
 use tracing::info;
 
 use super::distribution_graphs::{LabelledDistributionGraph, NodeName};
@@ -19,6 +20,7 @@ impl SchedulerCommunicator for NullSchedulerCommunicator {
         _node_name: NodeName,
         _work: Vec<VarName>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        debug!("NullSchedulerCommunicator called");
         Ok(())
     }
 }
@@ -58,12 +60,10 @@ impl Scheduler {
                         let nodes = dist_graph.dist_graph.graph.node_indices();
                         // is this really the best way?
                         for node in nodes {
-                            info!("processing node {:?}", node);
                             let node_name = dist_graph.dist_graph.graph[node].clone();
                             let work = dist_graph.node_labels[&node].clone();
                             info!("Scheduling work {:?} for node {}", work, node_name);
                             let _ = communicator.schedule_work(node_name, work).await;
-                            info!("Scheduled work");
                         }
                     }
                 })

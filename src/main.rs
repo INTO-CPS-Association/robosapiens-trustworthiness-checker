@@ -15,13 +15,14 @@ use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
+use trustworthiness_checker::runtime::distributed::SchedulerCommunication;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, io::file::parse_file};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, DistributionMode as CliDistMode, Language, ParserMode,
+    Cli, DistributionMode as CliDistMode, Language, ParserMode, SchedulingType,
 };
 use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
@@ -62,6 +63,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     let model_parser = match language {
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
     };
+
+    let builder = builder.scheduler_mode(match cli.scheduling_mode {
+        SchedulingType::Mock => SchedulerCommunication::Null,
+        SchedulingType::MQTT => SchedulerCommunication::MQTT,
+    });
 
     debug!("Choosing distribution mode");
     let builder = builder.distribution_mode(match cli.distribution_mode {
