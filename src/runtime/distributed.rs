@@ -131,7 +131,6 @@ impl<
         dist_constraints: Vec<VarName>,
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
-        // input_ctx: Rc<RefCell<Context<Value>>>,
         context_builder: &Option<DistributedContextBuilder<Value>>,
         executor: Rc<LocalExecutor<'static>>,
         labelled_graph: &LabelledDistributionGraph,
@@ -141,38 +140,16 @@ impl<
             "Output stream for graph with input_vars: {:?} and output_vars: {:?}",
             input_vars, output_vars
         );
-        // let ctx = input_ctx.borrow().subcontext(1);
         let input_provider: Box<dyn InputProvider<Val = Value>> =
             Box::new(BTreeMap::<VarName, OutputStream<Value>>::new());
-        // let input_provider = Box::new(
-        //     input_vars
-        //         .iter()
-        //         .map(|var| {
-        //             // let var_clone = var.clone();
-        //             (
-        //                 var.clone(),
-        //                 Box::pin(ctx.var(var).unwrap().map(move |x| {
-        //                     // info!("forwarding input {:?} for {:?}", x, var_clone);
-        //                     x
-        //                 })) as OutputStream<Value>,
-        //             )
-        //         })
-        //         .collect::<BTreeMap<_, _>>(),
-        // );
-        // let mut output_handler = ManualOutputHandler::new(executor.clone(), output_vars.clone());
         let mut output_handler =
             ManualOutputHandler::new(executor.clone(), dist_constraints.clone());
-        let output_stream: OutputStream<Vec<Value>> =
-            Box::pin(output_handler.get_output().map(|output| {
-                info!("Got output = {:?}", output);
-                output
-            }));
+        let output_stream: OutputStream<Vec<Value>> = Box::pin(output_handler.get_output());
         let potential_dist_graph_stream = Box::pin(repeat(labelled_graph.clone()));
         let context_builder = context_builder
             .as_ref()
             .map(|b| b.partial_clone())
             .unwrap_or(DistributedContextBuilder::new().graph_stream(potential_dist_graph_stream));
-        // .nested(ctx);
         let runtime = builder
             .context_builder(context_builder)
             .static_dist_graph(labelled_graph.clone())
@@ -193,7 +170,6 @@ impl<
         dist_constraints: Vec<VarName>,
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
-        // input_ctx: Rc<RefCell<Context<Value>>>,
         context_builder: Option<DistributedContextBuilder<Value>>,
         executor: Rc<LocalExecutor<'static>>,
     ) -> OutputStream<LabelledDistributionGraph> {
@@ -201,12 +177,6 @@ impl<
         let dist_constraints = dist_constraints.clone();
         let context_builder = context_builder.map(|b| b.partial_clone());
         let executor = executor.clone();
-        // let var_names: Vec<VarName> = input_vars
-        //     .iter()
-        //     .chain(output_vars.iter())
-        //     .filter(|name| !dist_constraints.contains(name))
-        //     .cloned()
-        //     .collect();
         let non_dist_constraints: Vec<VarName> = output_vars
             .iter()
             .filter(|name| !dist_constraints.contains(name))
@@ -237,19 +207,13 @@ impl<
                     dist_constraints.clone(),
                     input_vars.clone(),
                     output_vars.clone(),
-                    // input_ctx.clone(),
                     &context_builder,
                     executor,
                     &graph,
                 );
 
-                // info!("starting context");
-                // input_ctx.borrow_mut().tick().await;
-                // info!("getting first output");
                 let first_output: Vec<Value> = output_stream.next().await.unwrap();
-                // info!("got first output");
                 let dist_constraints_hold = output_vars.iter().zip(first_output).all(|(var_name, res)| {
-                    // !dist_constraints.contains(var_name) ||
                     match res {
                         Value::Bool(b) => {
                             // info!("True constraint");
@@ -400,37 +364,6 @@ where
                     .as_ref()
                     .unwrap()
                     .output_vars();
-                // let mut input_provider = mem::take(&mut self.input).unwrap();
-                // let input_streams = input_vars
-                //     .iter()
-                //     .map(|var| {
-                //         input_provider
-                //             .input_stream(var)
-                //             .expect(format!("Missing input stream for var {}", var).as_str())
-                //     })
-                //     .collect();
-                // let input_proxy_context = Rc::new(RefCell::new(
-                //     ContextBuilder::new()
-                //         .executor(executor.clone())
-                //         .var_names(input_vars.clone())
-                //         .history_length(0)
-                //         .input_streams(input_streams)
-                //         .build(),
-                // ));
-                // Recreate input provider based on proxy
-                // self = self.input(Box::new(
-                //     input_vars
-                //         .iter()
-                //         .map(|var| {
-                //             (
-                //                 var.clone(),
-                //                 input_proxy_context.borrow().var(var).expect(
-                //                     format!("Missing input stream for var {}", var).as_str(),
-                //                 ),
-                //             )
-                //         })
-                //         .collect::<BTreeMap<_, _>>(),
-                // ));
 
                 let builder = self.partial_clone();
                 let context_builder = self.context_builder.as_ref().map(|b| b.partial_clone());
