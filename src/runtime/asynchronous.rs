@@ -712,7 +712,7 @@ pub struct AsyncMonitorBuilder<
     S: MonitoringSemantics<Expr, V, Ctx>,
 > {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
-    pub(super) model: Option<M>,
+    pub(crate) model: Option<M>,
     pub(super) input: Option<Box<dyn InputProvider<Val = V>>>,
     pub(super) output: Option<Box<dyn OutputHandler<Val = V>>>,
     pub(super) context_builder: Option<Ctx::Builder>,

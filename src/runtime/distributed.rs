@@ -1,33 +1,25 @@
 use std::{cell::RefCell, collections::BTreeMap, mem, rc::Rc};
 
-use async_stream::stream;
 use async_trait::async_trait;
-use futures::stream::LocalBoxStream;
-use petgraph::graph::NodeIndex;
-use smol::{
-    LocalExecutor,
-    stream::{StreamExt, repeat},
-};
-use tracing::{debug, info};
+use smol::{LocalExecutor, stream::repeat};
+use tracing::debug;
 
 use crate::{
     InputProvider, Monitor, OutputStream, Specification, Value, VarName,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
     dep_manage::interface::DependencyManager,
     distributed::{
-        distribution_graphs::{
-            DistributionGraph, LabelledDistributionGraph, NodeName, graph_to_png,
-            possible_labelled_dist_graphs,
+        distribution_graphs::{LabelledDistributionGraph, NodeName},
+        dynamic_work_scheduler::{
+            BruteForceDistConstraintSolver, CentralisedSchedulerPlanner, NullSchedulerCommunicator,
+            RandomSchedulerPlanner, SchedulerEnactor, SchedulerPlanner,
+            StaticOptimizedSchedulerPlanner, planned_dist_graph_stream,
         },
-        dynamic_work_scheduler::{NullSchedulerCommunicator, Scheduler},
         scheduling::SchedulerCommunicator,
     },
-    io::{
-        mqtt::{
-            MQTTSchedulerCommunicator,
-            dist_graph_provider::{self, MQTTDistGraphProvider},
-        },
-        testing::ManualOutputHandler,
+    io::mqtt::{
+        MQTTSchedulerCommunicator,
+        dist_graph_provider::{self, MQTTDistGraphProvider},
     },
     semantics::{
         AbstractContextBuilder, MonitoringSemantics, StreamContext,
@@ -79,9 +71,9 @@ pub struct DistAsyncMonitorBuilder<
     Expr,
     S: MonitoringSemantics<Expr, V, Ctx>,
 > {
-    async_monitor_builder: AsyncMonitorBuilder<M, Ctx, V, Expr, S>,
+    pub async_monitor_builder: AsyncMonitorBuilder<M, Ctx, V, Expr, S>,
     input: Option<Box<dyn InputProvider<Val = V>>>,
-    context_builder: Option<Ctx::Builder>,
+    pub context_builder: Option<Ctx::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
     scheduler_mode: Option<SchedulerCommunication>,
 }
@@ -140,112 +132,6 @@ impl<
     pub fn scheduler_mode(mut self, scheduler_mode: SchedulerCommunication) -> Self {
         self.scheduler_mode = Some(scheduler_mode);
         self
-    }
-
-    fn output_stream_for_graph(
-        builder: Self,
-        dist_constraints: Vec<VarName>,
-        input_vars: Vec<VarName>,
-        output_vars: Vec<VarName>,
-        context_builder: &Option<DistributedContextBuilder<Value>>,
-        executor: Rc<LocalExecutor<'static>>,
-        labelled_graph: &LabelledDistributionGraph,
-    ) -> OutputStream<Vec<Value>> {
-        // Build a runtime for constructing the output stream
-        debug!(
-            "Output stream for graph with input_vars: {:?} and output_vars: {:?}",
-            input_vars, output_vars
-        );
-        let input_provider: Box<dyn InputProvider<Val = Value>> =
-            Box::new(BTreeMap::<VarName, OutputStream<Value>>::new());
-        let mut output_handler =
-            ManualOutputHandler::new(executor.clone(), dist_constraints.clone());
-        let output_stream: OutputStream<Vec<Value>> = Box::pin(output_handler.get_output());
-        let potential_dist_graph_stream = Box::pin(repeat(labelled_graph.clone()));
-        let context_builder = context_builder
-            .as_ref()
-            .map(|b| b.partial_clone())
-            .unwrap_or(DistributedContextBuilder::new().graph_stream(potential_dist_graph_stream));
-        let runtime = builder
-            .context_builder(context_builder)
-            .static_dist_graph(labelled_graph.clone())
-            .input(input_provider)
-            .output(Box::new(output_handler))
-            .build();
-        executor.spawn(runtime.run()).detach();
-
-        // Construct a wrapped output stream which makes sure the context starts
-        output_stream
-    }
-
-    /// Finds all possible labelled distribution graphs given a set of distribution constraints
-    /// and a distribution graph
-    fn possible_labelled_dist_graph_stream(
-        builder: Self,
-        initial_graph: Rc<DistributionGraph>,
-        dist_constraints: Vec<VarName>,
-        input_vars: Vec<VarName>,
-        output_vars: Vec<VarName>,
-        context_builder: Option<DistributedContextBuilder<Value>>,
-        executor: Rc<LocalExecutor<'static>>,
-    ) -> OutputStream<LabelledDistributionGraph> {
-        // To avoid lifetime and move issues, clone all necessary data for the async block.
-        let dist_constraints = dist_constraints.clone();
-        let context_builder = context_builder.map(|b| b.partial_clone());
-        let executor = executor.clone();
-        let non_dist_constraints: Vec<VarName> = output_vars
-            .iter()
-            .filter(|name| !dist_constraints.contains(name))
-            .cloned()
-            .collect();
-        let localised_spec = builder
-            .async_monitor_builder
-            .model
-            .as_ref()
-            .unwrap()
-            .localise(&dist_constraints);
-        let builder = builder.model(localised_spec);
-
-        info!("Starting optimized distributed graph generation");
-
-        Box::pin(async_stream::stream! {
-            for (i, graph) in possible_labelled_dist_graphs(initial_graph, dist_constraints.clone(), non_dist_constraints).enumerate() {
-                // Clone everything needed for the async block
-                let builder = builder.partial_clone();
-                let dist_constraints = dist_constraints.clone();
-                let context_builder = (&context_builder).as_ref().map(|b| b.partial_clone());
-                let executor = executor.clone();
-
-                info!("Testing graph {}", i);
-
-                let mut output_stream = Self::output_stream_for_graph(
-                    builder,
-                    dist_constraints.clone(),
-                    input_vars.clone(),
-                    output_vars.clone(),
-                    &context_builder,
-                    executor,
-                    &graph,
-                );
-
-                let first_output: Vec<Value> = output_stream.next().await.unwrap();
-                let dist_constraints_hold = output_vars.iter().zip(first_output).all(|(var_name, res)| {
-                    match res {
-                        Value::Bool(b) => {
-                            // info!("True constraint");
-                            b
-                        },
-                        _ => {
-                            panic!("Unexpected value type for variable {}", var_name);
-                        }
-                    }
-                });
-                if dist_constraints_hold {
-                    info!("Found matching graph!");
-                    yield graph;
-                }
-            }
-        })
     }
 }
 
@@ -334,11 +220,14 @@ where
                     locations.clone(),
                 )
                 .expect("Failed to create MQTT dist graph provider");
-                let labelled_dist_graph_stream = centralised_dist_graph_stream(
-                    var_names,
-                    dist_graph_provider.central_node.clone(),
-                    dist_graph_provider.dist_graph_stream(),
-                );
+                let dist_graph_stream = dist_graph_provider.dist_graph_stream();
+                let planner: Rc<Box<dyn SchedulerPlanner>> =
+                    Rc::new(Box::new(CentralisedSchedulerPlanner {
+                        var_names,
+                        central_node: dist_graph_provider.central_node.clone(),
+                    }));
+                let labelled_dist_graph_stream =
+                    planned_dist_graph_stream(dist_graph_stream, planner);
                 let location_names = locations.keys().cloned().collect::<Vec<_>>();
 
                 (
@@ -355,8 +244,11 @@ where
                     locations.clone(),
                 )
                 .expect("Failed to create MQTT dist graph provider");
+                let dist_graph_stream = dist_graph_provider.dist_graph_stream();
+                let planner: Rc<Box<dyn SchedulerPlanner>> =
+                    Rc::new(Box::new(RandomSchedulerPlanner { var_names }));
                 let labelled_dist_graph_stream =
-                    random_dist_graph_stream(var_names, dist_graph_provider.dist_graph_stream());
+                    planned_dist_graph_stream(dist_graph_stream, planner);
                 let location_names = locations.keys().cloned().collect::<Vec<_>>();
 
                 (
@@ -374,7 +266,7 @@ where
                 )
                 .expect("Failed to create MQTT dist graph provider");
                 let location_names = locations.keys().cloned().collect::<Vec<_>>();
-                let mut dist_graph_stream = dist_graph_provider.dist_graph_stream();
+                let dist_graph_stream = dist_graph_provider.dist_graph_stream();
                 let input_vars = self
                     .async_monitor_builder
                     .model
@@ -388,36 +280,19 @@ where
                     .unwrap()
                     .output_vars();
 
-                let builder = self.partial_clone();
-                let context_builder = self.context_builder.as_ref().map(|b| b.partial_clone());
-                let executor_clone = executor.clone();
-                let labelled_dist_graph_stream: OutputStream<LabelledDistributionGraph> = Box::pin(
-                    stream! {
-                        let Some(initial_graph) = dist_graph_stream.next().await else {
-                            panic!("No initial graph received")
-                        };
+                let solver = BruteForceDistConstraintSolver {
+                    executor: executor.clone(),
+                    monitor_builder: self.partial_clone(),
+                    context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
+                    dist_constraints,
+                    input_vars,
+                    output_vars,
+                };
+                let planner: Rc<Box<dyn SchedulerPlanner>> =
+                    Rc::new(Box::new(StaticOptimizedSchedulerPlanner::new(solver)));
 
-                        info!("Initial dist graph stream {:?}", initial_graph);
-
-                        let mut labelled_dist_graphs: LocalBoxStream<LabelledDistributionGraph> =
-                            Self::possible_labelled_dist_graph_stream(builder, initial_graph,
-                            dist_constraints.clone(), input_vars.clone(), output_vars.clone(),
-                            context_builder, executor_clone);
-
-                        let chosen_dist_graph: LabelledDistributionGraph = match labelled_dist_graphs.next().await {
-                            Some(dist_graph) => dist_graph,
-                            None => return,
-                        };
-
-                        yield chosen_dist_graph.clone();
-                        info!("Labelled optimized graph: {:?}", chosen_dist_graph);
-                        graph_to_png(chosen_dist_graph.clone(), "distributed_graph.png").await.unwrap();
-
-                        while let Some(_) = dist_graph_stream.next().await {
-                            yield chosen_dist_graph.clone();
-                        }
-                    },
-                );
+                let labelled_dist_graph_stream: OutputStream<LabelledDistributionGraph> =
+                    planned_dist_graph_stream(dist_graph_stream, planner);
 
                 (
                     labelled_dist_graph_stream,
@@ -436,7 +311,7 @@ where
                     as Box<dyn SchedulerCommunicator>
             }
         };
-        let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
+        let scheduler = Rc::new(RefCell::new(Some(SchedulerEnactor::new(
             executor,
             scheduler_communicator,
         ))));
@@ -487,75 +362,7 @@ where
     #[allow(dead_code)]
     pub(crate) dist_graph_provider:
         Option<crate::io::mqtt::dist_graph_provider::MQTTDistGraphProvider>,
-    pub(crate) scheduler: Scheduler,
-}
-
-fn centralised_dist_graph_stream(
-    var_names: Vec<VarName>,
-    central_node: NodeName,
-    mut dist_graph_stream: OutputStream<Rc<DistributionGraph>>,
-) -> OutputStream<LabelledDistributionGraph> {
-    info!("Starting centralised_dist_graph_stream");
-    Box::pin(async_stream::stream! {
-        while let Some(graph) = dist_graph_stream.next().await {
-            let labels = graph
-                .graph
-                .node_indices()
-                .map(|i| {
-                    let node = graph.graph.node_weight(i).unwrap();
-                    (i.clone(),
-                     if *node == central_node {
-                        var_names.clone()
-                     } else {
-                        vec![]
-                     })
-                })
-                .collect::<BTreeMap<_, _>>();
-            let labelled_graph = LabelledDistributionGraph {
-                dist_graph: graph,
-                var_names: var_names.clone(),
-                node_labels: labels,
-            };
-            info!("Labelled graph: {:?}", labelled_graph);
-            graph_to_png(labelled_graph.clone(), "distributed_graph.png").await.unwrap();
-            yield labelled_graph;
-        }
-    })
-}
-
-fn random_dist_graph_stream(
-    var_names: Vec<VarName>,
-    mut dist_graph_stream: OutputStream<Rc<DistributionGraph>>,
-) -> OutputStream<LabelledDistributionGraph> {
-    info!("Starting random distribution graph stream");
-    Box::pin(async_stream::stream! {
-        while let Some(dist_graph) = dist_graph_stream.next().await {
-            info!("Received distribution graph: generating random labelling");
-            let node_indicies = dist_graph.graph.node_indices().collect::<Vec<_>>();
-            let location_map: BTreeMap<VarName, NodeIndex> = var_names.iter()
-                .map(|var| {
-                    let location_index: usize = rand::random_range(0..node_indicies.len());
-                    assert!(location_index < node_indicies.len());
-                    (var.clone(), node_indicies[location_index].clone())
-                }).collect();
-
-            let node_labels: BTreeMap<NodeIndex, Vec<VarName>> = dist_graph.graph
-                .node_indices()
-                .map(|idx| (idx,
-                    var_names.iter().filter(|var| location_map[var] == idx).cloned().collect()))
-                .collect();
-            info!("Generated random labelling: {:?}", node_labels);
-
-            let labelled_graph = LabelledDistributionGraph {
-                dist_graph,
-                var_names: var_names.clone(),
-                node_labels,
-            };
-            info!("Labelled graph: {:?}", labelled_graph);
-            graph_to_png(labelled_graph.clone(), "distributed_graph.png").await.unwrap();
-            yield labelled_graph;
-        }
-    })
+    pub(crate) scheduler: SchedulerEnactor,
 }
 
 #[async_trait(?Send)]
