@@ -205,13 +205,7 @@ where
     /// and a distribution graph
     fn possible_labelled_dist_graph_stream(
         self: Rc<Self>,
-        // builder: Self,
         graph: Rc<DistributionGraph>,
-        // dist_constraints: Vec<VarName>,
-        // input_vars: Vec<VarName>,
-        // output_vars: Vec<VarName>,
-        // context_builder: Option<DistributedContextBuilder<Value>>,
-        // executor: Rc<LocalExecutor<'static>>,
     ) -> OutputStream<Rc<LabelledDistributionGraph>> {
         // To avoid lifetime and move issues, clone all necessary data for the async block.
         let dist_constraints = self.dist_constraints.clone();
