@@ -10,7 +10,7 @@ use crate::{
     cli::args::Cli,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
-    io::InputProviderBuilder,
+    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::dynamic_lola::type_checker::{TypedLOLASpecification, type_check},
     semantics::distributed::{contexts::DistributedContext, localisation::LocalitySpec},
 };
@@ -178,12 +178,14 @@ impl Debug for DistributionMode {
         }
     }
 }
+
 pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
     pub input: Option<Box<dyn crate::InputProvider<Val = V>>>,
     pub input_provider_builder: Option<InputProviderBuilder>,
     pub output: Option<Box<dyn OutputHandler<Val = V>>>,
+    pub output_handler_builder: Option<OutputHandlerBuilder>,
     pub dependencies: Option<DependencyManager>,
     pub runtime: Runtime,
     pub semantics: Semantics,
@@ -240,6 +242,13 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         }
     }
 
+    pub fn output_handler_builder(self, builder: OutputHandlerBuilder) -> Self {
+        Self {
+            output_handler_builder: Some(builder),
+            ..self
+        }
+    }
+
     pub fn maybe_distribution_mode(self, dist_mode: Option<DistributionMode>) -> Self {
         match dist_mode {
             Some(dist_mode) => self.distribution_mode(dist_mode),
@@ -267,6 +276,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             input: None,
             input_provider_builder: None,
             output: None,
+            output_handler_builder: None,
             dependencies: None,
             distribution_mode: DistributionMode::CentralMonitor,
             distribution_mode_fn: None,
@@ -512,11 +522,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             Some(model) => builder.model(model),
             None => builder,
         };
-        let builder = if let Some(output) = self.output {
-            builder.output(output)
-        } else {
-            builder
-        };
+
+        // Construct inputs:
         let builder = if let Some(input_provider_builder) = self.input_provider_builder {
             let input = input_provider_builder.async_build().await;
             builder.input(input)
@@ -526,6 +533,33 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             builder
         };
 
+        // Construct outputs:
+        let builder = if let Some(output_handler_builder) = self.output_handler_builder {
+            let output = output_handler_builder.async_build().await;
+            builder.output(output)
+        } else if let Some(output) = self.output {
+            builder.output(output)
+        } else {
+            builder
+        };
+
         builder.build()
+    }
+
+    pub fn partial_clone(self) -> Self {
+        Self {
+            executor: self.executor.clone(),
+            model: self.model.clone(),
+            input: None, // Not clonable. TODO: We should make all builders clonable
+            input_provider_builder: self.input_provider_builder.clone(),
+            output: None, // Not clonable. TODO: We should make all builders clonable
+            output_handler_builder: self.output_handler_builder.clone(),
+            dependencies: self.dependencies.clone(),
+            distribution_mode: DistributionMode::CentralMonitor, // Not clonable. TODO: We should make all builders clonable
+            distribution_mode_fn: self.distribution_mode_fn.clone(),
+            runtime: self.runtime.clone(),
+            semantics: self.semantics.clone(),
+            scheduler_mode: self.scheduler_mode.clone(),
+        }
     }
 }

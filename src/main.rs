@@ -7,26 +7,22 @@ use smol::LocalExecutor;
 use tracing::{debug, info};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::core::{
-    AbstractMonitorBuilder, MQTT_HOSTNAME, OutputHandler, Runnable,
-};
+use trustworthiness_checker::core::{AbstractMonitorBuilder, MQTT_HOSTNAME, Runnable};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
 use trustworthiness_checker::io::InputProviderBuilder;
-use trustworthiness_checker::io::mqtt::MQTTOutputHandler;
+use trustworthiness_checker::io::builders::OutputHandlerBuilder;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
 use trustworthiness_checker::semantics::distributed::localisation::{Localisable, LocalitySpec};
 use trustworthiness_checker::{self as tc, io::file::parse_file};
-use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, DistributionMode as CliDistMode, Language, OutputMode, ParserMode,
+    Cli, DistributionMode as CliDistMode, Language, ParserMode,
 };
-use trustworthiness_checker::io::cli::StdoutOutputHandler;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::io::ros::{
     input_provider::ROSInputProvider, ros_topic_stream_mapping,
@@ -110,59 +106,6 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
     })
 }
 
-fn create_output_handler(
-    executor: Rc<LocalExecutor<'static>>,
-    output_var_names: Vec<VarName>,
-    output_mode: OutputMode,
-) -> Box<dyn OutputHandler<Val = Value>> {
-    match output_mode {
-        OutputMode {
-            output_stdout: true,
-            ..
-        } => Box::new(StdoutOutputHandler::<tc::Value>::new(
-            executor.clone(),
-            output_var_names,
-        )),
-        OutputMode {
-            output_mqtt_topics: Some(topics),
-            ..
-        } => {
-            let topics = topics
-                .into_iter()
-                // Only include topics that are in the output_vars
-                // this is necessary for localisation support
-                .filter(|topic| output_var_names.contains(&VarName::new(topic.as_str())))
-                .map(|topic| (topic.clone().into(), topic))
-                .collect();
-            Box::new(
-                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
-                    .expect("MQTT output handler could not be created"),
-            )
-        }
-        OutputMode {
-            mqtt_output: true, ..
-        } => {
-            let topics = output_var_names
-                .iter()
-                .map(|var| (var.clone(), var.into()))
-                .collect();
-            Box::new(
-                MQTTOutputHandler::new(executor.clone(), output_var_names, MQTT_HOSTNAME, topics)
-                    .expect("MQTT output handler could not be created"),
-            )
-        }
-        OutputMode {
-            output_ros_topics: Some(_),
-            ..
-        } => unimplemented!("ROS output not implemented"),
-        // Default to stdout
-        _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
-            executor.clone(),
-            output_var_names.clone(),
-        )),
-    }
-}
-
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) {
     tracing_subscriber::registry()
@@ -229,13 +172,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     let builder = builder.input_provider_builder(input_provider_builder);
 
     // Create the output handler
-    let builder = builder.output(create_output_handler(
-        executor.clone(),
-        output_var_names,
-        cli.output_mode.clone(),
-    ));
+    let output_handler_builder = OutputHandlerBuilder::new(cli.output_mode)
+        .executor(executor.clone())
+        .output_var_names(output_var_names);
+
+    let builder = builder.output_handler_builder(output_handler_builder);
 
     // Create the runtime
+    let builder = builder.partial_clone();
     let monitor = builder.async_build().await;
 
     monitor.run().await;
