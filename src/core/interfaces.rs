@@ -20,6 +20,7 @@ pub enum Runtime {
     Async,
     Constraints,
     Distributed,
+    ReconfigurableAsync,
 }
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;

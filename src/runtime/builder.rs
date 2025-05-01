@@ -12,6 +12,7 @@ use crate::{
     dep_manage::interface::DependencyManager,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::dynamic_lola::type_checker::{TypedLOLASpecification, type_check},
+    runtime::reconfigurable_async::ReconfAsyncMonitorBuilder,
     semantics::distributed::{contexts::DistributedContext, localisation::LocalitySpec},
 };
 
@@ -322,7 +323,10 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     }
 
     fn build(self) -> Self::Mon {
-        if self.distribution_mode_fn.is_some() || self.input_provider_builder.is_some() {
+        if self.distribution_mode_fn.is_some()
+            || self.input_provider_builder.is_some()
+            || self.output_handler_builder.is_some()
+        {
             panic!("Call async_build instead");
         }
 
@@ -456,6 +460,15 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 }
                 (Runtime::Constraints, Semantics::Untimed) => {
                     Box::new(ConstraintBasedMonitorBuilder::new())
+                }
+                (Runtime::ReconfigurableAsync, Semantics::Untimed) => {
+                    Box::new(ReconfAsyncMonitorBuilder::<
+                        LOLASpecification,
+                        DistributedContext<Value>,
+                        Value,
+                        _,
+                        crate::semantics::DistributedSemantics,
+                    >::new())
                 }
                 (Runtime::Distributed, Semantics::Untimed) => {
                     debug!(

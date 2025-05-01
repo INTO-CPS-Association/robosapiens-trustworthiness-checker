@@ -10,6 +10,7 @@ use super::provide_mqtt_client_with_subscription;
 
 const MQTT_QOS: i32 = 1;
 
+#[derive(Clone)]
 pub struct MQTTLocalityReceiver {
     mqtt_host: String,
     local_node: String,

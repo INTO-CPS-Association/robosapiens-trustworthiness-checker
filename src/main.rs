@@ -179,7 +179,6 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     let builder = builder.output_handler_builder(output_handler_builder);
 
     // Create the runtime
-    let builder = builder.partial_clone();
     let monitor = builder.async_build().await;
 
     monitor.run().await;
