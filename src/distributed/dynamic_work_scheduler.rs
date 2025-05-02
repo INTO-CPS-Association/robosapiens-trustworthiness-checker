@@ -1,5 +1,10 @@
+use crate::core::to_typed_stream_vec;
+use crate::io::mqtt::dist_graph_provider::DistGraphProvider;
+
 use std::cell::OnceCell;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::mem;
 use std::rc::Rc;
 
 use crate::InputProvider;
@@ -21,15 +26,20 @@ use crate::semantics::distributed::contexts::DistributedContextBuilder;
 use crate::semantics::distributed::localisation::Localisable;
 use async_stream::stream;
 use async_trait::async_trait;
+use futures::future::join_all;
+use futures::join;
 use futures::stream::LocalBoxStream;
 use petgraph::graph::NodeIndex;
 use smol::LocalExecutor;
 use smol::stream::StreamExt;
+use smol::stream::once;
 use smol::stream::repeat;
 use tracing::debug;
 use tracing::info;
+use unsync::broadcast;
 
 use super::distribution_graphs::DistributionGraph;
+use super::distribution_graphs::LabelledDistGraphStream;
 use super::distribution_graphs::{LabelledDistributionGraph, NodeName};
 use super::scheduling::SchedulerCommunicator;
 
@@ -49,16 +59,16 @@ impl SchedulerCommunicator for NullSchedulerCommunicator {
 
 #[async_trait(?Send)]
 pub trait SchedulerPlanner {
-    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<LabelledDistributionGraph>;
+    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>>;
 }
 
 pub struct StaticFixedSchedulerPlanner {
-    fixed_graph: LabelledDistributionGraph,
+    pub fixed_graph: Rc<LabelledDistributionGraph>,
 }
 
 #[async_trait(?Send)]
 impl SchedulerPlanner for StaticFixedSchedulerPlanner {
-    async fn plan(&self, _graph: Rc<DistributionGraph>) -> Option<LabelledDistributionGraph> {
+    async fn plan(&self, _graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
         Some(self.fixed_graph.clone())
     }
 }
@@ -70,7 +80,7 @@ pub struct CentralisedSchedulerPlanner {
 
 #[async_trait(?Send)]
 impl SchedulerPlanner for CentralisedSchedulerPlanner {
-    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<LabelledDistributionGraph> {
+    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
         let labels = graph
             .graph
             .node_indices()
@@ -86,11 +96,11 @@ impl SchedulerPlanner for CentralisedSchedulerPlanner {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let labelled_graph = LabelledDistributionGraph {
+        let labelled_graph = Rc::new(LabelledDistributionGraph {
             dist_graph: graph,
             var_names: self.var_names.clone(),
             node_labels: labels,
-        };
+        });
         info!("Labelled graph: {:?}", labelled_graph);
 
         graph_to_png(labelled_graph.clone(), "distributed_graph.png")
@@ -106,7 +116,7 @@ pub struct RandomSchedulerPlanner {
 
 #[async_trait(?Send)]
 impl SchedulerPlanner for RandomSchedulerPlanner {
-    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<LabelledDistributionGraph> {
+    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
         info!("Received distribution graph: generating random labelling");
         let node_indicies = graph.graph.node_indices().collect::<Vec<_>>();
         let location_map: BTreeMap<VarName, NodeIndex> = self
@@ -135,11 +145,11 @@ impl SchedulerPlanner for RandomSchedulerPlanner {
             .collect();
         info!("Generated random labelling: {:?}", node_labels);
 
-        let labelled_graph = LabelledDistributionGraph {
+        let labelled_graph = Rc::new(LabelledDistributionGraph {
             dist_graph: graph,
             var_names: self.var_names.clone(),
             node_labels,
-        };
+        });
         info!("Labelled graph: {:?}", labelled_graph);
         graph_to_png(labelled_graph.clone(), "distributed_graph.png")
             .await
@@ -172,7 +182,7 @@ where
         &self,
         monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>,
         labelled_graph: Rc<LabelledDistributionGraph>,
-    ) -> OutputStream<Vec<Value>> {
+    ) -> OutputStream<Vec<bool>> {
         // Build a runtime for constructing the output stream
         debug!(
             "Output stream for graph with input_vars: {:?} and output_vars: {:?}",
@@ -183,7 +193,7 @@ where
         let mut output_handler =
             ManualOutputHandler::new(self.executor.clone(), self.dist_constraints.clone());
         let output_stream: OutputStream<Vec<Value>> = Box::pin(output_handler.get_output());
-        let potential_dist_graph_stream = Box::pin(repeat((*labelled_graph).clone()));
+        let potential_dist_graph_stream = Box::pin(repeat(labelled_graph.clone()));
         let context_builder = self
             .context_builder
             .as_ref()
@@ -198,7 +208,7 @@ where
         self.executor.spawn(runtime.run()).detach();
 
         // Construct a wrapped output stream which makes sure the context starts
-        output_stream
+        to_typed_stream_vec(output_stream)
     }
 
     /// Finds all possible labelled distribution graphs given a set of distribution constraints
@@ -206,7 +216,7 @@ where
     fn possible_labelled_dist_graph_stream(
         self: Rc<Self>,
         graph: Rc<DistributionGraph>,
-    ) -> OutputStream<Rc<LabelledDistributionGraph>> {
+    ) -> LabelledDistGraphStream {
         // To avoid lifetime and move issues, clone all necessary data for the async block.
         let dist_constraints = self.dist_constraints.clone();
         let builder = self.monitor_builder.partial_clone();
@@ -240,13 +250,8 @@ where
                     labelled_graph.clone(),
                 );
 
-                let first_output: Vec<Value> = output_stream.next().await.unwrap();
-                let dist_constraints_hold = first_output.iter().all(|x| match x {
-                    Value::Bool(b) => *b,
-                    x => {
-                        panic!("Unexpected value for dist constraint {:?}", x);
-                    }
-                });
+                let first_output: Vec<bool> = output_stream.next().await.unwrap();
+                let dist_constraints_hold = first_output.iter().all(|x| *x);
                 if dist_constraints_hold {
                     info!("Found matching graph!");
                     yield labelled_graph;
@@ -286,9 +291,9 @@ where
     S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
     M: Specification<Expr = Expr> + Localisable,
 {
-    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<LabelledDistributionGraph> {
+    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
         if let Some(chosen_dist_graph) = self.chosen_dist_graph.get() {
-            return Some((**chosen_dist_graph).clone());
+            return Some(chosen_dist_graph.clone());
         }
 
         info!("Initial dist graph stream {:?}", graph);
@@ -309,18 +314,15 @@ where
             .unwrap();
 
         info!("Labelled optimized graph: {:?}", chosen_dist_graph);
-        graph_to_png((*chosen_dist_graph).clone(), "distributed_graph.png")
-            .await
-            .unwrap();
 
-        Some((*chosen_dist_graph).clone())
+        Some(chosen_dist_graph)
     }
 }
 
 pub fn planned_dist_graph_stream(
     mut dist_graphs: OutputStream<Rc<DistributionGraph>>,
     planner: Rc<Box<dyn SchedulerPlanner>>,
-) -> OutputStream<LabelledDistributionGraph> {
+) -> LabelledDistGraphStream {
     Box::pin(stream! {
         while let Some(dist_graph) = dist_graphs.next().await {
             let labelled_dist_graph = planner.plan(dist_graph).await.unwrap();
@@ -329,49 +331,148 @@ pub fn planned_dist_graph_stream(
     })
 }
 
-pub struct SchedulerEnactor {
-    executor: Rc<LocalExecutor<'static>>,
-    dist_graph_stream: Option<OutputStream<LabelledDistributionGraph>>,
+pub struct SchedulerExecutor {
     communicator: Box<dyn SchedulerCommunicator>,
 }
 
-impl SchedulerEnactor {
+impl SchedulerExecutor {
+    pub fn new(communicator: Box<dyn SchedulerCommunicator>) -> Self {
+        SchedulerExecutor { communicator }
+    }
+    pub async fn execute(&mut self, dist_graph: Rc<LabelledDistributionGraph>) {
+        let nodes = dist_graph.dist_graph.graph.node_indices();
+        // is this really the best way?
+        for node in nodes {
+            let node_name = dist_graph.dist_graph.graph[node].clone();
+            let work = dist_graph.node_labels[&node].clone();
+            info!("Scheduling work {:?} for node {}", work, node_name);
+            let _ = self.communicator.schedule_work(node_name, work).await;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ReplanningCondition {
+    ConstraintsFail,
+    Always,
+    Never,
+}
+
+pub struct Scheduler {
+    replanning_condition: ReplanningCondition,
+    dist_graph_output_stream: Option<LabelledDistGraphStream>,
+    planner: Box<dyn SchedulerPlanner>,
+    schedule_executor: SchedulerExecutor,
+    dist_graph_provider: Box<dyn DistGraphProvider>,
+    dist_constraints_streams: Rc<RefCell<Option<Vec<OutputStream<bool>>>>>,
+    dist_graph_sender: broadcast::Sender<Rc<LabelledDistributionGraph>>,
+}
+
+impl Scheduler {
     pub fn new(
-        executor: Rc<LocalExecutor<'static>>,
+        planner: Box<dyn SchedulerPlanner>,
         communicator: Box<dyn SchedulerCommunicator>,
+        dist_graph_provider: Box<dyn DistGraphProvider>,
+        replanning_condition: ReplanningCondition,
     ) -> Self {
-        SchedulerEnactor {
-            executor,
-            dist_graph_stream: None,
-            communicator,
+        let mut tx = broadcast::channel(10);
+        let executor = SchedulerExecutor::new(communicator);
+        let mut rx_output = tx.subscribe();
+        let dist_graph_output_stream: Option<LabelledDistGraphStream> = Some(Box::pin(stream! {
+            while let Some(x) = rx_output.recv().await {
+                yield x
+            }
+        }));
+
+        Scheduler {
+            dist_graph_output_stream,
+            planner,
+            dist_graph_sender: tx,
+            dist_constraints_streams: Rc::new(RefCell::new(None)),
+            dist_graph_provider,
+            schedule_executor: executor,
+            replanning_condition,
         }
     }
 
-    pub fn dist_graph_stream(
-        &mut self,
-        stream: OutputStream<LabelledDistributionGraph>,
-    ) -> &mut Self {
-        self.dist_graph_stream = Some(stream);
-        self
+    pub fn take_graph_stream(&mut self) -> LabelledDistGraphStream {
+        mem::take(&mut self.dist_graph_output_stream)
+            .expect("Take graph stream called more than once")
     }
 
-    pub fn run(self) {
-        if let Some(mut stream) = self.dist_graph_stream {
-            self.executor
-                .spawn(async move {
-                    let mut communicator = self.communicator;
-                    while let Some(dist_graph) = stream.next().await {
-                        let nodes = dist_graph.dist_graph.graph.node_indices();
-                        // is this really the best way?
-                        for node in nodes {
-                            let node_name = dist_graph.dist_graph.graph[node].clone();
-                            let work = dist_graph.node_labels[&node].clone();
-                            info!("Scheduling work {:?} for node {}", work, node_name);
-                            let _ = communicator.schedule_work(node_name, work).await;
-                        }
-                    }
-                })
-                .detach();
-        };
+    pub fn provide_dist_constraints_streams(&mut self, streams: Vec<OutputStream<bool>>) {
+        self.dist_constraints_streams = Rc::new(RefCell::new(Some(streams)));
+    }
+
+    pub fn all_constraints_hold(vec: Vec<Option<bool>>) -> Option<bool> {
+        vec.into_iter().fold(Some(true), |acc, x| match (acc, x) {
+            (Some(b), Some(c)) => Some(b && c),
+            _ => None,
+        })
+    }
+
+    pub fn dist_constraints_hold_stream(&mut self) -> OutputStream<bool> {
+        let mut dist_constraints_streams = self
+            .dist_constraints_streams
+            .take()
+            .expect("Distribution constraints streams not provided");
+        info!(
+            "dist_constraints_stream with {} constraints",
+            dist_constraints_streams.len()
+        );
+
+        if dist_constraints_streams.len() == 0 {
+            return Box::pin(repeat(true));
+        }
+
+        Box::pin(stream! {
+            info!("In dist_constraints_hold_stream");
+            while let Some(res) = Self::all_constraints_hold(join_all(dist_constraints_streams.iter_mut().map(|x| x.next())).await) {
+                info!("Yielding one");
+                yield res
+            }
+        })
+    }
+
+    pub async fn run(mut self) {
+        // MAPE-K loop for scheduling
+        let mut dist_constraits_hold_stream =
+            once(false).chain(self.dist_constraints_hold_stream());
+        let mut dist_graph_stream = self.dist_graph_provider.dist_graph_stream();
+
+        let mut plan = None;
+
+        info!("In Scheduler loop");
+
+        // Monitor + Analyse phase in let
+        while let (Some(constraints_hold), Some(graph)) =
+            join!(dist_constraits_hold_stream.next(), dist_graph_stream.next())
+        {
+            info!("Monitored and analised");
+
+            // Plan phase
+            let should_plan = match self.replanning_condition {
+                ReplanningCondition::ConstraintsFail => !constraints_hold,
+                ReplanningCondition::Always => true,
+                ReplanningCondition::Never => plan.is_none(),
+            };
+            if should_plan {
+                info!("Plan");
+                plan = Some(self.planner.plan(graph).await);
+            }
+
+            // Execute phase
+            if let Some(Some(ref plan)) = plan {
+                info!("Execute");
+                self.schedule_executor.execute(plan.clone()).await;
+                self.dist_graph_sender.send(plan.clone()).await;
+                info!("Plotting graph");
+                graph_to_png(plan.clone(), "distributed_graph.png")
+                    .await
+                    .unwrap();
+            }
+
+            info!("Monitor");
+        }
     }
 }

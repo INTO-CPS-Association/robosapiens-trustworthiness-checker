@@ -15,7 +15,10 @@ use smol::{
 };
 use tracing::{debug, info};
 
-use crate::VarName;
+use crate::{OutputStream, VarName, core::StreamData};
+
+pub type LabelledDistGraphStream = OutputStream<Rc<LabelledDistributionGraph>>;
+pub type DistGraphStream = OutputStream<Rc<DistributionGraph>>;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Default, Ord, PartialOrd)]
 pub struct NodeName(String);
@@ -119,6 +122,9 @@ impl<W> GenericLabelledDistributionGraph<W> {
         self.dist_graph.get_node_index_by_name(name)
     }
 }
+
+impl<W: StreamData> StreamData for GenericLabelledDistributionGraph<W> {}
+impl<W: StreamData> StreamData for Rc<GenericLabelledDistributionGraph<W>> {}
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub enum TaggedVarOrNodeName {
@@ -282,7 +288,7 @@ impl Display for GraphPlottingError {
     }
 }
 
-pub fn plottable_graph(input: LabelledDistributionGraph) -> DiGraph<String, u64> {
+pub fn plottable_graph(input: Rc<LabelledDistributionGraph>) -> DiGraph<String, u64> {
     let node_map = |node: NodeIndex, node_name: &NodeName| {
         let label_str: String =
             input
@@ -306,7 +312,7 @@ pub fn plottable_graph(input: LabelledDistributionGraph) -> DiGraph<String, u64>
 }
 
 pub async fn graph_to_dot(
-    input: LabelledDistributionGraph,
+    input: Rc<LabelledDistributionGraph>,
     file_path: &str,
 ) -> Result<(), GraphPlottingError> {
     let graph = plottable_graph(input);
@@ -331,7 +337,7 @@ pub async fn graph_to_dot(
 }
 
 pub async fn graph_to_png(
-    input: LabelledDistributionGraph,
+    input: Rc<LabelledDistributionGraph>,
     file_path: &str,
 ) -> Result<(), GraphPlottingError> {
     let dot_path = "/tmp/graph_visualization.dot";

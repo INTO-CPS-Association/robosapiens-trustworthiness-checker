@@ -1,14 +1,12 @@
 use crate::VarName;
 use crate::core::OutputStream;
 use crate::core::{StreamData, Value};
-use crate::distributed::distribution_graphs::{Distance, LabelledDistributionGraph, NodeName};
+use crate::distributed::distribution_graphs::{Distance, NodeName};
 use crate::lang::dynamic_lola::ast::VarOrNodeName;
 use async_stream::stream;
 use futures::StreamExt;
 
 use super::contexts::DistributedContext;
-
-impl StreamData for LabelledDistributionGraph {}
 
 pub fn monitored_at<Val: StreamData>(
     var_name: VarName,
@@ -59,7 +57,9 @@ mod tests {
     use super::*;
     use crate::{
         core::Value,
-        distributed::distribution_graphs::{DistributionGraph, TaggedVarOrNodeName},
+        distributed::distribution_graphs::{
+            DistributionGraph, LabelledDistributionGraph, TaggedVarOrNodeName,
+        },
         semantics::{
             AbstractContextBuilder, StreamContext, distributed::contexts::DistributedContextBuilder,
         },
@@ -109,7 +109,7 @@ mod tests {
             central_monitor: a,
             graph,
         });
-        let labelled_graph = LabelledDistributionGraph {
+        let labelled_graph = Rc::new(LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["x".into(), "y".into(), "z".into()],
             node_labels: BTreeMap::from([
@@ -117,7 +117,7 @@ mod tests {
                 (b, vec!["x".into()]),
                 (c, vec!["y".into(), "z".into()]),
             ]),
-        };
+        });
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
@@ -153,7 +153,7 @@ mod tests {
             central_monitor: a,
             graph,
         });
-        let labelled_graph = LabelledDistributionGraph {
+        let labelled_graph = Rc::new(LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["x".into(), "y".into(), "z".into()],
             node_labels: BTreeMap::from([
@@ -161,7 +161,7 @@ mod tests {
                 (b, vec!["x".into()]),
                 (c, vec!["y".into(), "z".into()]),
             ]),
-        };
+        });
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
@@ -197,7 +197,7 @@ mod tests {
             central_monitor: a,
             graph,
         });
-        let labelled_graph = LabelledDistributionGraph {
+        let labelled_graph = Rc::new(LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["x".into(), "y".into(), "z".into()],
             node_labels: BTreeMap::from([
@@ -205,7 +205,7 @@ mod tests {
                 (b, vec!["x".into()]),
                 (c, vec!["y".into(), "z".into()]),
             ]),
-        };
+        });
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
@@ -241,7 +241,7 @@ mod tests {
             central_monitor: a,
             graph,
         });
-        let labelled_graph = LabelledDistributionGraph {
+        let labelled_graph = Rc::new(LabelledDistributionGraph {
             dist_graph,
             var_names: vec!["x".into(), "y".into(), "z".into()],
             node_labels: BTreeMap::from([
@@ -249,7 +249,7 @@ mod tests {
                 (b, vec!["x".into()]),
                 (c, vec!["y".into(), "z".into()]),
             ]),
-        };
+        });
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 

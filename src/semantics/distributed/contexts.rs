@@ -7,7 +7,9 @@ use smol::LocalExecutor;
 use crate::{
     OutputStream, VarName,
     core::StreamData,
-    distributed::distribution_graphs::{LabelledDistributionGraph, NodeName, TaggedVarOrNodeName},
+    distributed::distribution_graphs::{
+        LabelledDistGraphStream, LabelledDistributionGraph, NodeName, TaggedVarOrNodeName,
+    },
     lang::dynamic_lola::ast::VarOrNodeName,
     runtime::asynchronous::{Context as AsyncCtx, ContextBuilder as AsyncCtxBuilder, VarManager},
     semantics::{AbstractContextBuilder, StreamContext},
@@ -19,7 +21,7 @@ pub struct DistributedContextBuilder<Val: StreamData> {
     nested_async_ctx: Option<AsyncCtx<Val>>,
     graph_name: Option<String>,
     node_names: Option<Vec<NodeName>>,
-    graph_stream: Option<OutputStream<LabelledDistributionGraph>>,
+    graph_stream: Option<LabelledDistGraphStream>,
     presupplied_ctx: Option<Box<DistributedContext<Val>>>,
     built_callbacks: Vec<Box<dyn FnOnce(&mut DistributedContext<Val>)>>,
 }
@@ -111,7 +113,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
 }
 
 impl<Val: StreamData> DistributedContextBuilder<Val> {
-    pub fn graph_stream(mut self, graph_stream: OutputStream<LabelledDistributionGraph>) -> Self {
+    pub fn graph_stream(mut self, graph_stream: LabelledDistGraphStream) -> Self {
         self.graph_stream = Some(graph_stream);
         self
     }
@@ -151,7 +153,7 @@ pub struct DistributedContext<Val: StreamData> {
     ctx: AsyncCtx<Val>,
     /// Essentially a shared_ptr that we can at some time take ownership of
     node_names: Vec<NodeName>,
-    graph_manager: Rc<RefCell<Option<VarManager<LabelledDistributionGraph>>>>,
+    graph_manager: Rc<RefCell<Option<VarManager<Rc<LabelledDistributionGraph>>>>>,
     executor: Rc<LocalExecutor<'static>>,
     builder: DistributedContextBuilder<Val>,
 }
@@ -217,7 +219,7 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
 }
 
 impl<Val: StreamData> DistributedContext<Val> {
-    pub fn graph(&self) -> Option<OutputStream<LabelledDistributionGraph>> {
+    pub fn graph(&self) -> Option<LabelledDistGraphStream> {
         if self.is_clock_started() {
             panic!("Cannot request a stream after the clock has started");
         }

@@ -130,6 +130,8 @@ pub trait StreamData: Clone + Debug + 'static {}
 
 // Trait defining the allowed types for expression values
 impl StreamData for i64 {}
+impl StreamData for i32 {}
+impl StreamData for u64 {}
 impl StreamData for f64 {}
 impl StreamData for String {}
 impl StreamData for bool {}

@@ -1,25 +1,26 @@
-use std::{cell::RefCell, collections::BTreeMap, mem, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use async_trait::async_trait;
-use smol::{LocalExecutor, stream::repeat};
+use futures::join;
+use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
-    InputProvider, Monitor, OutputStream, Specification, Value, VarName,
-    core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
+    InputProvider, Monitor, Specification, Value, VarName,
+    core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData, to_typed_stream},
     dep_manage::interface::DependencyManager,
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         dynamic_work_scheduler::{
             BruteForceDistConstraintSolver, CentralisedSchedulerPlanner, NullSchedulerCommunicator,
-            RandomSchedulerPlanner, SchedulerEnactor, SchedulerPlanner,
-            StaticOptimizedSchedulerPlanner, planned_dist_graph_stream,
+            RandomSchedulerPlanner, ReplanningCondition, Scheduler, SchedulerPlanner,
+            StaticFixedSchedulerPlanner, StaticOptimizedSchedulerPlanner,
         },
         scheduling::SchedulerCommunicator,
     },
     io::mqtt::{
         MQTTSchedulerCommunicator,
-        dist_graph_provider::{self, MQTTDistGraphProvider},
+        dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
     },
     semantics::{
         AbstractContextBuilder, MonitoringSemantics, StreamContext,
@@ -202,71 +203,83 @@ where
             .as_ref()
             .expect("Var names not set")
             .output_vars();
-        let (dist_graph_stream, node_names, dist_graph_provider): (
-            OutputStream<LabelledDistributionGraph>,
+        let (planner, locations, dist_graph_provider, dist_constraints, replanning_condition): (
+            Box<dyn SchedulerPlanner>,
             Vec<NodeName>,
-            Option<MQTTDistGraphProvider>,
+            Box<dyn DistGraphProvider>,
+            Vec<VarName>, // Distribution constraints
+            ReplanningCondition,
         ) = match dist_graph_mode {
-            DistGraphMode::Static(graph) => (
-                Box::pin(repeat(graph.clone())),
-                graph.dist_graph.graph.node_weights().cloned().collect(),
-                None,
-            ),
+            DistGraphMode::Static(graph) => {
+                let graph = Rc::new(graph);
+                let dist_graph_provider =
+                    Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
+                let locations = graph.dist_graph.graph.node_weights().cloned().collect();
+                let planner = Box::new(StaticFixedSchedulerPlanner { fixed_graph: graph });
+                (
+                    planner,
+                    locations,
+                    dist_graph_provider,
+                    vec![],
+                    ReplanningCondition::Never,
+                )
+            }
             DistGraphMode::MQTTCentralised(locations) => {
                 debug!("Creating MQTT dist graph provider");
-                let mut dist_graph_provider = dist_graph_provider::MQTTDistGraphProvider::new(
-                    executor.clone(),
-                    "central".to_string().into(),
-                    locations.clone(),
-                )
-                .expect("Failed to create MQTT dist graph provider");
-                let dist_graph_stream = dist_graph_provider.dist_graph_stream();
-                let planner: Rc<Box<dyn SchedulerPlanner>> =
-                    Rc::new(Box::new(CentralisedSchedulerPlanner {
-                        var_names,
-                        central_node: dist_graph_provider.central_node.clone(),
-                    }));
-                let labelled_dist_graph_stream =
-                    planned_dist_graph_stream(dist_graph_stream, planner);
-                let location_names = locations.keys().cloned().collect::<Vec<_>>();
-
+                let location_names = locations.keys().cloned().collect();
+                let dist_graph_provider = Box::new(
+                    dist_graph_provider::MQTTDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        locations,
+                    )
+                    .expect("Failed to create MQTT dist graph provider"),
+                );
+                let planner: Box<dyn SchedulerPlanner> = Box::new(CentralisedSchedulerPlanner {
+                    var_names,
+                    central_node: dist_graph_provider.central_node.clone(),
+                });
                 (
-                    labelled_dist_graph_stream,
+                    planner,
                     location_names,
-                    Some(dist_graph_provider),
+                    dist_graph_provider,
+                    vec![],
+                    ReplanningCondition::Always,
                 )
             }
             DistGraphMode::MQTTRandom(locations) => {
                 debug!("Creating random dist graph stream");
-                let mut dist_graph_provider = dist_graph_provider::MQTTDistGraphProvider::new(
-                    executor.clone(),
-                    "central".to_string().into(),
-                    locations.clone(),
-                )
-                .expect("Failed to create MQTT dist graph provider");
-                let dist_graph_stream = dist_graph_provider.dist_graph_stream();
-                let planner: Rc<Box<dyn SchedulerPlanner>> =
-                    Rc::new(Box::new(RandomSchedulerPlanner { var_names }));
-                let labelled_dist_graph_stream =
-                    planned_dist_graph_stream(dist_graph_stream, planner);
-                let location_names = locations.keys().cloned().collect::<Vec<_>>();
+                let location_names = locations.keys().cloned().collect();
+                let dist_graph_provider = Box::new(
+                    dist_graph_provider::MQTTDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        locations,
+                    )
+                    .expect("Failed to create MQTT dist graph provider"),
+                );
+                let planner: Box<dyn SchedulerPlanner> =
+                    Box::new(RandomSchedulerPlanner { var_names });
 
                 (
-                    labelled_dist_graph_stream,
+                    planner,
                     location_names,
-                    Some(dist_graph_provider),
+                    dist_graph_provider,
+                    vec![],
+                    ReplanningCondition::Always,
                 )
             }
             DistGraphMode::MQTTStaticOptimized(locations, dist_constraints) => {
                 debug!("Creating static optimized dist graph provider");
-                let mut dist_graph_provider = dist_graph_provider::MQTTDistGraphProvider::new(
-                    executor.clone(),
-                    "central".to_string().into(),
-                    locations.clone(),
-                )
-                .expect("Failed to create MQTT dist graph provider");
-                let location_names = locations.keys().cloned().collect::<Vec<_>>();
-                let dist_graph_stream = dist_graph_provider.dist_graph_stream();
+                let location_names = locations.keys().cloned().collect();
+                let dist_graph_provider = Box::new(
+                    dist_graph_provider::MQTTDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        locations,
+                    )
+                    .expect("Failed to create MQTT dist graph provider"),
+                );
                 let input_vars = self
                     .async_monitor_builder
                     .model
@@ -284,20 +297,19 @@ where
                     executor: executor.clone(),
                     monitor_builder: self.partial_clone(),
                     context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
-                    dist_constraints,
+                    dist_constraints: dist_constraints.clone(),
                     input_vars,
                     output_vars,
                 };
-                let planner: Rc<Box<dyn SchedulerPlanner>> =
-                    Rc::new(Box::new(StaticOptimizedSchedulerPlanner::new(solver)));
-
-                let labelled_dist_graph_stream: OutputStream<LabelledDistributionGraph> =
-                    planned_dist_graph_stream(dist_graph_stream, planner);
+                let planner: Box<dyn SchedulerPlanner> =
+                    Box::new(StaticOptimizedSchedulerPlanner::new(solver));
 
                 (
-                    labelled_dist_graph_stream,
+                    planner,
                     location_names,
-                    Some(dist_graph_provider),
+                    dist_graph_provider,
+                    dist_constraints,
+                    ReplanningCondition::Never,
                 )
             }
         };
@@ -311,19 +323,27 @@ where
                     as Box<dyn SchedulerCommunicator>
             }
         };
-        let scheduler = Rc::new(RefCell::new(Some(SchedulerEnactor::new(
-            executor,
+        let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
+            planner,
             scheduler_communicator,
+            dist_graph_provider,
+            replanning_condition,
         ))));
+        let dist_graph_stream = scheduler.borrow_mut().as_mut().unwrap().take_graph_stream();
         let scheduler_clone = scheduler.clone();
         let context_builder = self
             .context_builder
             .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
-            .node_names(node_names)
+            .node_names(locations)
             .add_callback(Box::new(move |ctx| {
                 let mut scheduler_borrow = scheduler_clone.borrow_mut();
                 let scheduler_ref = (&mut *scheduler_borrow).as_mut().unwrap();
-                scheduler_ref.dist_graph_stream(ctx.graph().unwrap());
+                scheduler_ref.provide_dist_constraints_streams(
+                    dist_constraints
+                        .iter()
+                        .map(|x| to_typed_stream(ctx.var(x).unwrap()))
+                        .collect(),
+                )
             }));
         let async_monitor = self
             .async_monitor_builder
@@ -333,8 +353,7 @@ where
 
         DistributedMonitorRunner {
             async_monitor,
-            dist_graph_provider,
-            scheduler: mem::take(&mut *scheduler.borrow_mut()).unwrap(),
+            scheduler: scheduler.take().unwrap(),
         }
     }
 }
@@ -359,10 +378,7 @@ where
 {
     pub(crate) async_monitor: AsyncMonitorRunner<Expr, Val, S, M, DistributedContext<Val>>,
     // TODO: should we be responsible for building the stream of graphs
-    #[allow(dead_code)]
-    pub(crate) dist_graph_provider:
-        Option<crate::io::mqtt::dist_graph_provider::MQTTDistGraphProvider>,
-    pub(crate) scheduler: SchedulerEnactor,
+    pub(crate) scheduler: Scheduler,
 }
 
 #[async_trait(?Send)]
@@ -385,12 +401,10 @@ where
     V: StreamData,
 {
     async fn run_boxed(self: Box<Self>) {
-        self.scheduler.run();
-        self.async_monitor.run().await;
+        join!(self.scheduler.run(), self.async_monitor.run());
     }
 
     async fn run(self: Self) {
-        self.scheduler.run();
-        self.async_monitor.run().await;
+        join!(self.scheduler.run(), self.async_monitor.run());
     }
 }

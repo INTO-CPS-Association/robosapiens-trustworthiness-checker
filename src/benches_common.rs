@@ -19,15 +19,8 @@ use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
 use crate::runtime::asynchronous::Context;
 use crate::runtime::constraints::runtime::ConstraintBasedRuntime;
-use futures::StreamExt;
-use smol::LocalExecutor;
-use std::fmt::Debug;
 
-pub fn to_typed_stream<T: TryFrom<Value, Error = ()> + Debug>(
-    stream: OutputStream<Value>,
-) -> OutputStream<T> {
-    Box::pin(stream.map(|x| x.try_into().expect("Type error")))
-}
+use smol::LocalExecutor;
 
 pub async fn monitor_runtime_outputs(
     runtime: Runtime,

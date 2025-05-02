@@ -26,11 +26,65 @@ use tracing::{debug, info, info_span, warn};
 
 const QOS: i32 = 1;
 
+pub trait DistGraphProvider {
+    fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>>;
+    // let central_node = self.central_node.clone();
+    // let locations = self.locations.keys().cloned().collect::<Vec<_>>();
+    // Box::pin(self.locations_stream().map(move |positions| {
+    //     Rc::new(dist_graph_from_positions(
+    //         central_node.clone(),
+    //         locations.clone(),
+    //         positions,
+    //     ))
+    // }))
+    // fn central_node(&self) -> NodeName;
+
+    // fn locations(&self) ->
+}
+
+static_assertions::assert_obj_safe!(DistGraphProvider);
+
+pub struct StaticDistGraphProvider {
+    graph: Rc<DistributionGraph>,
+}
+
+impl StaticDistGraphProvider {
+    pub fn new(graph: Rc<DistributionGraph>) -> Self {
+        Self { graph }
+    }
+}
+
+impl DistGraphProvider for StaticDistGraphProvider {
+    fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
+        let graph = self.graph.clone();
+        Box::pin(stream! {
+            loop {
+                yield graph.clone()
+            }
+        })
+    }
+}
+
 pub struct MQTTDistGraphProvider {
     pub executor: Rc<LocalExecutor<'static>>,
     pub central_node: NodeName,
     pub locations: BTreeMap<NodeName, String>,
     position_stream: Option<OutputStream<Vec<Pos>>>,
+}
+
+impl DistGraphProvider for MQTTDistGraphProvider {
+    fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
+        let central_node = self.central_node.clone();
+        let locations = self.locations.keys().cloned().collect::<Vec<_>>();
+        Box::pin(self.locations_stream().map(move |positions| {
+            info!("Providing dist graph");
+            Rc::new(dist_graph_from_positions(
+                central_node.clone(),
+                locations.clone(),
+                positions,
+            ))
+        }))
+    }
 }
 
 static PROVIDER_ID: LazyLock<AtomicUsize> = LazyLock::new(|| 0.into());
@@ -144,17 +198,5 @@ impl MQTTDistGraphProvider {
     pub fn locations_stream(&mut self) -> OutputStream<Vec<Pos>> {
         info!("Taking locations stream");
         Box::pin(mem::take(&mut self.position_stream).unwrap())
-    }
-
-    pub fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
-        let central_node = self.central_node.clone();
-        let locations = self.locations.keys().cloned().collect::<Vec<_>>();
-        Box::pin(self.locations_stream().map(move |positions| {
-            Rc::new(dist_graph_from_positions(
-                central_node.clone(),
-                locations.clone(),
-                positions,
-            ))
-        }))
     }
 }
