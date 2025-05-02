@@ -5,3 +5,4 @@ Cargo.lock
 distributed_graph.png
 flamegraph.svg
 perf.data
+*.log
