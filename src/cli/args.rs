@@ -77,6 +77,10 @@ pub struct DistributionMode {
     #[clap(requires = "distribution_constraints")]
     pub mqtt_static_optimized: Option<Vec<String>>,
 
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    #[clap(requires = "distribution_constraints")]
+    pub mqtt_dynamic_optimized: Option<Vec<String>>,
+
     #[clap(long)]
     #[clap(requires = "local_node")]
     pub distributed_work: bool,

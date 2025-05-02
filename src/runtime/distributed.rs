@@ -50,6 +50,12 @@ pub enum DistGraphMode {
         /// Output variables containing distribution constraints
         Vec<VarName>,
     ),
+    MQTTDynamicOptimized(
+        /// Locations
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+    ),
 }
 
 impl<
@@ -108,6 +114,18 @@ impl<
         dist_constraints: Vec<VarName>,
     ) -> Self {
         self.dist_graph_mode = Some(DistGraphMode::MQTTStaticOptimized(
+            locations,
+            dist_constraints,
+        ));
+        self
+    }
+
+    pub fn mqtt_optimized_dynamic_dist_graph(
+        mut self,
+        locations: BTreeMap<NodeName, String>,
+        dist_constraints: Vec<VarName>,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::MQTTDynamicOptimized(
             locations,
             dist_constraints,
         ));
@@ -203,6 +221,18 @@ where
             .as_ref()
             .expect("Var names not set")
             .output_vars();
+        let input_vars = self
+            .async_monitor_builder
+            .model
+            .as_ref()
+            .unwrap()
+            .input_vars();
+        let output_vars = self
+            .async_monitor_builder
+            .model
+            .as_ref()
+            .unwrap()
+            .output_vars();
         let (planner, locations, dist_graph_provider, dist_constraints, replanning_condition): (
             Box<dyn SchedulerPlanner>,
             Vec<NodeName>,
@@ -280,18 +310,6 @@ where
                     )
                     .expect("Failed to create MQTT dist graph provider"),
                 );
-                let input_vars = self
-                    .async_monitor_builder
-                    .model
-                    .as_ref()
-                    .unwrap()
-                    .input_vars();
-                let output_vars = self
-                    .async_monitor_builder
-                    .model
-                    .as_ref()
-                    .unwrap()
-                    .output_vars();
 
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),
@@ -310,6 +328,37 @@ where
                     dist_graph_provider,
                     dist_constraints,
                     ReplanningCondition::Never,
+                )
+            }
+            DistGraphMode::MQTTDynamicOptimized(locations, dist_constraints) => {
+                debug!("Creating dynamic optimized dist graph provider");
+                let location_names = locations.keys().cloned().collect();
+                let dist_graph_provider = Box::new(
+                    dist_graph_provider::MQTTDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        locations,
+                    )
+                    .expect("Failed to create MQTT dist graph provider"),
+                );
+
+                let solver = BruteForceDistConstraintSolver {
+                    executor: executor.clone(),
+                    monitor_builder: self.partial_clone(),
+                    context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
+                    dist_constraints: dist_constraints.clone(),
+                    input_vars,
+                    output_vars,
+                };
+                let planner: Box<dyn SchedulerPlanner> =
+                    Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+
+                (
+                    planner,
+                    location_names,
+                    dist_graph_provider,
+                    dist_constraints,
+                    ReplanningCondition::ConstraintsFail,
                 )
             }
         };

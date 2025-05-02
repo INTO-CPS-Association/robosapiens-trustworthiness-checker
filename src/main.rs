@@ -99,6 +99,19 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
                 DistributionMode::DistributedOptimizedStatic(locations, dist_constraints)
             }
             CliDistMode {
+                mqtt_dynamic_optimized: Some(locations),
+                ..
+            } => {
+                info!("setting up static optimization mode");
+                let dist_constraints = cli
+                    .distribution_constraints
+                    .expect("Distribution constraints must be provided")
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect();
+                DistributionMode::DistributedOptimizedDynamic(locations, dist_constraints)
+            }
+            CliDistMode {
                 centralised: true, ..
             } => DistributionMode::CentralMonitor,
             _ => unreachable!(),

@@ -156,6 +156,12 @@ pub enum DistributionMode {
         /// Variables which represent the constraints which determine the static distribution
         Vec<VarName>,
     ),
+    DistributedOptimizedDynamic(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+    ),
 }
 
 impl Debug for DistributionMode {
@@ -173,6 +179,13 @@ impl Debug for DistributionMode {
                 write!(
                     f,
                     "DistributedOptimizedStatic({:?}, {:?})",
+                    locations, dist_constraints
+                )
+            }
+            DistributionMode::DistributedOptimizedDynamic(locations, dist_constraints) => {
+                write!(
+                    f,
+                    "DistributedOptimizedDynamic({:?}, {:?})",
                     locations, dist_constraints
                 )
             }
@@ -395,6 +408,16 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                                 .collect();
                             builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
                         }
+                        DistributionMode::DistributedOptimizedDynamic(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
+                        }
                     };
 
                     Box::new(builder)
@@ -513,6 +536,16 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                                 .map(|loc| (loc.clone().into(), loc))
                                 .collect();
                             builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
+                        }
+                        DistributionMode::DistributedOptimizedDynamic(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
                         }
                     };
 
