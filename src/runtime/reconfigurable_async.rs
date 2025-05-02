@@ -9,8 +9,7 @@ use crate::{
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
     dep_manage::interface::DependencyManager,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
-    runtime::reconfigurable_async,
-    semantics::{AbstractContextBuilder, MonitoringSemantics, StreamContext},
+    semantics::{MonitoringSemantics, StreamContext},
 };
 
 use super::asynchronous::{AsyncMonitorBuilder, AsyncMonitorRunner};
@@ -27,7 +26,9 @@ pub struct ReconfAsyncMonitorBuilder<
     pub(crate) model: Option<M>,
     pub(super) input_builder: Option<InputProviderBuilder>,
     pub(super) output_builder: Option<OutputHandlerBuilder>,
+    #[allow(dead_code)]
     reconf_provider: Option<MQTTLocalityReceiver>,
+    #[allow(dead_code)]
     local_node: String,
     ctx_t: PhantomData<Ctx>,
     v_t: PhantomData<V>,
@@ -135,8 +136,11 @@ where
     S: MonitoringSemantics<Expr, Val, Ctx>,
     M: Specification<Expr = Expr>,
 {
+    #[allow(dead_code)]
     async_mon_builder: AsyncMonitorBuilder<M, Ctx, Val, Expr, S>,
+    #[allow(dead_code)]
     reconf_provider: MQTTLocalityReceiver,
+    #[allow(dead_code)]
     local_node: String,
     async_mon: AsyncMonitorRunner<Expr, Val, S, M, Ctx>,
 }
