@@ -11,12 +11,18 @@ use crate::{
     dep_manage::interface::DependencyManager,
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
-        dynamic_work_scheduler::{
-            BruteForceDistConstraintSolver, CentralisedSchedulerPlanner, NullSchedulerCommunicator,
-            RandomSchedulerPlanner, ReplanningCondition, Scheduler, SchedulerPlanner,
-            StaticFixedSchedulerPlanner, StaticOptimizedSchedulerPlanner,
+        scheduling::{
+            ReplanningCondition, Scheduler,
+            communication::{NullSchedulerCommunicator, SchedulerCommunicator},
+            planners::{
+                constrained::StaticOptimizedSchedulerPlanner,
+                core::{
+                    CentralisedSchedulerPlanner, SchedulerPlanner, StaticFixedSchedulerPlanner,
+                },
+                random::RandomSchedulerPlanner,
+            },
         },
-        scheduling::SchedulerCommunicator,
+        solvers::brute_solver::BruteForceDistConstraintSolver,
     },
     io::mqtt::{
         MQTTSchedulerCommunicator,

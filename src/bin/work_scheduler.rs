@@ -1,12 +1,14 @@
 use clap::Parser;
 use std::path::PathBuf;
+use std::rc::Rc;
 use tracing::{info, instrument};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::distributed::{
-    distribution_graphs::LabelledDistributionGraph, static_work_scheduler::static_work_scheduler,
-};
+use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
+use trustworthiness_checker::distributed::scheduling::planners::core::StaticFixedSchedulerPlanner;
+use trustworthiness_checker::distributed::scheduling::{ReplanningCondition, Scheduler};
 use trustworthiness_checker::io::mqtt::MQTTSchedulerCommunicator;
+use trustworthiness_checker::io::mqtt::dist_graph_provider::StaticDistGraphProvider;
 
 /// Worker scheduler application for distributed monitoring
 ///
@@ -46,15 +48,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Work scheduler starting");
 
     // Load distribution graph
-    let dist_graph = load_distribution_graph(args.distribution_graph).await?;
+    let dist_graph = Rc::new(load_distribution_graph(args.distribution_graph).await?);
 
     // Create MQTT communicator
-    let communicator = MQTTSchedulerCommunicator::new(mqtt_uri);
+    let communicator = Box::new(MQTTSchedulerCommunicator::new(mqtt_uri));
 
     info!("Distribution graph loaded, scheduling work...");
 
+    let planner = Box::new(StaticFixedSchedulerPlanner {
+        fixed_graph: dist_graph.clone(),
+    });
+
+    let dist_graph_provider = Box::new(StaticDistGraphProvider::new(dist_graph.dist_graph.clone()));
+
     // Run the static work scheduler
-    static_work_scheduler(dist_graph, communicator).await?;
+    let scheduler = Scheduler::new(
+        planner,
+        communicator,
+        dist_graph_provider,
+        ReplanningCondition::Never,
+        false,
+    );
+
+    scheduler.run().await;
 
     info!("Work scheduling completed successfully");
 

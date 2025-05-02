@@ -1,194 +1,125 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
-use crate::VarName;
-use crate::distributed::distribution_graphs::{LabelledDistributionGraph, NodeName};
-use crate::lang::distribution_constraints::ast::{
-    DistConstraint, DistConstraintBody, DistConstraintType,
+use smol::{
+    LocalExecutor,
+    stream::{StreamExt, repeat},
 };
-use contracts::ensures;
-use ecow::EcoVec;
-use petgraph::algo::all_simple_paths;
-use petgraph::prelude::*;
+use tracing::{debug, info};
 
-// use petgraph::visit
-#[allow(unused)]
-type Path = EcoVec<NodeIndex>;
-
-#[allow(unused)]
-struct PathGenerator {
-    active_paths: EcoVec<Path>,
-    next_paths: EcoVec<Path>,
-    active_neighbours: EcoVec<NodeIndex>,
-}
-
-impl PathGenerator {
-    #[ensures(!ret.active_paths.is_empty() || ret.active_neighbours.is_empty())]
-    fn new(origin: NodeIndex) -> Self {
-        let active_paths = EcoVec::from([EcoVec::new()]);
-        let active_neighbours = EcoVec::from([origin]);
-        let next_paths = EcoVec::new();
-        PathGenerator {
-            active_paths,
-            next_paths,
-            active_neighbours,
-        }
-    }
-}
-
-// #[invariant(!self.active_paths.is_empty() || self.active_neighbours.is_empty())]
-// impl<R: GraphRef> Walker<R> for PathGenerator {
-//     type Item = Path;
-
-//     fn walk_next(&mut self, context: R) -> Option<Self::Item> {
-//         if let Some(next_neighbour) = self.active_neighbours.pop() {
-//             let mut path = self.active_paths.first().unwrap().clone();
-//             path.push(next_neighbour);
-//             self.next_paths.push(path.clone());
-//             Some(path)
-//         } else if let Some(active_path) = self.active_paths.pop() {
-//             let mut path = active_path.clone();
-//             let mut neighbours = context.neighbours(active_path.last().unwrap());
-//             while let Some(neighbour) = neighbours.next() {
-//                 if !active_path.contains(&neighbour) {
-//                     self.active_neighbours.push(neighbour);
-//                     path.push(neighbour);
-//                     self.next_paths.push(path.clone());
-//                 }
-//             }
-//             self.active_paths.extend(self.next_paths.drain(..));
-//             self.walk_next(context)
-
-//         } else {
-//             None
-//         }
-//     }
-// }
-
-// pub fn paths(
-//     node_name: NodeName,
-//     dist_graph: &LabelledDistributionGraph,
-// ) -> Result<impl Iterator<Item = Vec<NodeIndex>>, ()> {
-//     let root = dist_graph
-//         .dist_graph
-//         .graph
-//         .node_indices()
-//         .find(|i| dist_graph.dist_graph.graph[*i] == node_name)
-//         .ok_or(())?;
-// }
-
-pub fn gen_paths(
-    node_name: NodeName,
-    conc_dist_graph: &LabelledDistributionGraph,
-) -> impl Iterator<Item = Vec<NodeIndex>> {
-    let dist_graph = &conc_dist_graph.dist_graph;
-    let monitor = dist_graph.central_monitor;
-    let graph = &dist_graph.graph;
-    let node = graph
-        .node_indices()
-        .find(|i| graph[*i] == node_name)
-        .unwrap();
-
-    const MIN_NODES: usize = 0;
-    const MAX_NODES: Option<usize> = None;
-    all_simple_paths(graph, node, monitor, MIN_NODES, MAX_NODES)
-}
-
-// Checks a path against a constraint
-pub fn check_path_constraint(
-    path: &Vec<NodeIndex>,
-    node_labels: &BTreeMap<NodeIndex, Vec<VarName>>,
-    constraint: &DistConstraint,
-) -> bool {
-    let typ = &constraint.0;
-    let body = &constraint.1;
-    match typ {
-        DistConstraintType::CanRun => match body {
-            // Check if var_name is within the node_labels relevant to the path
-            DistConstraintBody::Monitor(var_name) => path.iter().any(|i| {
-                node_labels
-                    .get(i)
-                    .is_some_and(|vec| vec.iter().any(|name| name == var_name))
-            }),
-            // Check if var_name is within the node_labels relevant to the path
-            DistConstraintBody::Source(var_name) => path.iter().any(|i| {
-                node_labels
-                    .get(i)
-                    .is_some_and(|vec| vec.iter().any(|name| name == var_name))
-            }),
-
-            DistConstraintBody::Dist(_) => todo!(),
-            DistConstraintBody::WeightedDist(_, _) => {
-                todo!()
-            }
-            DistConstraintBody::Sum(_) => {
-                todo!()
-            }
-            _ => todo!(),
+use crate::{
+    InputProvider, OutputStream, Specification, Value, VarName,
+    core::{AbstractMonitorBuilder, Runnable, to_typed_stream_vec},
+    distributed::distribution_graphs::{
+        DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
+        possible_labelled_dist_graphs,
+    },
+    io::testing::ManualOutputHandler,
+    runtime::{asynchronous::AbstractAsyncMonitorBuilder, distributed::DistAsyncMonitorBuilder},
+    semantics::{
+        AbstractContextBuilder, MonitoringSemantics,
+        distributed::{
+            contexts::{DistributedContext, DistributedContextBuilder},
+            localisation::Localisable,
         },
-        DistConstraintType::LocalityScore => todo!(),
-        DistConstraintType::Redundancy => todo!(),
+    },
+};
+
+pub struct BruteForceDistConstraintSolver<Expr, S, M>
+where
+    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    M: Specification<Expr = Expr> + Localisable,
+{
+    pub executor: Rc<LocalExecutor<'static>>,
+    pub monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>,
+    pub context_builder: Option<DistributedContextBuilder<Value>>,
+    pub dist_constraints: Vec<VarName>,
+    pub input_vars: Vec<VarName>,
+    pub output_vars: Vec<VarName>,
+}
+
+impl<Expr, S, M> BruteForceDistConstraintSolver<Expr, S, M>
+where
+    Expr: 'static,
+    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    M: Specification<Expr = Expr> + Localisable,
+{
+    fn output_stream_for_graph(
+        &self,
+        monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>,
+        labelled_graph: Rc<LabelledDistributionGraph>,
+    ) -> OutputStream<Vec<bool>> {
+        // Build a runtime for constructing the output stream
+        debug!(
+            "Output stream for graph with input_vars: {:?} and output_vars: {:?}",
+            self.input_vars, self.output_vars
+        );
+        let input_provider: Box<dyn InputProvider<Val = Value>> =
+            Box::new(BTreeMap::<VarName, OutputStream<Value>>::new());
+        let mut output_handler =
+            ManualOutputHandler::new(self.executor.clone(), self.dist_constraints.clone());
+        let output_stream: OutputStream<Vec<Value>> = Box::pin(output_handler.get_output());
+        let potential_dist_graph_stream = Box::pin(repeat(labelled_graph.clone()));
+        let context_builder = self
+            .context_builder
+            .as_ref()
+            .map(|b| b.partial_clone())
+            .unwrap_or(DistributedContextBuilder::new().graph_stream(potential_dist_graph_stream));
+        let runtime = monitor_builder
+            .context_builder(context_builder)
+            .static_dist_graph((*labelled_graph).clone())
+            .input(input_provider)
+            .output(Box::new(output_handler))
+            .build();
+        self.executor.spawn(runtime.run()).detach();
+
+        // Construct a wrapped output stream which makes sure the context starts
+        to_typed_stream_vec(output_stream)
     }
-}
 
-pub fn check(
-    node_name: NodeName,
-    conc_dist_graph: &LabelledDistributionGraph,
-    constraints: Vec<DistConstraint>,
-) -> Vec<bool> {
-    let node_labels = &conc_dist_graph.node_labels;
-    gen_paths(node_name, conc_dist_graph)
-        .map(|path| {
-            constraints
-                .iter()
-                .all(|constraint| check_path_constraint(&path, node_labels, constraint))
+    /// Finds all possible labelled distribution graphs given a set of distribution constraints
+    /// and a distribution graph
+    pub fn possible_labelled_dist_graph_stream(
+        self: Rc<Self>,
+        graph: Rc<DistributionGraph>,
+    ) -> LabelledDistGraphStream {
+        // To avoid lifetime and move issues, clone all necessary data for the async block.
+        let dist_constraints = self.dist_constraints.clone();
+        let builder = self.monitor_builder.partial_clone();
+        let non_dist_constraints: Vec<VarName> = self
+            .output_vars
+            .iter()
+            .filter(|name| !dist_constraints.contains(name))
+            .cloned()
+            .collect();
+        let localised_spec = self
+            .monitor_builder
+            .async_monitor_builder
+            .model
+            .as_ref()
+            .unwrap()
+            .localise(&dist_constraints);
+        let builder = builder.model(localised_spec);
+
+        info!("Starting optimized distributed graph generation");
+
+        Box::pin(async_stream::stream! {
+            for (i, labelled_graph) in possible_labelled_dist_graphs(graph, dist_constraints.clone(), non_dist_constraints).enumerate() {
+                let labelled_graph = Rc::new(labelled_graph);
+
+                info!("Testing graph {}", i);
+
+                let mut output_stream = self.output_stream_for_graph(
+                    builder.partial_clone(),
+                    labelled_graph.clone(),
+                );
+
+                let first_output: Vec<bool> = output_stream.next().await.unwrap();
+                let dist_constraints_hold = first_output.iter().all(|x| *x);
+                if dist_constraints_hold {
+                    info!("Found matching graph!");
+                    yield labelled_graph;
+                }
+            }
         })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::distributed::distribution_graphs::{
-        GenericDistributionGraph, LabelledDistributionGraph,
-    };
-    use std::{collections::BTreeMap, rc::Rc};
-
-    #[test]
-    fn test_dist_graph_paths() {
-        let mut graph = Graph::<NodeName, _>::new();
-        let a = graph.add_node("A".into());
-        let b = graph.add_node("B".into());
-        let c = graph.add_node("C".into());
-        let d = graph.add_node("D".into());
-        let e = graph.add_node("E".into());
-        let f = graph.add_node("F".into());
-
-        graph.extend_with_edges([(a, b), (b, c), (c, d), (d, e), (e, f)]);
-
-        #[allow(unused)]
-        let var_names = ["x".to_string(), "y".to_string(), "z".to_string()];
-
-        let dist_graph = Rc::new(GenericDistributionGraph {
-            graph,
-            central_monitor: f,
-        });
-
-        let labelled_dist_graph = LabelledDistributionGraph {
-            var_names: vec!["x".into(), "y".into(), "z".into()],
-            dist_graph: dist_graph.clone(),
-            node_labels: BTreeMap::from([
-                (a, vec!["x".into()]),
-                (b, vec!["y".into()]),
-                (c, vec!["z".into()]),
-                (d, vec!["x".into(), "y".into()]),
-                (e, vec!["z".into()]),
-                (f, vec!["y".into()]),
-            ]),
-        };
-
-        let paths = gen_paths("A".into(), &labelled_dist_graph);
-        for path in paths {
-            println!("{:?}", path);
-        }
     }
 }

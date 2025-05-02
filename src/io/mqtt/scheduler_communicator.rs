@@ -4,7 +4,9 @@ use tracing::debug;
 
 use crate::{
     VarName,
-    distributed::{distribution_graphs::NodeName, scheduling::SchedulerCommunicator},
+    distributed::{
+        distribution_graphs::NodeName, scheduling::communication::SchedulerCommunicator,
+    },
 };
 
 use super::provide_mqtt_client;
