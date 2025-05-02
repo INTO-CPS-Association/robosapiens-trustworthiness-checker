@@ -124,7 +124,9 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             .unwrap();
 
         Box::pin(async move {
-            output_done_rx.await.unwrap();
+            if let Err(_) = output_done_rx.await {
+                debug!("Output went away");
+            }
         })
     }
 }

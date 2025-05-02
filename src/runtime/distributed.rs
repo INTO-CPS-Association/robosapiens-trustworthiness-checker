@@ -328,6 +328,7 @@ where
             scheduler_communicator,
             dist_graph_provider,
             replanning_condition,
+            false,
         ))));
         let dist_graph_stream = scheduler.borrow_mut().as_mut().unwrap().take_graph_stream();
         let scheduler_clone = scheduler.clone();

@@ -26,8 +26,9 @@ use crate::semantics::distributed::contexts::DistributedContextBuilder;
 use crate::semantics::distributed::localisation::Localisable;
 use async_stream::stream;
 use async_trait::async_trait;
+
 use futures::future::join_all;
-use futures::join;
+
 use futures::stream::LocalBoxStream;
 use petgraph::graph::NodeIndex;
 use smol::LocalExecutor;
@@ -35,7 +36,9 @@ use smol::stream::StreamExt;
 use smol::stream::once;
 use smol::stream::repeat;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
+
 use unsync::broadcast;
 
 use super::distribution_graphs::DistributionGraph;
@@ -239,14 +242,12 @@ where
 
         Box::pin(async_stream::stream! {
             for (i, labelled_graph) in possible_labelled_dist_graphs(graph, dist_constraints.clone(), non_dist_constraints).enumerate() {
-                // Clone everything needed for the async block
                 let labelled_graph = Rc::new(labelled_graph);
-                let builder = builder.partial_clone();
 
                 info!("Testing graph {}", i);
 
                 let mut output_stream = self.output_stream_for_graph(
-                    builder,
+                    builder.partial_clone(),
                     labelled_graph.clone(),
                 );
 
@@ -366,6 +367,7 @@ pub struct Scheduler {
     dist_graph_provider: Box<dyn DistGraphProvider>,
     dist_constraints_streams: Rc<RefCell<Option<Vec<OutputStream<bool>>>>>,
     dist_graph_sender: broadcast::Sender<Rc<LabelledDistributionGraph>>,
+    suppress_output: bool,
 }
 
 impl Scheduler {
@@ -374,6 +376,7 @@ impl Scheduler {
         communicator: Box<dyn SchedulerCommunicator>,
         dist_graph_provider: Box<dyn DistGraphProvider>,
         replanning_condition: ReplanningCondition,
+        suppress_output: bool,
     ) -> Self {
         let mut tx = broadcast::channel(10);
         let executor = SchedulerExecutor::new(communicator);
@@ -392,6 +395,7 @@ impl Scheduler {
             dist_graph_provider,
             schedule_executor: executor,
             replanning_condition,
+            suppress_output,
         }
     }
 
@@ -416,19 +420,14 @@ impl Scheduler {
             .dist_constraints_streams
             .take()
             .expect("Distribution constraints streams not provided");
-        info!(
-            "dist_constraints_stream with {} constraints",
-            dist_constraints_streams.len()
-        );
 
         if dist_constraints_streams.len() == 0 {
             return Box::pin(repeat(true));
         }
 
         Box::pin(stream! {
-            info!("In dist_constraints_hold_stream");
+            // info!("In dist_constraints_hold_stream");
             while let Some(res) = Self::all_constraints_hold(join_all(dist_constraints_streams.iter_mut().map(|x| x.next())).await) {
-                info!("Yielding one");
                 yield res
             }
         })
@@ -436,19 +435,19 @@ impl Scheduler {
 
     pub async fn run(mut self) {
         // MAPE-K loop for scheduling
-        let mut dist_constraits_hold_stream =
-            once(false).chain(self.dist_constraints_hold_stream());
-        let mut dist_graph_stream = self.dist_graph_provider.dist_graph_stream();
+        let dist_constraits_hold_stream = once(false).chain(self.dist_constraints_hold_stream());
+        let dist_graph_stream = self.dist_graph_provider.dist_graph_stream();
+        let mut monitor_stream = dist_graph_stream.zip(dist_constraits_hold_stream);
 
         let mut plan = None;
 
         info!("In Scheduler loop");
 
         // Monitor + Analyse phase in let
-        while let (Some(constraints_hold), Some(graph)) =
-            join!(dist_constraits_hold_stream.next(), dist_graph_stream.next())
-        {
-            info!("Monitored and analised");
+        while let Some((graph, constraints_hold)) = monitor_stream.next().await {
+            if !self.suppress_output {
+                info!("Monitored and analysed");
+            }
 
             // Plan phase
             let should_plan = match self.replanning_condition {
@@ -457,22 +456,34 @@ impl Scheduler {
                 ReplanningCondition::Never => plan.is_none(),
             };
             if should_plan {
-                info!("Plan");
+                if !self.suppress_output {
+                    info!("Plan");
+                }
                 plan = Some(self.planner.plan(graph).await);
             }
 
             // Execute phase
             if let Some(Some(ref plan)) = plan {
-                info!("Execute");
+                if !self.suppress_output {
+                    info!("Execute");
+                }
                 self.schedule_executor.execute(plan.clone()).await;
                 self.dist_graph_sender.send(plan.clone()).await;
-                info!("Plotting graph");
-                graph_to_png(plan.clone(), "distributed_graph.png")
-                    .await
-                    .unwrap();
+                if should_plan && !self.suppress_output {
+                    info!("Plotting graph");
+                    if let Err(e) = graph_to_png(plan.clone(), "distributed_graph.png").await {
+                        error!("Failed to plot graph: {}", e);
+                    }
+                }
             }
 
-            info!("Monitor");
+            if !self.suppress_output {
+                info!("Monitor");
+            }
+        }
+
+        if !self.suppress_output {
+            info!("Scheduler ended");
         }
     }
 }
