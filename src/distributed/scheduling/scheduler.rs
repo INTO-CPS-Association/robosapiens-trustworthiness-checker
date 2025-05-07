@@ -120,7 +120,7 @@ impl Scheduler {
             let should_plan = match self.replanning_condition {
                 ReplanningCondition::ConstraintsFail => !constraints_hold,
                 ReplanningCondition::Always => true,
-                ReplanningCondition::Never => plan.is_none(),
+                ReplanningCondition::Never => false,
             };
             if should_plan {
                 if !self.suppress_output {
@@ -145,7 +145,7 @@ impl Scheduler {
             }
 
             if !self.suppress_output {
-                info!("Monitor");
+                info!("MAPE-K iteration end");
             }
         }
 
