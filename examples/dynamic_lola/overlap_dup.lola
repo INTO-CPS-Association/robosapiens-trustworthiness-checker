@@ -4,6 +4,7 @@ in x
 in T
 out R
 out c
+out Td
 out S
 out v
 // Guided adaptation:
@@ -11,7 +12,10 @@ out v
 S = x
 // Adaptation condition is "x == 3"
 c = x == 3
+// T with a default value (because if currently doesn't lazy eval)
+Td = default(defer(T), 0)
 // R is Rcond
 R = when(T) && (c || default(R[-1], false)) // Eventually, after T was not Unknown
-// When we haven't received a new spec T, and R is not true, yield from old spec
-v = if R then defer(T) else S
+// When T is not provided, use S. When T is provided but R is not true, use S + T. When T and R use T.
+v = if !when(T) then S else if !R then S + Td  else Td
+// v = if when(T) then if R then Td else S + Td else S
