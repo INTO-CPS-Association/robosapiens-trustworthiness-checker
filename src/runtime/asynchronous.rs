@@ -19,8 +19,10 @@ use async_unsync::semaphore;
 use futures::StreamExt;
 use futures::future::LocalBoxFuture;
 use futures::future::join_all;
+use futures::{FutureExt, select};
 use smol::LocalExecutor;
 use strum_macros::Display;
+use tokio_util::sync::CancellationToken;
 use tracing::Level;
 use tracing::debug;
 use tracing::info;
@@ -36,7 +38,7 @@ use crate::core::Specification;
 use crate::core::{OutputStream, StreamData, VarName};
 use crate::dep_manage::interface::DependencyManager;
 use crate::semantics::{AbstractContextBuilder, MonitoringSemantics, StreamContext};
-use crate::stream_utils::oneshot_to_stream;
+use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
 /// Track the stage of a variable's lifecycle
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
@@ -82,9 +84,9 @@ enum VarStage {
 ///  - only one time tick can happen at once
 ///  - we can't tick when there are outstanding subscription requests
 pub struct VarManager<V: StreamData> {
-    /// The async executor used to run background tasks
+    /// The executor which is used to run background tasks
     executor: Rc<LocalExecutor<'static>>,
-    /// The name of the variable managed by this actor
+    /// The variable name which this manager is responsible for
     var: VarName,
     /// The input stream which is feeding data into the variable
     input_stream: Rc<RefCell<Option<OutputStream<V>>>>,
@@ -100,16 +102,20 @@ pub struct VarManager<V: StreamData> {
     subscribers: Rc<RefCell<Vec<bounded::Sender<V>>>>,
     /// The current clock value of the variable
     clock: Rc<RefCell<usize>>,
-    id: u16,
+    /// Unique identifier for this variable manager
+    id: usize,
+    /// Cancellation token to stop the VarManager when output streams are dropped
+    cancellation_token: CancellationToken,
 }
 
-static COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl<V: StreamData> VarManager<V> {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var: VarName,
         input_stream: OutputStream<V>,
+        cancellation_token: CancellationToken,
     ) -> Self {
         let var_stage = AsyncCell::new_with(VarStage::Gathering).into_shared();
         let var_semaphore = Rc::new(semaphore::Semaphore::new(1));
@@ -127,6 +133,7 @@ impl<V: StreamData> VarManager<V> {
             subscribers,
             clock,
             id,
+            cancellation_token,
         }
     }
 
@@ -241,10 +248,17 @@ impl<V: StreamData> VarManager<V> {
         let clock_ref = self.clock.clone();
         let var = self.var.clone();
         let var_stage = self.var_stage.clone();
+        let cancellation_token = self.cancellation_token.clone();
         let id = self.id;
 
         // Return a future which will actually do the distribution
         Box::pin(async move {
+            // Check if cancellation was requested
+            if cancellation_token.is_cancelled() {
+                debug!("VarManager {id}: Cancellation requested, stopping tick");
+                return false;
+            }
+
             // Move to the open stage if we are in the gathering stage and we
             // have been ticked
             if var_stage.get().await == VarStage::Gathering {
@@ -253,7 +267,13 @@ impl<V: StreamData> VarManager<V> {
             }
 
             debug!(?var, "VarManager {id}: Waiting for permit");
-            let _permit = semaphore.acquire().await.unwrap();
+            let _permit = select! {
+                permit = semaphore.acquire().fuse() => permit.unwrap(),
+                _ = cancellation_token.cancelled().fuse() => {
+                    debug!("VarManager {id}: Cancellation requested during semaphore acquisition");
+                    return false;
+                }
+            };
             debug!(?var, "VarManager {id}: Acquired permit");
 
             debug!(?var, "VarManager {id}: Distributing single");
@@ -272,14 +292,32 @@ impl<V: StreamData> VarManager<V> {
                 return false;
             }
 
-            match input_stream.next().await {
+            // Use select! to race input_stream.next() against cancellation
+            let next_result = select! {
+                next_item = input_stream.next().fuse() => next_item,
+                _ = cancellation_token.cancelled().fuse() => {
+                    debug!("VarManager {id}: Cancellation requested during input stream read");
+                    return false;
+                }
+            };
+
+            match next_result {
                 Some(data) => {
                     debug!(?data, "VarManager {id}: Distributing data");
                     *clock_ref.borrow_mut() += 1;
                     let mut to_delete = vec![];
 
                     for (i, child_sender) in subscribers_ref.borrow().iter().enumerate() {
-                        if child_sender.send(data.clone()).await.is_err() {
+                        // Use select! to race send operation against cancellation
+                        let send_result = select! {
+                            result = child_sender.send(data.clone()).fuse() => result,
+                            _ = cancellation_token.cancelled().fuse() => {
+                                debug!("VarManager {id}: Cancellation requested during send");
+                                return false;
+                            }
+                        };
+
+                        if send_result.is_err() {
                             info!(
                                 "VarManager {id}: Stopping distributing to receiver since it has been dropped"
                             );
@@ -311,10 +349,36 @@ impl<V: StreamData> VarManager<V> {
         debug!("VarManager {}: Moving to closed stage from run", self.id);
         self.var_stage.set(VarStage::Closed);
 
+        let cancellation_token = self.cancellation_token.clone();
+        let id = self.id;
+
         // Return a future which will run the tick function until it returns
         // false (indicating the input stream is exhausted or there are no
-        // subscribers)
-        Box::pin(async move { while self.tick().await {} })
+        // subscribers) or cancellation is requested
+        Box::pin(async move {
+            debug!("VarManager {id}: Starting run loop with cancellation token");
+            let mut should_continue = true;
+            while should_continue {
+                should_continue = select! {
+                    _ = cancellation_token.cancelled().fuse() => {
+                        debug!("VarManager {id}: Cancellation requested, stopping run loop");
+                        false  // Exit the loop
+                    }
+                    tick_result = self.tick().fuse() => {
+                        if tick_result {
+                            true  // Continue the loop
+                        } else {
+                            debug!("VarManager {id}: Tick returned false, stopping run loop");
+                            false  // Exit the loop
+                        }
+                    }
+                };
+            }
+            debug!(
+                "VarManager {id}: Run loop ended, cancellation: {}",
+                cancellation_token.is_cancelled()
+            );
+        })
     }
 
     /// Get the var name
@@ -370,8 +434,8 @@ fn store_history<V: StreamData>(
 
 #[derive(Debug)]
 pub struct ContextId {
-    id: u16,
-    parent_id: Option<u16>,
+    id: usize,
+    parent_id: Option<usize>,
 }
 
 impl Display for ContextId {
@@ -401,6 +465,8 @@ pub struct Context<Val: StreamData> {
     clock: usize,
     /// Variable manangers
     var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Val>>>>,
+    /// Cancellation token to stop all var managers when output streams are dropped
+    cancellation_token: CancellationToken,
     /// Identifier - used for log messages
     id: ContextId,
     /// Nested context --- Lets us construct a constext which wraps another context. Currently only
@@ -493,13 +559,19 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
         let clock: usize = 0;
         // TODO: push the mutability to the API of contexts
         let var_managers = Rc::new(RefCell::new(BTreeMap::new()));
+        let cancellation_token = CancellationToken::new();
 
         for (var, input_stream) in var_names.iter().zip(input_streams.into_iter()) {
             let input_stream =
                 store_history(executor.clone(), var.clone(), history_length, input_stream);
             var_managers.borrow_mut().insert(
                 var.clone(),
-                VarManager::new(executor.clone(), var.clone(), input_stream),
+                VarManager::new(
+                    executor.clone(),
+                    var.clone(),
+                    input_stream,
+                    cancellation_token.clone(),
+                ),
             );
         }
 
@@ -528,6 +600,7 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
             history_length,
             clock,
             var_managers,
+            cancellation_token,
             nested,
             builder,
             id,
@@ -536,7 +609,7 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
 }
 
 impl<Val: StreamData> ContextBuilder<Val> {
-    pub fn id(mut self, id: u16, parent_id: Option<u16>) -> Self {
+    pub fn id(mut self, id: usize, parent_id: Option<usize>) -> Self {
         let id = ContextId { id, parent_id };
         self.id = Some(id);
         self
@@ -570,6 +643,15 @@ impl<Val: StreamData> Context<Val> {
 
     pub fn var_names(&self) -> &Vec<VarName> {
         &self.var_names
+    }
+
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    pub fn cancel(&self) {
+        debug!("Context[id={}]: Cancelling all var managers", self.id);
+        self.cancellation_token.cancel();
     }
 }
 
@@ -672,6 +754,18 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
     fn is_clock_started(&self) -> bool {
         self.clock() == usize::MAX
     }
+
+    fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    fn cancel(&self) {
+        debug!(
+            "Context[id={}]: Cancelling all var managers via StreamContext trait",
+            self.id
+        );
+        self.cancellation_token.cancel();
+    }
 }
 
 /// A Monitor instance implementing the Async Runtime.
@@ -698,6 +792,7 @@ where
     model: M,
     output_handler: Box<dyn OutputHandler<Val = Val>>,
     output_streams: Vec<OutputStream<Val>>,
+    cancellation_token: CancellationToken,
     #[allow(dead_code)]
     expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
@@ -861,15 +956,28 @@ impl<
             .input_streams(streams)
             .build();
 
+        // Get cancellation token from context and create drop guard
+        let cancellation_token = context.cancellation_token();
+        let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
+        debug!("AsyncMonitorBuilder: Created drop guard for cancellation token");
+
         // Create a map of the output variables to their streams
         // based on using the context
         let output_streams = model
             .output_vars()
             .iter()
             .map(|var| {
-                context.var(var).unwrap_or_else(|| {
+                let stream = context.var(var).unwrap_or_else(|| {
                     panic!("Failed to find expression for var {}", var.name().as_str())
-                })
+                });
+                // Wrap stream with drop guard so cancellation happens when the last output stream
+                // is dropped
+                let guarded_stream = drop_guard_stream(stream, drop_guard.clone());
+                debug!(
+                    "AsyncMonitorBuilder: Wrapped output stream for var {} with drop guard",
+                    var
+                );
+                guarded_stream
             })
             .collect();
 
@@ -896,6 +1004,7 @@ impl<
             model,
             output_handler,
             output_streams,
+            cancellation_token,
             expr_t: PhantomData,
             semantics_t: PhantomData,
             context_t: PhantomData,
@@ -951,6 +1060,10 @@ where
     async fn run_boxed(mut self: Box<Self>) {
         self.output_handler.provide_streams(self.output_streams);
         self.output_handler.run().await;
+
+        // Trigger cancellation when output handler completes to stop all var managers
+        debug!("AsyncMonitorRunner: Output handler completed, triggering cancellation");
+        self.cancellation_token.cancel();
     }
 }
 
@@ -973,7 +1086,13 @@ mod tests {
             yield 3;
         });
 
-        let mut manager = VarManager::new(executor.clone(), "test".into(), input_stream);
+        let cancellation_token = CancellationToken::new();
+        let mut manager = VarManager::new(
+            executor.clone(),
+            "test".into(),
+            input_stream,
+            cancellation_token,
+        );
 
         info!("subscribing 1");
         let sub1 = manager.subscribe();
@@ -999,7 +1118,13 @@ mod tests {
             yield 4;
         });
 
-        let mut manager = VarManager::new(executor.clone(), "test".into(), input_stream);
+        let cancellation_token = CancellationToken::new();
+        let mut manager = VarManager::new(
+            executor.clone(),
+            "test".into(),
+            input_stream,
+            cancellation_token,
+        );
 
         info!("ticking 1");
         manager.tick().await;

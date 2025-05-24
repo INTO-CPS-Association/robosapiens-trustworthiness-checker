@@ -50,6 +50,12 @@ pub trait StreamContext<Val: StreamData>: 'static {
     /// Get the current value of the clock (this may not guarantee
     /// that all stream have reached this time)
     fn clock(&self) -> usize;
+
+    /// Get the cancellation token for this context
+    fn cancellation_token(&self) -> tokio_util::sync::CancellationToken;
+
+    /// Cancel all var managers in this context
+    fn cancel(&self);
 }
 
 pub trait MonitoringSemantics<Expr, Val, Ctx, CVal = Val>: Clone + 'static

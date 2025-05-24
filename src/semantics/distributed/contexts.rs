@@ -97,6 +97,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
             ctx.executor.clone(),
             graph_name.into(),
             graph_stream,
+            ctx.cancellation_token(),
         ))));
         let mut ret = DistributedContext {
             ctx,
@@ -215,6 +216,14 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
 
     fn clock(&self) -> usize {
         self.ctx.clock()
+    }
+
+    fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+        self.ctx.cancellation_token()
+    }
+
+    fn cancel(&self) {
+        self.ctx.cancel();
     }
 }
 

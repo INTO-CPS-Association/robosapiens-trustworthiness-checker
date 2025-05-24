@@ -35,13 +35,17 @@ pub fn drop_guard_stream<T: 'static>(
     stream: LocalBoxStream<'static, T>,
     drop_guard: Rc<DropGuard>,
 ) -> LocalBoxStream<'static, T> {
+    use tracing::debug;
+    debug!("drop_guard_stream: Creating drop guard wrapper for stream");
     Box::pin(stream! {
         // Keep the shared reference to drop_guard alive until the stream
         // is done
         let _drop_guard = drop_guard.clone();
+        debug!("drop_guard_stream: Drop guard acquired in stream, starting iteration");
         let mut stream = stream;
         while let Some(val) = stream.next().await {
             yield val;
         }
+        debug!("drop_guard_stream: Stream ended, drop guard will be released");
     })
 }
