@@ -41,6 +41,24 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     }
 }
 
+impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
+    type Val = V;
+
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
+        self.remove(var)
+            .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
+    }
+}
+
+impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
+    type Val = V;
+
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
+        self.remove(var)
+            .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
+    }
+}
+
 pub trait Specification: Clone + 'static {
     type Expr;
 

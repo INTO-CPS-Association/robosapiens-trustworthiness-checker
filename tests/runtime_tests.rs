@@ -63,8 +63,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let x = vec![0.into(), 1.into(), 2.into()];
             let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -119,8 +118,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let x = vec![1.into(), 2.into(), 3.into()];
             let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -175,8 +173,7 @@ async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let x = vec![1.into(), 2.into(), 3.into()];
             let e = vec![Value::Unknown, "x + 1".into(), "x + 2".into()];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -231,8 +228,7 @@ async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let x = vec![0.into(), 1.into(), 2.into()];
             let e = vec![Value::Unknown, "x + 1".into(), Value::Unknown];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -295,11 +291,11 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
                 "x + y".into(),
                 "x + y".into(),
             ];
-            let input_streams = new_input_stream(BTreeMap::from([
+            let input_streams = BTreeMap::from([
                 ("x".into(), x),
                 ("y".into(), y),
                 ("e".into(), e),
-            ]));
+            ]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -355,8 +351,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let x = vec!["x0".into(), "x1".into(), "x2".into()];
             let y = vec!["y0".into(), "y1".into(), "y2".into()];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -411,8 +406,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
             let y = vec![Value::Unknown, "y1".into(), Value::Unknown, "y3".into()];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -470,8 +464,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
             let e = vec![Value::Unknown, "x".into(), "x".into(), "x".into()];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -533,8 +526,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
                 "y_won!".into(),
                 "y_happy".into(),
             ];
-            let input_streams =
-                new_input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
+            let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -589,7 +581,7 @@ async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) {
 
         for kind in config.dependency_kinds() {
             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-            let input_streams = new_input_stream(BTreeMap::from([("x".into(), x)]));
+            let input_streams = BTreeMap::from([("x".into(), x)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -649,7 +641,7 @@ async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) {
 
         for kind in config.dependency_kinds() {
             let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
-            let input_streams = new_input_stream(BTreeMap::from([("x".into(), x)]));
+            let input_streams = BTreeMap::from([("x".into(), x)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -696,18 +688,7 @@ async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-pub fn new_input_stream(
-    map: BTreeMap<VarName, Vec<Value>>,
-) -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
-    for (name, values) in map {
-        input_streams.insert(
-            name,
-            Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<Value>,
-        );
-    }
-    input_streams
-}
+
 
 pub fn input_streams_constraint() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
@@ -1236,10 +1217,10 @@ async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         for kind in config.dependency_kinds() {
-            let input_streams = new_input_stream(BTreeMap::from([(
+            let input_streams = BTreeMap::from([(
                 "x".into(),
                 vec![Value::Unknown, Value::Unknown, Value::Unknown],
-            )]));
+            )]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -1296,10 +1277,10 @@ async fn test_default_one_unknown(executor: Rc<LocalExecutor<'static>>) {
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         for kind in config.dependency_kinds() {
-            let input_streams = new_input_stream(BTreeMap::from([(
+            let input_streams = BTreeMap::from([(
                 "x".into(),
                 vec![1.into(), Value::Unknown, 5.into()],
-            )]));
+            )]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
