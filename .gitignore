@@ -6,3 +6,4 @@ distributed_graph.png
 flamegraph.svg
 perf.data
 *.log
+scripts/env/*

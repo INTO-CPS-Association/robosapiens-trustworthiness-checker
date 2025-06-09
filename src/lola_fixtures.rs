@@ -482,6 +482,92 @@ pub fn spec_add_defer() -> &'static str {
      z = defer(e)"
 }
 
+#[allow(dead_code)]
+pub fn spec_deferred_and() -> &'static str {
+    "in x: Bool
+     in y: Bool
+     in e: Str
+     out z: Bool
+     z = default(defer(e), true)"
+}
+
+#[allow(dead_code)]
+pub fn spec_direct_and() -> &'static str {
+    "in x: Bool
+     in y: Bool
+     out z: Bool
+     z = x && y"
+}
+#[allow(dead_code)]
+pub fn spec_deferred_globally() -> &'static str {
+    "in x: Bool
+     in e: Str
+     out y: Bool
+     y = default(defer(e), x && default(x[-1], true))"
+}
+
+#[allow(dead_code)]
+pub fn spec_direct_globally() -> &'static str {
+    "in x: Bool
+     out y: Bool
+     y = x && default(x[-1], true)"
+}
+
+#[allow(dead_code)]
+pub fn input_streams_paper_benchmark(
+    percent: usize,
+    size: usize,
+) -> BTreeMap<VarName, OutputStream<Value>> {
+    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
+    let y: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(false)));
+    let e1 = stream::repeat(Value::Unknown).take(size * percent / 100 - 1);
+    let e2 = stream::repeat(Value::Str("x && y".into()));
+    let e: OutputStream<Value> = if percent == 100 {
+        Box::pin(e1)
+    } else if percent == 0 {
+        Box::pin(e2)
+    } else {
+        Box::pin(e1.chain(e2))
+    };
+    vec![("x".into(), x), ("y".into(), y), ("e".into(), e)]
+        .into_iter()
+        .collect()
+}
+
+#[allow(dead_code)]
+pub fn input_streams_paper_benchmark_direct(
+    _size: usize,
+) -> BTreeMap<VarName, OutputStream<Value>> {
+    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
+    let y: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(false)));
+    vec![("x".into(), x), ("y".into(), y)].into_iter().collect()
+}
+#[allow(dead_code)]
+pub fn input_streams_paper_benchmark_globally(
+    percent: usize,
+    size: usize,
+) -> BTreeMap<VarName, OutputStream<Value>> {
+    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
+    let e1 = stream::repeat(Value::Unknown).take(size * percent / 100 - 1);
+    let e2 = stream::repeat(Value::Str("x || default(y[-1], false)".into()));
+    let e: OutputStream<Value> = if percent == 100 {
+        Box::pin(e1)
+    } else if percent == 0 {
+        Box::pin(e2)
+    } else {
+        Box::pin(e1.chain(e2))
+    };
+    vec![("x".into(), x), ("e".into(), e)].into_iter().collect()
+}
+
+#[allow(dead_code)]
+pub fn input_streams_paper_benchmark_direct_globally(
+    _size: usize,
+) -> BTreeMap<VarName, OutputStream<Value>> {
+    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
+    vec![("x".into(), x)].into_iter().collect()
+}
+
 pub fn input_streams_add_defer(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
     let size = size as i64;
     let mut input_streams = BTreeMap::new();

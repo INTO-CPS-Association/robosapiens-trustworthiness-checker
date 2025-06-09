@@ -43,15 +43,15 @@ where
             SExpr::Var(v) => mc::var(ctx, v),
             SExpr::Dynamic(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic(ctx, e, None, 10)
+                mc::dynamic(ctx, e, None, 1)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic(ctx, e, Some(vs), 10)
+                mc::dynamic(ctx, e, Some(vs), 1)
             }
             SExpr::Defer(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::defer(ctx, e, 10)
+                mc::defer(ctx, e, 1)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = Self::to_async_stream(*e1, ctx);

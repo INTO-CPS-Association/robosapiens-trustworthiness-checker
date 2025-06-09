@@ -9,11 +9,12 @@ use crate::OutputStream;
 use crate::Value;
 use crate::VarName;
 use crate::core::AbstractMonitorBuilder;
+use crate::core::OutputHandler;
 use crate::core::Runnable;
 use crate::core::Runtime;
 use crate::core::Semantics;
 use crate::dep_manage::interface::DependencyManager;
-use crate::io::testing::null_output_handler::NullOutputHandler;
+use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
@@ -29,11 +30,20 @@ pub async fn monitor_runtime_outputs(
     spec: LOLASpecification,
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
     dep_manager: DependencyManager,
+    output_limit: Option<usize>,
 ) {
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
+    let output_handler: Box<dyn OutputHandler<Val = Value>> = match output_limit {
+        Some(output_limit) => Box::new(LimitedNullOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+            output_limit,
+        )),
+        None => Box::new(NullOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        )),
+    };
+
     let monitor = RuntimeBuilder::new()
         .runtime(runtime)
         .semantics(semantics)
@@ -59,6 +69,26 @@ pub async fn monitor_outputs_untyped_constraints(
         spec,
         input_streams,
         dep_manager,
+        None,
+    )
+    .await;
+}
+
+pub async fn monitor_outputs_untyped_async_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: LOLASpecification,
+    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+    dep_manager: DependencyManager,
+    limit: usize,
+) {
+    monitor_runtime_outputs(
+        Runtime::Async,
+        Semantics::Untimed,
+        executor,
+        spec,
+        input_streams,
+        dep_manager,
+        Some(limit),
     )
     .await;
 }
@@ -76,6 +106,7 @@ pub async fn monitor_outputs_untyped_async(
         spec,
         input_streams,
         dep_manager,
+        None,
     )
     .await;
 }
