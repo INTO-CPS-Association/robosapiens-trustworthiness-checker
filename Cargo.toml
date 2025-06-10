@@ -3,6 +3,7 @@ name = "trustworthiness_checker"
 version = "0.1.0"
 edition = "2024"
 default-run = "trustworthiness_checker"
+exclude = ["examples/*", "scripts/*"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
