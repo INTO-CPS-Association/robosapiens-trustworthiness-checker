@@ -36,7 +36,7 @@ pub async fn parse_file<O: Clone + Debug>(
     file: &str,
 ) -> Result<O, Box<dyn Error>> {
     let contents = smol::fs::read_to_string(file).await?;
-    debug!(name: "Parsing file", 
+    debug!(name: "Parsing file",
         contents=?parser.parse_next(&mut contents.as_str()).unwrap());
     parser
         .parse(contents.as_str())
@@ -55,7 +55,7 @@ mod tests {
     #[test(tokio::test)]
     async fn test_parse_file() {
         let parser = crate::lang::untimed_input::untimed_input_file;
-        let file = "examples/simple_add.input";
+        let file = "fixtures/simple_add.input";
         let mut data = parse_file(parser, file).await.unwrap();
         let x_vals = data
             .input_stream(&"x".into())

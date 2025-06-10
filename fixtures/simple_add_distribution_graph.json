@@ -1,0 +1,36 @@
+{
+    "dist_graph": {
+        "central_monitor": 1,
+        "graph": {
+            "nodes": [
+                "A",
+                "B"
+            ],
+            "edge_property": "directed",
+            "edges": [
+                [
+                    0,
+                    1,
+                    {
+                        "Internal": null
+                    }
+                ]
+            ]
+        }
+    },
+    "var_names": [
+        "x",
+        "y",
+        "z",
+        "w",
+        "v"
+    ],
+    "node_labels": {
+        "0": [
+            "w"
+        ],
+        "1": [
+            "v"
+        ]
+    }
+}

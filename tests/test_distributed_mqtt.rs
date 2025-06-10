@@ -401,7 +401,7 @@ async fn localisation_distribution_graphs_test(
         .expect("Model could not be parsed");
 
     let file_content =
-        smol::fs::read_to_string("examples/simple_add_distribution_graph.json").await?;
+        smol::fs::read_to_string("fixtures/simple_add_distribution_graph.json").await?;
     let dist_graph: LabelledDistributionGraph = serde_json::from_str(&file_content)?;
 
     let xs = vec![Value::Int(1), Value::Int(2)];
