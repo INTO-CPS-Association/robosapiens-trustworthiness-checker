@@ -14,27 +14,27 @@ crate-type = ["lib"]
 bench = false
 
 [build-dependencies]
-lalrpop = "0.22.1"
+lalrpop = "0.22.2"
 
 [dependencies]
 # console-subscriber = "0.4.0"
-winnow = { version = "0.7.3", features = ["simd"] }
+winnow = { version = "0.7.10", features = ["simd"] }
 futures = "0.3.31"
-tokio = { version = "1.43.0", features = ["full", "tracing"] }
+tokio = { version = "1.45.1", features = ["full", "tracing"] }
 tokio-stream = { version = "0.1.17", features = ["full"] }
-tokio-util = "0.7.13"
-clap = { version = "4.5.30", features = ["derive"] }
+tokio-util = "0.7.15"
+clap = { version = "4.5.40", features = ["derive"] }
 async-stream = "0.3.6"
-r2r = { version = "0.9.4", optional = true }
-serde = { version = "1.0.218", features = ["derive", "rc"] }
-serde_json = "1.0.139"
+r2r = { version = "0.9.5", optional = true }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = "1.0.140"
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = { version = "0.13.1", default-features = false, features = [
+paho-mqtt = { version = "0.13.3", default-features = false, features = [
     "bundled",
     "ssl",
 ] }
-async-trait = "0.1.86"
+async-trait = "0.1.88"
 async-once-cell = "0.5.4"
 tracing = { version = "0.1.41", features = [
     "attributes",
@@ -44,27 +44,27 @@ tracing = { version = "0.1.41", features = [
     "release_max_level_warn",
 ] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
-uuid = { version = "1.14.0", features = [
+uuid = { version = "1.17.0", features = [
     "v4",                # Lets you generate random UUIDs
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
 ] }
 strum = "0.27.1"
 strum_macros = "0.27.1"
-petgraph = { version = "0.7.1", features = ["serde-1"] }
+petgraph = { version = "0.8.2", features = ["serde-1"] }
 enum_inner_method = { git = "https://github.com/mortenhaahr/enum_inner_method", tag = "v0.1.0" }
 smol = "2.0.2"
 async-unsync = "0.3.0"
 smol-macros = "0.1.1"
-macro_rules_attribute = "0.2.0"
+macro_rules_attribute = "0.2.2"
 async-compat = "0.2.4"
 jemallocator = "0.5.4"
-ecow = { version = "0.2.3", features = ["serde"] }
+ecow = { version = "0.2.5", features = ["serde"] }
 async_cell = "0.2.2"
 ordered-float = "5.0.0"
 approx = "0.5.1"
-lalrpop-util = { version = "0.21.0", features = ["lexer", "unicode"] }
-contracts = "0.6.3"
+lalrpop-util = { version = "0.22.2", features = ["lexer", "unicode"] }
+contracts = "0.6.6"
 static_assertions = "1.1.0"
 thiserror = "2.0.12"
 rand = "0.9.1"
@@ -83,14 +83,14 @@ testcontainers = []
 bench-full = []
 
 [dev-dependencies]
-criterion = { version = "0.5.1", features = [
+criterion = { version = "0.6.0", features = [
     "async_tokio",
     "async_smol",
     "html_reports",
 ] }
-testcontainers-modules = "0.11.6"
+testcontainers-modules = "0.12.1"
 test-log = { version = "0.2.17", features = ["trace"] }
-proptest = "1.6.0"
+proptest = "1.7.0"
 
 [[bin]]
 name = "work_scheduler"
