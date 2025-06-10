@@ -88,7 +88,7 @@ criterion = { version = "0.6.0", features = [
     "async_smol",
     "html_reports",
 ] }
-testcontainers-modules = "0.12.1"
+testcontainers-modules = { version = "0.12.1", features = ["mosquitto"] }
 test-log = { version = "0.2.17", features = ["trace"] }
 proptest = "1.7.0"
 

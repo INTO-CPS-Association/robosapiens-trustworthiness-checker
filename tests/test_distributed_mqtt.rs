@@ -27,6 +27,7 @@ use macro_rules_attribute::apply;
 use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
 use test_log::test;
+use testcontainers_modules::mosquitto::{self, Mosquitto};
 use testcontainers_modules::testcontainers::core::WaitFor;
 use testcontainers_modules::testcontainers::core::{IntoContainerPort, Mount};
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
@@ -72,12 +73,8 @@ impl<T: Image> Drop for ContainerAsync<T> {
 }
 
 #[instrument(level = tracing::Level::INFO)]
-async fn start_emqx() -> ContainerAsync<GenericImage> {
-    let image = GenericImage::new("emqx/emqx", "5.8.3")
-        .with_wait_for(WaitFor::message_on_stdout("EMQX 5.8.3 is running now!"))
-        .with_exposed_port(1883_u16.tcp())
-        .with_startup_timeout(Duration::from_secs(30));
-    // .with_mount(Mount::bind_mount("/tmp/emqx_logs", "/opt/emqx/log"));
+async fn start_mqtt() -> ContainerAsync<Mosquitto> {
+    let image = mosquitto::Mosquitto::default();
 
     ContainerAsync::new(
         TokioCompat::new(image.start())
@@ -158,11 +155,11 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     ];
     let var_out_topics_2 = [("v".into(), "mqtt_output_dec_v".to_string())];
 
-    let emqx_server = start_emqx().await;
-    let mqtt_port = emqx_server
+    let mqtt_server = start_mqtt().await;
+    let mqtt_port = mqtt_server
         .get_host_port_ipv4(1883)
         .await
-        .expect("Failed to get host port for EMQX server");
+        .expect("Failed to get host port for MQTT server");
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
     let mut input_provider_1 = MQTTInputProvider::new(
@@ -275,11 +272,11 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     let local_spec1 = model1.localise(&vec!["w".into()]);
     let local_spec2 = model2.localise(&vec!["v".into()]);
 
-    let emqx_server = start_emqx().await;
-    let mqtt_port = emqx_server
+    let mqtt_server = start_mqtt().await;
+    let mqtt_port = mqtt_server
         .get_host_port_ipv4(1883)
         .await
-        .expect("Failed to get host port for EMQX server");
+        .expect("Failed to get host port for MQTT server");
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
     let mut input_provider_1 = MQTTInputProvider::new(
@@ -413,11 +410,11 @@ async fn localisation_distribution_graphs_test(
     let local_spec1 = model1.localise(&("A".into(), &dist_graph));
     let local_spec2 = model2.localise(&("B".into(), &dist_graph));
 
-    let emqx_server = start_emqx().await;
-    let mqtt_port = emqx_server
+    let mqtt_server = start_mqtt().await;
+    let mqtt_port = mqtt_server
         .get_host_port_ipv4(1883)
         .await
-        .expect("Failed to get host port for EMQX server");
+        .expect("Failed to get host port for MQTT server");
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
     let mut input_provider_1 = MQTTInputProvider::new(

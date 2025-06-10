@@ -9,7 +9,7 @@ use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use smol_macros::test as smol_test;
 use std::pin::Pin;
-use std::task;
+use std::{mem, task};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::io::mqtt::client::{
@@ -22,39 +22,49 @@ use winnow::Parser;
 use async_compat::Compat as TokioCompat;
 use async_compat::CompatExt;
 use async_once_cell::Lazy;
+use testcontainers_modules::mosquitto::{self, Mosquitto};
 use testcontainers_modules::testcontainers::core::WaitFor;
 use testcontainers_modules::testcontainers::core::{IntoContainerPort, Mount};
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
-use testcontainers_modules::testcontainers::{ContainerAsync, GenericImage, ImageExt};
+use testcontainers_modules::testcontainers::{
+    ContainerAsync as ContainerAsyncTokio, GenericImage, Image, ImageExt,
+};
 use tokio::sync::oneshot;
 
-#[instrument(level = tracing::Level::INFO)]
-async fn start_emqx() -> ContainerAsync<GenericImage> {
-    let image = GenericImage::new("emqx/emqx", "5.8.3")
-        .with_wait_for(WaitFor::message_on_stdout("EMQX 5.8.3 is running now!"))
-        .with_exposed_port(1883_u16.tcp())
-        .with_startup_timeout(Duration::from_secs(30));
-    // .with_mount(Mount::bind_mount("/tmp/emqx_logs", "/opt/emqx/log"));
-
-    TokioCompat::new(image.start())
-        .await
-        .expect("Failed to start EMQX test container")
+struct ContainerAsync<T: Image> {
+    inner: Option<ContainerAsyncTokio<T>>,
 }
 
-pub struct StartEmqx(Option<Pin<Box<dyn Future<Output = ContainerAsync<GenericImage>> + Send>>>);
+impl<T: Image> ContainerAsync<T> {
+    fn new(inner: ContainerAsyncTokio<T>) -> Self {
+        Self { inner: Some(inner) }
+    }
 
-impl Future for StartEmqx {
-    type Output = ContainerAsync<GenericImage>;
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut task::Context,
-    ) -> task::Poll<ContainerAsync<GenericImage>> {
-        Pin::new(self.0.get_or_insert_with(|| Box::pin(start_emqx()))).poll(cx)
+    async fn get_host_port_ipv4(
+        &self,
+        port: u16,
+    ) -> Result<u16, testcontainers_modules::testcontainers::TestcontainersError> {
+        TokioCompat::new(self.inner.as_ref().unwrap().get_host_port_ipv4(port)).await
     }
 }
 
-pub static MQTT_TEST_CONTAINER: Lazy<ContainerAsync<GenericImage>, StartEmqx> =
-    Lazy::new(StartEmqx(None));
+impl<T: Image> Drop for ContainerAsync<T> {
+    fn drop(&mut self) {
+        let inner = mem::take(&mut self.inner);
+        TokioCompat::new(async move { mem::drop(inner) });
+    }
+}
+
+#[instrument(level = tracing::Level::INFO)]
+async fn start_mqtt() -> ContainerAsync<Mosquitto> {
+    let image = mosquitto::Mosquitto::default();
+
+    ContainerAsync::new(
+        TokioCompat::new(image.start())
+            .await
+            .expect("Failed to start EMQX test container"),
+    )
+}
 
 #[instrument(level = tracing::Level::INFO)]
 async fn get_outputs(topic: String, client_name: String, port: u16) -> OutputStream<Value> {
@@ -150,10 +160,10 @@ mod tests {
 
         let expected_outputs = vec![Value::Int(3), Value::Int(7)];
 
-        let emqx_server = Pin::new(&MQTT_TEST_CONTAINER).get().await;
-        let mqtt_port = TokioCompat::new(emqx_server.get_host_port_ipv4(1883))
+        let mqtt_server = start_mqtt().await;
+        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
             .await
-            .expect("Failed to get host port for EMQX server");
+            .expect("Failed to get host port for MQTT server");
 
         let mut input_streams = input_streams1();
         let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
@@ -200,10 +210,10 @@ mod tests {
             .parse(spec_simple_add_monitor_typed_float())
             .expect("Model could not be parsed");
 
-        let emqx_server = Pin::new(&MQTT_TEST_CONTAINER).get().await;
-        let mqtt_port = TokioCompat::new(emqx_server.get_host_port_ipv4(1883))
+        let mqtt_server = start_mqtt().await;
+        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
             .await
-            .expect("Failed to get host port for EMQX server");
+            .expect("Failed to get host port for MQTT server");
 
         let mut input_streams = input_streams_float();
         let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
@@ -263,11 +273,11 @@ mod tests {
         let ys = vec![Value::Int(3), Value::Int(4)];
         let zs = vec![Value::Int(4), Value::Int(6)];
 
-        let emqx_server = MQTT_TEST_CONTAINER.get_unpin().await;
+        let mqtt_server = start_mqtt().await;
 
-        let mqtt_port = TokioCompat::new(emqx_server.get_host_port_ipv4(1883))
+        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
             .await
-            .expect("Failed to get host port for EMQX server");
+            .expect("Failed to get host port for MQTT server");
 
         let var_topics = [
             ("x".into(), "mqtt_input_x".to_string()),
@@ -337,17 +347,15 @@ mod tests {
             .parse(spec_simple_add_monitor())
             .expect("Model could not be parsed");
 
-        // let pool = tokio::task::LocalSet::new();
-
         let xs = vec![Value::Float(1.3), Value::Float(3.4)];
         let ys = vec![Value::Float(2.4), Value::Float(4.3)];
         let zs = vec![Value::Float(3.7), Value::Float(7.7)];
 
-        let emqx_server = MQTT_TEST_CONTAINER.get_unpin().await;
+        let mqtt_server = start_mqtt().await;
 
-        let mqtt_port = TokioCompat::new(emqx_server.get_host_port_ipv4(1883))
+        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
             .await
-            .expect("Failed to get host port for EMQX server");
+            .expect("Failed to get host port for MQTT server");
 
         let var_topics = [
             ("x".into(), "mqtt_input_float_x".to_string()),
@@ -422,11 +430,11 @@ mod tests {
     #[test(apply(smol_test))]
     async fn test_mqtt_locality_receiver(executor: Rc<LocalExecutor<'static>>) {
         println!("Starting test");
-        let emqx_server = MQTT_TEST_CONTAINER.get_unpin().await;
-        println!("Got EMQX server");
-        let mqtt_port = TokioCompat::new(emqx_server.get_host_port_ipv4(1883))
+        let mqtt_server = start_mqtt().await;
+        println!("Got MQTT server");
+        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
             .await
-            .expect("Failed to get host port for EMQX server");
+            .expect("Failed to get host port for MQTT server");
         let mqtt_uri = format!("tcp://localhost:{}", mqtt_port);
 
         let receiver = MQTTLocalityReceiver::new(mqtt_uri.clone(), "test_node".to_string());
