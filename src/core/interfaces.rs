@@ -237,14 +237,20 @@ pub trait Monitor<M, V: StreamData>: Runnable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::stream;
     use crate::Value;
+    use futures::stream;
 
     #[test]
     fn test_vec_input_provider_input_stream() {
         let mut provider = vec![
-            ("x".into(), Box::pin(stream::iter(vec![Value::Int(1), Value::Int(2)])) as OutputStream<Value>),
-            ("y".into(), Box::pin(stream::iter(vec![Value::Int(3), Value::Int(4)])) as OutputStream<Value>),
+            (
+                "x".into(),
+                Box::pin(stream::iter(vec![Value::Int(1), Value::Int(2)])) as OutputStream<Value>,
+            ),
+            (
+                "y".into(),
+                Box::pin(stream::iter(vec![Value::Int(3), Value::Int(4)])) as OutputStream<Value>,
+            ),
         ];
 
         // Test getting an existing stream
