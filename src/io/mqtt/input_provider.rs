@@ -183,6 +183,6 @@ impl InputProvider for MQTTInputProvider {
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(pending())
+        Box::pin(self.result.take_shared())
     }
 }
