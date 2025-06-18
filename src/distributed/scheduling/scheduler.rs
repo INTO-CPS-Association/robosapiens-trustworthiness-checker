@@ -99,7 +99,7 @@ impl Scheduler {
         })
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         // MAPE-K loop for scheduling
         let dist_constraits_hold_stream =
             smol::stream::once(false).chain(self.dist_constraints_hold_stream());
@@ -138,6 +138,7 @@ impl Scheduler {
                 self.dist_graph_sender.send(plan.clone()).await;
                 if should_plan && !self.suppress_output {
                     info!("Plotting graph");
+                    // TODO: should this error be propagated?
                     if let Err(e) = graph_to_png(plan.clone(), "distributed_graph.png").await {
                         error!("Failed to plot graph: {}", e);
                     }
@@ -152,5 +153,7 @@ impl Scheduler {
         if !self.suppress_output {
             info!("Scheduler ended");
         }
+
+        Ok(())
     }
 }

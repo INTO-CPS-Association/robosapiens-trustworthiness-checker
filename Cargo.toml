@@ -70,6 +70,7 @@ thiserror = "2.0.12"
 rand = "0.9.1"
 unsync = "0.1.2"
 itertools = "0.14.0"
+anyhow = { version = "1.0.98", features = ["backtrace"] }
 
 [profile.release]
 lto = "fat"

@@ -22,9 +22,7 @@ struct Args {
 }
 
 #[instrument]
-async fn load_distribution_graph(
-    path: PathBuf,
-) -> Result<LabelledDistributionGraph, Box<dyn std::error::Error>> {
+async fn load_distribution_graph(path: PathBuf) -> anyhow::Result<LabelledDistributionGraph> {
     info!("Loading distribution graph from {:?}", path);
     let file_content = tokio::fs::read_to_string(path).await?;
     let dist_graph: LabelledDistributionGraph = serde_json::from_str(&file_content)?;
@@ -33,7 +31,7 @@ async fn load_distribution_graph(
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
@@ -70,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         false,
     );
 
-    scheduler.run().await;
+    scheduler.run().await?;
 
     info!("Work scheduling completed successfully");
 

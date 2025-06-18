@@ -78,9 +78,10 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
 
     #[instrument(name="Running ManualOutputHandler", level=Level::INFO,
                  skip(self))]
-    fn run(&mut self) -> LocalBoxFuture<'static, ()> {
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         let receivers: Vec<oneshot::Receiver<OutputStream<V>>> =
-            mem::take(&mut self.stream_receivers).expect("Stream receivers not found");
+            mem::take(&mut self.stream_receivers).expect("Stream receivers already taken");
+
         debug!(
             name = "Running ManualOutputHandler",
             num_streams = receivers.len()
@@ -90,7 +91,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             .map(|mut r| r.try_recv().unwrap())
             .collect();
 
-        let (output_done_tx, output_done_rx) = oneshot::channel().into_split();
+        let (result_tx, result_rx) = oneshot::channel().into_split();
 
         mem::take(&mut self.output_sender)
             .expect("Output sender not found")
@@ -119,13 +120,17 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
                         break;
                     }
                 }
-                output_done_tx.send(()).unwrap();
+                result_tx.send(Ok(())).expect("Result channel dropped");
             }))
-            .unwrap();
+            .expect("Output sender channel dropped");
 
         Box::pin(async move {
-            if let Err(_) = output_done_rx.await {
-                debug!("Output went away");
+            match result_rx.await {
+                Ok(res) => res,
+                Err(_) => {
+                    debug!("Output dropped; stopping and ignoring");
+                    Ok(())
+                }
             }
         })
     }
@@ -154,7 +159,7 @@ impl<V: StreamData> OutputHandler for AsyncManualOutputHandler<V> {
         }
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, ()> {
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         let receivers = mem::take(&mut self.stream_receivers).expect("Stream receivers not found");
         let streams: Vec<_> = receivers
             .into_iter()
@@ -180,6 +185,8 @@ impl<V: StreamData> OutputHandler for AsyncManualOutputHandler<V> {
                     .collect::<Vec<_>>(),
             )
             .await;
+
+            Ok(())
         })
     }
 }
@@ -302,7 +309,7 @@ mod tests {
 
         assert_eq!(output, xy_expected);
 
-        task.await;
+        task.await.expect("Failed to run handler");
     }
 
     #[test(apply(smol_test))]
@@ -345,6 +352,6 @@ mod tests {
         let results = output_stream.collect::<BTreeSet<_>>().await;
 
         assert_eq!(results, expected_output);
-        task.await;
+        task.await.expect("Failed to run handler");
     }
 }

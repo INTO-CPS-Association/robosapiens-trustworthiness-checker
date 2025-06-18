@@ -1,3 +1,6 @@
+use std::future::pending;
+
+use futures::future::LocalBoxFuture;
 use futures::stream;
 
 use crate::core::Value;
@@ -27,6 +30,10 @@ impl InputProvider for UntimedInputFileData {
             self.clone(),
             var.clone(),
         ))))
+    }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(pending())
     }
 }
 

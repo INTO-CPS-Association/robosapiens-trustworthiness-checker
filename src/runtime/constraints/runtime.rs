@@ -18,8 +18,10 @@ use crate::runtime::constraints::solver::SimplifyResult;
 use crate::runtime::constraints::solver::model_constraints;
 use async_stream::stream;
 use async_trait::async_trait;
+use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::join_all;
+use futures::select;
 use futures::stream::LocalBoxStream;
 use smol::LocalExecutor;
 use std::collections::BTreeMap;
@@ -237,7 +239,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for ConstraintBasedMonitor
         let input_streams = model
             .input_vars()
             .iter()
-            .map(move |var| {
+            .map(|var| {
                 let stream = input.input_stream(var);
                 stream.unwrap()
             })
@@ -249,6 +251,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for ConstraintBasedMonitor
             executor,
             stream_collection,
             model,
+            input_provider: input,
             output_handler: output,
             has_inputs,
             dependencies,
@@ -263,6 +266,7 @@ pub struct ConstraintBasedMonitor {
     executor: Rc<LocalExecutor<'static>>,
     stream_collection: ValStreamCollection,
     model: LOLASpecification,
+    input_provider: Box<dyn InputProvider<Val = Value>>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
     has_inputs: bool,
     dependencies: DependencyManager,
@@ -294,10 +298,19 @@ impl Monitor<LOLASpecification, Value> for ConstraintBasedMonitor {
 
 #[async_trait(?Send)]
 impl Runnable for ConstraintBasedMonitor {
-    async fn run_boxed(mut self: Box<Self>) {
+    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         let outputs = self.output_streams();
         self.output_handler.provide_streams(outputs);
-        self.output_handler.run().await;
+
+        let mut input_fut = self.input_provider.run().fuse();
+        let mut output_fut = self.output_handler.run().fuse();
+
+        select! {
+            input_res = input_fut => input_res?,
+            output_res = output_fut => output_res?,
+        }
+
+        Ok(())
     }
 }
 

@@ -29,6 +29,8 @@ pub trait InputProvider {
     type Val;
 
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
+
+    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
 }
 
 impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
@@ -38,6 +40,10 @@ impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
         self.iter()
             .position(|(name, _)| name == var)
             .map(|index| self.swap_remove(index).1)
+    }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        Box::pin(futures::future::pending())
     }
 }
 
@@ -49,6 +55,10 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
         self.remove(var)
     }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        Box::pin(futures::future::pending())
+    }
 }
 
 impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
@@ -58,6 +68,10 @@ impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
         self.remove(var)
             .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
     }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        Box::pin(futures::future::pending())
+    }
 }
 
 impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
@@ -66,6 +80,10 @@ impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
         self.remove(var)
             .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
+    }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(futures::future::pending())
     }
 }
 
@@ -103,7 +121,7 @@ pub trait OutputHandler {
 
     // Essentially this is of type
     // async fn run(&mut self);
-    fn run(&mut self) -> LocalBoxFuture<'static, ()>;
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>>;
 }
 
 pub trait AbstractMonitorBuilder<M, V: StreamData> {
@@ -181,23 +199,23 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
 
 #[async_trait(?Send)]
 impl Runnable for Box<dyn Runnable> {
-    async fn run_boxed(mut self: Box<Self>) {
-        Runnable::run_boxed(self).await;
+    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
+        Runnable::run_boxed(self).await
     }
 
-    async fn run(mut self: Self) {
-        Runnable::run_boxed(self).await;
+    async fn run(mut self: Self) -> anyhow::Result<()> {
+        Runnable::run_boxed(self).await
     }
 }
 
 #[async_trait(?Send)]
 impl<M, V: StreamData> Runnable for Box<dyn Monitor<M, V>> {
-    async fn run_boxed(mut self: Box<Self>) {
-        Runnable::run_boxed(self).await;
+    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
+        Runnable::run_boxed(self).await
     }
 
-    async fn run(mut self: Self) {
-        Runnable::run_boxed(self).await;
+    async fn run(mut self: Self) -> anyhow::Result<()> {
+        Runnable::run_boxed(self).await
     }
 }
 
@@ -211,14 +229,14 @@ impl<M, V: StreamData> Monitor<M, V> for Box<dyn Monitor<M, V>> {
 #[async_trait(?Send)]
 pub trait Runnable {
     // Should usually wait on the output provider
-    async fn run(mut self)
+    async fn run(mut self) -> anyhow::Result<()>
     where
         Self: Sized,
     {
-        Box::new(self).run_boxed().await;
+        Box::new(self).run_boxed().await
     }
 
-    async fn run_boxed(mut self: Box<Self>);
+    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()>;
 }
 
 /*

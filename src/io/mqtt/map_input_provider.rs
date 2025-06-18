@@ -2,8 +2,9 @@ use std::{collections::BTreeMap, rc::Rc};
 
 // Fork of the MQTTInputProvider that accepts Values in a key-value format
 
+use async_cell::unsync::AsyncCell;
 use ecow::eco_vec;
-use futures::StreamExt;
+use futures::{StreamExt, future::LocalBoxFuture};
 use paho_mqtt as mqtt;
 use serde_json::Value as JValue;
 use smol::LocalExecutor;
@@ -67,14 +68,10 @@ pub struct MapMQTTInputProvider {
     #[allow(dead_code)]
     executor: Rc<LocalExecutor<'static>>,
     pub var_map: BTreeMap<VarName, VarData>,
+    pub result: Rc<AsyncCell<anyhow::Result<()>>>,
     // node: Arc<Mutex<r2r::Node>>,
     pub started: watch::Receiver<bool>,
 }
-
-// #[Error]
-// enum MQTTInputProviderError {
-// MQTTClientError(mqtt::Error)
-// }
 
 impl MapMQTTInputProvider {
     // TODO: should we have dependency injection for the MQTT client?
@@ -86,11 +83,6 @@ impl MapMQTTInputProvider {
     ) -> Result<Self, mqtt::Error> {
         // Client options
         let host = host.to_string();
-
-        // let (tx, rx) = tokio::sync::watch::channel(false);
-        // let notify = Arc::new(Notify::new());
-
-        // let cancellation_token = CancellationToken::new();
 
         // Create a pair of mpsc channels for each topic which is used to put
         // messages received on that topic into an appropriate stream of
@@ -112,61 +104,23 @@ impl MapMQTTInputProvider {
             ?host, ?var_topics, ?topic_vars);
 
         let (started_tx, started_rx) = watch::channel(false);
+        let result = Rc::new(AsyncCell::new());
 
         // Spawn a background task to receive messages from the MQTT broker and
         // send them to the appropriate channel based on which topic they were
         // received on
         // Should go away when the sender goes away by sender.send throwing
         // due to no senders
-        let var_topics_clone = var_topics.clone();
         executor
-            .spawn(async move {
-                let var_topics = var_topics_clone;
-                let mqtt_input_span =
-                    debug_span!("InputProvider MQTT startup task", ?host, ?var_topics);
-                let _enter = mqtt_input_span.enter();
-                // Create and connect to the MQTT client
-                let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone())
-                    .await
-                    .unwrap();
-                info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
-                loop {
-                    match client.subscribe_many_same_qos(&topics, QOS).await {
-                        Ok(_) => break,
-                        Err(e) => {
-                            warn!(name: "Failed to subscribe to topics", ?topics, err=?e);
-                            info!("Retrying in 100ms");
-                            let _e = client.reconnect().await;
-                        }
-                    }
-                }
-                info!(name: "Connected to MQTT broker", ?host, ?var_topics);
-                started_tx
-                    .send(true)
-                    .expect("Failed to send started signal");
-
-                while let Some(msg) = stream.next().await {
-                    // Process the message
-                    debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-                    let jvalue =
-                        serde_json::from_str::<JValue>(&msg.payload_str()).unwrap_or_else(|_| {
-                            panic!(
-                                "Failed to parse value {:?} sent from MQTT",
-                                msg.payload_str()
-                            )
-                        });
-                    debug!("JValue: {:?}", jvalue);
-                    let value = jvalue.to_value();
-                    if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
-                        sender
-                            .send(value)
-                            .await
-                            .expect("Failed to send value to channel");
-                    } else {
-                        error!(name: "Channel not found for topic", topic=?msg.topic());
-                    }
-                }
-            })
+            .spawn(MapMQTTInputProvider::input_monitor(
+                result.clone(),
+                host,
+                var_topics.clone(),
+                topic_vars,
+                topics,
+                senders,
+                started_tx,
+            ))
             .detach();
 
         // Build the variable map from the input monitor streams
@@ -188,9 +142,81 @@ impl MapMQTTInputProvider {
 
         Ok(MapMQTTInputProvider {
             executor,
+            result,
             var_map: var_data,
             started: started_rx,
         })
+    }
+
+    async fn input_monitor(
+        result: Rc<AsyncCell<anyhow::Result<()>>>,
+        host: String,
+        var_topics: BTreeMap<VarName, String>,
+        topic_vars: BTreeMap<String, VarName>,
+        topics: Vec<String>,
+        senders: BTreeMap<VarName, mpsc::Sender<Value>>,
+        started_tx: watch::Sender<bool>,
+    ) {
+        result.set(
+            Self::input_monitor_with_result(
+                host, var_topics, topic_vars, topics, senders, started_tx,
+            )
+            .await,
+        )
+    }
+
+    async fn input_monitor_with_result(
+        host: String,
+        var_topics: BTreeMap<VarName, String>,
+        topic_vars: BTreeMap<String, VarName>,
+        topics: Vec<String>,
+        senders: BTreeMap<VarName, mpsc::Sender<Value>>,
+        started_tx: watch::Sender<bool>,
+    ) -> anyhow::Result<()> {
+        let mqtt_input_span = debug_span!("InputProvider MQTT startup task", ?host, ?var_topics);
+        let _enter = mqtt_input_span.enter();
+        // Create and connect to the MQTT client
+        let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone())
+            .await
+            .unwrap();
+        info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
+        loop {
+            match client.subscribe_many_same_qos(&topics, QOS).await {
+                Ok(_) => break,
+                Err(e) => {
+                    warn!(name: "Failed to subscribe to topics", ?topics, err=?e);
+                    info!("Retrying in 100ms");
+                    let _e = client.reconnect().await;
+                }
+            }
+        }
+        info!(name: "Connected to MQTT broker", ?host, ?var_topics);
+        started_tx
+            .send(true)
+            .expect("Failed to send started signal");
+
+        while let Some(msg) = stream.next().await {
+            // Process the message
+            debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
+            let jvalue = serde_json::from_str::<JValue>(&msg.payload_str()).unwrap_or_else(|_| {
+                panic!(
+                    "Failed to parse value {:?} sent from MQTT",
+                    msg.payload_str()
+                )
+            });
+            debug!("JValue: {:?}", jvalue);
+            let value = jvalue.to_value();
+            if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
+                sender
+                    .send(value)
+                    .await
+                    .expect("Failed to send value to channel");
+            } else {
+                error!(name: "Channel not found for topic", topic=?msg.topic());
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -201,5 +227,11 @@ impl InputProvider for MapMQTTInputProvider {
         let var_data = self.var_map.get_mut(var)?;
         let stream = var_data.stream.take()?;
         Some(stream)
+    }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        let res = self.result.clone();
+
+        Box::pin(async move { res.take().await })
     }
 }

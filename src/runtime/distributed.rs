@@ -456,11 +456,13 @@ where
     S: MonitoringSemantics<Expr, V, DistributedContext<V>>,
     V: StreamData,
 {
-    async fn run_boxed(self: Box<Self>) {
-        join!(self.scheduler.run(), self.async_monitor.run());
+    async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {
+        let (res1, res2) = join!(self.scheduler.run(), self.async_monitor.run());
+        res1.and(res2)
     }
 
-    async fn run(self: Self) {
-        join!(self.scheduler.run(), self.async_monitor.run());
+    async fn run(self: Self) -> anyhow::Result<()> {
+        let (res1, res2) = join!(self.scheduler.run(), self.async_monitor.run());
+        res1.and(res2)
     }
 }

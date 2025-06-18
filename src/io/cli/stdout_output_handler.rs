@@ -12,16 +12,14 @@ use crate::io::testing::ManualOutputHandler;
  * cannot be used again; this allows us to manage the lifetimes of our data
  * without mutexes or arcs. */
 pub struct StdoutOutputHandler<V: StreamData> {
-    executor: Rc<LocalExecutor<'static>>,
     manual_output_handler: ManualOutputHandler<V>,
 }
 
 impl<V: StreamData> StdoutOutputHandler<V> {
     pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: Vec<VarName>) -> Self {
-        let combined_output_handler = ManualOutputHandler::new(executor.clone(), var_names);
+        let combined_output_handler = ManualOutputHandler::new(executor, var_names);
 
         Self {
-            executor,
             manual_output_handler: combined_output_handler,
         }
     }
@@ -38,10 +36,10 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
         self.manual_output_handler.provide_streams(streams);
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, ()> {
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         let output_stream = self.manual_output_handler.get_output();
         let mut enumerated_outputs = output_stream.enumerate();
-        let task = self.executor.spawn(self.manual_output_handler.run());
+        let task = self.manual_output_handler.run();
         let var_names = self
             .var_names()
             .iter()
@@ -54,7 +52,7 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
                     println!("{}[{}] = {:?}", var, i, data);
                 }
             }
-            task.await;
+            task.await
         })
     }
 }
@@ -79,8 +77,6 @@ mod tests {
 
         handler.provide_streams(vec![x_stream, y_stream].into_iter().collect());
 
-        let task = executor.spawn(handler.run());
-
-        task.await;
+        handler.run().await.expect("Failed to run output handler");
     }
 }

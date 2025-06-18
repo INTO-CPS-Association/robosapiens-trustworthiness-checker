@@ -53,7 +53,7 @@ pub async fn monitor_runtime_outputs(
         .input(Box::new(input_streams))
         .dependencies(dep_manager)
         .build();
-    monitor.run().await;
+    monitor.run().await.expect("Error running monitor");
 }
 
 pub async fn monitor_outputs_untyped_constraints(
@@ -136,7 +136,7 @@ pub async fn monitor_outputs_typed_async(
     .output(output_handler)
     .dependencies(dep_manager)
     .build();
-    async_monitor.run().await;
+    async_monitor.run().await.expect("Error running monitor");
 }
 
 pub fn monitor_outputs_untyped_constraints_no_overhead(

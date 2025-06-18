@@ -194,5 +194,5 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     // Create the runtime
     let monitor = builder.async_build().await;
 
-    monitor.run().await;
+    monitor.run().await.expect("Failed to run monitor");
 }

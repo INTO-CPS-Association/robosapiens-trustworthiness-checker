@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, rc::Rc};
 
+use anyhow;
 use async_trait::async_trait;
 use smol::LocalExecutor;
 use tracing::{Level, instrument};
@@ -167,5 +168,8 @@ where
     M: Specification<Expr = Expr>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
-    async fn run_boxed(mut self: Box<Self>) {}
+    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
+        // TODO: Implement this
+        Ok(())
+    }
 }

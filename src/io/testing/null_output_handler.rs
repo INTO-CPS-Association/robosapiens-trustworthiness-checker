@@ -1,9 +1,6 @@
 use std::rc::Rc;
 
-use futures::{
-    StreamExt,
-    future::{LocalBoxFuture, select},
-};
+use futures::{StreamExt, future::LocalBoxFuture};
 use smol::LocalExecutor;
 
 use super::ManualOutputHandler;
@@ -51,17 +48,12 @@ impl<V: StreamData> OutputHandler for LimitedNullOutputHandler<V> {
         self.manual_output_handler.provide_streams(streams);
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, ()> {
-        // let mut enumerated_outputs = output_stream.enumerate();
-        let task = self.executor.spawn(self.manual_output_handler.run());
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         let output_stream = self.manual_output_handler.get_output();
-        let limit = self.limit;
-
-        Box::pin(async move {
-            let output_task = output_stream.take(limit).collect::<Vec<_>>();
-
-            let _ = select(output_task, task).await;
-        })
+        self.executor
+            .spawn(output_stream.take(self.limit).collect::<Vec<_>>())
+            .detach();
+        self.manual_output_handler.run()
     }
 }
 
@@ -87,16 +79,12 @@ impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
         self.manual_output_handler.provide_streams(streams);
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, ()> {
-        // let mut enumerated_outputs = output_stream.enumerate();
-        let task = self.executor.spawn(self.manual_output_handler.run());
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         let output_stream = self.manual_output_handler.get_output();
-
-        Box::pin(async move {
-            let _ = output_stream.collect::<Vec<_>>().await;
-
-            task.await;
-        })
+        self.executor
+            .spawn(output_stream.collect::<Vec<_>>())
+            .detach();
+        self.manual_output_handler.run()
     }
 }
 
@@ -122,7 +110,7 @@ mod tests {
 
         let task = executor.spawn(handler.run());
 
-        task.await;
+        task.await.expect("Failed to run handler");
     }
 
     #[test(apply(smol_test))]
@@ -137,6 +125,6 @@ mod tests {
 
         let task = executor.spawn(handler.run());
 
-        task.await;
+        task.await.expect("Failed to run handler");
     }
 }

@@ -790,6 +790,7 @@ where
     #[allow(dead_code)]
     pub executor: Rc<LocalExecutor<'static>>,
     model: M,
+    input_provider: Box<dyn InputProvider<Val = Val>>,
     output_handler: Box<dyn OutputHandler<Val = Val>>,
     output_streams: Vec<OutputStream<Val>>,
     cancellation_token: CancellationToken,
@@ -919,7 +920,7 @@ impl<
     fn build(self) -> AsyncMonitorRunner<Expr, Val, S, M, Ctx> {
         let executor = self.executor.expect("Executor not supplied");
         let model = self.model.expect("Model not supplied");
-        let mut input_streams = self.input.expect("Input streams not supplied");
+        let mut input_provider = self.input.expect("Input streams not supplied");
         let output_handler = self.output.expect("Output handler not supplied");
         let context_builder = self.context_builder.unwrap_or_else(Ctx::Builder::new);
 
@@ -932,7 +933,7 @@ impl<
             .collect();
 
         let input_streams = input_vars.iter().map(|var| {
-            input_streams
+            input_provider
                 .input_stream(var)
                 .expect(format!("Input stream not found for {}", var).as_str())
         });
@@ -1003,6 +1004,7 @@ impl<
             executor,
             model,
             output_handler,
+            input_provider,
             output_streams,
             cancellation_token,
             expr_t: PhantomData,
@@ -1057,13 +1059,22 @@ where
     M: Specification<Expr = Expr>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
-    async fn run_boxed(mut self: Box<Self>) {
+    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         self.output_handler.provide_streams(self.output_streams);
-        self.output_handler.run().await;
+
+        let mut output_fut = self.output_handler.run().fuse();
+        let mut input_fut = self.input_provider.run().fuse();
+
+        select! {
+            output_res = output_fut => output_res?,
+            input_res = input_fut => input_res?,
+        }
 
         // Trigger cancellation when output handler completes to stop all var managers
         debug!("AsyncMonitorRunner: Output handler completed, triggering cancellation");
         self.cancellation_token.cancel();
+
+        Ok(())
     }
 }
 
