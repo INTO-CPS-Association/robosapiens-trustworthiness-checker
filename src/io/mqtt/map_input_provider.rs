@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, rc::Rc};
 
 // Fork of the MQTTInputProvider that accepts Values in a key-value format
 
+use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
 use ecow::eco_vec;
 use futures::{StreamExt, future::LocalBoxFuture};
@@ -10,15 +11,10 @@ use serde_json::Value as JValue;
 use smol::LocalExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Level, debug, debug_span, error, info, info_span, instrument, warn};
-// TODO: should we use a cancellation token to cleanup the background task
-// or does it go away when anyway the receivers of our outputs go away?
-// use tokio_util::sync::CancellationToken;
+use tracing::{Level, debug, debug_span, info, info_span, instrument, warn};
 
-// use crate::stream_utils::drop_guard_stream;
 use super::client::provide_mqtt_client_with_subscription;
 use crate::{InputProvider, OutputStream, Value, core::VarName};
-// use async_stream::stream;
 
 const QOS: i32 = 1;
 
@@ -104,7 +100,7 @@ impl MapMQTTInputProvider {
             ?host, ?var_topics, ?topic_vars);
 
         let (started_tx, started_rx) = watch::channel(false);
-        let result = Rc::new(AsyncCell::new());
+        let result = AsyncCell::shared();
 
         // Spawn a background task to receive messages from the MQTT broker and
         // send them to the appropriate channel based on which topic they were
@@ -157,6 +153,7 @@ impl MapMQTTInputProvider {
         senders: BTreeMap<VarName, mpsc::Sender<Value>>,
         started_tx: watch::Sender<bool>,
     ) {
+        let result = result.guard_shared(Err(anyhow::anyhow!("InputProvider crashed")));
         result.set(
             Self::input_monitor_with_result(
                 host, var_topics, topic_vars, topics, senders, started_tx,
@@ -198,12 +195,15 @@ impl MapMQTTInputProvider {
         while let Some(msg) = stream.next().await {
             // Process the message
             debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-            let jvalue = serde_json::from_str::<JValue>(&msg.payload_str()).unwrap_or_else(|_| {
-                panic!(
-                    "Failed to parse value {:?} sent from MQTT",
-                    msg.payload_str()
-                )
-            });
+            let jvalue = match serde_json::from_str::<JValue>(&msg.payload_str()) {
+                Ok(value) => value,
+                Err(e) => {
+                    return Err(anyhow!(e).context(format!(
+                        "Failed to parse value {:?} sent from MQTT",
+                        msg.payload_str()
+                    )));
+                }
+            };
             debug!("JValue: {:?}", jvalue);
             let value = jvalue.to_value();
             if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
@@ -212,7 +212,7 @@ impl MapMQTTInputProvider {
                     .await
                     .expect("Failed to send value to channel");
             } else {
-                error!(name: "Channel not found for topic", topic=?msg.topic());
+                return Err(anyhow!("Channel not found for topic {}", msg.topic()));
             }
         }
 

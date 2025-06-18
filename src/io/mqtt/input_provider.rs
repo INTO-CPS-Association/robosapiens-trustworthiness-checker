@@ -1,19 +1,16 @@
 use std::{collections::BTreeMap, future::pending, rc::Rc};
 
+use async_cell::unsync::AsyncCell;
 use futures::{StreamExt, future::LocalBoxFuture};
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Level, debug, error, info, info_span, instrument, warn};
-// TODO: should we use a cancellation token to cleanup the background task
-// or does it go away when anyway the receivers of our outputs go away?
-// use tokio_util::sync::CancellationToken;
+use tracing::{Level, debug, info, info_span, instrument, warn};
 
-// use crate::stream_utils::drop_guard_stream;
 use super::client::provide_mqtt_client_with_subscription;
 use crate::{InputProvider, OutputStream, Value, core::VarName};
-// use async_stream::stream;
+use anyhow::anyhow;
 
 const QOS: i32 = 1;
 
@@ -31,14 +28,9 @@ pub struct MQTTInputProvider {
     #[allow(dead_code)]
     executor: Rc<LocalExecutor<'static>>,
     pub var_map: BTreeMap<VarName, VarData>,
-    // node: Arc<Mutex<r2r::Node>>,
+    pub result: Rc<AsyncCell<anyhow::Result<()>>>,
     pub started: watch::Receiver<bool>,
 }
-
-// #[Error]
-// enum MQTTInputProviderError {
-// MQTTClientError(mqtt::Error)
-// }
 
 impl MQTTInputProvider {
     // TODO: should we have dependency injection for the MQTT client?
@@ -68,9 +60,11 @@ impl MQTTInputProvider {
             .collect::<BTreeMap<_, _>>();
 
         let (started_tx, started_rx) = watch::channel(false);
+        let result = AsyncCell::shared();
 
         executor
             .spawn(MQTTInputProvider::input_monitor(
+                result.clone(),
                 var_topics.clone(),
                 topic_vars,
                 host,
@@ -98,11 +92,14 @@ impl MQTTInputProvider {
 
         Ok(MQTTInputProvider {
             executor,
+            result,
             var_map: var_data,
             started: started_rx,
         })
     }
+
     async fn input_monitor(
+        result: Rc<AsyncCell<anyhow::Result<()>>>,
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
         host: String,
@@ -110,6 +107,23 @@ impl MQTTInputProvider {
         senders: BTreeMap<VarName, mpsc::Sender<Value>>,
         started_tx: watch::Sender<bool>,
     ) {
+        let result = result.guard_shared(Err(anyhow::anyhow!("InputProvider crashed")));
+        result.set(
+            Self::input_monitor_with_result(
+                var_topics, topic_vars, host, topics, senders, started_tx,
+            )
+            .await,
+        )
+    }
+
+    async fn input_monitor_with_result(
+        var_topics: BTreeMap<VarName, String>,
+        topic_vars: BTreeMap<String, VarName>,
+        host: String,
+        topics: Vec<String>,
+        senders: BTreeMap<VarName, mpsc::Sender<Value>>,
+        started_tx: watch::Sender<bool>,
+    ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
         // Create and connect to the MQTT client
@@ -136,21 +150,26 @@ impl MQTTInputProvider {
         while let Some(msg) = stream.next().await {
             // Process the message
             debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-            let value = serde_json::from_str(&msg.payload_str()).unwrap_or_else(|_| {
-                panic!(
-                    "Failed to parse value {:?} sent from MQTT",
-                    msg.payload_str()
-                )
-            });
+            let value = match serde_json::from_str(&msg.payload_str()) {
+                Ok(value) => value,
+                Err(e) => {
+                    return Err(anyhow!(e).context(format!(
+                        "Failed to parse value {:?} sent from MQTT",
+                        msg.payload_str(),
+                    )));
+                }
+            };
             if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
-                sender
-                    .send(value)
-                    .await
-                    .expect("Failed to send value to channel");
+                sender.send(value).await?;
             } else {
-                error!(name: "Channel not found for topic", topic=?msg.topic());
+                return Err(anyhow::anyhow!(
+                    "Channel not found for topic {}",
+                    msg.topic()
+                ));
             }
         }
+
+        Ok(())
     }
 }
 
