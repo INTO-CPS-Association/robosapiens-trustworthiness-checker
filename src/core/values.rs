@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use ecow::{EcoString, EcoVec};
+use redis::{FromRedisValue, RedisResult, ToRedisArgs};
 use serde::{Deserialize, Serialize};
 
 // Anything inside a stream should be clonable in O(1) time in order for the
@@ -19,6 +20,53 @@ pub enum Value {
     Unit,
 }
 impl StreamData for Value {}
+
+impl ToRedisArgs for Value {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        match serde_json5::to_string(self) {
+            Ok(json_str) => json_str.write_redis_args(out),
+            Err(_) => "null".write_redis_args(out),
+        }
+    }
+}
+
+impl FromRedisValue for Value {
+    fn from_redis_value(v: &redis::Value) -> RedisResult<Self> {
+        match v {
+            redis::Value::BulkString(bytes) => {
+                let s = std::str::from_utf8(bytes).map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::TypeError, "Invalid UTF-8"))
+                })?;
+
+                serde_json5::from_str(s).map_err(|_e| {
+                    redis::RedisError::from((
+                        redis::ErrorKind::TypeError,
+                        "Response type not deserializable to Value with serde_json5",
+                        format!(
+                            "(response was {:?})",
+                            redis::Value::BulkString(bytes.clone())
+                        ),
+                    ))
+                })
+            }
+            redis::Value::Array(values) => {
+                let list: Result<Vec<Value>, _> =
+                    values.iter().map(Value::from_redis_value).collect();
+                Ok(Value::List(list?.into()))
+            }
+            redis::Value::Nil => Ok(Value::Unit),
+            redis::Value::Int(i) => Ok(Value::Int(*i)),
+            redis::Value::SimpleString(s) => Ok(Value::Str(s.clone().into())),
+            _ => Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "Response type not deserializable to Value",
+            ))),
+        }
+    }
+}
 
 impl TryFrom<Value> for i64 {
     type Error = ();

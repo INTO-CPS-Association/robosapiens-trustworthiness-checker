@@ -148,7 +148,7 @@ impl MQTTInputProvider {
         while let Some(msg) = stream.next().await {
             // Process the message
             debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-            let value = match serde_json::from_str(&msg.payload_str()) {
+            let value = match serde_json5::from_str(&msg.payload_str()) {
                 Ok(value) => value,
                 Err(e) => {
                     return Err(anyhow!(e).context(format!(

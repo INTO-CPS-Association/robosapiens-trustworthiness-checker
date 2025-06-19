@@ -195,7 +195,7 @@ impl MapMQTTInputProvider {
         while let Some(msg) = stream.next().await {
             // Process the message
             debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-            let jvalue = match serde_json::from_str::<JValue>(&msg.payload_str()) {
+            let jvalue = match serde_json5::from_str::<JValue>(&msg.payload_str()) {
                 Ok(value) => value,
                 Err(e) => {
                     return Err(anyhow!(e).context(format!(
