@@ -1060,18 +1060,27 @@ where
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
+        debug!("AsyncMonitorRunner: Starting monitor execution");
         self.output_handler.provide_streams(self.output_streams);
 
+        debug!("AsyncMonitorRunner: Creating futures for input and output handlers");
         let mut output_fut = self.output_handler.run().fuse();
         let mut input_fut = self.input_provider.run().fuse();
 
+        debug!("AsyncMonitorRunner: Entering select! to wait for input or output completion");
         select! {
-            output_res = output_fut => output_res?,
-            input_res = input_fut => input_res?,
-        }
+            output_res = output_fut => {
+                debug!("AsyncMonitorRunner: Output handler completed with result: {:?}", output_res);
+                output_res?
+            },
+            input_res = input_fut => {
+                debug!("AsyncMonitorRunner: Input provider completed with result: {:?}", input_res);
+                input_res?
+            },
+        };
 
         // Trigger cancellation when output handler completes to stop all var managers
-        debug!("AsyncMonitorRunner: Output handler completed, triggering cancellation");
+        debug!("AsyncMonitorRunner: Monitor execution completed, triggering cancellation");
         self.cancellation_token.cancel();
 
         Ok(())

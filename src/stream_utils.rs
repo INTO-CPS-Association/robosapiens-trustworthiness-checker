@@ -46,6 +46,9 @@ pub fn drop_guard_stream<T: 'static>(
         while let Some(val) = stream.next().await {
             yield val;
         }
-        debug!("drop_guard_stream: Stream ended, drop guard will be released");
+        debug!("drop_guard_stream: Stream ended naturally, drop guard will be released");
+        // Explicit drop to show when it happens
+        drop(_drop_guard);
+        debug!("drop_guard_stream: Drop guard explicitly dropped");
     })
 }

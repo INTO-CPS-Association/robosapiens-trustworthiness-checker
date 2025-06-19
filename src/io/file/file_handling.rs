@@ -1,30 +1,10 @@
-use std::{
-    error::Error,
-    fmt::{Debug, Display},
-};
+use std::fmt::Debug;
+
+use anyhow::{self};
 
 // use tokio::{fs::File, io::AsyncReadExt};
 use tracing::debug;
 use winnow::{Parser, error::ContextError};
-
-#[derive(Debug)]
-struct FileParseError {
-    error: String,
-}
-
-impl FileParseError {
-    fn new(error: String) -> Self {
-        Self { error }
-    }
-}
-
-impl Display for FileParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Error parsing file: {}", self.error)
-    }
-}
-
-impl Error for FileParseError {}
 
 pub async fn parse_file<O: Clone + Debug>(
     // The for<'a> syntax is a higher-ranked trait bound which is
@@ -34,13 +14,13 @@ pub async fn parse_file<O: Clone + Debug>(
     // see: https://doc.rust-lang.org/nomicon/hrtb.html
     mut parser: impl for<'a> Parser<&'a str, O, ContextError>,
     file: &str,
-) -> Result<O, Box<dyn Error>> {
+) -> anyhow::Result<O> {
     let contents = smol::fs::read_to_string(file).await?;
     debug!(name: "Parsing file",
         contents=?parser.parse_next(&mut contents.as_str()).unwrap());
-    parser
-        .parse(contents.as_str())
-        .map_err(|e| Box::new(FileParseError::new(e.to_string())) as Box<dyn Error>)
+    parser.parse(contents.as_str()).map_err(|e| {
+        anyhow::anyhow!(e.to_string()).context(format!("Failed to parse file {}", file))
+    })
 }
 
 #[cfg(test)]

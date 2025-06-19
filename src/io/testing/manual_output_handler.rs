@@ -2,14 +2,16 @@ use std::{mem, rc::Rc};
 
 use async_stream::stream;
 use async_unsync::{bounded, oneshot};
+use futures::FutureExt;
 use futures::future::{LocalBoxFuture, join_all};
 use smol::LocalExecutor;
 use tokio_stream::StreamExt;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{Level, debug, instrument};
 
 use crate::{
     core::{OutputHandler, OutputStream, StreamData, VarName},
-    stream_utils::oneshot_to_stream,
+    stream_utils::{drop_guard_stream, oneshot_to_stream},
 };
 
 /* Some members are defined as Option<T> as either they are provided after
@@ -24,6 +26,7 @@ pub struct ManualOutputHandler<V: StreamData> {
     stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
     output_receiver: Option<oneshot::Receiver<OutputStream<Vec<V>>>>,
     output_sender: Option<oneshot::Sender<OutputStream<Vec<V>>>>,
+    output_cancellation: CancellationToken,
 }
 
 impl<V: StreamData> ManualOutputHandler<V> {
@@ -36,6 +39,16 @@ impl<V: StreamData> ManualOutputHandler<V> {
             .map(|_| oneshot::channel().into_split())
             .unzip();
         let (output_sender, output_receiver) = oneshot::channel().into_split();
+        let cancellation = CancellationToken::new();
+
+        // Add debug task to monitor when cancellation is triggered
+        let cancellation_debug = cancellation.clone();
+        executor
+            .spawn(async move {
+                cancellation_debug.cancelled().await;
+                debug!("ManualOutputHandler: Cancellation token was triggered!");
+            })
+            .detach();
 
         Self {
             var_names,
@@ -44,6 +57,7 @@ impl<V: StreamData> ManualOutputHandler<V> {
             stream_receivers: Some(stream_receivers),
             output_receiver: Some(output_receiver),
             output_sender: Some(output_sender),
+            output_cancellation: cancellation,
         }
     }
 
@@ -52,7 +66,9 @@ impl<V: StreamData> ManualOutputHandler<V> {
             .output_receiver
             .take()
             .expect("Output receiver missing");
-        oneshot_to_stream(receiver)
+        let drop_guard: Rc<DropGuard> = Rc::new(self.output_cancellation.clone().drop_guard());
+        debug!("ManualOutputHandler: Created drop guard for output stream");
+        drop_guard_stream(oneshot_to_stream(receiver), drop_guard)
     }
 }
 
@@ -92,17 +108,29 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             .collect();
 
         let (result_tx, result_rx) = oneshot::channel().into_split();
+        let (cancel_tx, cancel_rx) = oneshot::channel().into_split();
+        let output_cancellation = self.output_cancellation.clone();
+
+        // Spawn a task to monitor cancellation and send completion signal
+        self.executor.spawn({
+            let output_cancellation = output_cancellation.clone();
+            async move {
+                output_cancellation.cancelled().await;
+                debug!("ManualOutputHandler: Cancellation monitor detected cancellation, sending completion signal");
+                let _ = cancel_tx.send(());
+            }
+        }).detach();
 
         mem::take(&mut self.output_sender)
             .expect("Output sender not found")
             .send(Box::pin(stream! {
                 loop {
-                    let nexts = streams.iter_mut().map(|s| s.next());
+                    let num_streams = streams.len();
+                    debug!("ManualOutputHandler: Stream generator loop iteration, {} streams", num_streams);
+                    let nexts = join_all(streams.iter_mut().map(|s| s.next()));
+                    debug!("ManualOutputHandler: Waiting for values from streams");
 
-                    // Stop outputting when any of the streams ends, otherwise collect
-                    // all of the values
-                    if let Some(vals) = join_all(nexts)
-                        .await
+                    if let Some(vals) = nexts.await
                         .into_iter()
                         .collect::<Option<Vec<V>>>()
                     {
@@ -115,20 +143,36 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
                         // One of the streams has ended, so we should stop
                         debug!(
                             "Stopping ManualOutputHandler with len(nexts) = {}",
-                            streams.len()
+                            num_streams
                         );
                         break;
                     }
                 }
-                result_tx.send(Ok(())).expect("Result channel dropped");
+                debug!("ManualOutputHandler: Stream generator completed naturally");
+                let _ = result_tx.send(Ok(()));
             }))
             .expect("Output sender channel dropped");
 
         Box::pin(async move {
-            match result_rx.await {
-                Ok(res) => res,
-                Err(_) => {
-                    debug!("Output dropped; stopping and ignoring");
+            debug!("ManualOutputHandler: Waiting for result or drop signal");
+            futures::select! {
+                result = result_rx.fuse() => {
+                    match result {
+                        Ok(res) => {
+                            debug!(
+                                "ManualOutputHandler: Received completion signal from stream generator: {:?}",
+                                res
+                            );
+                            res
+                        }
+                        Err(_) => {
+                            debug!("ManualOutputHandler: Output stream was dropped, completing handler");
+                            Ok(())
+                        }
+                    }
+                }
+                _ = cancel_rx.fuse() => {
+                    debug!("ManualOutputHandler: Received cancellation signal, completing handler");
                     Ok(())
                 }
             }
@@ -232,10 +276,12 @@ mod tests {
     use super::*;
     use crate::{OutputStream, Value, VarName};
     use futures::StreamExt;
+    use futures::select;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol_macros::test as smol_test;
     use test_log::test;
+    use tracing::info;
 
     // Implement Eq for Value - only available for testing since this is not
     // true for floats
@@ -353,5 +399,46 @@ mod tests {
 
         assert_eq!(results, expected_output);
         task.await.expect("Failed to run handler");
+    }
+
+    #[test(apply(smol_test))]
+    async fn test_manual_output_handler_hang(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        info!("Creating ManualOutputHandler...");
+        let mut handler = ManualOutputHandler::new(executor.clone(), vec!["test".into()]);
+
+        // Create a test stream that never ends
+        let test_stream: OutputStream<Value> = Box::pin(stream::iter((0..).map(|x| Value::Int(x))));
+
+        info!("Providing infinite stream to handler...");
+        handler.provide_streams(vec![test_stream]);
+
+        info!("Getting output stream...");
+        let output_stream = handler.get_output();
+
+        info!("Starting handler task...");
+        let handler_task = executor.spawn(handler.run());
+
+        info!("Taking only 3 items from output stream...");
+        let outputs = output_stream.take(3).collect::<Vec<_>>().await;
+        info!("Collected outputs: {:?}", outputs);
+
+        info!("Output stream dropped, waiting for handler to complete...");
+
+        // Add a short timeout to see if the handler completes
+        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
+
+        select! {
+            result = handler_task.fuse() => {
+                info!("Handler completed successfully: {:?}", result);
+            }
+            _ = FutureExt::fuse(timeout_future) => {
+                info!("Handler did not complete within timeout");
+                return Err(anyhow::anyhow!("Handler hung"));
+            }
+        }
+
+        Ok(())
     }
 }

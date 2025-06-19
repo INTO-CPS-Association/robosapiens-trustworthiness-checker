@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 // #![deny(warnings)]
+use anyhow::{self, Context};
 use clap::Parser;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
@@ -120,7 +121,7 @@ fn create_dist_mode(cli: Cli) -> LocalBoxFuture<'static, DistributionMode> {
 }
 
 #[apply(smol_main)]
-async fn main(executor: Rc<LocalExecutor<'static>>) {
+async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer())
         // Uncomment the following line to enable full span events which logs
@@ -154,8 +155,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     let model = match parser {
         ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
             .await
-            .expect("Model file could not be parsed"),
-        ParserMode::LALR => unimplemented!(),
+            .context("Model file could not be parsed")?,
+        ParserMode::LALR => Err(anyhow::anyhow!("LALR parser not currently implemented"))?,
     };
     info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
 
@@ -194,5 +195,5 @@ async fn main(executor: Rc<LocalExecutor<'static>>) {
     // Create the runtime
     let monitor = builder.async_build().await;
 
-    monitor.run().await.expect("Failed to run monitor");
+    monitor.run().await
 }

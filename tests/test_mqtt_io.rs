@@ -1,16 +1,11 @@
-#![allow(warnings)]
-use std::thread::spawn;
-use std::time::Duration;
-use std::{future::Future, vec};
+use std::vec;
 
-use futures::{StreamExt, stream};
+use futures::{FutureExt, StreamExt};
 use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use smol_macros::test as smol_test;
-use std::pin::Pin;
-use std::{mem, task};
-use tokio_util::sync::CancellationToken;
+use std::mem;
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,
@@ -20,16 +15,9 @@ use trustworthiness_checker::{OutputStream, Value};
 use winnow::Parser;
 
 use async_compat::Compat as TokioCompat;
-use async_compat::CompatExt;
-use async_once_cell::Lazy;
 use testcontainers_modules::mosquitto::{self, Mosquitto};
-use testcontainers_modules::testcontainers::core::WaitFor;
-use testcontainers_modules::testcontainers::core::{IntoContainerPort, Mount};
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
-use testcontainers_modules::testcontainers::{
-    ContainerAsync as ContainerAsyncTokio, GenericImage, Image, ImageExt,
-};
-use tokio::sync::oneshot;
+use testcontainers_modules::testcontainers::{ContainerAsync as ContainerAsyncTokio, Image};
 
 struct ContainerAsync<T: Image> {
     inner: Option<ContainerAsyncTokio<T>>,
@@ -69,7 +57,7 @@ async fn start_mqtt() -> ContainerAsync<Mosquitto> {
 #[instrument(level = tracing::Level::INFO)]
 async fn get_outputs(topic: String, client_name: String, port: u16) -> OutputStream<Value> {
     // Create a new client
-    let (mqtt_client, mut stream) =
+    let (mqtt_client, stream) =
         provide_mqtt_client_with_subscription(format!("tcp://localhost:{}", port))
             .await
             .expect("Failed to create MQTT client");
@@ -116,20 +104,13 @@ async fn dummy_publisher(client_name: String, topic: String, values: Vec<Value>,
 #[cfg(test)]
 mod tests {
     use approx::assert_abs_diff_eq;
-    use futures::executor;
-    use std::{collections::BTreeMap, pin::Pin, rc::Rc};
+    use std::{collections::BTreeMap, rc::Rc};
     use test_log::test;
 
-    use testcontainers_modules::testcontainers::{
-        ContainerAsync,
-        runners::{self, AsyncRunner},
-    };
-    use tokio;
-    use tokio::time::sleep;
     use tracing::info_span;
     use trustworthiness_checker::{
-        Monitor, Value, VarName,
-        core::Runnable,
+        Value, VarName,
+        core::{OutputHandler, Runnable},
         dep_manage::interface::{DependencyKind, create_dependency_manager},
         io::{
             mqtt::{MQTTInputProvider, MQTTOutputHandler},
@@ -141,12 +122,8 @@ mod tests {
         semantics::UntimedLolaSemantics,
     };
     use trustworthiness_checker::{
-        distributed::locality_receiver::LocalityReceiver,
-        io::mqtt::MQTTLocalityReceiver,
-        lola_fixtures::{
-            input_streams1, spec_simple_add_decomposed_1, spec_simple_add_decomposed_2,
-        },
-        semantics::distributed::localisation::LocalitySpec,
+        distributed::locality_receiver::LocalityReceiver, io::mqtt::MQTTLocalityReceiver,
+        lola_fixtures::input_streams1, semantics::distributed::localisation::LocalitySpec,
     };
 
     use super::*;
@@ -165,7 +142,7 @@ mod tests {
             .await
             .expect("Failed to get host port for MQTT server");
 
-        let mut input_streams = input_streams1();
+        let input_streams = input_streams1();
         let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
         let mqtt_topics = spec
             .output_vars
@@ -181,7 +158,7 @@ mod tests {
         .await;
         // sleep(Duration::from_secs(2)).await;
 
-        let mut output_handler = Box::new(
+        let output_handler = Box::new(
             MQTTOutputHandler::new(
                 executor.clone(),
                 vec!["z".into()],
@@ -215,7 +192,7 @@ mod tests {
             .await
             .expect("Failed to get host port for MQTT server");
 
-        let mut input_streams = input_streams_float();
+        let input_streams = input_streams_float();
         let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
         let mqtt_topics = spec
             .output_vars
@@ -231,7 +208,7 @@ mod tests {
         .await;
         // sleep(Duration::from_secs(2)).await;
 
-        let mut output_handler = Box::new(
+        let output_handler = Box::new(
             MQTTOutputHandler::new(
                 executor.clone(),
                 vec!["z".into()],
@@ -260,9 +237,48 @@ mod tests {
         }
     }
 
+    #[test(apply(smol_test))]
+    async fn test_manual_output_handler_completion(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        use futures::stream;
+
+        info!("Creating ManualOutputHandler with infinite input stream");
+        let mut handler = ManualOutputHandler::new(executor.clone(), vec!["test".into()]);
+
+        // Create an infinite stream
+        let infinite_stream: OutputStream<Value> =
+            Box::pin(stream::iter((0..).map(|x| Value::Int(x))));
+        handler.provide_streams(vec![infinite_stream]);
+
+        let output_stream = handler.get_output();
+        let handler_task = executor.spawn(handler.run());
+
+        info!("Taking only 2 items from infinite stream");
+        let outputs = output_stream.take(2).collect::<Vec<_>>().await;
+        info!("Collected outputs: {:?}", outputs);
+
+        info!("Output stream dropped, waiting for handler to complete");
+        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
+
+        futures::select! {
+            result = handler_task.fuse() => {
+                info!("Handler completed: {:?}", result);
+                result?;
+            }
+            _ = futures::FutureExt::fuse(timeout_future) => {
+                return Err(anyhow::anyhow!("ManualOutputHandler did not complete after output stream was dropped"));
+            }
+        }
+
+        Ok(())
+    }
+
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[test(apply(smol_test))]
-    async fn test_add_monitor_mqtt_input(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_add_monitor_mqtt_input(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
         let model = lola_specification
             .parse(spec_simple_add_monitor())
             .expect("Model could not be parsed");
@@ -296,12 +312,12 @@ mod tests {
         input_provider
             .started
             .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-            .await;
+            .await?;
 
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
-        let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+        let runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
             executor.clone(),
             model.clone(),
             Box::new(input_provider),
@@ -309,7 +325,7 @@ mod tests {
             create_dependency_manager(DependencyKind::Empty, model),
         );
 
-        executor.spawn(runner.run()).detach();
+        let res = executor.spawn(runner.run());
 
         // Spawn dummy MQTT publisher nodes
         executor
@@ -338,11 +354,33 @@ mod tests {
         info!("Outputs: {:?}", outputs);
         let expected_outputs = zs.into_iter().map(|val| vec![val]).collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
+
+        info!("Output collection complete, output stream should now be dropped");
+
+        // Add a small delay to allow the drop to propagate
+        smol::Timer::after(std::time::Duration::from_millis(100)).await;
+
+        info!("Waiting for monitor to complete after output stream drop...");
+        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(5));
+
+        futures::select! {
+            result = res.fuse() => {
+                info!("Monitor completed: {:?}", result);
+                result?;
+            }
+            _ = futures::FutureExt::fuse(timeout_future) => {
+                return Err(anyhow::anyhow!("Monitor did not complete within timeout after output stream was dropped"));
+            }
+        }
+
+        Ok(())
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[test(apply(smol_test))]
-    async fn test_add_monitor_mqtt_input_float(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_add_monitor_mqtt_input_float(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
         let model = lola_specification
             .parse(spec_simple_add_monitor())
             .expect("Model could not be parsed");
@@ -374,12 +412,12 @@ mod tests {
         input_provider
             .started
             .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-            .await;
+            .await?;
 
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
-        let mut runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+        let runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
             executor.clone(),
             model.clone(),
             Box::new(input_provider),
@@ -387,7 +425,7 @@ mod tests {
             create_dependency_manager(DependencyKind::Empty, model),
         );
 
-        executor.spawn(runner.run()).detach();
+        let res = executor.spawn(runner.run());
 
         // Spawn dummy MQTT publisher nodes
         executor
@@ -424,11 +462,33 @@ mod tests {
             Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
             _ => panic!("Expected float"),
         }
+
+        info!("Output collection complete, output stream should now be dropped");
+
+        // Add a small delay to allow the drop to propagate
+        smol::Timer::after(std::time::Duration::from_millis(100)).await;
+
+        info!("Waiting for monitor to complete after output stream drop...");
+        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(5));
+
+        futures::select! {
+            result = res.fuse() => {
+                info!("Monitor completed: {:?}", result);
+                result?;
+            }
+            _ = futures::FutureExt::fuse(timeout_future) => {
+                return Err(anyhow::anyhow!("Monitor did not complete within timeout after output stream was dropped"));
+            }
+        }
+
+        Ok(())
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[test(apply(smol_test))]
-    async fn test_mqtt_locality_receiver(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_mqtt_locality_receiver(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
         println!("Starting test");
         let mqtt_server = start_mqtt().await;
         println!("Got MQTT server");
@@ -441,7 +501,7 @@ mod tests {
 
         println!("Created receiver");
 
-        let handle = executor.spawn(async move {
+        let handle: smol::Task<anyhow::Result<()>> = executor.spawn(async move {
             // Wait for the receiver to be ready
             smol::Timer::after(std::time::Duration::from_millis(300)).await;
             let mqtt_client = provide_mqtt_client(mqtt_uri)
@@ -450,8 +510,10 @@ mod tests {
             let topic = "start_monitors_at_test_node".to_string();
             let message = serde_json::to_string(&vec!["x", "y"]).unwrap();
             let message = mqtt::Message::new(topic, message, 1);
-            mqtt_client.publish(message).await.unwrap();
+            mqtt_client.publish(message).await?;
             println!("Published message");
+
+            Ok(())
         });
 
         println!("Awaiting locality spec");
@@ -462,5 +524,9 @@ mod tests {
         let local_vars = locality_spec.local_vars();
 
         assert_eq!(local_vars, vec!["x".into(), "y".into()]);
+
+        handle.await?;
+
+        Ok(())
     }
 }

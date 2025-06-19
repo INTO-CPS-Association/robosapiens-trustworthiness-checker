@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, future::pending, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc};
 
 use async_cell::unsync::AsyncCell;
 use futures::{StreamExt, future::LocalBoxFuture};
@@ -127,9 +127,7 @@ impl MQTTInputProvider {
         let mqtt_input_span = info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
         // Create and connect to the MQTT client
-        let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone())
-            .await
-            .unwrap();
+        let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone()).await?;
         info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
         let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
         loop {
