@@ -483,13 +483,9 @@ async fn test_redis_input_provider_multiple_channels(
     Ok(())
 }
 
-/// Tests pub/sub message serialization format
-///
-/// This test demonstrates the exact wire format used in Redis pub/sub by
-/// publishing messages and examining what gets transmitted.
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[test_log::test(apply(smol_test))]
-async fn test_pubsub_wire_format(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
+async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let redis = start_redis().await;
     let redis_port = redis
         .get_host_port_ipv4(6379)
@@ -525,9 +521,9 @@ async fn test_pubsub_wire_format(executor: Rc<LocalExecutor<'static>>) -> anyhow
         // Verify round-trip works
         if let Some(mut stream) = receiver_outputs.pop() {
             // Use a timeout to avoid hanging
-            let timeout = smol::Timer::after(std::time::Duration::from_millis(500));
+            let timeout = smol::Timer::after(Duration::from_millis(500));
             futures::select! {
-                received = futures::StreamExt::next(&mut stream).fuse() => {
+                received = stream.next().fuse() => {
                     match received {
                         Some(received_value) => {
                             info!("{} - Round-trip successful: {:?} -> {:?}",
@@ -789,7 +785,7 @@ async fn test_json_interoperability(executor: Rc<LocalExecutor<'static>>) -> any
 
         // Verify it deserializes to the expected Value
         if let Some(mut stream) = receiver_outputs.pop() {
-            let received = futures::StreamExt::next(&mut stream).await;
+            let received = stream.next().await;
             match received {
                 Some(received_value) => {
                     info!("Enum format JSON deserialized to: {:?}", received_value);

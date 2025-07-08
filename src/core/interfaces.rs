@@ -30,6 +30,8 @@ pub trait InputProvider {
 
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
 
+    /// Input providers should run forever, unless there is an error, in which case they halt with
+    /// an error result
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
 }
 
