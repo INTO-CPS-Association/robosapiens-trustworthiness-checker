@@ -5,7 +5,7 @@ use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_unsync::bounded::{self, Receiver, Sender};
 use futures::{StreamExt, future::LocalBoxFuture};
-use smol::LocalExecutor;
+use smol::{LocalExecutor, future::yield_now};
 
 use crate::{InputProvider, OutputStream, Value, VarName};
 
@@ -19,6 +19,7 @@ pub struct RedisInputProvider {
     pub host: String,
     pub var_data: BTreeMap<VarName, VarData>,
     pub result: Rc<AsyncCell<anyhow::Result<()>>>,
+    pub started: Rc<AsyncCell<bool>>,
 }
 
 impl RedisInputProvider {
@@ -42,6 +43,8 @@ impl RedisInputProvider {
             .map(|(k, v)| (v.clone(), k.clone()))
             .collect::<BTreeMap<_, _>>();
 
+        let started = AsyncCell::shared();
+
         let client = redis::Client::open(host.clone())?;
 
         let result = AsyncCell::shared();
@@ -52,6 +55,7 @@ impl RedisInputProvider {
             var_topics.clone(),
             topic_vars,
             senders,
+            started.clone(),
         ))
         .detach();
 
@@ -79,6 +83,7 @@ impl RedisInputProvider {
             host,
             result,
             var_data,
+            started,
         })
     }
 
@@ -88,11 +93,14 @@ impl RedisInputProvider {
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
         senders: BTreeMap<VarName, Sender<Value>>,
+        started: Rc<AsyncCell<bool>>,
     ) {
         let result = result.guard_shared(Err(anyhow!("RedisInputProvider crashed")));
         result.set(
-            RedisInputProvider::input_monitor_with_result(client, var_topics, topic_vars, senders)
-                .await,
+            RedisInputProvider::input_monitor_with_result(
+                client, var_topics, topic_vars, senders, started,
+            )
+            .await,
         );
     }
 
@@ -101,10 +109,12 @@ impl RedisInputProvider {
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
         senders: BTreeMap<VarName, Sender<Value>>,
+        started: Rc<AsyncCell<bool>>,
     ) -> anyhow::Result<()> {
         let mut pubsub = client.get_async_pubsub().await?;
         let channel_names = var_topics.values().collect::<Vec<_>>();
         pubsub.subscribe(channel_names).await?;
+        started.set(true);
         let mut stream = pubsub.on_message();
 
         while let Some(msg) = stream.next().await {
@@ -134,5 +144,15 @@ impl InputProvider for RedisInputProvider {
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(self.result.take_shared())
+    }
+
+    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        let started = self.started.clone();
+        Box::pin(async move {
+            while !started.get().await {
+                yield_now().await;
+            }
+            Ok(())
+        })
     }
 }

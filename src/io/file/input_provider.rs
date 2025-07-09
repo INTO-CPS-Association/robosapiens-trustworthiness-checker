@@ -35,6 +35,10 @@ impl InputProvider for UntimedInputFileData {
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(pending())
     }
+
+    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 #[cfg(test)]

@@ -234,4 +234,12 @@ impl InputProvider for MapMQTTInputProvider {
 
         Box::pin(async move { res.take().await })
     }
+
+    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        let mut started = self.started.clone();
+        Box::pin(async move {
+            started.wait_for(|x| *x).await?;
+            Ok(())
+        })
+    }
 }

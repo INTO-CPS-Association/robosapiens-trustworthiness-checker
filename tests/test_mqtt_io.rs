@@ -11,7 +11,7 @@ use trustworthiness_checker::io::mqtt::client::{
     provide_mqtt_client, provide_mqtt_client_with_subscription,
 };
 use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
-use trustworthiness_checker::{OutputStream, Value};
+use trustworthiness_checker::{InputProvider, OutputStream, Value};
 use winnow::Parser;
 
 use async_compat::Compat as TokioCompat;
@@ -107,7 +107,6 @@ mod tests {
     use std::{collections::BTreeMap, rc::Rc};
     use test_log::test;
 
-    use tracing::info_span;
     use trustworthiness_checker::{
         Value, VarName,
         core::{OutputHandler, Runnable},
@@ -303,16 +302,13 @@ mod tests {
         .collect::<BTreeMap<VarName, _>>();
 
         // Create the ROS input provider
-        let mut input_provider = MQTTInputProvider::new(
+        let input_provider = MQTTInputProvider::new(
             executor.clone(),
             format!("tcp://localhost:{}", mqtt_port).as_str(),
             var_topics,
         )
         .unwrap();
-        input_provider
-            .started
-            .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-            .await?;
+        input_provider.ready().await?;
 
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
@@ -357,9 +353,6 @@ mod tests {
 
         info!("Output collection complete, output stream should now be dropped");
 
-        // Add a small delay to allow the drop to propagate
-        smol::Timer::after(std::time::Duration::from_millis(100)).await;
-
         info!("Waiting for monitor to complete after output stream drop...");
         let timeout_future = smol::Timer::after(std::time::Duration::from_secs(5));
 
@@ -403,16 +396,13 @@ mod tests {
         .collect::<BTreeMap<VarName, _>>();
 
         // Create the ROS input provider
-        let mut input_provider = MQTTInputProvider::new(
+        let input_provider = MQTTInputProvider::new(
             executor.clone(),
             format!("tcp://localhost:{}", mqtt_port).as_str(),
             var_topics,
         )
         .unwrap();
-        input_provider
-            .started
-            .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-            .await?;
+        input_provider.ready().await?;
 
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
@@ -465,9 +455,6 @@ mod tests {
 
         info!("Output collection complete, output stream should now be dropped");
 
-        // Add a small delay to allow the drop to propagate
-        smol::Timer::after(std::time::Duration::from_millis(100)).await;
-
         info!("Waiting for monitor to complete after output stream drop...");
         let timeout_future = smol::Timer::after(std::time::Duration::from_secs(5));
 
@@ -501,9 +488,10 @@ mod tests {
 
         println!("Created receiver");
 
-        let handle: smol::Task<anyhow::Result<()>> = executor.spawn(async move {
-            // Wait for the receiver to be ready
-            smol::Timer::after(std::time::Duration::from_millis(300)).await;
+        let sender_task: smol::Task<anyhow::Result<()>> = executor.spawn(async move {
+            // Yield to allow receiver to establish subscription
+            smol::future::yield_now().await;
+
             let mqtt_client = provide_mqtt_client(mqtt_uri)
                 .await
                 .expect("Failed to create MQTT client");
@@ -525,7 +513,7 @@ mod tests {
 
         assert_eq!(local_vars, vec!["x".into(), "y".into()]);
 
-        handle.await?;
+        sender_task.await?;
 
         Ok(())
     }

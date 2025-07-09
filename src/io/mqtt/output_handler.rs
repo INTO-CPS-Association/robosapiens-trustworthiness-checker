@@ -29,10 +29,9 @@ pub struct VarData {
 pub type OutputChannelMap = BTreeMap<VarName, String>;
 
 pub struct MQTTOutputHandler {
-    var_names: Vec<VarName>,
+    pub var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
-    // node: Arc<Mutex<r2r::Node>>,
-    hostname: String,
+    pub hostname: String,
 }
 
 #[instrument(level = Level::INFO, skip(stream, client))]

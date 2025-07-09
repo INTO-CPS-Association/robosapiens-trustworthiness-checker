@@ -30,6 +30,10 @@ pub trait InputProvider {
 
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
 
+    /// Wait until the InputProvider is ready to receive messages (may never terminate in case
+    /// of errors)
+    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>>;
+
     /// Input providers should run forever, unless there is an error, in which case they halt with
     /// an error result
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
@@ -47,6 +51,10 @@ impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         Box::pin(futures::future::pending())
     }
+
+    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
@@ -61,6 +69,10 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         Box::pin(futures::future::pending())
     }
+
+    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
@@ -74,6 +86,10 @@ impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         Box::pin(futures::future::pending())
     }
+
+    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
@@ -86,6 +102,10 @@ impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(futures::future::pending())
+    }
+
+    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
     }
 }
 

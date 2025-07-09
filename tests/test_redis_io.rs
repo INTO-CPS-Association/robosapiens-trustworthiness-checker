@@ -18,6 +18,7 @@ use approx::assert_abs_diff_eq;
 use async_compat::Compat as TokioCompat;
 use async_stream::stream;
 use async_unsync::bounded::{self, Receiver, Sender};
+use async_unsync::oneshot;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::select;
@@ -32,10 +33,10 @@ use testcontainers_modules::testcontainers::{ContainerAsync as ContainerAsyncTok
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::{
     InputProvider, OutputStream, Value, VarName,
-    core::Runnable,
+    core::{OutputHandler, Runnable},
     dep_manage::interface::{DependencyKind, create_dependency_manager},
     io::{
-        redis::input_provider::RedisInputProvider,
+        redis::{input_provider::RedisInputProvider, output_handler::RedisOutputHandler},
         testing::manual_output_handler::ManualOutputHandler,
     },
     lola_fixtures::{spec_simple_add_monitor, spec_simple_add_monitor_typed_float},
@@ -82,9 +83,13 @@ async fn dummy_redis_sender(
     host: String,
     channel: String,
     messages: Vec<Value>,
+    ready_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     let client = redis::Client::open(host)?;
     let mut con = client.get_multiplexed_async_connection().await?;
+
+    // Wait for receiver to be ready
+    let _ = ready_rx.await;
 
     for message in messages.into_iter() {
         debug!(name: "Publishing message", ?message, ?channel);
@@ -100,10 +105,14 @@ async fn dummy_redis_receiver(
     executor: Rc<LocalExecutor<'static>>,
     host: String,
     channels: Vec<String>,
+    ready_tx: oneshot::Sender<()>,
 ) -> anyhow::Result<Vec<OutputStream<Value>>> {
     let client = redis::Client::open(host)?;
     let mut con = client.get_async_pubsub().await?;
     con.subscribe(&channels).await?;
+
+    // Signal that we're ready to receive messages
+    let _ = ready_tx.send(());
 
     let (senders, receivers): (Vec<Sender<Value>>, Vec<Receiver<Value>>) = channels
         .iter()
@@ -155,16 +164,35 @@ async fn test_dummy_redis_sender_receiver(
     let channel = "test_channel";
     let messages = vec![Value::Str("test_message".into())];
 
+    // Create oneshot channel for coordination
+    let ready_channel = oneshot::channel();
+    let (ready_tx, ready_rx) = ready_channel.into_split();
+
     // Start receiver before sending to ensure we don't miss the message
     let mut outputs = dummy_redis_receiver(
         executor.clone(),
         host_uri.clone(),
         vec![channel.to_string()],
+        ready_tx,
     )
     .await?;
 
+    // Wait for receiver to be ready
+    ready_rx.await.unwrap();
+
+    // Create oneshot channel for sender coordination
+    let sender_ready_channel = oneshot::channel();
+    let (sender_ready_tx, sender_ready_rx) = sender_ready_channel.into_split();
+    let _ = sender_ready_tx.send(());
+
     // Re-send the message after receiver is set up
-    dummy_redis_sender(host_uri, channel.to_string(), messages.clone()).await?;
+    dummy_redis_sender(
+        host_uri,
+        channel.to_string(),
+        messages.clone(),
+        sender_ready_rx,
+    )
+    .await?;
 
     // Get the first output stream
     let mut output_stream = outputs.pop().unwrap();
@@ -212,8 +240,13 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
     let input_provider = RedisInputProvider::new(executor.clone(), &host_uri, var_topics)
         .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
 
-    // Small delay to ensure Redis connection is established
-    smol::Timer::after(Duration::from_millis(100)).await;
+    input_provider.ready().await?;
+
+    // Create oneshot channels for coordination
+    let ready_channel_x = oneshot::channel();
+    let (ready_tx_x, ready_rx_x) = ready_channel_x.into_split();
+    let ready_channel_y = oneshot::channel();
+    let (ready_tx_y, ready_rx_y) = ready_channel_y.into_split();
 
     // Run the monitor
     let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
@@ -234,6 +267,7 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
             host_uri.clone(),
             "redis_input_x".to_string(),
             xs,
+            ready_rx_x,
         ))
         .detach();
 
@@ -242,8 +276,13 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
             host_uri.clone(),
             "redis_input_y".to_string(),
             ys,
+            ready_rx_y,
         ))
         .detach();
+
+    // Signal that senders are ready to start
+    let _ = ready_tx_x.send(());
+    let _ = ready_tx_y.send(());
 
     // Test we have the expected outputs
     info!("Waiting for {:?} outputs", zs.len());
@@ -254,8 +293,8 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
 
     info!("Output collection complete, output stream should now be dropped");
 
-    // Add a small delay to allow the drop to propagate
-    smol::Timer::after(Duration::from_millis(100)).await;
+    // Allow a brief moment for the drop to propagate
+    smol::Timer::after(Duration::from_millis(10)).await;
 
     info!("Waiting for monitor to complete after output stream drop...");
     let timeout_future = smol::Timer::after(Duration::from_secs(5));
@@ -309,8 +348,13 @@ async fn test_add_monitor_redis_input_float(
     let input_provider = RedisInputProvider::new(executor.clone(), &host_uri, var_topics)
         .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
 
-    // Small delay to ensure Redis connection is established
-    smol::Timer::after(Duration::from_millis(100)).await;
+    input_provider.ready().await?;
+
+    // Create oneshot channels for coordination
+    let ready_channel_x = oneshot::channel();
+    let (ready_tx_x, ready_rx_x) = ready_channel_x.into_split();
+    let ready_channel_y = oneshot::channel();
+    let (ready_tx_y, ready_rx_y) = ready_channel_y.into_split();
 
     // Run the monitor
     let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
@@ -331,6 +375,7 @@ async fn test_add_monitor_redis_input_float(
             host_uri.clone(),
             "redis_input_x_float".to_string(),
             xs,
+            ready_rx_x,
         ))
         .detach();
 
@@ -339,8 +384,13 @@ async fn test_add_monitor_redis_input_float(
             host_uri.clone(),
             "redis_input_y_float".to_string(),
             ys,
+            ready_rx_y,
         ))
         .detach();
+
+    // Signal that senders are ready to start
+    let _ = ready_tx_x.send(());
+    let _ = ready_tx_y.send(());
 
     // Test we have the expected outputs
     info!("Waiting for {:?} outputs", expected_zs.len());
@@ -359,9 +409,6 @@ async fn test_add_monitor_redis_input_float(
     }
 
     info!("Output collection complete, output stream should now be dropped");
-
-    // Add a small delay to allow the drop to propagate
-    smol::Timer::after(Duration::from_millis(100)).await;
 
     info!("Waiting for monitor to complete after output stream drop...");
     let timeout_future = smol::Timer::after(Duration::from_secs(5));
@@ -408,8 +455,13 @@ async fn test_redis_input_provider_multiple_channels(
     let mut input_provider = RedisInputProvider::new(executor.clone(), &host_uri, var_topics)
         .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
 
-    // Small delay to ensure Redis connection is established
-    smol::Timer::after(std::time::Duration::from_millis(100)).await;
+    // Create oneshot channels for coordination
+    let ready_channel_1 = oneshot::channel();
+    let (ready_tx_1, ready_rx_1) = ready_channel_1.into_split();
+    let ready_channel_2 = oneshot::channel();
+    let (ready_tx_2, ready_rx_2) = ready_channel_2.into_split();
+    let ready_channel_3 = oneshot::channel();
+    let (ready_tx_3, ready_rx_3) = ready_channel_3.into_split();
 
     // Get input streams for all variables
     let mut stream1 = input_provider
@@ -425,12 +477,15 @@ async fn test_redis_input_provider_multiple_channels(
     // Start the input provider
     let provider_task = executor.spawn(input_provider.run());
 
+    input_provider.ready().await?;
+
     // Send test messages to different channels
     executor
         .spawn(dummy_redis_sender(
             host_uri.clone(),
             "channel1".to_string(),
             vec![Value::Str("message1".into())],
+            ready_rx_1,
         ))
         .detach();
 
@@ -439,6 +494,7 @@ async fn test_redis_input_provider_multiple_channels(
             host_uri.clone(),
             "channel2".to_string(),
             vec![Value::Int(42)],
+            ready_rx_2,
         ))
         .detach();
 
@@ -447,8 +503,14 @@ async fn test_redis_input_provider_multiple_channels(
             host_uri.clone(),
             "channel3".to_string(),
             vec![Value::Float(3.14)],
+            ready_rx_3,
         ))
         .detach();
+
+    // Signal that senders are ready to start
+    let _ = ready_tx_1.send(());
+    let _ = ready_tx_2.send(());
+    let _ = ready_tx_3.send(());
 
     // Collect messages from all streams
     let msg1 = executor.run(async { stream1.next().await }).await;
@@ -512,11 +574,34 @@ async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         info!("Testing {}: {:?}", description, value);
 
         // Create receiver using our existing helper
-        let mut receiver_outputs =
-            dummy_redis_receiver(executor.clone(), host_uri.clone(), vec![channel.clone()]).await?;
+        // Create oneshot channel for coordination
+        let ready_channel = oneshot::channel();
+        let (ready_tx, ready_rx) = ready_channel.into_split();
+
+        let mut receiver_outputs = dummy_redis_receiver(
+            executor.clone(),
+            host_uri.clone(),
+            vec![channel.clone()],
+            ready_tx,
+        )
+        .await?;
+
+        // Wait for receiver to be ready
+        ready_rx.await.unwrap();
+
+        // Create oneshot channel for sender coordination
+        let sender_ready_channel = oneshot::channel();
+        let (sender_ready_tx, sender_ready_rx) = sender_ready_channel.into_split();
+        let _ = sender_ready_tx.send(());
 
         // Send the value using our existing helper
-        dummy_redis_sender(host_uri.clone(), channel, vec![value.clone()]).await?;
+        dummy_redis_sender(
+            host_uri.clone(),
+            channel,
+            vec![value.clone()],
+            sender_ready_rx,
+        )
+        .await?;
 
         // Verify round-trip works
         if let Some(mut stream) = receiver_outputs.pop() {
@@ -604,11 +689,34 @@ async fn test_serialization_edge_cases(executor: Rc<LocalExecutor<'static>>) -> 
         info!("Testing edge case {}: {:?}", i, test_value);
 
         // Create receiver first
-        let mut receiver_outputs =
-            dummy_redis_receiver(executor.clone(), host_uri.clone(), vec![channel.clone()]).await?;
+        // Create oneshot channel for coordination
+        let ready_channel = oneshot::channel();
+        let (ready_tx, ready_rx) = ready_channel.into_split();
+
+        let mut receiver_outputs = dummy_redis_receiver(
+            executor.clone(),
+            host_uri.clone(),
+            vec![channel.clone()],
+            ready_tx,
+        )
+        .await?;
+
+        // Wait for receiver to be ready
+        ready_rx.await.unwrap();
+
+        // Create oneshot channel for sender coordination
+        let sender_ready_channel = oneshot::channel();
+        let (sender_ready_tx, sender_ready_rx) = sender_ready_channel.into_split();
+        let _ = sender_ready_tx.send(());
 
         // Send the value
-        dummy_redis_sender(host_uri.clone(), channel, vec![test_value.clone()]).await?;
+        dummy_redis_sender(
+            host_uri.clone(),
+            channel,
+            vec![test_value.clone()],
+            sender_ready_rx,
+        )
+        .await?;
 
         // Verify round-trip serialization
         if let Some(mut stream) = receiver_outputs.pop() {
@@ -775,8 +883,20 @@ async fn test_json_interoperability(executor: Rc<LocalExecutor<'static>>) -> any
         info!("Expected Value: {:?}", expected_value);
 
         // Create receiver first
-        let mut receiver_outputs =
-            dummy_redis_receiver(executor.clone(), host_uri.clone(), vec![channel.clone()]).await?;
+        // Create oneshot channel for coordination
+        let ready_channel = oneshot::channel();
+        let (ready_tx, ready_rx) = ready_channel.into_split();
+
+        let mut receiver_outputs = dummy_redis_receiver(
+            executor.clone(),
+            host_uri.clone(),
+            vec![channel.clone()],
+            ready_tx,
+        )
+        .await?;
+
+        // Wait for receiver to be ready
+        ready_rx.await.unwrap();
 
         // Manually publish the enum format JSON string
         let client = redis::Client::open(host_uri.as_str())?;
@@ -804,6 +924,559 @@ async fn test_json_interoperability(executor: Rc<LocalExecutor<'static>>) -> any
             }
         }
     }
+
+    Ok(())
+}
+
+// Helper function to create a simple output stream for testing
+fn create_test_output_stream(values: Vec<Value>) -> OutputStream<Value> {
+    let stream = stream! {
+        for value in values {
+            yield value;
+        }
+    };
+    Box::pin(stream)
+}
+
+// Helper function to consume messages from a Redis channel
+async fn consume_redis_messages(
+    host: String,
+    channel: String,
+    expected_count: usize,
+    timeout_ms: u64,
+    ready_tx: oneshot::Sender<()>,
+) -> anyhow::Result<Vec<Value>> {
+    let client = redis::Client::open(host)?;
+    let mut pubsub = client.get_async_pubsub().await?;
+    pubsub.subscribe(&channel).await?;
+
+    // Signal that we're ready to receive messages
+    let _ = ready_tx.send(());
+
+    let mut messages = Vec::new();
+    let timeout_duration = Duration::from_millis(timeout_ms);
+
+    for _ in 0..expected_count {
+        let timeout_timer = smol::Timer::after(timeout_duration);
+        let mut stream = pubsub.on_message();
+
+        futures::select! {
+            msg = stream.next().fuse() => {
+                match msg {
+                    Some(msg) => {
+                        let payload: String = msg.get_payload()?;
+                        let value: Value = serde_json::from_str(&payload)?;
+                        messages.push(value);
+                    }
+                    None => break,
+                }
+            }
+            _ = futures::FutureExt::fuse(timeout_timer) => {
+                debug!("Timeout waiting for message");
+                break;
+            }
+        }
+    }
+
+    Ok(messages)
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_basic(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let redis = start_redis().await;
+    let host = redis.get_host_port_ipv4(6379).await.unwrap();
+    let host_uri = format!("redis://127.0.0.1:{}", host);
+
+    // Create test variables and topics
+    let var1 = VarName::new("test_var1");
+    let var2 = VarName::new("test_var2");
+    let var_names = vec![var1.clone(), var2.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var1.clone(), "topic1".to_string());
+    var_topics.insert(var2.clone(), "topic2".to_string());
+
+    // Create RedisOutputHandler
+    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+
+    // Create test output streams
+    let stream1 = create_test_output_stream(vec![Value::Int(42), Value::Str("hello".into())]);
+    let stream2 = create_test_output_stream(vec![Value::Float(3.14), Value::Bool(true)]);
+
+    // Provide streams to handler
+    handler.provide_streams(vec![stream1, stream2]);
+
+    // Create oneshot channels for coordination
+    let ready_channel1 = oneshot::channel();
+    let (ready_tx1, ready_rx1) = ready_channel1.into_split();
+    let ready_channel2 = oneshot::channel();
+    let (ready_tx2, ready_rx2) = ready_channel2.into_split();
+
+    // Start consumers first
+    let consumer1_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "topic1".to_string(),
+        2,
+        5000,
+        ready_tx1,
+    ));
+    let consumer2_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "topic2".to_string(),
+        2,
+        5000,
+        ready_tx2,
+    ));
+
+    // Wait for consumers to be ready
+    ready_rx1.await.unwrap();
+    ready_rx2.await.unwrap();
+
+    // Run handler
+    let handler_task = handler.run();
+
+    // Wait for all tasks to complete
+    let (handler_result, messages1, messages2) =
+        futures::join!(handler_task, consumer1_task, consumer2_task);
+
+    // Verify handler completed successfully
+    handler_result?;
+
+    // Verify messages were received correctly
+    let messages1 = messages1?;
+    let messages2 = messages2?;
+
+    assert_eq!(messages1.len(), 2);
+    assert_eq!(messages2.len(), 2);
+
+    assert_eq!(messages1[0], Value::Int(42));
+    assert_eq!(messages1[1], Value::Str("hello".into()));
+    assert_eq!(messages2[0], Value::Float(3.14));
+    assert_eq!(messages2[1], Value::Bool(true));
+
+    Ok(())
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_single_variable(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let redis = start_redis().await;
+    let host = redis.get_host_port_ipv4(6379).await.unwrap();
+    let host_uri = format!("redis://127.0.0.1:{}", host);
+
+    // Create single test variable
+    let var = VarName::new("single_var");
+    let var_names = vec![var.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var.clone(), "single_topic".to_string());
+
+    // Create RedisOutputHandler
+    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+
+    // Create test output stream with various data types
+    let stream = create_test_output_stream(vec![
+        Value::Int(123),
+        Value::Float(456.789),
+        Value::Str("test_string".into()),
+        Value::Bool(false),
+        Value::Unit,
+    ]);
+
+    // Provide stream to handler
+    handler.provide_streams(vec![stream]);
+
+    // Create oneshot channel for coordination
+    let ready_channel = oneshot::channel();
+    let (ready_tx, ready_rx) = ready_channel.into_split();
+
+    // Start consumer first
+    let consumer_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "single_topic".to_string(),
+        5,
+        5000,
+        ready_tx,
+    ));
+
+    // Wait for consumer to be ready
+    ready_rx.await.unwrap();
+
+    // Run handler
+    let handler_task = handler.run();
+
+    // Wait for completion
+    let (handler_result, messages) = futures::join!(handler_task, consumer_task);
+
+    // Verify results
+    handler_result?;
+    let messages = messages?;
+
+    assert_eq!(messages.len(), 5);
+    assert_eq!(messages[0], Value::Int(123));
+    assert_eq!(messages[1], Value::Float(456.789));
+    assert_eq!(messages[2], Value::Str("test_string".into()));
+    assert_eq!(messages[3], Value::Bool(false));
+    assert_eq!(messages[4], Value::Unit);
+
+    Ok(())
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_empty_stream(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let redis = start_redis().await;
+    let host = redis.get_host_port_ipv4(6379).await.unwrap();
+    let host_uri = format!("redis://127.0.0.1:{}", host);
+
+    // Create test variable
+    let var = VarName::new("empty_var");
+    let var_names = vec![var.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var.clone(), "empty_topic".to_string());
+
+    // Create RedisOutputHandler
+    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+
+    // Create empty output stream
+    let stream = create_test_output_stream(vec![]);
+
+    // Provide stream to handler
+    handler.provide_streams(vec![stream]);
+
+    // Create oneshot channel for coordination
+    let ready_channel = oneshot::channel();
+    let (ready_tx, ready_rx) = ready_channel.into_split();
+
+    // Start consuming messages (should timeout with no messages)
+    let consumer_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "empty_topic".to_string(),
+        1,
+        1000,
+        ready_tx,
+    ));
+
+    // Wait for consumer to be ready
+    ready_rx.await.unwrap();
+
+    // Run handler
+    let handler_task = handler.run();
+
+    // Wait for completion
+    let (handler_result, messages) = futures::join!(handler_task, consumer_task);
+
+    // Verify results
+    handler_result?;
+    let messages = messages?;
+
+    // Should receive no messages
+    assert_eq!(messages.len(), 0);
+
+    Ok(())
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_multiple_variables(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let redis = start_redis().await;
+    let host = redis.get_host_port_ipv4(6379).await.unwrap();
+    let host_uri = format!("redis://127.0.0.1:{}", host);
+
+    // Create multiple test variables
+    let var1 = VarName::new("multi_var1");
+    let var2 = VarName::new("multi_var2");
+    let var3 = VarName::new("multi_var3");
+    let var_names = vec![var1.clone(), var2.clone(), var3.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var1.clone(), "multi_topic1".to_string());
+    var_topics.insert(var2.clone(), "multi_topic2".to_string());
+    var_topics.insert(var3.clone(), "multi_topic3".to_string());
+
+    // Create RedisOutputHandler
+    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+
+    // Create test output streams
+    let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2)]);
+    let stream2 = create_test_output_stream(vec![Value::Str("a".into()), Value::Str("b".into())]);
+    let stream3 = create_test_output_stream(vec![Value::Bool(true), Value::Bool(false)]);
+
+    // Provide streams to handler
+    handler.provide_streams(vec![stream1, stream2, stream3]);
+
+    // Create oneshot channels for coordination
+    let ready_channel1 = oneshot::channel();
+    let (ready_tx1, ready_rx1) = ready_channel1.into_split();
+    let ready_channel2 = oneshot::channel();
+    let (ready_tx2, ready_rx2) = ready_channel2.into_split();
+    let ready_channel3 = oneshot::channel();
+    let (ready_tx3, ready_rx3) = ready_channel3.into_split();
+
+    // Start consumers first
+    let consumer1_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "multi_topic1".to_string(),
+        2,
+        5000,
+        ready_tx1,
+    ));
+    let consumer2_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "multi_topic2".to_string(),
+        2,
+        5000,
+        ready_tx2,
+    ));
+    let consumer3_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "multi_topic3".to_string(),
+        2,
+        5000,
+        ready_tx3,
+    ));
+
+    // Wait for consumers to be ready
+    ready_rx1.await.unwrap();
+    ready_rx2.await.unwrap();
+    ready_rx3.await.unwrap();
+
+    // Run handler
+    let handler_task = handler.run();
+
+    // Wait for completion
+    let (handler_result, messages1, messages2, messages3) =
+        futures::join!(handler_task, consumer1_task, consumer2_task, consumer3_task);
+
+    // Verify results
+    handler_result?;
+    let messages1 = messages1?;
+    let messages2 = messages2?;
+    let messages3 = messages3?;
+
+    assert_eq!(messages1.len(), 2);
+    assert_eq!(messages2.len(), 2);
+    assert_eq!(messages3.len(), 2);
+
+    assert_eq!(messages1[0], Value::Int(1));
+    assert_eq!(messages1[1], Value::Int(2));
+    assert_eq!(messages2[0], Value::Str("a".into()));
+    assert_eq!(messages2[1], Value::Str("b".into()));
+    assert_eq!(messages3[0], Value::Bool(true));
+    assert_eq!(messages3[1], Value::Bool(false));
+
+    Ok(())
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_var_names(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let redis = start_redis().await;
+    let host = redis.get_host_port_ipv4(6379).await.unwrap();
+    let host_uri = format!("redis://127.0.0.1:{}", host);
+
+    // Create test variables
+    let var1 = VarName::new("var1");
+    let var2 = VarName::new("var2");
+    let var_names = vec![var1.clone(), var2.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var1.clone(), "topic1".to_string());
+    var_topics.insert(var2.clone(), "topic2".to_string());
+
+    // Create RedisOutputHandler
+    let handler =
+        RedisOutputHandler::new(executor.clone(), var_names.clone(), &host_uri, var_topics)?;
+
+    // Test var_names method
+    let returned_var_names = handler.var_names();
+    assert_eq!(returned_var_names, var_names);
+
+    Ok(())
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_json_serialization(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let redis = start_redis().await;
+    let host = redis.get_host_port_ipv4(6379).await.unwrap();
+    let host_uri = format!("redis://127.0.0.1:{}", host);
+
+    // Create test variable
+    let var = VarName::new("json_var");
+    let var_names = vec![var.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var.clone(), "json_topic".to_string());
+
+    // Create RedisOutputHandler
+    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+
+    // Create test output stream with complex data
+    let stream = create_test_output_stream(vec![
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()),
+        Value::Str("special chars: àáâãäåæçèéêë".into()),
+    ]);
+
+    // Provide stream to handler
+    handler.provide_streams(vec![stream]);
+
+    // Create oneshot channel for coordination
+    let ready_channel = oneshot::channel();
+    let (ready_tx, ready_rx) = ready_channel.into_split();
+
+    // Start consuming messages using our helper function
+    let consumer_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "json_topic".to_string(),
+        2,
+        5000,
+        ready_tx,
+    ));
+
+    // Wait for consumer to be ready
+    ready_rx.await.unwrap();
+
+    // Run handler
+    let handler_task = handler.run();
+
+    // Wait for both tasks to complete
+    let (handler_result, messages) = futures::join!(handler_task, consumer_task);
+    handler_result?;
+    let messages = messages?;
+
+    // Convert messages back to JSON strings for verification
+    let raw_messages: Vec<String> = messages
+        .into_iter()
+        .map(|msg| serde_json::to_string(&msg).unwrap())
+        .collect();
+
+    // Verify JSON serialization
+    assert_eq!(raw_messages.len(), 2);
+
+    // Verify first message (list)
+    let value1: Value = serde_json::from_str(&raw_messages[0])?;
+    assert_eq!(
+        value1,
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into())
+    );
+
+    // Verify second message (string with special chars)
+    let value2: Value = serde_json::from_str(&raw_messages[1])?;
+    assert_eq!(value2, Value::Str("special chars: àáâãäåæçèéêë".into()));
+
+    Ok(())
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_concurrent_streams(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let redis = start_redis().await;
+    let host = redis.get_host_port_ipv4(6379).await.unwrap();
+    let host_uri = format!("redis://127.0.0.1:{}", host);
+
+    // Create test variables
+    let var1 = VarName::new("concurrent_var1");
+    let var2 = VarName::new("concurrent_var2");
+    let var_names = vec![var1.clone(), var2.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var1.clone(), "concurrent_topic1".to_string());
+    var_topics.insert(var2.clone(), "concurrent_topic2".to_string());
+
+    // Create RedisOutputHandler
+    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+
+    // Create output streams with timing delays to test concurrency
+    let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+
+    let stream2 = create_test_output_stream(vec![
+        Value::Str("a".into()),
+        Value::Str("b".into()),
+        Value::Str("c".into()),
+    ]);
+
+    // Provide streams to handler
+    handler.provide_streams(vec![stream1, stream2]);
+
+    // Create oneshot channels for coordination
+    let ready_channel1 = oneshot::channel();
+    let (ready_tx1, ready_rx1) = ready_channel1.into_split();
+    let ready_channel2 = oneshot::channel();
+    let (ready_tx2, ready_rx2) = ready_channel2.into_split();
+
+    // Start consumers first
+    let consumer1_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "concurrent_topic1".to_string(),
+        3,
+        5000,
+        ready_tx1,
+    ));
+    let consumer2_task = executor.spawn(consume_redis_messages(
+        host_uri.clone(),
+        "concurrent_topic2".to_string(),
+        3,
+        5000,
+        ready_tx2,
+    ));
+
+    // Wait for consumers to be ready
+    ready_rx1.await.unwrap();
+    ready_rx2.await.unwrap();
+
+    // Run handler
+    let handler_task = handler.run();
+
+    // Wait for completion
+    let (handler_result, messages1, messages2) =
+        futures::join!(handler_task, consumer1_task, consumer2_task);
+
+    // Verify results
+    handler_result?;
+    let messages1 = messages1?;
+    let messages2 = messages2?;
+
+    assert_eq!(messages1.len(), 3);
+    assert_eq!(messages2.len(), 3);
+
+    assert_eq!(messages1[0], Value::Int(1));
+    assert_eq!(messages1[1], Value::Int(2));
+    assert_eq!(messages1[2], Value::Int(3));
+    assert_eq!(messages2[0], Value::Str("a".into()));
+    assert_eq!(messages2[1], Value::Str("b".into()));
+    assert_eq!(messages2[2], Value::Str("c".into()));
+
+    // Verify concurrent execution completed successfully
+
+    Ok(())
+}
+
+#[apply(smol_test)]
+async fn test_redis_output_handler_error_handling(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // Test with invalid Redis host
+    let invalid_host = "redis://invalid-host:6379";
+
+    let var = VarName::new("error_var");
+    let var_names = vec![var.clone()];
+
+    let mut var_topics = BTreeMap::new();
+    var_topics.insert(var.clone(), "error_topic".to_string());
+
+    // Creating the handler should succeed even with invalid host
+    let result = RedisOutputHandler::new(executor.clone(), var_names, invalid_host, var_topics);
+    assert!(result.is_ok());
 
     Ok(())
 }

@@ -34,10 +34,9 @@ use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use testcontainers_modules::testcontainers::{
     ContainerAsync as ContainerAsyncTokio, GenericImage, Image, ImageExt,
 };
-use tokio::time::sleep;
-use tracing::info_span;
+
 use trustworthiness_checker::{
-    Monitor, VarName,
+    InputProvider, Monitor, VarName,
     dep_manage::interface::{DependencyKind, create_dependency_manager},
     io::{
         mqtt::{MQTTInputProvider, MQTTOutputHandler},
@@ -169,9 +168,9 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     )
     .expect("Failed to create input provider 1");
     input_provider_1
-        .started
-        .wait_for(|x| info_span!("Waited for input provider 1 started").in_scope(|| *x))
-        .await;
+        .ready()
+        .await
+        .expect("Input provider 1 should be ready");
     let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
@@ -179,9 +178,9 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     )
     .expect("Failed to create input provider 2");
     input_provider_2
-        .started
-        .wait_for(|x| info_span!("Waited for input provider 2 started").in_scope(|| *x))
-        .await;
+        .ready()
+        .await
+        .expect("Input provider 2 should be ready");
 
     let mut output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
@@ -290,9 +289,9 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     )
     .expect("Failed to create input provider 1");
     input_provider_1
-        .started
-        .wait_for(|x| info_span!("Waited for input provider 1 started").in_scope(|| *x))
-        .await;
+        .ready()
+        .await
+        .expect("Input provider 1 should be ready");
     let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
@@ -304,9 +303,9 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     )
     .expect("Failed to create input provider 2");
     input_provider_2
-        .started
-        .wait_for(|x| info_span!("Waited for input provider 2 started").in_scope(|| *x))
-        .await;
+        .ready()
+        .await
+        .expect("Input provider 2 should be ready");
 
     let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
         .output_vars()
@@ -428,9 +427,9 @@ async fn localisation_distribution_graphs_test(
     )
     .expect("Failed to create input provider 1");
     input_provider_1
-        .started
-        .wait_for(|x| info_span!("Waited for input provider 1 started").in_scope(|| *x))
-        .await;
+        .ready()
+        .await
+        .expect("Input provider 1 should be ready");
     let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
@@ -442,9 +441,9 @@ async fn localisation_distribution_graphs_test(
     )
     .expect("Failed to create input provider 2");
     input_provider_2
-        .started
-        .wait_for(|x| info_span!("Waited for input provider 2 started").in_scope(|| *x))
-        .await;
+        .ready()
+        .await
+        .expect("Input provider 2 should be ready");
 
     let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
         .output_vars()
