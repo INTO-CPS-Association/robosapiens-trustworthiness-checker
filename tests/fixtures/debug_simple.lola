@@ -1,0 +1,3 @@
+in x : Int
+out y : Int
+y = x

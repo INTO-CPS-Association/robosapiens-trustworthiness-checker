@@ -1,0 +1,10 @@
+in x : Float
+in y : Float
+out sum : Float
+out diff : Float
+out product : Float
+out quotient : Float
+sum = x + y
+diff = x - y
+product = x * y
+quotient = x / y

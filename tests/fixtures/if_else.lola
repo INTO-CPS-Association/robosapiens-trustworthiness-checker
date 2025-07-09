@@ -1,0 +1,6 @@
+in x : Int
+in y : Int
+out result : Int
+out positive : Bool
+result = if x > y then x else y
+positive = x > 0

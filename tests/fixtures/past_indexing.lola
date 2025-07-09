@@ -1,0 +1,12 @@
+in x : Int
+in y : Int
+out current : Int
+out prev1 : Int
+out prev2 : Int
+out diffprev : Int
+out sumlast3 : Int
+current = x
+prev1 = default(x[-1], 0)
+prev2 = default(x[-2], 0)
+diffprev = x - default(x[-1], x)
+sumlast3 = x + default(x[-1], 0) + default(x[-2], 0)

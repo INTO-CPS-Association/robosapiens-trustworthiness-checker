@@ -1,0 +1,4 @@
+in x : Str
+in y : Str
+out z : Str
+z = x ++ y

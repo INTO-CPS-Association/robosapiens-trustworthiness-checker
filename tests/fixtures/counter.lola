@@ -1,0 +1,3 @@
+in x : Int
+out z : Int
+z = default(z[-1], 0) + x
