@@ -26,7 +26,7 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
 ) -> impl Future<Output = ()> {
     // Create a ROS node and publisher
 
-    use tokio::select;
+    use futures::select;
     let ctx = r2r::Context::create().unwrap();
     let mut node = r2r::Node::create(ctx, &*node_name, "").unwrap();
     let publisher = node
@@ -43,19 +43,19 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
 
         // Spawn a background async task to run the ROS node
         // and spin until cancelled
-        tokio::task::spawn(async move {
+        smol::spawn(async move {
             loop {
                 select! {
-                    biased;
-                    _ = cancellation_token.cancelled() => {
+                    _ = cancellation_token.cancelled().fuse() => {
                         return;
                     },
-                    _ = tokio::task::yield_now() => {
+                    _ = smol::future::yield_now().fuse() => {
                         node.spin_once(std::time::Duration::from_millis(0));
                     },
                 }
             }
-        });
+        })
+        .detach();
 
         // Publish the values on the topic
         for val in values {
@@ -66,7 +66,7 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
 }
 
 #[cfg(feature = "ros")]
-#[tokio::test]
+#[smol::test]
 async fn test_add_monitor_ros() {
     let var_topics = json_to_mapping(
         r#"
@@ -88,24 +88,26 @@ async fn test_add_monitor_ros() {
         .parse(spec_simple_add_monitor())
         .expect("Model could not be parsed");
 
-    // let pool = tokio::task::LocalSet::new();
+    // let pool = smol::LocalExecutor::new();
 
     let xs = vec![Int32 { data: 1 }, Int32 { data: 2 }];
     let ys = vec![Int32 { data: 3 }, Int32 { data: 4 }];
     let zs = vec![Value::Int(4), Value::Int(6)];
 
     // Spawn dummy ROS publisher nodes
-    tokio::spawn(dummy_publisher(
+    smol::spawn(dummy_publisher(
         "x_publisher".to_string(),
         "/x".to_string(),
         xs,
-    ));
+    ))
+    .detach();
 
-    tokio::spawn(dummy_publisher(
+    smol::spawn(dummy_publisher(
         "y_publisher".to_string(),
         "/y".to_string(),
         ys,
-    ));
+    ))
+    .detach();
 
     // Create the ROS input provider
     let input_provider = ROSInputProvider::new(var_topics).unwrap();

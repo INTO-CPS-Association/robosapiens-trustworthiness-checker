@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use async_cell::unsync::AsyncCell;
 use async_trait::async_trait;
+use futures::StreamExt;
 use futures::future::LocalBoxFuture;
-use tokio_stream::StreamExt;
 
 use crate::{
     VarName, distributed::locality_receiver::LocalityReceiver,

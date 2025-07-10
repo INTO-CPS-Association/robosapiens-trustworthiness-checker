@@ -129,17 +129,20 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
+                let mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
                     self.executor.unwrap().clone(),
                     MQTT_HOSTNAME,
                     var_topics,
                 )
                 .expect("MQTT input provider could not be created");
-                mqtt_input_provider
-                    .started
-                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
-                    .await
-                    .expect("MQTT input provider failed to start");
+                let started = mqtt_input_provider.started.clone();
+                info_span!("Waited for input provider started")
+                    .in_scope(|| async {
+                        while !started.get().await {
+                            smol::future::yield_now().await;
+                        }
+                    })
+                    .await;
                 Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::MQTTMap(topics) => {

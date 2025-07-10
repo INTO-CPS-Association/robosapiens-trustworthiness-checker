@@ -24,14 +24,17 @@ struct Args {
 #[instrument]
 async fn load_distribution_graph(path: PathBuf) -> anyhow::Result<LabelledDistributionGraph> {
     info!("Loading distribution graph from {:?}", path);
-    let file_content = tokio::fs::read_to_string(path).await?;
+    let file_content = smol::fs::read_to_string(path).await?;
     let dist_graph: LabelledDistributionGraph = serde_json::from_str(&file_content)?;
     info!("Successfully loaded distribution graph");
     Ok(dist_graph)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    smol::block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 

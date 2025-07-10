@@ -4,13 +4,13 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
+use async_stream::stream;
+use async_unsync::bounded;
 use ecow::eco_vec;
 use futures::{StreamExt, future::LocalBoxFuture};
 use paho_mqtt as mqtt;
 use serde_json::Value as JValue;
 use smol::LocalExecutor;
-use tokio::sync::{mpsc, watch};
-use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, debug_span, info, info_span, instrument, warn};
 
 use super::client::provide_mqtt_client_with_subscription;
@@ -66,7 +66,7 @@ pub struct MapMQTTInputProvider {
     pub var_map: BTreeMap<VarName, VarData>,
     pub result: Rc<AsyncCell<anyhow::Result<()>>>,
     // node: Arc<Mutex<r2r::Node>>,
-    pub started: watch::Receiver<bool>,
+    pub started: Rc<AsyncCell<bool>>,
 }
 
 impl MapMQTTInputProvider {
@@ -86,7 +86,7 @@ impl MapMQTTInputProvider {
         let mut senders = BTreeMap::new();
         let mut receivers = BTreeMap::new();
         for (v, _) in var_topics.iter() {
-            let (tx, rx) = mpsc::channel(10);
+            let (tx, rx) = bounded::channel(10).into_split();
             senders.insert(v.clone(), tx);
             receivers.insert(v.clone(), rx);
         }
@@ -99,7 +99,7 @@ impl MapMQTTInputProvider {
         info!(name: "InputProvider connecting to MQTT broker",
             ?host, ?var_topics, ?topic_vars);
 
-        let (started_tx, started_rx) = watch::channel(false);
+        let started = AsyncCell::new_with(false).into_shared();
         let result = AsyncCell::shared();
 
         // Spawn a background task to receive messages from the MQTT broker and
@@ -115,7 +115,7 @@ impl MapMQTTInputProvider {
                 topic_vars,
                 topics,
                 senders,
-                started_tx,
+                started.clone(),
             ))
             .detach();
 
@@ -123,14 +123,21 @@ impl MapMQTTInputProvider {
         let var_data = var_topics
             .iter()
             .map(|(v, topic)| {
-                let rx = receivers.remove(v).expect("Channel not found for topic");
-                let stream = ReceiverStream::new(rx);
+                let mut rx = receivers.remove(v).expect("Channel not found for topic");
+                let stream = Box::pin(stream! {
+                    loop {
+                        match rx.recv().await {
+                            Some(value) => yield value,
+                            None => break,
+                        }
+                    }
+                });
                 (
                     v.clone(),
                     VarData {
                         variable: v.clone(),
                         channel_name: topic.clone(),
-                        stream: Some(Box::pin(stream)),
+                        stream: Some(stream),
                     },
                 )
             })
@@ -140,7 +147,7 @@ impl MapMQTTInputProvider {
             executor,
             result,
             var_map: var_data,
-            started: started_rx,
+            started,
         })
     }
 
@@ -150,15 +157,13 @@ impl MapMQTTInputProvider {
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
         topics: Vec<String>,
-        senders: BTreeMap<VarName, mpsc::Sender<Value>>,
-        started_tx: watch::Sender<bool>,
+        senders: BTreeMap<VarName, bounded::Sender<Value>>,
+        started: Rc<AsyncCell<bool>>,
     ) {
         let result = result.guard_shared(Err(anyhow::anyhow!("InputProvider crashed")));
         result.set(
-            Self::input_monitor_with_result(
-                host, var_topics, topic_vars, topics, senders, started_tx,
-            )
-            .await,
+            Self::input_monitor_with_result(host, var_topics, topic_vars, topics, senders, started)
+                .await,
         )
     }
 
@@ -167,8 +172,8 @@ impl MapMQTTInputProvider {
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
         topics: Vec<String>,
-        senders: BTreeMap<VarName, mpsc::Sender<Value>>,
-        started_tx: watch::Sender<bool>,
+        senders: BTreeMap<VarName, bounded::Sender<Value>>,
+        started: Rc<AsyncCell<bool>>,
     ) -> anyhow::Result<()> {
         let mqtt_input_span = debug_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
@@ -188,9 +193,7 @@ impl MapMQTTInputProvider {
             }
         }
         info!(name: "Connected to MQTT broker", ?host, ?var_topics);
-        started_tx
-            .send(true)
-            .expect("Failed to send started signal");
+        started.set(true);
 
         while let Some(msg) = stream.next().await {
             // Process the message
@@ -210,7 +213,7 @@ impl MapMQTTInputProvider {
                 sender
                     .send(value)
                     .await
-                    .expect("Failed to send value to channel");
+                    .map_err(|_| anyhow::anyhow!("Failed to send value to channel"))?;
             } else {
                 return Err(anyhow!("Channel not found for topic {}", msg.topic()));
             }
@@ -236,9 +239,11 @@ impl InputProvider for MapMQTTInputProvider {
     }
 
     fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        let mut started = self.started.clone();
+        let started = self.started.clone();
         Box::pin(async move {
-            started.wait_for(|x| *x).await?;
+            while !started.get().await {
+                smol::future::yield_now().await;
+            }
             Ok(())
         })
     }

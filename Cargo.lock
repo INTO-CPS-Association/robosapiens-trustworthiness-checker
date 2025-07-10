@@ -712,7 +712,6 @@ dependencies = [
  "serde_json",
  "smol",
  "tinytemplate",
- "tokio",
  "walkdir",
 ]
 
@@ -3264,12 +3263,9 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "tracing",
  "windows-sys 0.52.0",
 ]
 
@@ -3303,7 +3299,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -3407,8 +3402,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "approx",
+ "async-channel 2.3.1",
  "async-compat",
  "async-once-cell",
+ "async-signal",
  "async-stream",
  "async-trait",
  "async-unsync",
@@ -3443,8 +3440,6 @@ dependencies = [
  "tc-testutils",
  "test-log",
  "thiserror 2.0.12",
- "tokio",
- "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-subscriber",

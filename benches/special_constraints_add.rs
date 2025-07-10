@@ -42,10 +42,6 @@ fn from_elem(c: &mut Criterion) {
                   // 1000000,
         ];
 
-        let tokio_rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-
         let mut group = c.benchmark_group("special_constraints_add");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
@@ -56,7 +52,7 @@ fn from_elem(c: &mut Criterion) {
                 BenchmarkId::new("special_constraints_add_dep_empty", size),
                 &size,
                 |b, &size| {
-                    b.to_async(&tokio_rt)
+                    b.to_async(criterion::async_executor::SmolExecutor)
                         .iter(|| monitor_outputs_untyped_constraints(size, DependencyKind::Empty))
                 },
             );
@@ -64,9 +60,10 @@ fn from_elem(c: &mut Criterion) {
                 BenchmarkId::new("special_constraints_add_dep_graph", size),
                 &size,
                 |b, &size| {
-                    b.to_async(&tokio_rt).iter(|| {
-                        monitor_outputs_untyped_constraints(size, DependencyKind::DepGraph)
-                    })
+                    b.to_async(criterion::async_executor::SmolExecutor)
+                        .iter(|| {
+                            monitor_outputs_untyped_constraints(size, DependencyKind::DepGraph)
+                        })
                 },
             );
         }

@@ -29,10 +29,12 @@ mod tests {
     use crate::{InputProvider, Value};
 
     use super::*;
+    use futures::StreamExt;
+    use macro_rules_attribute::apply;
+    use smol_macros::test as smol_test;
     use test_log::test;
-    use tokio_stream::StreamExt;
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_parse_file() {
         let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/simple_add.input";
@@ -45,7 +47,7 @@ mod tests {
         assert_eq!(x_vals, vec![Value::Int(1), Value::Int(3)]);
     }
 
-    #[test(tokio::test)]
+    #[test(apply(smol_test))]
     async fn test_parse_boolean_file() {
         let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/maple_sequence_true.input";

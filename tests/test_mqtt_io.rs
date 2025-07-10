@@ -194,7 +194,7 @@ mod tests {
             .parse(spec_simple_add_monitor())
             .expect("Model could not be parsed");
 
-        // let pool = tokio::task::LocalSet::new();
+        // let pool = smol::LocalExecutor::new();
 
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];

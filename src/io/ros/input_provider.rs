@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use futures::StreamExt;
+use futures::select;
 use r2r;
 use smol::LocalExecutor;
-use tokio::select;
 use tokio_util::sync::CancellationToken;
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
@@ -101,11 +101,10 @@ impl ROSInputProvider {
             .spawn(async move {
                 loop {
                     select! {
-                        biased;
-                        _ = cancellation_token.cancelled() => {
+                        _ = cancellation_token.cancelled().fuse() => {
                             return;
                         },
-                        _ = smol::future::yield_now() => {
+                        _ = smol::future::yield_now().fuse() => {
                             node.spin_once(std::time::Duration::from_millis(0));
                         },
                     }

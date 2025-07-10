@@ -32,7 +32,7 @@ fn message_stream(mut client: mqtt::AsyncClient) -> BoxStream<'static, Message> 
             warn!("Connection list. Attempting reconnect...");
             while let Err(err) = client.reconnect().await {
                 warn!(name: "MQTT client reconnection failed", ?err);
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                smol::Timer::after(Duration::from_secs(1)).await;
             }
             info!("MQTT client reconnected");
         }

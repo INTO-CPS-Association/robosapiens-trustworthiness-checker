@@ -7,13 +7,13 @@ use crate::{OutputStream, VarName};
 use async_stream::stream;
 use core::panic;
 use ecow::EcoVec;
+use futures::join;
 use futures::stream::LocalBoxStream;
 use futures::{
     StreamExt,
     future::join_all,
     stream::{self},
 };
-use tokio::join;
 use tracing::debug;
 use tracing::info;
 use tracing::instrument;
