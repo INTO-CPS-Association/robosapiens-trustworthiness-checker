@@ -293,9 +293,6 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
 
     info!("Output collection complete, output stream should now be dropped");
 
-    // Allow a brief moment for the drop to propagate
-    smol::Timer::after(Duration::from_millis(10)).await;
-
     info!("Waiting for monitor to complete after output stream drop...");
     let timeout_future = smol::Timer::after(Duration::from_secs(5));
 
