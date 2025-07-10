@@ -35,7 +35,6 @@ paho-mqtt = { version = "0.13.3", default-features = false, features = [
     "ssl",
 ] }
 async-trait = "0.1.88"
-async-once-cell = "0.5.4"
 tracing = { version = "0.1.41", features = [
     "attributes",
     "std",
