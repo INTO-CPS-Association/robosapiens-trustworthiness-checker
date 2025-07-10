@@ -106,6 +106,9 @@ mod tests {
     use approx::assert_abs_diff_eq;
     use std::{collections::BTreeMap, rc::Rc};
     use test_log::test;
+    use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
+    use trustworthiness_checker::io::mqtt::MQTTLocalityReceiver;
+    use trustworthiness_checker::semantics::distributed::localisation::LocalitySpec;
 
     use trustworthiness_checker::lola_fixtures::input_streams1;
     use trustworthiness_checker::{
@@ -480,72 +483,34 @@ mod tests {
             .await
             .expect("Failed to get host port for MQTT server");
         let mqtt_uri = format!("tcp://localhost:{}", mqtt_port);
+        let node_name = "test_node".to_string();
 
         // Create oneshot channel for synchronization
-        let (ready_sender, ready_receiver) = smol::channel::bounded::<()>(1);
-        let (result_sender, result_receiver) = smol::channel::bounded::<Vec<VarName>>(1);
+        let locality_receiver = MQTTLocalityReceiver::new(mqtt_uri.clone(), node_name);
+        let ready = locality_receiver.ready();
 
-        // Custom receiver implementation that signals when actually subscribed
-        let mqtt_uri_clone = mqtt_uri.clone();
-        let receiver_task: smol::Task<anyhow::Result<()>> = executor.spawn(async move {
-            println!("Receiver task started");
+        executor
+            .spawn(async move {
+                // Wait for receiver to signal it's actually subscribed
+                ready.await;
+                println!("Receiver is subscribed, publishing message");
 
-            // Create MQTT client and subscribe
-            let (client, mut stream) =
-                provide_mqtt_client_with_subscription(mqtt_uri_clone).await?;
-            let topic = "start_monitors_at_test_node".to_string();
-            client.subscribe(&topic, 1).await?;
-
-            println!("Subscribed to topic, signaling ready");
-            // Signal that subscription is established
-            ready_sender.send(()).await.unwrap();
-
-            // Wait for message
-            println!("Awaiting locality spec");
-            match stream.next().await {
-                Some(msg) => {
-                    println!("Received message");
-                    let msg_content = msg.payload_str().to_string();
-                    let local_topics: Vec<String> = serde_json::from_str(&msg_content)?;
-                    let local_topics: Vec<VarName> =
-                        local_topics.into_iter().map(|s| s.into()).collect();
-                    result_sender.send(local_topics).await.unwrap();
-                    println!("Sent result");
-                }
-                None => {
-                    return Err(anyhow::anyhow!("No message received"));
-                }
-            }
-
-            Ok(())
-        });
-
-        let sender_task: smol::Task<anyhow::Result<()>> = executor.spawn(async move {
-            // Wait for receiver to signal it's actually subscribed
-            ready_receiver.recv().await.unwrap();
-            println!("Receiver is subscribed, publishing message");
-
-            let mqtt_client = provide_mqtt_client(mqtt_uri)
-                .await
-                .expect("Failed to create MQTT client");
-            let topic = "start_monitors_at_test_node".to_string();
-            let message = serde_json::to_string(&vec!["x", "y"]).unwrap();
-            let message = mqtt::Message::new(topic, message, 1);
-            mqtt_client.publish(message).await?;
-            println!("Published message");
-
-            Ok(())
-        });
+                let mqtt_client = provide_mqtt_client(mqtt_uri)
+                    .await
+                    .expect("Failed to create MQTT client");
+                let topic = "start_monitors_at_test_node".to_string();
+                let message = serde_json::to_string(&vec!["x", "y"]).unwrap();
+                let message = mqtt::Message::new(topic, message, 1);
+                mqtt_client.publish(message).await.unwrap();
+                println!("Published message");
+            })
+            .detach();
 
         // Wait for the result
-        let locality_spec = result_receiver.recv().await.unwrap();
+        let locality_spec = locality_receiver.receive().await.unwrap();
         println!("Received locality spec");
 
-        assert_eq!(locality_spec, vec!["x".into(), "y".into()]);
-
-        // Ensure both tasks complete successfully
-        receiver_task.await?;
-        sender_task.await?;
+        assert_eq!(locality_spec.local_vars(), vec!["x".into(), "y".into()]);
 
         Ok(())
     }

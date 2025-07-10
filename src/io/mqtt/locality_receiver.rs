@@ -1,4 +1,8 @@
+use std::rc::Rc;
+
+use async_cell::unsync::AsyncCell;
 use async_trait::async_trait;
+use futures::future::LocalBoxFuture;
 use tokio_stream::StreamExt;
 
 use crate::{
@@ -14,18 +18,30 @@ const MQTT_QOS: i32 = 1;
 pub struct MQTTLocalityReceiver {
     mqtt_host: String,
     local_node: String,
+    ready: Rc<AsyncCell<bool>>,
 }
 
 impl MQTTLocalityReceiver {
     pub fn new(mqtt_host: String, local_node: String) -> Self {
+        let ready = AsyncCell::new_with(false).into_shared();
         Self {
             mqtt_host,
             local_node,
+            ready,
         }
     }
 
     fn topic(&self) -> String {
         format!("start_monitors_at_{}", self.local_node)
+    }
+
+    pub fn ready(&self) -> LocalBoxFuture<'static, ()> {
+        let ready = self.ready.clone();
+        Box::pin(async move {
+            while !ready.get().await {
+                smol::future::yield_now().await;
+            }
+        })
     }
 }
 
@@ -35,6 +51,7 @@ impl LocalityReceiver for MQTTLocalityReceiver {
         let (client, mut stream) =
             provide_mqtt_client_with_subscription(self.mqtt_host.clone()).await?;
         client.subscribe(self.topic(), MQTT_QOS).await?;
+        self.ready.set(true);
         match stream.next().await {
             Some(msg) => {
                 let msg_content = msg.payload_str().to_string();
