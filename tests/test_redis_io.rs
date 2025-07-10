@@ -95,7 +95,7 @@ async fn dummy_redis_sender(
         debug!(name: "Publishing message", ?message, ?channel);
         con.publish(&channel, message).await?;
         // Small delay to ensure message ordering
-        smol::Timer::after(std::time::Duration::from_millis(10)).await;
+        // smol::Timer::after(std::time::Duration::from_millis(10)).await;
     }
 
     Ok(())

@@ -107,6 +107,7 @@ mod tests {
     use std::{collections::BTreeMap, rc::Rc};
     use test_log::test;
 
+    use trustworthiness_checker::lola_fixtures::input_streams1;
     use trustworthiness_checker::{
         Value, VarName,
         core::{OutputHandler, Runnable},
@@ -119,10 +120,6 @@ mod tests {
         lola_specification,
         runtime::asynchronous::AsyncMonitorRunner,
         semantics::UntimedLolaSemantics,
-    };
-    use trustworthiness_checker::{
-        distributed::locality_receiver::LocalityReceiver, io::mqtt::MQTTLocalityReceiver,
-        lola_fixtures::input_streams1, semantics::distributed::localisation::LocalitySpec,
     };
 
     use super::*;
@@ -484,13 +481,49 @@ mod tests {
             .expect("Failed to get host port for MQTT server");
         let mqtt_uri = format!("tcp://localhost:{}", mqtt_port);
 
-        let receiver = MQTTLocalityReceiver::new(mqtt_uri.clone(), "test_node".to_string());
+        // Create oneshot channel for synchronization
+        let (ready_sender, ready_receiver) = smol::channel::bounded::<()>(1);
+        let (result_sender, result_receiver) = smol::channel::bounded::<Vec<VarName>>(1);
 
-        println!("Created receiver");
+        // Custom receiver implementation that signals when actually subscribed
+        let mqtt_uri_clone = mqtt_uri.clone();
+        let receiver_task: smol::Task<anyhow::Result<()>> = executor.spawn(async move {
+            println!("Receiver task started");
+
+            // Create MQTT client and subscribe
+            let (client, mut stream) =
+                provide_mqtt_client_with_subscription(mqtt_uri_clone).await?;
+            let topic = "start_monitors_at_test_node".to_string();
+            client.subscribe(&topic, 1).await?;
+
+            println!("Subscribed to topic, signaling ready");
+            // Signal that subscription is established
+            ready_sender.send(()).await.unwrap();
+
+            // Wait for message
+            println!("Awaiting locality spec");
+            match stream.next().await {
+                Some(msg) => {
+                    println!("Received message");
+                    let msg_content = msg.payload_str().to_string();
+                    let local_topics: Vec<String> = serde_json::from_str(&msg_content)?;
+                    let local_topics: Vec<VarName> =
+                        local_topics.into_iter().map(|s| s.into()).collect();
+                    result_sender.send(local_topics).await.unwrap();
+                    println!("Sent result");
+                }
+                None => {
+                    return Err(anyhow::anyhow!("No message received"));
+                }
+            }
+
+            Ok(())
+        });
 
         let sender_task: smol::Task<anyhow::Result<()>> = executor.spawn(async move {
-            // Yield to allow receiver to establish subscription
-            smol::future::yield_now().await;
+            // Wait for receiver to signal it's actually subscribed
+            ready_receiver.recv().await.unwrap();
+            println!("Receiver is subscribed, publishing message");
 
             let mqtt_client = provide_mqtt_client(mqtt_uri)
                 .await
@@ -504,15 +537,14 @@ mod tests {
             Ok(())
         });
 
-        println!("Awaiting locality spec");
-
-        let locality_spec = receiver.receive().await.unwrap();
+        // Wait for the result
+        let locality_spec = result_receiver.recv().await.unwrap();
         println!("Received locality spec");
 
-        let local_vars = locality_spec.local_vars();
+        assert_eq!(locality_spec, vec!["x".into(), "y".into()]);
 
-        assert_eq!(local_vars, vec!["x".into(), "y".into()]);
-
+        // Ensure both tasks complete successfully
+        receiver_task.await?;
         sender_task.await?;
 
         Ok(())

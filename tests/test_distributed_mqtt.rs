@@ -4,14 +4,16 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{future::Future, vec};
 
+use futures::future::Either;
 use futures::{StreamExt, executor, stream};
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
+use smol::future::{FutureExt, race};
 use std::pin::Pin;
 use std::{mem, task};
 use tokio::fs::File;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 use trustworthiness_checker::core::Runnable;
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::io::mqtt::client::{
@@ -109,24 +111,59 @@ async fn get_outputs(topic: String, client_name: String, port: u16) -> OutputStr
 
 #[instrument(level = tracing::Level::INFO)]
 async fn dummy_publisher(client_name: String, topic: String, values: Vec<Value>, port: u16) {
+    info!(
+        "Starting publisher {} for topic {} with {} values",
+        client_name,
+        topic,
+        values.len()
+    );
+
     // Create a new client
     let mqtt_client = provide_mqtt_client(format!("tcp://localhost:{}", port))
         .await
         .expect("Failed to create MQTT client");
 
     // Try to send the messages
-    let mut output_strs = values.iter().map(|val| serde_json::to_string(val).unwrap());
-    while let Some(output_str) = output_strs.next() {
+    for (index, value) in values.iter().enumerate() {
+        let output_str = match serde_json::to_string(value) {
+            Ok(s) => s,
+            Err(e) => {
+                panic!("Failed to serialize value {:?}: {:?}", value, e);
+            }
+        };
+
         let message = mqtt::Message::new(topic.clone(), output_str.clone(), 1);
+        info!(
+            "Publishing message {}/{} on topic {}: {}",
+            index + 1,
+            values.len(),
+            topic,
+            output_str
+        );
+
         match mqtt_client.publish(message.clone()).await {
             Ok(_) => {
-                debug!(name: "Published message", ?message, topic=?message.topic());
+                info!(
+                    "Successfully published message {}/{} on topic {}",
+                    index + 1,
+                    values.len(),
+                    topic
+                );
             }
             Err(e) => {
-                panic!("Lost MQTT connection with error {:?}.", e);
+                panic!(
+                    "Lost MQTT connection with error {:?} on topic {}.",
+                    e, topic
+                );
             }
         }
     }
+
+    info!(
+        "Finished publishing all {} messages for topic {}",
+        values.len(),
+        topic
+    );
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
@@ -167,20 +204,6 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         var_in_topics_1.iter().cloned().collect(),
     )
     .expect("Failed to create input provider 1");
-    input_provider_1
-        .ready()
-        .await
-        .expect("Input provider 1 should be ready");
-    let mut input_provider_2 = MQTTInputProvider::new(
-        executor.clone(),
-        mqtt_host.as_str(),
-        var_in_topics_2.iter().cloned().collect(),
-    )
-    .expect("Failed to create input provider 2");
-    input_provider_2
-        .ready()
-        .await
-        .expect("Input provider 2 should be ready");
 
     let mut output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
@@ -189,6 +212,14 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         var_out_topics_1.into_iter().collect(),
     )
     .expect("Failed to create output handler 1");
+
+    let mut input_provider_2 = MQTTInputProvider::new(
+        executor.clone(),
+        mqtt_host.as_str(),
+        var_in_topics_2.iter().cloned().collect(),
+    )
+    .expect("Failed to create input provider 2");
+
     let mut output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["v".into()],
@@ -197,6 +228,9 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     )
     .expect("Failed to create output handler 2");
 
+    let input_provider_1_ready = input_provider_1.ready();
+    let input_provider_2_ready = input_provider_2.ready();
+
     let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model1.clone(),
@@ -204,6 +238,10 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         Box::new(output_handler_1),
         create_dependency_manager(DependencyKind::Empty, model1),
     );
+    executor.spawn(runner_1.run()).detach();
+    input_provider_1_ready
+        .await
+        .expect("Input provider 1 should be ready");
 
     let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
@@ -212,10 +250,12 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         Box::new(output_handler_2),
         create_dependency_manager(DependencyKind::Empty, model2),
     );
-
-    executor.spawn(runner_1.run()).detach();
     executor.spawn(runner_2.run()).detach();
+    input_provider_2_ready
+        .await
+        .expect("Input provider 2 should be ready");
 
+    // Start publishers for x and y inputs
     executor
         .spawn(dummy_publisher(
             "x_dec_publisher".to_string(),
@@ -224,6 +264,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
             mqtt_port,
         ))
         .detach();
+
     executor
         .spawn(dummy_publisher(
             "y_dec_publisher".to_string(),
@@ -232,6 +273,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
             mqtt_port,
         ))
         .detach();
+
     executor
         .spawn(dummy_publisher(
             "z_dec_publisher".to_string(),
