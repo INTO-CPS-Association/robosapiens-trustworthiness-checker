@@ -10,6 +10,7 @@ use std::mem;
 use std::pin::Pin;
 use std::rc::Rc;
 
+use crate::utils::cancellation_token::CancellationToken;
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
@@ -22,7 +23,6 @@ use futures::future::join_all;
 use futures::{FutureExt, select};
 use smol::LocalExecutor;
 use strum_macros::Display;
-use tokio_util::sync::CancellationToken;
 use tracing::Level;
 use tracing::debug;
 use tracing::info;
@@ -755,7 +755,7 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
         self.clock() == usize::MAX
     }
 
-    fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+    fn cancellation_token(&self) -> CancellationToken {
         self.cancellation_token.clone()
     }
 

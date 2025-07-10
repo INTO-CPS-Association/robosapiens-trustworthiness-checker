@@ -21,9 +21,7 @@ lalrpop = "0.22.2"
 # console-subscriber = "0.4.0"
 winnow = { version = "0.7.10", features = ["simd"] }
 futures = "0.3.31"
-async-channel = "2.3.1"
-async-signal = "0.2.9"
-tokio-util = "0.7.15"
+
 clap = { version = "4.5.40", features = ["derive"] }
 async-stream = "0.3.6"
 r2r = { version = "0.9.5", optional = true }

@@ -9,7 +9,7 @@ use smol::LocalExecutor;
 use tracing::{Level, debug, info, instrument, warn};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
-// use tokio_util::sync::CancellationToken;
+// use crate::utils::cancellation_token::CancellationToken;
 
 use super::client::provide_mqtt_client;
 use crate::core::OutputHandler;

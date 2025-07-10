@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use crate::utils::cancellation_token::CancellationToken;
 use futures::StreamExt;
 use futures::select;
 use r2r;
 use smol::LocalExecutor;
-use tokio_util::sync::CancellationToken;
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
 

@@ -52,7 +52,7 @@ pub trait StreamContext<Val: StreamData>: 'static {
     fn clock(&self) -> usize;
 
     /// Get the cancellation token for this context
-    fn cancellation_token(&self) -> tokio_util::sync::CancellationToken;
+    fn cancellation_token(&self) -> crate::utils::cancellation_token::CancellationToken;
 
     /// Cancel all var managers in this context
     fn cancel(&self);

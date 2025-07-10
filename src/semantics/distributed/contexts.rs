@@ -218,7 +218,7 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
         self.ctx.clock()
     }
 
-    fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+    fn cancellation_token(&self) -> crate::utils::cancellation_token::CancellationToken {
         self.ctx.cancellation_token()
     }
 

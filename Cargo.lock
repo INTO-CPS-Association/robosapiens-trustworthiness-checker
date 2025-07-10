@@ -3402,10 +3402,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "approx",
- "async-channel 2.3.1",
  "async-compat",
  "async-once-cell",
- "async-signal",
  "async-stream",
  "async-trait",
  "async-unsync",
@@ -3440,7 +3438,6 @@ dependencies = [
  "tc-testutils",
  "test-log",
  "thiserror 2.0.12",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "unsync",

@@ -1713,7 +1713,7 @@ async fn test_direct_varmanager_cancellation(executor: Rc<LocalExecutor<'static>
     use async_stream::stream;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use tokio_util::sync::CancellationToken;
+    use trustworthiness_checker::utils::cancellation_token::CancellationToken;
 
     // Create a cancellation token and an infinite input stream
     let cancellation_token = CancellationToken::new();

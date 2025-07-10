@@ -5,9 +5,9 @@ use std::future::Future;
 use futures::StreamExt;
 #[cfg(feature = "ros")]
 use r2r::{WrappedTypesupport, std_msgs::msg::Int32};
-use tokio_util::sync::CancellationToken;
 use trustworthiness_checker::lola_fixtures;
 use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
+use trustworthiness_checker::utils::cancellation_token::CancellationToken;
 #[cfg(feature = "ros")]
 use trustworthiness_checker::{
     AsyncMonitorRunner, Monitor, UntimedLolaSemantics, Value, VarName, lola_specification,

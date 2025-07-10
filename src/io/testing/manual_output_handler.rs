@@ -1,12 +1,12 @@
 use std::{mem, rc::Rc};
 
+use crate::utils::cancellation_token::{CancellationToken, DropGuard};
 use async_stream::stream;
 use async_unsync::{bounded, oneshot};
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::{LocalBoxFuture, join_all};
 use smol::LocalExecutor;
-use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{Level, debug, instrument};
 
 use crate::{

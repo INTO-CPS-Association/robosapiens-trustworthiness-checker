@@ -6,8 +6,8 @@ use futures::{
     stream::{self, LocalBoxStream},
 };
 // use tokio::sync::oneshot;
+use crate::utils::cancellation_token::DropGuard;
 use async_unsync::oneshot;
-use tokio_util::sync::DropGuard;
 
 /* Converts a `oneshot::Receiver` of an `OutputStream` into an `OutputStream`.
  * Is done by first waiting for the oneshot to resolve to an OutputStream and
