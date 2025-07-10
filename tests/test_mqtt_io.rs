@@ -1,110 +1,22 @@
 use std::vec;
 
+use async_compat::Compat as TokioCompat;
 use futures::{FutureExt, StreamExt};
 use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use smol_macros::test as smol_test;
-use std::mem;
-use tracing::{debug, info, instrument};
-use trustworthiness_checker::io::mqtt::client::{
-    provide_mqtt_client, provide_mqtt_client_with_subscription,
-};
+use tracing::info;
+use trustworthiness_checker::io::mqtt::client::provide_mqtt_client;
 use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
-use trustworthiness_checker::{InputProvider, OutputStream, Value};
+use trustworthiness_checker::{InputProvider, OutputStream};
 use winnow::Parser;
-
-use async_compat::Compat as TokioCompat;
-use testcontainers_modules::mosquitto::{self, Mosquitto};
-use testcontainers_modules::testcontainers::runners::AsyncRunner;
-use testcontainers_modules::testcontainers::{ContainerAsync as ContainerAsyncTokio, Image};
-
-struct ContainerAsync<T: Image> {
-    inner: Option<ContainerAsyncTokio<T>>,
-}
-
-impl<T: Image> ContainerAsync<T> {
-    fn new(inner: ContainerAsyncTokio<T>) -> Self {
-        Self { inner: Some(inner) }
-    }
-
-    async fn get_host_port_ipv4(
-        &self,
-        port: u16,
-    ) -> Result<u16, testcontainers_modules::testcontainers::TestcontainersError> {
-        TokioCompat::new(self.inner.as_ref().unwrap().get_host_port_ipv4(port)).await
-    }
-}
-
-impl<T: Image> Drop for ContainerAsync<T> {
-    fn drop(&mut self) {
-        let inner = mem::take(&mut self.inner);
-        TokioCompat::new(async move { mem::drop(inner) });
-    }
-}
-
-#[instrument(level = tracing::Level::INFO)]
-async fn start_mqtt() -> ContainerAsync<Mosquitto> {
-    let image = mosquitto::Mosquitto::default();
-
-    ContainerAsync::new(
-        TokioCompat::new(image.start())
-            .await
-            .expect("Failed to start EMQX test container"),
-    )
-}
-
-#[instrument(level = tracing::Level::INFO)]
-async fn get_outputs(topic: String, client_name: String, port: u16) -> OutputStream<Value> {
-    // Create a new client
-    let (mqtt_client, stream) =
-        provide_mqtt_client_with_subscription(format!("tcp://localhost:{}", port))
-            .await
-            .expect("Failed to create MQTT client");
-    info!(
-        "Received client for Z with client_id: {:?}",
-        mqtt_client.client_id()
-    );
-
-    // Try to get the messages
-    //let mut stream = mqtt_client.clone().get_stream(10);
-    mqtt_client.subscribe(topic, 1).await.unwrap();
-    info!("Subscribed to Z outputs");
-    return Box::pin(stream.map(|msg| {
-        let binding = msg;
-        let payload = binding.payload_str();
-        let res = serde_json::from_str(&payload).unwrap();
-        debug!(name:"Received message", ?res, topic=?binding.topic());
-        res
-    }));
-}
-
-#[instrument(level = tracing::Level::INFO)]
-async fn dummy_publisher(client_name: String, topic: String, values: Vec<Value>, port: u16) {
-    // Create a new client
-    let mqtt_client = provide_mqtt_client(format!("tcp://localhost:{}", port))
-        .await
-        .expect("Failed to create MQTT client");
-
-    // Try to send the messages
-    let mut output_strs = values.iter().map(|val| serde_json::to_string(val).unwrap());
-    while let Some(output_str) = output_strs.next() {
-        let message = mqtt::Message::new(topic.clone(), output_str.clone(), 1);
-        match mqtt_client.publish(message.clone()).await {
-            Ok(_) => {
-                debug!(name: "Published message", ?message, topic=?message.topic());
-            }
-            Err(e) => {
-                panic!("Lost MQTT connection with error {:?}.", e);
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use approx::assert_abs_diff_eq;
     use std::{collections::BTreeMap, rc::Rc};
+    use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
     use test_log::test;
     use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
     use trustworthiness_checker::io::mqtt::MQTTLocalityReceiver;
@@ -149,7 +61,7 @@ mod tests {
             .map(|v| (v.clone(), format!("mqtt_output_{}", v)))
             .collect::<BTreeMap<_, _>>();
 
-        let outputs = get_outputs(
+        let outputs = get_mqtt_outputs(
             "mqtt_output_z".to_string(),
             "z_subscriber".to_string(),
             mqtt_port,
@@ -199,7 +111,7 @@ mod tests {
             .map(|v| (v.clone(), format!("mqtt_output_float_{}", v)))
             .collect::<BTreeMap<_, _>>();
 
-        let outputs = get_outputs(
+        let outputs = get_mqtt_outputs(
             "mqtt_output_float_z".to_string(),
             "z_float_subscriber".to_string(),
             mqtt_port,
@@ -325,7 +237,7 @@ mod tests {
 
         // Spawn dummy MQTT publisher nodes
         executor
-            .spawn(dummy_publisher(
+            .spawn(dummy_mqtt_publisher(
                 "x_publisher".to_string(),
                 "mqtt_input_x".to_string(),
                 xs,
@@ -334,7 +246,7 @@ mod tests {
             .detach();
 
         executor
-            .spawn(dummy_publisher(
+            .spawn(dummy_mqtt_publisher(
                 "y_publisher".to_string(),
                 "mqtt_input_y".to_string(),
                 ys,
@@ -419,7 +331,7 @@ mod tests {
 
         // Spawn dummy MQTT publisher nodes
         executor
-            .spawn(dummy_publisher(
+            .spawn(dummy_mqtt_publisher(
                 "x_publisher_float".to_string(),
                 "mqtt_input_float_x".to_string(),
                 xs,
@@ -428,7 +340,7 @@ mod tests {
             .detach();
 
         executor
-            .spawn(dummy_publisher(
+            .spawn(dummy_mqtt_publisher(
                 "y_publisher_float".to_string(),
                 "mqtt_input_float_y".to_string(),
                 ys,

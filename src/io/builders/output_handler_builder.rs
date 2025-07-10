@@ -3,9 +3,10 @@ use std::rc::Rc;
 use smol::LocalExecutor;
 
 use crate::cli::args::OutputMode;
-use crate::core::MQTT_HOSTNAME;
+use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::cli::StdoutOutputHandler;
 use crate::io::mqtt::MQTTOutputHandler;
+use crate::io::redis::RedisOutputHandler;
 use crate::{self as tc, Value};
 use crate::{VarName, core::OutputHandler};
 
@@ -70,6 +71,39 @@ impl OutputHandlerBuilder {
                         topics,
                     )
                     .expect("MQTT output handler could not be created"),
+                )
+            }
+            OutputMode {
+                redis_output: true, ..
+            } => {
+                let topics = output_var_names
+                    .iter()
+                    .map(|var| (var.clone(), var.into()))
+                    .collect();
+                Box::new(
+                    MQTTOutputHandler::new(executor, output_var_names, MQTT_HOSTNAME, topics)
+                        .expect("MQTT output handler could not be created"),
+                )
+            }
+            OutputMode {
+                output_redis_topics: Some(topics),
+                ..
+            } => {
+                let topics = topics
+                    .into_iter()
+                    // Only include topics that are in the output_vars
+                    // this is necessary for localisation support
+                    .filter(|topic| output_var_names.contains(&VarName::new(topic.as_str())))
+                    .map(|topic| (topic.clone().into(), topic))
+                    .collect();
+                Box::new(
+                    RedisOutputHandler::new(
+                        executor.clone(),
+                        output_var_names,
+                        REDIS_HOSTNAME,
+                        topics,
+                    )
+                    .expect("Redis output handler could not be created"),
                 )
             }
             OutputMode {

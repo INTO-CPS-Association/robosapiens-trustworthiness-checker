@@ -31,6 +31,12 @@ pub struct InputMode {
     #[clap(long)]
     pub mqtt_input: bool,
 
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    pub input_redis_topics: Option<Vec<String>>,
+
+    #[clap(long)]
+    pub redis_input: bool,
+
     // #[cfg(feature = "ros")]
     #[clap(long)]
     pub input_ros_topics: Option<String>,
@@ -47,6 +53,12 @@ pub struct OutputMode {
 
     #[clap(long)]
     pub mqtt_output: bool,
+
+    #[clap(long, value_delimiter = ' ', num_args = 1..)]
+    pub output_redis_topics: Option<Vec<String>>,
+
+    #[clap(long)]
+    pub redis_output: bool,
 
     // #[cfg(feature = "ros")]
     // TODO: Implement ROS output support

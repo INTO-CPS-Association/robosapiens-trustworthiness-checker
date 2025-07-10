@@ -1,170 +1,29 @@
-#![allow(warnings)]
-use std::fmt::Result as FmtResult;
 use std::rc::Rc;
-use std::time::Duration;
-use std::{future::Future, vec};
+use std::vec;
 
-use futures::future::Either;
-use futures::{StreamExt, executor, stream};
-use paho_mqtt as mqtt;
+use futures::StreamExt;
 use smol::LocalExecutor;
-use smol::future::{FutureExt, race};
-use std::pin::Pin;
-use std::{mem, task};
-use tokio::fs::File;
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, instrument, warn};
+use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
+use tracing::info;
 use trustworthiness_checker::core::Runnable;
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
-use trustworthiness_checker::io::mqtt::client::{
-    provide_mqtt_client, provide_mqtt_client_with_subscription,
-};
 use trustworthiness_checker::lola_fixtures::*;
-use trustworthiness_checker::{OutputStream, Specification, Value};
+use trustworthiness_checker::{Specification, Value};
 use winnow::Parser;
 
-use async_compat::Compat as TokioCompat;
-use async_once_cell::Lazy;
 use macro_rules_attribute::apply;
 use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
 use test_log::test;
-use testcontainers_modules::mosquitto::{self, Mosquitto};
-use testcontainers_modules::testcontainers::core::WaitFor;
-use testcontainers_modules::testcontainers::core::{IntoContainerPort, Mount};
-use testcontainers_modules::testcontainers::runners::AsyncRunner;
-use testcontainers_modules::testcontainers::{
-    ContainerAsync as ContainerAsyncTokio, GenericImage, Image, ImageExt,
-};
 
 use trustworthiness_checker::{
-    InputProvider, Monitor, VarName,
+    InputProvider, VarName,
     dep_manage::interface::{DependencyKind, create_dependency_manager},
-    io::{
-        mqtt::{MQTTInputProvider, MQTTOutputHandler},
-        testing::manual_output_handler::ManualOutputHandler,
-    },
+    io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
     lola_specification,
     runtime::asynchronous::AsyncMonitorRunner,
     semantics::{UntimedLolaSemantics, distributed::localisation::Localisable},
 };
-
-struct ContainerAsync<T: Image> {
-    inner: Option<ContainerAsyncTokio<T>>,
-}
-
-impl<T: Image> ContainerAsync<T> {
-    fn new(inner: ContainerAsyncTokio<T>) -> Self {
-        Self { inner: Some(inner) }
-    }
-
-    async fn get_host_port_ipv4(
-        &self,
-        port: u16,
-    ) -> Result<u16, testcontainers_modules::testcontainers::TestcontainersError> {
-        TokioCompat::new(self.inner.as_ref().unwrap().get_host_port_ipv4(port)).await
-    }
-}
-
-impl<T: Image> Drop for ContainerAsync<T> {
-    fn drop(&mut self) {
-        let inner = mem::take(&mut self.inner);
-        TokioCompat::new(async move { mem::drop(inner) });
-    }
-}
-
-#[instrument(level = tracing::Level::INFO)]
-async fn start_mqtt() -> ContainerAsync<Mosquitto> {
-    let image = mosquitto::Mosquitto::default();
-
-    ContainerAsync::new(
-        TokioCompat::new(image.start())
-            .await
-            .expect("Failed to start EMQX test container"),
-    )
-}
-
-#[instrument(level = tracing::Level::INFO)]
-async fn get_outputs(topic: String, client_name: String, port: u16) -> OutputStream<Value> {
-    // Create a new client
-    let (mqtt_client, mut stream) =
-        provide_mqtt_client_with_subscription(format!("tcp://localhost:{}", port))
-            .await
-            .expect("Failed to create MQTT client");
-    info!(
-        "Received client for Z with client_id: {:?}",
-        mqtt_client.client_id()
-    );
-
-    // Try to get the messages
-    //let mut stream = mqtt_client.clone().get_stream(10);
-    mqtt_client.subscribe(topic, 1).await.unwrap();
-    info!("Subscribed to Z outputs");
-    return Box::pin(stream.map(|msg| {
-        let binding = msg;
-        let payload = binding.payload_str();
-        let res = serde_json::from_str(&payload).unwrap();
-        debug!(name:"Received message", ?res, topic=?binding.topic());
-        res
-    }));
-}
-
-#[instrument(level = tracing::Level::INFO)]
-async fn dummy_publisher(client_name: String, topic: String, values: Vec<Value>, port: u16) {
-    info!(
-        "Starting publisher {} for topic {} with {} values",
-        client_name,
-        topic,
-        values.len()
-    );
-
-    // Create a new client
-    let mqtt_client = provide_mqtt_client(format!("tcp://localhost:{}", port))
-        .await
-        .expect("Failed to create MQTT client");
-
-    // Try to send the messages
-    for (index, value) in values.iter().enumerate() {
-        let output_str = match serde_json::to_string(value) {
-            Ok(s) => s,
-            Err(e) => {
-                panic!("Failed to serialize value {:?}: {:?}", value, e);
-            }
-        };
-
-        let message = mqtt::Message::new(topic.clone(), output_str.clone(), 1);
-        info!(
-            "Publishing message {}/{} on topic {}: {}",
-            index + 1,
-            values.len(),
-            topic,
-            output_str
-        );
-
-        match mqtt_client.publish(message.clone()).await {
-            Ok(_) => {
-                info!(
-                    "Successfully published message {}/{} on topic {}",
-                    index + 1,
-                    values.len(),
-                    topic
-                );
-            }
-            Err(e) => {
-                panic!(
-                    "Lost MQTT connection with error {:?} on topic {}.",
-                    e, topic
-                );
-            }
-        }
-    }
-
-    info!(
-        "Finished publishing all {} messages for topic {}",
-        values.len(),
-        topic
-    );
-}
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[test(apply(smol_test))]
@@ -198,14 +57,14 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .expect("Failed to get host port for MQTT server");
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
-    let mut input_provider_1 = MQTTInputProvider::new(
+    let input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
         var_in_topics_1.iter().cloned().collect(),
     )
     .expect("Failed to create input provider 1");
 
-    let mut output_handler_1 = MQTTOutputHandler::new(
+    let output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["w".into()],
         mqtt_host.as_str(),
@@ -213,14 +72,14 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     )
     .expect("Failed to create output handler 1");
 
-    let mut input_provider_2 = MQTTInputProvider::new(
+    let input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
         var_in_topics_2.iter().cloned().collect(),
     )
     .expect("Failed to create input provider 2");
 
-    let mut output_handler_2 = MQTTOutputHandler::new(
+    let output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["v".into()],
         mqtt_host.as_str(),
@@ -231,7 +90,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     let input_provider_1_ready = input_provider_1.ready();
     let input_provider_2_ready = input_provider_2.ready();
 
-    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model1.clone(),
         Box::new(input_provider_1),
@@ -243,7 +102,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .await
         .expect("Input provider 1 should be ready");
 
-    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model2.clone(),
         Box::new(input_provider_2),
@@ -257,7 +116,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
 
     // Start publishers for x and y inputs
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "x_dec_publisher".to_string(),
             "mqtt_input_dec_x".to_string(),
             xs,
@@ -266,7 +125,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .detach();
 
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "y_dec_publisher".to_string(),
             "mqtt_input_dec_y".to_string(),
             ys,
@@ -275,7 +134,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .detach();
 
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "z_dec_publisher".to_string(),
             "mqtt_input_dec_z".to_string(),
             zs,
@@ -283,7 +142,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         ))
         .detach();
 
-    let outputs_z = get_outputs(
+    let outputs_z = get_mqtt_outputs(
         "mqtt_output_dec_v".to_string(),
         "v_subscriber".to_string(),
         mqtt_port,
@@ -320,7 +179,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .expect("Failed to get host port for MQTT server");
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
-    let mut input_provider_1 = MQTTInputProvider::new(
+    let input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
         local_spec1
@@ -334,7 +193,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .ready()
         .await
         .expect("Input provider 1 should be ready");
-    let mut input_provider_2 = MQTTInputProvider::new(
+    let input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
         local_spec2
@@ -354,7 +213,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_1 = MQTTOutputHandler::new(
+    let output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["w".into()],
         mqtt_host.as_str(),
@@ -366,7 +225,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_2 = MQTTOutputHandler::new(
+    let output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["v".into()],
         mqtt_host.as_str(),
@@ -374,7 +233,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     )
     .expect("Failed to create output handler 2");
 
-    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model1.clone(),
         Box::new(input_provider_1),
@@ -382,7 +241,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, model1),
     );
 
-    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model2.clone(),
         Box::new(input_provider_2),
@@ -394,7 +253,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     executor.spawn(runner_2.run()).detach();
 
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "x_dec_publisher".to_string(),
             "x".to_string(),
             xs,
@@ -402,7 +261,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         ))
         .detach();
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "y_dec_publisher".to_string(),
             "y".to_string(),
             ys,
@@ -410,7 +269,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         ))
         .detach();
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "z_dec_publisher".to_string(),
             "z".to_string(),
             zs,
@@ -418,7 +277,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         ))
         .detach();
 
-    let outputs_z = get_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
+    let outputs_z = get_mqtt_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
 
     assert_eq!(
         outputs_z.take(2).collect::<Vec<_>>().await,
@@ -458,7 +317,7 @@ async fn localisation_distribution_graphs_test(
         .expect("Failed to get host port for MQTT server");
     let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
 
-    let mut input_provider_1 = MQTTInputProvider::new(
+    let input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
         local_spec1
@@ -472,7 +331,7 @@ async fn localisation_distribution_graphs_test(
         .ready()
         .await
         .expect("Input provider 1 should be ready");
-    let mut input_provider_2 = MQTTInputProvider::new(
+    let input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host.as_str(),
         local_spec2
@@ -492,7 +351,7 @@ async fn localisation_distribution_graphs_test(
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_1 = MQTTOutputHandler::new(
+    let output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["w".into()],
         mqtt_host.as_str(),
@@ -504,7 +363,7 @@ async fn localisation_distribution_graphs_test(
         .iter()
         .map(|v| (v.clone(), format!("{}", v)))
         .collect();
-    let mut output_handler_2 = MQTTOutputHandler::new(
+    let output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["v".into()],
         mqtt_host.as_str(),
@@ -512,7 +371,7 @@ async fn localisation_distribution_graphs_test(
     )
     .expect("Failed to create output handler 2");
 
-    let mut runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model1.clone(),
         Box::new(input_provider_1),
@@ -520,7 +379,7 @@ async fn localisation_distribution_graphs_test(
         create_dependency_manager(DependencyKind::Empty, model1),
     );
 
-    let mut runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
         executor.clone(),
         model2.clone(),
         Box::new(input_provider_2),
@@ -532,7 +391,7 @@ async fn localisation_distribution_graphs_test(
     executor.spawn(runner_2.run()).detach();
 
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "x_dec_publisher".to_string(),
             "x".to_string(),
             xs,
@@ -540,7 +399,7 @@ async fn localisation_distribution_graphs_test(
         ))
         .detach();
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "y_dec_publisher".to_string(),
             "y".to_string(),
             ys,
@@ -548,7 +407,7 @@ async fn localisation_distribution_graphs_test(
         ))
         .detach();
     executor
-        .spawn(dummy_publisher(
+        .spawn(dummy_mqtt_publisher(
             "z_dec_publisher".to_string(),
             "z".to_string(),
             zs,
@@ -556,7 +415,7 @@ async fn localisation_distribution_graphs_test(
         ))
         .detach();
 
-    let outputs_z = get_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
+    let outputs_z = get_mqtt_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
 
     assert_eq!(
         outputs_z.take(2).collect::<Vec<_>>().await,

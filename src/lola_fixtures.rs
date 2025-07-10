@@ -4,14 +4,12 @@ use smol::stream::StreamExt;
 use std::collections::BTreeMap;
 
 // Dead code is allowed in this file since cargo does not correctly
-// track when functions are used in tests.
+// track when functions are used in tests or with specific features.
 
-#[allow(dead_code)]
 pub fn input_empty() -> BTreeMap<VarName, OutputStream<Value>> {
     BTreeMap::new()
 }
 
-#[allow(dead_code)]
 pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(

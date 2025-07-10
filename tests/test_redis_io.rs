@@ -10,14 +10,11 @@
 //! to spin up Redis instances for testing.
 
 use std::collections::BTreeMap;
-use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
 
 use approx::assert_abs_diff_eq;
-use async_compat::Compat as TokioCompat;
 use async_stream::stream;
-use async_unsync::bounded::{self, Receiver, Sender};
 use async_unsync::oneshot;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -27,10 +24,8 @@ use redis::{self, AsyncTypedCommands};
 use smol::LocalExecutor;
 
 use smol_macros::test as smol_test;
-use testcontainers_modules::redis::Redis;
-use testcontainers_modules::testcontainers::runners::AsyncRunner;
-use testcontainers_modules::testcontainers::{ContainerAsync as ContainerAsyncTokio, Image};
-use tracing::{debug, info, instrument};
+use tc_testutils::redis::{dummy_redis_receiver, dummy_redis_sender, start_redis};
+use tracing::{debug, info};
 use trustworthiness_checker::{
     InputProvider, OutputStream, Value, VarName,
     core::{OutputHandler, Runnable},
@@ -45,109 +40,6 @@ use trustworthiness_checker::{
     semantics::UntimedLolaSemantics,
 };
 use winnow::Parser;
-
-struct ContainerAsync<T: Image> {
-    inner: Option<ContainerAsyncTokio<T>>,
-}
-
-impl<T: Image> ContainerAsync<T> {
-    fn new(inner: ContainerAsyncTokio<T>) -> Self {
-        Self { inner: Some(inner) }
-    }
-
-    async fn get_host_port_ipv4(
-        &self,
-        port: u16,
-    ) -> Result<u16, testcontainers_modules::testcontainers::TestcontainersError> {
-        TokioCompat::new(self.inner.as_ref().unwrap().get_host_port_ipv4(port)).await
-    }
-}
-
-impl<T: Image> Drop for ContainerAsync<T> {
-    fn drop(&mut self) {
-        let inner = mem::take(&mut self.inner);
-        TokioCompat::new(async move { mem::drop(inner) });
-    }
-}
-
-#[instrument(level = tracing::Level::INFO)]
-async fn start_redis() -> ContainerAsync<Redis> {
-    ContainerAsync::new(
-        TokioCompat::new(Redis::default().start())
-            .await
-            .expect("Failed to start Redis test container"),
-    )
-}
-
-async fn dummy_redis_sender(
-    host: String,
-    channel: String,
-    messages: Vec<Value>,
-    ready_rx: oneshot::Receiver<()>,
-) -> anyhow::Result<()> {
-    let client = redis::Client::open(host)?;
-    let mut con = client.get_multiplexed_async_connection().await?;
-
-    // Wait for receiver to be ready
-    let _ = ready_rx.await;
-
-    for message in messages.into_iter() {
-        debug!(name: "Publishing message", ?message, ?channel);
-        con.publish(&channel, message).await?;
-        // Small delay to ensure message ordering
-        // smol::Timer::after(std::time::Duration::from_millis(10)).await;
-    }
-
-    Ok(())
-}
-
-async fn dummy_redis_receiver(
-    executor: Rc<LocalExecutor<'static>>,
-    host: String,
-    channels: Vec<String>,
-    ready_tx: oneshot::Sender<()>,
-) -> anyhow::Result<Vec<OutputStream<Value>>> {
-    let client = redis::Client::open(host)?;
-    let mut con = client.get_async_pubsub().await?;
-    con.subscribe(&channels).await?;
-
-    // Signal that we're ready to receive messages
-    let _ = ready_tx.send(());
-
-    let (senders, receivers): (Vec<Sender<Value>>, Vec<Receiver<Value>>) = channels
-        .iter()
-        .map(|_| bounded::channel(10).into_split())
-        .unzip();
-    let mut senders: BTreeMap<String, Sender<Value>> =
-        channels.iter().cloned().zip(senders.into_iter()).collect();
-    let outputs = receivers
-        .into_iter()
-        .map(|mut rx| {
-            Box::pin(stream! {
-                while let Some(x) = rx.recv().await {
-                    yield x
-                }
-            }) as OutputStream<Value>
-        })
-        .collect();
-
-    executor
-        .spawn(async move {
-            let mut stream = con.on_message();
-            while let Some(message) = futures::StreamExt::next(&mut stream).await {
-                let channel = message.get_channel_name();
-                let message = message.get_payload().unwrap();
-                if let Some(sender) = senders.get_mut(channel) {
-                    if sender.send(message).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        })
-        .detach();
-
-    Ok(outputs)
-}
 
 /// Tests basic Redis pub/sub functionality with dummy sender and receiver.
 ///

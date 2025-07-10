@@ -6,6 +6,7 @@ default-run = "trustworthiness_checker"
 exclude = ["examples/*", "scripts/*"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
 
 [lib]
 name = "trustworthiness_checker"
@@ -92,12 +93,9 @@ criterion = { version = "0.6.0", features = [
     "async_smol",
     "html_reports",
 ] }
-testcontainers-modules = { version = "0.12.1", features = [
-    "mosquitto",
-    "redis",
-] }
 test-log = { version = "0.2.17", features = ["trace"] }
 proptest = "1.7.0"
+tc-testutils = { path = "libs/tc-testutils" }
 
 [[bin]]
 name = "work_scheduler"
@@ -125,3 +123,6 @@ harness = false
 [[bench]]
 name = "parsing"
 harness = false
+
+# [dev-dependencies.tc-testutils]
+# path = "libs/tc-testutils"

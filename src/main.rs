@@ -158,7 +158,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             .context("Model file could not be parsed")?,
         ParserMode::LALR => Err(anyhow::anyhow!("LALR parser not currently implemented"))?,
     };
-    info!(name: "Parsed model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
+    info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Parsed model");
 
     // Localise the model to contain only the local variables (if needed)
     let model = if let DistributionMode::LocalMonitor(locality_mode) = &builder.distribution_mode {

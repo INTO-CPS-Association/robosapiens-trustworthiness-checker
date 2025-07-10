@@ -3,7 +3,7 @@ use std::rc::Rc;
 use smol::LocalExecutor;
 use tracing::info_span;
 
-use crate::core::MQTT_HOSTNAME;
+use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::{self as tc, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
 
@@ -18,6 +18,11 @@ pub enum InputProviderSpec {
     ),
     /// MQTT topics input provider
     MQTT(
+        /// Topics
+        Option<Vec<String>>,
+    ),
+    /// Redis topics input provider
+    Redis(
         /// Topics
         Option<Vec<String>>,
     ),
@@ -60,6 +65,10 @@ impl InputProviderBuilder {
 
     pub fn mqtt_map(topics: Option<Vec<String>>) -> Self {
         Self::new(InputProviderSpec::MQTTMap(topics))
+    }
+
+    pub fn redis(topics: Option<Vec<String>>) -> Self {
+        Self::new(InputProviderSpec::Redis(topics))
     }
 
     pub fn lang(mut self, lang: Language) -> Self {
@@ -146,18 +155,42 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let mut mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
+                let mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
                     self.executor.unwrap().clone(),
-                    MQTT_HOSTNAME,
+                    REDIS_HOSTNAME,
                     var_topics,
                 )
                 .expect("MQTT input provider could not be created");
                 mqtt_input_provider
-                    .started
-                    .wait_for(|x| info_span!("Waited for input provider started").in_scope(|| *x))
+                    .ready()
                     .await
                     .expect("MQTT input provider failed to start");
                 Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
+            }
+            InputProviderSpec::Redis(topics) => {
+                let var_topics = match topics {
+                    Some(topics) => topics
+                        .iter()
+                        .map(|topic| (VarName::new(topic), topic.clone()))
+                        .collect(),
+                    None => self
+                        .input_vars
+                        .unwrap()
+                        .into_iter()
+                        .map(|topic| (topic.clone(), format!("{}", topic)))
+                        .collect(),
+                };
+                let redis_input_provider = tc::io::redis::RedisInputProvider::new(
+                    self.executor.unwrap().clone(),
+                    REDIS_HOSTNAME,
+                    var_topics,
+                )
+                .expect("Redis input provider could not be created");
+                redis_input_provider
+                    .ready()
+                    .await
+                    .expect("Redis input provider failed to start");
+                Box::new(redis_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
         }
     }
