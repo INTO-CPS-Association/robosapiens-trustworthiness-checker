@@ -39,6 +39,7 @@ impl MQTTInputProvider {
         executor: Rc<LocalExecutor<'static>>,
         host: &str,
         var_topics: InputChannelMap,
+        max_reconnect_attempts: u32,
     ) -> Result<Self, mqtt::Error> {
         let host: String = host.to_string();
 
@@ -71,6 +72,7 @@ impl MQTTInputProvider {
                 topics,
                 senders,
                 started.clone(),
+                max_reconnect_attempts,
             ))
             .detach();
 
@@ -113,11 +115,20 @@ impl MQTTInputProvider {
         topics: Vec<String>,
         senders: BTreeMap<VarName, bounded::Sender<Value>>,
         started: Rc<AsyncCell<bool>>,
+        max_reconnect_attempts: u32,
     ) {
         let result = result.guard_shared(Err(anyhow::anyhow!("InputProvider crashed")));
         result.set(
-            Self::input_monitor_with_result(var_topics, topic_vars, host, topics, senders, started)
-                .await,
+            Self::input_monitor_with_result(
+                var_topics,
+                topic_vars,
+                host,
+                topics,
+                senders,
+                started,
+                max_reconnect_attempts,
+            )
+            .await,
         )
     }
 
@@ -128,11 +139,13 @@ impl MQTTInputProvider {
         topics: Vec<String>,
         senders: BTreeMap<VarName, bounded::Sender<Value>>,
         started: Rc<AsyncCell<bool>>,
+        max_reconnect_attempts: u32,
     ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
         // Create and connect to the MQTT client
-        let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone()).await?;
+        let (client, mut stream) =
+            provide_mqtt_client_with_subscription(host.clone(), max_reconnect_attempts).await?;
         info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
         let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
         loop {

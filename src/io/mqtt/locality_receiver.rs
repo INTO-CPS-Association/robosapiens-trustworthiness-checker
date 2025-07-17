@@ -49,7 +49,7 @@ impl MQTTLocalityReceiver {
 impl LocalityReceiver for MQTTLocalityReceiver {
     async fn receive(&self) -> Result<impl LocalitySpec + 'static, Box<dyn std::error::Error>> {
         let (client, mut stream) =
-            provide_mqtt_client_with_subscription(self.mqtt_host.clone()).await?;
+            provide_mqtt_client_with_subscription(self.mqtt_host.clone(), u32::MAX).await?;
         client.subscribe(self.topic(), MQTT_QOS).await?;
         self.ready.set(true);
         match stream.next().await {

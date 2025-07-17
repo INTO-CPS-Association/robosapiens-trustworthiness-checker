@@ -15,6 +15,7 @@ use winnow::Parser;
 #[cfg(test)]
 mod tests {
     use approx::assert_abs_diff_eq;
+
     use std::{collections::BTreeMap, rc::Rc};
     use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
     use test_log::test;
@@ -194,8 +195,6 @@ mod tests {
             .parse(spec_simple_add_monitor())
             .expect("Model could not be parsed");
 
-        // let pool = smol::LocalExecutor::new();
-
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
         let zs = vec![Value::Int(4), Value::Int(6)];
@@ -218,6 +217,7 @@ mod tests {
             executor.clone(),
             format!("tcp://localhost:{}", mqtt_port).as_str(),
             var_topics,
+            0,
         )
         .unwrap();
         input_provider.ready().await?;
@@ -235,24 +235,20 @@ mod tests {
 
         let res = executor.spawn(runner.run());
 
-        // Spawn dummy MQTT publisher nodes
-        executor
-            .spawn(dummy_mqtt_publisher(
-                "x_publisher".to_string(),
-                "mqtt_input_x".to_string(),
-                xs,
-                mqtt_port,
-            ))
-            .detach();
+        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+        let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
+            "x_publisher".to_string(),
+            "mqtt_input_x".to_string(),
+            xs,
+            mqtt_port,
+        ));
 
-        executor
-            .spawn(dummy_mqtt_publisher(
-                "y_publisher".to_string(),
-                "mqtt_input_y".to_string(),
-                ys,
-                mqtt_port,
-            ))
-            .detach();
+        let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
+            "y_publisher".to_string(),
+            "mqtt_input_y".to_string(),
+            ys,
+            mqtt_port,
+        ));
 
         // Test we have the expected outputs
         // We have to specify how many outputs we want to take as the ROS
@@ -265,8 +261,14 @@ mod tests {
 
         info!("Output collection complete, output stream should now be dropped");
 
+        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        info!("Waiting for publishers to complete...");
+        x_publisher_task.await;
+        y_publisher_task.await;
+        info!("All publishers completed, shutting down MQTT server");
+
         info!("Waiting for monitor to complete after output stream drop...");
-        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(5));
+        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
 
         futures::select! {
             result = res.fuse() => {
@@ -312,6 +314,7 @@ mod tests {
             executor.clone(),
             format!("tcp://localhost:{}", mqtt_port).as_str(),
             var_topics,
+            0,
         )
         .unwrap();
         input_provider.ready().await?;
@@ -329,24 +332,20 @@ mod tests {
 
         let res = executor.spawn(runner.run());
 
-        // Spawn dummy MQTT publisher nodes
-        executor
-            .spawn(dummy_mqtt_publisher(
-                "x_publisher_float".to_string(),
-                "mqtt_input_float_x".to_string(),
-                xs,
-                mqtt_port,
-            ))
-            .detach();
+        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+        let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
+            "x_publisher_float".to_string(),
+            "mqtt_input_float_x".to_string(),
+            xs,
+            mqtt_port,
+        ));
 
-        executor
-            .spawn(dummy_mqtt_publisher(
-                "y_publisher_float".to_string(),
-                "mqtt_input_float_y".to_string(),
-                ys,
-                mqtt_port,
-            ))
-            .detach();
+        let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
+            "y_publisher_float".to_string(),
+            "mqtt_input_float_y".to_string(),
+            ys,
+            mqtt_port,
+        ));
 
         // Test we have the expected outputs
         // We have to specify how many outputs we want to take as the ROS
@@ -367,8 +366,14 @@ mod tests {
 
         info!("Output collection complete, output stream should now be dropped");
 
+        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        info!("Waiting for publishers to complete...");
+        x_publisher_task.await;
+        y_publisher_task.await;
+        info!("All publishers completed, shutting down MQTT server");
+
         info!("Waiting for monitor to complete after output stream drop...");
-        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(5));
+        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
 
         futures::select! {
             result = res.fuse() => {

@@ -31,7 +31,7 @@ pub async fn get_mqtt_outputs(
 ) -> OutputStream<Value> {
     // Create a new client
     let (mqtt_client, stream) =
-        provide_mqtt_client_with_subscription(format!("tcp://localhost:{}", port))
+        provide_mqtt_client_with_subscription(format!("tcp://localhost:{}", port), 0)
             .await
             .expect("Failed to create MQTT client");
     info!(
@@ -112,4 +112,11 @@ pub async fn dummy_mqtt_publisher(
         values.len(),
         topic
     );
+
+    // Clean up the MQTT client to prevent resource contention
+    if let Err(e) = mqtt_client.disconnect(None).await {
+        debug!("Failed to disconnect MQTT client {}: {:?}", client_name, e);
+    } else {
+        debug!("Successfully disconnected MQTT client {}", client_name);
+    }
 }

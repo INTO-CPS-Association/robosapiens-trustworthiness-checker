@@ -61,6 +61,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         executor.clone(),
         mqtt_host.as_str(),
         var_in_topics_1.iter().cloned().collect(),
+        0,
     )
     .expect("Failed to create input provider 1");
 
@@ -76,6 +77,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         executor.clone(),
         mqtt_host.as_str(),
         var_in_topics_2.iter().cloned().collect(),
+        0,
     )
     .expect("Failed to create input provider 2");
 
@@ -114,34 +116,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .await
         .expect("Input provider 2 should be ready");
 
-    // Start publishers for x and y inputs
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "x_dec_publisher".to_string(),
-            "mqtt_input_dec_x".to_string(),
-            xs,
-            mqtt_port,
-        ))
-        .detach();
-
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "y_dec_publisher".to_string(),
-            "mqtt_input_dec_y".to_string(),
-            ys,
-            mqtt_port,
-        ))
-        .detach();
-
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "z_dec_publisher".to_string(),
-            "mqtt_input_dec_z".to_string(),
-            zs,
-            mqtt_port,
-        ))
-        .detach();
-
+    // Get the output stream before starting publishers to ensure subscription is ready
     let outputs_z = get_mqtt_outputs(
         "mqtt_output_dec_v".to_string(),
         "v_subscriber".to_string(),
@@ -149,10 +124,36 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     )
     .await;
 
-    assert_eq!(
-        outputs_z.take(2).collect::<Vec<_>>().await,
-        vec![Value::Int(8), Value::Int(12)]
-    );
+    // Start publishers for x and y inputs and keep task handles
+    let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "x_dec_publisher".to_string(),
+        "mqtt_input_dec_x".to_string(),
+        xs,
+        mqtt_port,
+    ));
+
+    let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "y_dec_publisher".to_string(),
+        "mqtt_input_dec_y".to_string(),
+        ys,
+        mqtt_port,
+    ));
+
+    let z_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "z_dec_publisher".to_string(),
+        "mqtt_input_dec_z".to_string(),
+        zs,
+        mqtt_port,
+    ));
+
+    // Collect outputs
+    let outputs = outputs_z.take(2).collect::<Vec<_>>().await;
+    assert_eq!(outputs, vec![Value::Int(8), Value::Int(12)]);
+
+    // Wait for publishers to complete
+    x_publisher_task.await;
+    y_publisher_task.await;
+    z_publisher_task.await;
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
@@ -187,6 +188,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect(),
+        0,
     )
     .expect("Failed to create input provider 1");
     input_provider_1
@@ -201,6 +203,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect(),
+        0,
     )
     .expect("Failed to create input provider 2");
     input_provider_2
@@ -252,37 +255,37 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     executor.spawn(runner_1.run()).detach();
     executor.spawn(runner_2.run()).detach();
 
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "x_dec_publisher".to_string(),
-            "x".to_string(),
-            xs,
-            mqtt_port,
-        ))
-        .detach();
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "y_dec_publisher".to_string(),
-            "y".to_string(),
-            ys,
-            mqtt_port,
-        ))
-        .detach();
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "z_dec_publisher".to_string(),
-            "z".to_string(),
-            zs,
-            mqtt_port,
-        ))
-        .detach();
-
+    // Get the output stream before starting publishers to ensure subscription is ready
     let outputs_z = get_mqtt_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
 
-    assert_eq!(
-        outputs_z.take(2).collect::<Vec<_>>().await,
-        vec![Value::Int(8), Value::Int(12)]
-    );
+    // Start publishers and keep task handles
+    let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "x_dec_publisher".to_string(),
+        "x".to_string(),
+        xs,
+        mqtt_port,
+    ));
+    let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "y_dec_publisher".to_string(),
+        "y".to_string(),
+        ys,
+        mqtt_port,
+    ));
+    let z_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "z_dec_publisher".to_string(),
+        "z".to_string(),
+        zs,
+        mqtt_port,
+    ));
+
+    // Collect outputs
+    let outputs = outputs_z.take(2).collect::<Vec<_>>().await;
+    assert_eq!(outputs, vec![Value::Int(8), Value::Int(12)]);
+
+    // Wait for publishers to complete
+    x_publisher_task.await;
+    y_publisher_task.await;
+    z_publisher_task.await;
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
@@ -325,6 +328,7 @@ async fn localisation_distribution_graphs_test(
             .iter()
             .map(|v| (v.clone(), v.into()))
             .collect(),
+        0,
     )
     .expect("Failed to create input provider 1");
     input_provider_1
@@ -339,6 +343,7 @@ async fn localisation_distribution_graphs_test(
             .iter()
             .map(|v| (v.clone(), v.into()))
             .collect(),
+        0,
     )
     .expect("Failed to create input provider 2");
     input_provider_2
@@ -390,37 +395,37 @@ async fn localisation_distribution_graphs_test(
     executor.spawn(runner_1.run()).detach();
     executor.spawn(runner_2.run()).detach();
 
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "x_dec_publisher".to_string(),
-            "x".to_string(),
-            xs,
-            mqtt_port,
-        ))
-        .detach();
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "y_dec_publisher".to_string(),
-            "y".to_string(),
-            ys,
-            mqtt_port,
-        ))
-        .detach();
-    executor
-        .spawn(dummy_mqtt_publisher(
-            "z_dec_publisher".to_string(),
-            "z".to_string(),
-            zs,
-            mqtt_port,
-        ))
-        .detach();
-
+    // Get the output stream before starting publishers to ensure subscription is ready
     let outputs_z = get_mqtt_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
 
-    assert_eq!(
-        outputs_z.take(2).collect::<Vec<_>>().await,
-        vec![Value::Int(8), Value::Int(12)]
-    );
+    // Start publishers and keep task handles
+    let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "x_dec_publisher".to_string(),
+        "x".to_string(),
+        xs,
+        mqtt_port,
+    ));
+    let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "y_dec_publisher".to_string(),
+        "y".to_string(),
+        ys,
+        mqtt_port,
+    ));
+    let z_publisher_task = executor.spawn(dummy_mqtt_publisher(
+        "z_dec_publisher".to_string(),
+        "z".to_string(),
+        zs,
+        mqtt_port,
+    ));
+
+    // Collect outputs
+    let outputs = outputs_z.take(2).collect::<Vec<_>>().await;
+    assert_eq!(outputs, vec![Value::Int(8), Value::Int(12)]);
+
+    // Wait for publishers to complete
+    x_publisher_task.await;
+    y_publisher_task.await;
+    z_publisher_task.await;
 
     Ok(())
 }

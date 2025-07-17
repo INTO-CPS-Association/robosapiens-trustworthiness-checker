@@ -178,7 +178,7 @@ impl MapMQTTInputProvider {
         let mqtt_input_span = debug_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
         // Create and connect to the MQTT client
-        let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone())
+        let (client, mut stream) = provide_mqtt_client_with_subscription(host.clone(), u32::MAX)
             .await
             .unwrap();
         info_span!("InputProvider MQTT client connected", ?host, ?var_topics);

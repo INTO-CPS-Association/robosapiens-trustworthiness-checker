@@ -133,6 +133,7 @@ impl InputProviderBuilder {
                     self.executor.unwrap().clone(),
                     MQTT_HOSTNAME,
                     var_topics,
+                    u32::MAX,
                 )
                 .expect("MQTT input provider could not be created");
                 let started = mqtt_input_provider.started.clone();
