@@ -4,6 +4,7 @@ use async_compat::Compat as TokioCompat;
 use async_stream::stream;
 use async_unsync::bounded::{self, Receiver, Sender};
 use async_unsync::oneshot::{self};
+use futures::future::LocalBoxFuture;
 use redis::AsyncTypedCommands;
 use smol::LocalExecutor;
 use testcontainers_modules::{redis::Redis, testcontainers::runners::AsyncRunner};
@@ -22,12 +23,17 @@ pub async fn start_redis() -> ContainerAsync<Redis> {
 }
 
 pub async fn dummy_redis_sender(
-    host: String,
+    host: &str,
+    port: Option<u16>,
     channel: String,
     messages: Vec<Value>,
-    ready_rx: oneshot::Receiver<()>,
+    ready_rx: LocalBoxFuture<'static, ()>,
 ) -> anyhow::Result<()> {
-    let client = redis::Client::open(host)?;
+    let uri = match port {
+        Some(port) => format!("redis://{}:{}", host, port),
+        None => format!("redis://{}", host),
+    };
+    let client = redis::Client::open(uri)?;
     let mut con = client.get_multiplexed_async_connection().await?;
 
     // Wait for receiver to be ready
@@ -43,11 +49,16 @@ pub async fn dummy_redis_sender(
 
 pub async fn dummy_redis_receiver(
     executor: Rc<LocalExecutor<'static>>,
-    host: String,
+    host: &str,
+    port: Option<u16>,
     channels: Vec<String>,
     ready_tx: oneshot::Sender<()>,
 ) -> anyhow::Result<Vec<OutputStream<Value>>> {
-    let client = redis::Client::open(host)?;
+    let uri = match port {
+        Some(port) => format!("redis://{}:{}", host, port),
+        None => format!("redis://{}", host),
+    };
+    let client = redis::Client::open(uri)?;
     let mut con = client.get_async_pubsub().await?;
     con.subscribe(&channels).await?;
 

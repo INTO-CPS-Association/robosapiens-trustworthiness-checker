@@ -38,6 +38,7 @@ impl MQTTInputProvider {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         host: &str,
+        port: Option<u16>,
         var_topics: InputChannelMap,
         max_reconnect_attempts: u32,
     ) -> Result<Self, mqtt::Error> {
@@ -69,6 +70,7 @@ impl MQTTInputProvider {
                 var_topics.clone(),
                 topic_vars,
                 host,
+                port,
                 topics,
                 senders,
                 started.clone(),
@@ -112,6 +114,7 @@ impl MQTTInputProvider {
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
         host: String,
+        port: Option<u16>,
         topics: Vec<String>,
         senders: BTreeMap<VarName, bounded::Sender<Value>>,
         started: Rc<AsyncCell<bool>>,
@@ -123,6 +126,7 @@ impl MQTTInputProvider {
                 var_topics,
                 topic_vars,
                 host,
+                port,
                 topics,
                 senders,
                 started,
@@ -136,6 +140,7 @@ impl MQTTInputProvider {
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
         host: String,
+        port: Option<u16>,
         topics: Vec<String>,
         senders: BTreeMap<VarName, bounded::Sender<Value>>,
         started: Rc<AsyncCell<bool>>,
@@ -143,9 +148,13 @@ impl MQTTInputProvider {
     ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
+        let uri = match port {
+            Some(port) => format!("tcp://{}:{}", host, port),
+            None => format!("tcp://{}", host),
+        };
         // Create and connect to the MQTT client
         let (client, mut stream) =
-            provide_mqtt_client_with_subscription(host.clone(), max_reconnect_attempts).await?;
+            provide_mqtt_client_with_subscription(uri.clone(), max_reconnect_attempts).await?;
         info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
         let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
         loop {

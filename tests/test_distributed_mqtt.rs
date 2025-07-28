@@ -55,11 +55,11 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .get_host_port_ipv4(1883)
         .await
         .expect("Failed to get host port for MQTT server");
-    let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
-
+    let mqtt_host = "localhost";
     let input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_in_topics_1.iter().cloned().collect(),
         0,
     )
@@ -68,14 +68,16 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     let output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["w".into()],
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_out_topics_1.into_iter().collect(),
     )
     .expect("Failed to create output handler 1");
 
     let input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_in_topics_2.iter().cloned().collect(),
         0,
     )
@@ -84,7 +86,8 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     let output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["v".into()],
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_out_topics_2.into_iter().collect(),
     )
     .expect("Failed to create output handler 2");
@@ -178,11 +181,12 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .get_host_port_ipv4(1883)
         .await
         .expect("Failed to get host port for MQTT server");
-    let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
+    let mqtt_host = "localhost";
 
     let input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         local_spec1
             .input_vars()
             .iter()
@@ -197,7 +201,8 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .expect("Input provider 1 should be ready");
     let input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         local_spec2
             .input_vars()
             .iter()
@@ -219,7 +224,8 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     let output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["w".into()],
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_out_topics_1,
     )
     .expect("Failed to create output handler 1");
@@ -231,7 +237,8 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     let output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["v".into()],
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_out_topics_2.into_iter().collect(),
     )
     .expect("Failed to create output handler 2");
@@ -318,11 +325,12 @@ async fn localisation_distribution_graphs_test(
         .get_host_port_ipv4(1883)
         .await
         .expect("Failed to get host port for MQTT server");
-    let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
+    let mqtt_host = "localhost";
 
     let input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         local_spec1
             .input_vars()
             .iter()
@@ -337,7 +345,8 @@ async fn localisation_distribution_graphs_test(
         .expect("Input provider 1 should be ready");
     let input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         local_spec2
             .input_vars()
             .iter()
@@ -359,7 +368,8 @@ async fn localisation_distribution_graphs_test(
     let output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["w".into()],
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_out_topics_1,
     )
     .expect("Failed to create output handler 1");
@@ -371,7 +381,8 @@ async fn localisation_distribution_graphs_test(
     let output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
         vec!["v".into()],
-        mqtt_host.as_str(),
+        mqtt_host,
+        Some(mqtt_port),
         var_out_topics_2.into_iter().collect(),
     )
     .expect("Failed to create output handler 2");

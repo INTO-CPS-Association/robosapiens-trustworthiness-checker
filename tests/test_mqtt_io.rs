@@ -55,7 +55,7 @@ mod tests {
             .expect("Failed to get host port for MQTT server");
 
         let input_streams = input_streams1();
-        let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
+        let mqtt_host = "localhost";
         let mqtt_topics = spec
             .output_vars
             .iter()
@@ -68,13 +68,13 @@ mod tests {
             mqtt_port,
         )
         .await;
-        // sleep(Duration::from_secs(2)).await;
 
         let output_handler = Box::new(
             MQTTOutputHandler::new(
                 executor.clone(),
                 vec!["z".into()],
-                mqtt_host.as_str(),
+                mqtt_host,
+                Some(mqtt_port),
                 mqtt_topics,
             )
             .unwrap(),
@@ -105,7 +105,7 @@ mod tests {
             .expect("Failed to get host port for MQTT server");
 
         let input_streams = input_streams_float();
-        let mqtt_host = format!("tcp://localhost:{}", mqtt_port);
+        let mqtt_host = "localhost";
         let mqtt_topics = spec
             .output_vars
             .iter()
@@ -118,13 +118,13 @@ mod tests {
             mqtt_port,
         )
         .await;
-        // sleep(Duration::from_secs(2)).await;
 
         let output_handler = Box::new(
             MQTTOutputHandler::new(
                 executor.clone(),
                 vec!["z".into()],
-                mqtt_host.as_str(),
+                mqtt_host,
+                Some(mqtt_port),
                 mqtt_topics,
             )
             .unwrap(),
@@ -215,7 +215,8 @@ mod tests {
         // Create the ROS input provider
         let input_provider = MQTTInputProvider::new(
             executor.clone(),
-            format!("tcp://localhost:{}", mqtt_port).as_str(),
+            "localhost",
+            Some(mqtt_port),
             var_topics,
             0,
         )
@@ -312,7 +313,8 @@ mod tests {
         // Create the ROS input provider
         let input_provider = MQTTInputProvider::new(
             executor.clone(),
-            format!("tcp://localhost:{}", mqtt_port).as_str(),
+            "localhost",
+            Some(mqtt_port),
             var_topics,
             0,
         )

@@ -39,6 +39,8 @@ pub struct InputProviderBuilder {
     lang: Option<Language>,
     input_vars: Option<Vec<VarName>>,
     executor: Option<Rc<LocalExecutor<'static>>>,
+    redis_port: Option<u16>,
+    mqtt_port: Option<u16>,
 }
 
 impl InputProviderBuilder {
@@ -48,6 +50,8 @@ impl InputProviderBuilder {
             lang: None,
             input_vars: None,
             executor: None,
+            redis_port: None,
+            mqtt_port: None,
         }
     }
 
@@ -83,6 +87,16 @@ impl InputProviderBuilder {
 
     pub fn executor(mut self, executor: Rc<LocalExecutor<'static>>) -> Self {
         self.executor = Some(executor);
+        self
+    }
+
+    pub fn mqtt_port(mut self, port: Option<u16>) -> Self {
+        self.mqtt_port = port;
+        self
+    }
+
+    pub fn redis_port(mut self, port: Option<u16>) -> Self {
+        self.redis_port = port;
         self
     }
 
@@ -132,6 +146,7 @@ impl InputProviderBuilder {
                 let mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
                     self.executor.unwrap().clone(),
                     MQTT_HOSTNAME,
+                    self.mqtt_port,
                     var_topics,
                     u32::MAX,
                 )
@@ -184,9 +199,13 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
+                let hostname = match self.redis_port {
+                    Some(port) => format!("redis://{}:{}", REDIS_HOSTNAME, port),
+                    None => format!("redis://{}", REDIS_HOSTNAME),
+                };
                 let redis_input_provider = tc::io::redis::RedisInputProvider::new(
                     self.executor.unwrap().clone(),
-                    REDIS_HOSTNAME,
+                    &hostname,
                     var_topics,
                 )
                 .expect("Redis input provider could not be created");

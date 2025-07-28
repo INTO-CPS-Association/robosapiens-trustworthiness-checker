@@ -6,8 +6,6 @@ use paho_mqtt::{self as mqtt, Message};
 use tracing::{Level, debug, info, instrument, warn};
 use uuid::Uuid;
 
-type Hostname = String;
-
 /* An interface for creating the MQTT client lazily and sharing a single
  * instance of the client across all whole application (i.e. sharing
  * it between the input provider and the output handler). */
@@ -89,11 +87,11 @@ fn message_stream(
 }
 
 pub async fn provide_mqtt_client_with_subscription(
-    hostname: Hostname,
+    uri: String,
     max_reconnect_attempts: u32,
 ) -> Result<(mqtt::AsyncClient, BoxStream<'static, Message>), mqtt::Error> {
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-        .server_uri(hostname.clone())
+        .server_uri(uri.clone())
         .client_id(format!(
             "robosapiens_trustworthiness_checker_{}",
             Uuid::new_v4()
@@ -114,14 +112,14 @@ pub async fn provide_mqtt_client_with_subscription(
 
     debug!(
         name = "Created MQTT client",
-        ?hostname,
+        ?uri,
         client_id = mqtt_client.client_id()
     );
 
     let stream = message_stream(mqtt_client.clone(), max_reconnect_attempts);
     debug!(
         name = "Started consuming MQTT messages",
-        ?hostname,
+        ?uri,
         client_id = mqtt_client.client_id()
     );
 
@@ -133,9 +131,9 @@ pub async fn provide_mqtt_client_with_subscription(
         .map(|_| (mqtt_client, stream))
 }
 
-pub async fn provide_mqtt_client(hostname: Hostname) -> Result<mqtt::AsyncClient, mqtt::Error> {
+pub async fn provide_mqtt_client(uri: String) -> Result<mqtt::AsyncClient, mqtt::Error> {
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-        .server_uri(hostname.clone())
+        .server_uri(uri.clone())
         .client_id(format!(
             "robosapiens_trustworthiness_checker_{}",
             Uuid::new_v4()
@@ -156,9 +154,9 @@ pub async fn provide_mqtt_client(hostname: Hostname) -> Result<mqtt::AsyncClient
     };
 
     debug!(
-        name = "Created MQTT client",
-        ?hostname,
-        client_id = mqtt_client.client_id()
+        ?uri,
+        client_id = mqtt_client.client_id(),
+        "Created MQTT client",
     );
 
     // Try to connect to the broker

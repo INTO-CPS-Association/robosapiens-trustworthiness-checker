@@ -51,8 +51,7 @@ async fn test_dummy_redis_sender_receiver(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     let redis = start_redis().await;
-    let host = redis.get_host_port_ipv4(6379).await.unwrap();
-    let host_uri = format!("redis://127.0.0.1:{}", host);
+    let port = redis.get_host_port_ipv4(6379).await.unwrap();
     let channel = "test_channel";
     let messages = vec![Value::Str("test_message".into())];
 
@@ -63,7 +62,8 @@ async fn test_dummy_redis_sender_receiver(
     // Start receiver before sending to ensure we don't miss the message
     let mut outputs = dummy_redis_receiver(
         executor.clone(),
-        host_uri.clone(),
+        "localhost",
+        Some(port),
         vec![channel.to_string()],
         ready_tx,
     )
@@ -79,10 +79,11 @@ async fn test_dummy_redis_sender_receiver(
 
     // Re-send the message after receiver is set up
     dummy_redis_sender(
-        host_uri,
+        "localhost",
+        Some(port),
         channel.to_string(),
         messages.clone(),
-        sender_ready_rx,
+        Box::pin(sender_ready_rx.map(|_| ())),
     )
     .await?;
 
@@ -156,19 +157,21 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
     // Spawn dummy Redis publisher tasks
     executor
         .spawn(dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             "redis_input_x".to_string(),
             xs,
-            ready_rx_x,
+            Box::pin(ready_rx_x.map(|_| ())),
         ))
         .detach();
 
     executor
         .spawn(dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             "redis_input_y".to_string(),
             ys,
-            ready_rx_y,
+            Box::pin(ready_rx_y.map(|_| ())),
         ))
         .detach();
 
@@ -261,19 +264,21 @@ async fn test_add_monitor_redis_input_float(
     // Spawn dummy Redis publisher tasks
     executor
         .spawn(dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             "redis_input_x_float".to_string(),
             xs,
-            ready_rx_x,
+            Box::pin(ready_rx_x.map(|_| ())),
         ))
         .detach();
 
     executor
         .spawn(dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             "redis_input_y_float".to_string(),
             ys,
-            ready_rx_y,
+            Box::pin(ready_rx_y.map(|_| ())),
         ))
         .detach();
 
@@ -371,28 +376,31 @@ async fn test_redis_input_provider_multiple_channels(
     // Send test messages to different channels
     executor
         .spawn(dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             "channel1".to_string(),
             vec![Value::Str("message1".into())],
-            ready_rx_1,
+            Box::pin(ready_rx_1.map(|_| ())),
         ))
         .detach();
 
     executor
         .spawn(dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             "channel2".to_string(),
             vec![Value::Int(42)],
-            ready_rx_2,
+            Box::pin(ready_rx_2.map(|_| ())),
         ))
         .detach();
 
     executor
         .spawn(dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             "channel3".to_string(),
             vec![Value::Float(3.14)],
-            ready_rx_3,
+            Box::pin(ready_rx_3.map(|_| ())),
         ))
         .detach();
 
@@ -442,7 +450,6 @@ async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         .get_host_port_ipv4(6379)
         .await
         .expect("Failed to get host port for Redis server");
-    let host_uri = format!("redis://127.0.0.1:{}", redis_port);
 
     // Test cases showing Value types and their JSON wire format
     let test_cases = vec![
@@ -469,7 +476,8 @@ async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let mut receiver_outputs = dummy_redis_receiver(
             executor.clone(),
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             vec![channel.clone()],
             ready_tx,
         )
@@ -485,10 +493,11 @@ async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         // Send the value using our existing helper
         dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             channel,
             vec![value.clone()],
-            sender_ready_rx,
+            Box::pin(sender_ready_rx.map(|_| ())),
         )
         .await?;
 
@@ -531,7 +540,6 @@ async fn test_serialization_edge_cases(executor: Rc<LocalExecutor<'static>>) -> 
         .get_host_port_ipv4(6379)
         .await
         .expect("Failed to get host port for Redis server");
-    let host_uri = format!("redis://127.0.0.1:{}", redis_port);
 
     // Test edge cases and special characters
     let edge_cases = vec![
@@ -584,7 +592,8 @@ async fn test_serialization_edge_cases(executor: Rc<LocalExecutor<'static>>) -> 
 
         let mut receiver_outputs = dummy_redis_receiver(
             executor.clone(),
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             vec![channel.clone()],
             ready_tx,
         )
@@ -600,10 +609,11 @@ async fn test_serialization_edge_cases(executor: Rc<LocalExecutor<'static>>) -> 
 
         // Send the value
         dummy_redis_sender(
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             channel,
             vec![test_value.clone()],
-            sender_ready_rx,
+            Box::pin(sender_ready_rx.map(|_| ())),
         )
         .await?;
 
@@ -778,7 +788,8 @@ async fn test_json_interoperability(executor: Rc<LocalExecutor<'static>>) -> any
 
         let mut receiver_outputs = dummy_redis_receiver(
             executor.clone(),
-            host_uri.clone(),
+            "localhost",
+            Some(redis_port),
             vec![channel.clone()],
             ready_tx,
         )

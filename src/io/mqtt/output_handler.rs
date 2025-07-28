@@ -32,6 +32,7 @@ pub struct MQTTOutputHandler {
     pub var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     pub hostname: String,
+    pub port: Option<u16>,
 }
 
 #[instrument(level = Level::INFO, skip(stream, client))]
@@ -87,10 +88,11 @@ impl OutputHandler for MQTTOutputHandler {
             })
             .collect::<Vec<_>>();
         let hostname = self.hostname.clone();
+        let port = self.port.clone();
         info!(name: "OutputProvider MQTT startup task launched",
             ?hostname, num_streams = ?streams.len());
 
-        Box::pin(MQTTOutputHandler::inner_handler(hostname, streams))
+        Box::pin(MQTTOutputHandler::inner_handler(hostname, port, streams))
     }
 }
 
@@ -101,6 +103,7 @@ impl MQTTOutputHandler {
         _executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
         host: &str,
+        port: Option<u16>,
         var_topics: OutputChannelMap,
     ) -> Result<Self, mqtt::Error> {
         let hostname = host.to_string();
@@ -123,15 +126,21 @@ impl MQTTOutputHandler {
             var_names,
             var_map,
             hostname,
+            port,
         })
     }
 
     async fn inner_handler(
         host: String,
+        port: Option<u16>,
         streams: Vec<(String, OutputStream<Value>)>,
     ) -> anyhow::Result<()> {
         debug!("Awaiting client creation");
-        let client = provide_mqtt_client(host).await?;
+        let uri = match port {
+            Some(port) => format!("tcp://{}:{}", host, port),
+            None => format!("tcp://{}", host),
+        };
+        let client = provide_mqtt_client(uri).await?;
         debug!("Client created");
 
         futures::future::join_all(

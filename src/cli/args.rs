@@ -163,6 +163,12 @@ pub struct Cli {
 
     #[clap(long, value_delimiter = ' ', num_args = 1..)]
     pub distribution_constraints: Option<Vec<String>>,
+
+    #[arg(long)]
+    pub mqtt_port: Option<u16>,
+
+    #[arg(long)]
+    pub redis_port: Option<u16>,
 }
 
 #[derive(Parser)]

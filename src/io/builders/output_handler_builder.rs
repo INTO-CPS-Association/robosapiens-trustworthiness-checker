@@ -15,6 +15,8 @@ pub struct OutputHandlerBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     output_var_names: Option<Vec<VarName>>,
     output_mode: OutputMode,
+    mqtt_port: Option<u16>,
+    redis_port: Option<u16>,
 }
 
 impl OutputHandlerBuilder {
@@ -23,6 +25,8 @@ impl OutputHandlerBuilder {
             executor: None,
             output_var_names: None,
             output_mode,
+            mqtt_port: None,
+            redis_port: None,
         }
     }
 
@@ -33,6 +37,16 @@ impl OutputHandlerBuilder {
 
     pub fn output_var_names(mut self, output_var_names: Vec<VarName>) -> Self {
         self.output_var_names = Some(output_var_names);
+        self
+    }
+
+    pub fn mqtt_port(mut self, mqtt_port: Option<u16>) -> Self {
+        self.mqtt_port = mqtt_port;
+        self
+    }
+
+    pub fn redis_port(mut self, redis_port: Option<u16>) -> Self {
+        self.redis_port = redis_port;
         self
     }
 
@@ -68,6 +82,7 @@ impl OutputHandlerBuilder {
                         executor.clone(),
                         output_var_names,
                         MQTT_HOSTNAME,
+                        self.mqtt_port,
                         topics,
                     )
                     .expect("MQTT output handler could not be created"),
@@ -80,9 +95,13 @@ impl OutputHandlerBuilder {
                     .iter()
                     .map(|var| (var.clone(), var.into()))
                     .collect();
+                let hostname = match self.redis_port {
+                    Some(port) => format!("redis://{}:{}", REDIS_HOSTNAME, port),
+                    None => format!("redis://{}", REDIS_HOSTNAME),
+                };
                 Box::new(
-                    MQTTOutputHandler::new(executor, output_var_names, MQTT_HOSTNAME, topics)
-                        .expect("MQTT output handler could not be created"),
+                    RedisOutputHandler::new(executor.clone(), output_var_names, &hostname, topics)
+                        .expect("Redis output handler could not be created"),
                 )
             }
             OutputMode {
@@ -114,8 +133,14 @@ impl OutputHandlerBuilder {
                     .map(|var| (var.clone(), var.into()))
                     .collect();
                 Box::new(
-                    MQTTOutputHandler::new(executor, output_var_names, MQTT_HOSTNAME, topics)
-                        .expect("MQTT output handler could not be created"),
+                    MQTTOutputHandler::new(
+                        executor,
+                        output_var_names,
+                        MQTT_HOSTNAME,
+                        self.mqtt_port,
+                        topics,
+                    )
+                    .expect("MQTT output handler could not be created"),
                 )
             }
             OutputMode {

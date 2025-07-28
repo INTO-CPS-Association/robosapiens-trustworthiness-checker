@@ -137,6 +137,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let parser = cli.parser_mode.unwrap_or(ParserMode::Combinator);
     let language = cli.language.unwrap_or(Language::Lola);
 
+    let mqtt_port = cli.mqtt_port;
+    let redis_port = cli.redis_port;
+
     let builder = builder.executor(executor.clone());
 
     let builder = builder.maybe_semantics(cli.semantics);
@@ -182,13 +185,17 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let input_provider_builder = InputProviderBuilder::new(cli.input_mode)
         .executor(executor.clone())
         .model(model)
-        .lang(language);
+        .lang(language)
+        .mqtt_port(mqtt_port)
+        .redis_port(redis_port);
     let builder = builder.input_provider_builder(input_provider_builder);
 
     // Create the output handler
     let output_handler_builder = OutputHandlerBuilder::new(cli.output_mode)
         .executor(executor.clone())
-        .output_var_names(output_var_names);
+        .output_var_names(output_var_names)
+        .mqtt_port(mqtt_port)
+        .redis_port(redis_port);
 
     let builder = builder.output_handler_builder(output_handler_builder);
 

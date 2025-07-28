@@ -24,6 +24,9 @@ impl From<InputMode> for InputProviderSpec {
             InputMode {
                 mqtt_input: true, ..
             } => InputProviderSpec::MQTT(None),
+            InputMode {
+                redis_input: true, ..
+            } => InputProviderSpec::Redis(None),
             _ => panic!("Input provider not specified"),
         }
     }
