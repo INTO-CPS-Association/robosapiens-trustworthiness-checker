@@ -148,6 +148,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let model_parser = match language {
         Language::DynSRV => tc::lang::dynamic_lola::parser::lola_specification,
+        Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
     };
 
     let builder = builder.scheduler_mode(cli.scheduling_mode.clone());

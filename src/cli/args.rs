@@ -12,7 +12,10 @@ pub enum Language {
     ///
     /// A stream-based specification language for runtime verification that supports
     /// temporal logic properties and dynamic spawning of new monitors
+    #[value(name = "dynsrv")]
     DynSRV,
+    /// LOLA: a synonym for DynSRV for legacy compatibility
+    Lola,
 }
 
 /// Parser implementation strategies for specification parsing

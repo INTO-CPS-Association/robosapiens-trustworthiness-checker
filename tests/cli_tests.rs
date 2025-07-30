@@ -677,6 +677,38 @@ fn test_lola_language() {
     );
 }
 
+/// Test CLI with different language modes
+#[test]
+fn test_dynsrv_language() {
+    let output = futures::executor::block_on(run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--language",
+        "dynsrv",
+    ]))
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3"),
+        "Expected output '3' not found in: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("7"),
+        "Expected output '7' not found in: {}",
+        stdout
+    );
+}
+
 /// Test CLI with centralised distribution mode (default)
 #[test]
 fn test_centralised_mode() {
