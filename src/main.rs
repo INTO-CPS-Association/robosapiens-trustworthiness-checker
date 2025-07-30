@@ -135,7 +135,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = RuntimeBuilder::new();
 
     let parser = cli.parser_mode.unwrap_or(ParserMode::Combinator);
-    let language = cli.language.unwrap_or(Language::Lola);
+    let language = cli.language.unwrap_or(Language::DynSRV);
 
     let mqtt_port = cli.mqtt_port;
     let redis_port = cli.redis_port;
@@ -147,7 +147,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = builder.maybe_runtime(cli.runtime);
 
     let model_parser = match language {
-        Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
+        Language::DynSRV => tc::lang::dynamic_lola::parser::lola_specification,
     };
 
     let builder = builder.scheduler_mode(cli.scheduling_mode.clone());

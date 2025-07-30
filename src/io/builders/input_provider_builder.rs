@@ -103,8 +103,8 @@ impl InputProviderBuilder {
     pub async fn async_build(self) -> Box<dyn InputProvider<Val = Value>> {
         match self.spec {
             InputProviderSpec::File(path) => {
-                let input_file_parser = match self.lang.unwrap_or(Language::Lola) {
-                    Language::Lola => tc::lang::untimed_input::untimed_input_file,
+                let input_file_parser = match self.lang.unwrap_or(Language::DynSRV) {
+                    Language::DynSRV => tc::lang::untimed_input::untimed_input_file,
                 };
                 Box::new(
                     tc::parse_file(input_file_parser, &path)
