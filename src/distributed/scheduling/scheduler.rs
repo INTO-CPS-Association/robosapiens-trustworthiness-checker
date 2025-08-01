@@ -120,7 +120,9 @@ impl Scheduler {
             let should_plan = match self.replanning_condition {
                 ReplanningCondition::ConstraintsFail => !constraints_hold,
                 ReplanningCondition::Always => true,
-                ReplanningCondition::Never => false,
+                // Even if replanning is disabled, we need to plan at least once
+                // so we have an initial plan
+                ReplanningCondition::Never => plan.is_none(),
             };
             if should_plan {
                 if !self.suppress_output {

@@ -19,7 +19,6 @@ use trustworthiness_checker::{
 };
 use winnow::Parser;
 
-#[ignore = "Ignoring distributed tests due to hangs"]
 #[test(apply(smol_test))]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -77,7 +76,6 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![true.into(), 4.into(), 5.into()]);
 }
 
-#[ignore = "Ignoring distributed tests due to hangs"]
 #[test(apply(smol_test))]
 async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -135,7 +133,6 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![0.into(), 4.into(), 5.into()]);
 }
 
-#[ignore = "Ignoring distributed tests due to hangs"]
 #[test(apply(smol_test))]
 async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -193,7 +190,6 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![2.into(), 4.into(), 5.into()]);
 }
 
-#[ignore = "Ignoring distributed tests due to hangs"]
 #[test(apply(smol_test))]
 async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -251,7 +247,6 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![1.into(), 4.into(), 5.into()]);
 }
 
-#[ignore = "Ignoring distributed tests due to hangs"]
 #[test(apply(smol_test))]
 async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
