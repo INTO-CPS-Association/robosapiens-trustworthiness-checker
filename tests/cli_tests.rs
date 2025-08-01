@@ -878,7 +878,7 @@ async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
     });
 
     // Wait for CLI to start and subscribe to MQTT topics
-    smol::Timer::after(Duration::from_millis(100)).await;
+    smol::Timer::after(Duration::from_millis(150)).await;
 
     // Now start publishers to send data to the waiting CLI
     let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
@@ -900,7 +900,7 @@ async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
     y_publisher_task.await;
 
     // Give CLI additional time to process the messages
-    smol::Timer::after(Duration::from_millis(100)).await;
+    smol::Timer::after(Duration::from_millis(150)).await;
 
     // Wait for CLI to capture output or timeout
     let (stdout, _stderr, _exit_status) = cli_task.await.expect("Failed to run CLI streaming");
