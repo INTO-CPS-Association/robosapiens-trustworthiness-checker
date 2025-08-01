@@ -1189,3 +1189,569 @@ async fn test_file_input_mqtt_output(executor: Rc<LocalExecutor>) {
     assert_eq!(results[1], Value::Int(7), "Second result should be 7");
     assert_eq!(results[2], Value::Int(11), "Third result should be 11");
 }
+
+#[test(apply(smol_test))]
+async fn test_distribution_graph_with_local_node(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--distribution-graph",
+        &fixture_path("simple_add_distribution_graph.json"),
+        "--local-node",
+        "A",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    // Should succeed with proper arguments
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_distribution_graph_missing_local_node(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--distribution-graph",
+        &fixture_path("simple_add_distribution_graph.json"),
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    // Should fail because --distribution-graph requires --local-node
+    assert!(
+        !output.status.success(),
+        "CLI command should have failed due to missing --local-node"
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_local_topics_mode(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--local-topics",
+        "topic1",
+        "--local-topics",
+        "topic2",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_mqtt_centralised_distributed_mode(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-centralised-distributed",
+        "node1",
+        "node2",
+        "node3",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_mqtt_randomized_distributed_mode(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-randomized-distributed",
+        "node1",
+        "node2",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_mqtt_static_optimized_with_constraints(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-static-optimized",
+        "node1",
+        "node2",
+        "--distribution-constraints",
+        "constraint1",
+        "constraint2",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_mqtt_static_optimized_missing_constraints(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-static-optimized",
+        "node1",
+        "node2",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    // Should fail because --mqtt-static-optimized requires --distribution-constraints
+    assert!(
+        !output.status.success(),
+        "CLI command should have failed due to missing --distribution-constraints"
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_mqtt_dynamic_optimized_with_constraints(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-dynamic-optimized",
+        "node1",
+        "node2",
+        "--distribution-constraints",
+        "constraint1",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_mqtt_dynamic_optimized_missing_constraints(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-dynamic-optimized",
+        "node1",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    // Should fail because --mqtt-dynamic-optimized requires --distribution-constraints
+    assert!(
+        !output.status.success(),
+        "CLI command should have failed due to missing --distribution-constraints"
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_distributed_work_with_local_node(_executor: Rc<LocalExecutor>) {
+    // Use streaming version since --distributed-work waits indefinitely for work assignment
+    let (_stdout, stderr, exit_status) = run_cli_streaming(
+        &[
+            &fixture_path("simple_add_typed.lola"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--distributed-work",
+            "--local-node",
+            "worker1",
+        ],
+        Duration::from_secs(2),
+    )
+    .await
+    .expect("Failed to run CLI streaming");
+
+    // Process should start successfully (no immediate error)
+    // It will be terminated by timeout since it waits for work assignment
+    if let Some(status) = exit_status {
+        // If process exited naturally, it should not be due to argument parsing errors
+        if !status.success() {
+            // Check if it's not an argument parsing error
+            assert!(
+                !stderr.contains("error:")
+                    || !stderr.contains("required")
+                    || !stderr.contains("argument"),
+                "CLI argument parsing failed: {}",
+                stderr
+            );
+        }
+    }
+    // If no exit status, the process was terminated due to timeout (expected behavior)
+}
+
+#[test(apply(smol_test))]
+async fn test_distributed_work_missing_local_node(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--distributed-work",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    // Should fail because --distributed-work requires --local-node
+    assert!(
+        !output.status.success(),
+        "CLI command should have failed due to missing --local-node"
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_scheduling_mode_mock(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--scheduling-mode",
+        "mock",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_scheduling_mode_mqtt(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--scheduling-mode",
+        "mqtt",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_scheduling_mode_invalid(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--scheduling-mode",
+        "invalid",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    // Should fail due to invalid scheduling mode
+    assert!(
+        !output.status.success(),
+        "CLI command should have failed due to invalid scheduling mode"
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_distribution_constraints_standalone(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--distribution-constraints",
+        "memory<1GB",
+        "cpu<50%",
+        "network<10Mbps",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_mqtt_port_configuration(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-port",
+        "1884",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_redis_port_configuration(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--redis-port",
+        "6380",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_multiple_distribution_modes_conflict(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-centralised-distributed",
+        "node1",
+        "--mqtt-randomized-distributed",
+        "node2",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    // Should fail because multiple distribution modes are conflicting
+    assert!(
+        !output.status.success(),
+        "CLI command should have failed due to conflicting distribution modes"
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_complex_distributed_configuration(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--distribution-graph",
+        &fixture_path("simple_add_distribution_graph.json"),
+        "--local-node",
+        "A",
+        "--scheduling-mode",
+        "mqtt",
+        "--mqtt-port",
+        "1885",
+        "--distribution-constraints",
+        "x",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_default_centralised_mode(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        // No distribution mode specified - should default to centralised
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3"),
+        "Expected output '3' not found in: {}",
+        stdout
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_explicit_centralised_mode(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--centralised",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("7"),
+        "Expected output '7' not found in: {}",
+        stdout
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_async_runtime_with_distribution(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--runtime",
+        "async",
+        "--distribution-graph",
+        &fixture_path("simple_add_distribution_graph.json"),
+        "--local-node",
+        "A",
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test(apply(smol_test))]
+async fn test_async_runtime_default_with_mqtt_distributed(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--mqtt-centralised-distributed",
+        "node1",
+        "node2",
+        // No --runtime specified, should default to async
+    ])
+    .await
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_runtime_async() {
+    let output = futures::executor::block_on(run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--runtime",
+        "async",
+    ]))
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3"),
+        "Expected output '3' not found in: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_runtime_constraints() {
+    let output = futures::executor::block_on(run_cli(&[
+        &fixture_path("simple_add_typed.lola"),
+        "--input-file",
+        &fixture_path("simple_add_typed.input"),
+        "--output-stdout",
+        "--runtime",
+        "constraints",
+    ]))
+    .expect("Failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -33,7 +33,7 @@ pub enum ParserMode {
     ///
     /// Generates efficient parsers from grammar definitions.
     /// Currently not implemented.
-    LALR,
+    Lalr,
 }
 
 /// Input source configuration for monitoring data
@@ -154,14 +154,14 @@ pub enum SchedulingType {
     ///
     /// Uses MQTT messaging for real-time coordination between monitoring
     /// nodes, enabling dynamic work distribution and load balancing.
-    MQTT,
+    Mqtt,
 }
 
 impl Into<&'static str> for SchedulingType {
     fn into(self) -> &'static str {
         match self {
             SchedulingType::Mock => "mock",
-            SchedulingType::MQTT => "mqtt",
+            SchedulingType::Mqtt => "mqtt",
         }
     }
 }
@@ -170,7 +170,7 @@ impl Into<String> for SchedulingType {
     fn into(self) -> String {
         match self {
             SchedulingType::Mock => "mock".to_string(),
-            SchedulingType::MQTT => "mqtt".to_string(),
+            SchedulingType::Mqtt => "mqtt".to_string(),
         }
     }
 }
@@ -179,7 +179,7 @@ impl Into<OsStr> for SchedulingType {
     fn into(self) -> OsStr {
         match self {
             SchedulingType::Mock => (&"mock").into(),
-            SchedulingType::MQTT => (&"mqtt").into(),
+            SchedulingType::Mqtt => (&"mqtt").into(),
         }
     }
 }

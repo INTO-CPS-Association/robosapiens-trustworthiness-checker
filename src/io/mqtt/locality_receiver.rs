@@ -47,7 +47,7 @@ impl MQTTLocalityReceiver {
 
 #[async_trait(?Send)]
 impl LocalityReceiver for MQTTLocalityReceiver {
-    async fn receive(&self) -> Result<impl LocalitySpec + 'static, Box<dyn std::error::Error>> {
+    async fn receive(&self) -> anyhow::Result<impl LocalitySpec + 'static> {
         let (client, mut stream) =
             provide_mqtt_client_with_subscription(self.mqtt_host.clone(), u32::MAX).await?;
         client.subscribe(self.topic(), MQTT_QOS).await?;
@@ -60,7 +60,7 @@ impl LocalityReceiver for MQTTLocalityReceiver {
                     local_topics.into_iter().map(|s| s.into()).collect();
                 Ok(local_topics)
             }
-            None => Err("No message received".into()),
+            None => Err(anyhow::anyhow!("No message received")),
         }
     }
 }

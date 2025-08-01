@@ -1,13 +1,12 @@
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
     LOLASpecification, Monitor, Value, VarName,
-    cli::args::Cli,
+    cli::adapters::DistributionModeBuilder,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
@@ -204,7 +203,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub runtime: Runtime,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
-    pub distribution_mode_fn: Option<(Cli, fn(Cli) -> LocalBoxFuture<'static, DistributionMode>)>,
+    pub distribution_mode_builder: Option<DistributionModeBuilder>,
     pub scheduler_mode: SchedulerCommunication,
 }
 
@@ -238,13 +237,12 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         }
     }
 
-    pub fn distribution_mode_fn(
+    pub fn distribution_mode_builder(
         self,
-        cli: Cli,
-        dist_mode_fn: fn(Cli) -> LocalBoxFuture<'static, DistributionMode>,
+        distribution_mode_builder: DistributionModeBuilder,
     ) -> Self {
         Self {
-            distribution_mode_fn: Some((cli, dist_mode_fn)),
+            distribution_mode_builder: Some(distribution_mode_builder),
             ..self
         }
     }
@@ -293,7 +291,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             output_handler_builder: None,
             dependencies: None,
             distribution_mode: DistributionMode::CentralMonitor,
-            distribution_mode_fn: None,
+            distribution_mode_builder: None,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
             scheduler_mode: SchedulerCommunication::Null,
@@ -336,7 +334,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     }
 
     fn build(self) -> Self::Mon {
-        if self.distribution_mode_fn.is_some()
+        if self.distribution_mode_builder.is_some()
             || self.input_provider_builder.is_some()
             || self.output_handler_builder.is_some()
         {
@@ -456,11 +454,15 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
 
 impl GenericMonitorBuilder<LOLASpecification, Value> {
     pub async fn async_build(self) -> Box<dyn Runnable> {
-        let dist_mode = if self.distribution_mode_fn.is_some() {
-            let (cli, fun) = self.distribution_mode_fn.unwrap();
-            Some(fun(cli).await)
-        } else {
-            None
+        let dist_mode = match self.distribution_mode_builder {
+            // TODO: add error handling to this method
+            Some(distribution_mode_builder) => Some(
+                distribution_mode_builder
+                    .build()
+                    .await
+                    .expect("Failed to build distribution mode"),
+            ),
+            None => None,
         };
 
         let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> =
@@ -602,7 +604,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             output_handler_builder: self.output_handler_builder.clone(),
             dependencies: self.dependencies.clone(),
             distribution_mode: DistributionMode::CentralMonitor, // Not clonable. TODO: We should make all builders clonable
-            distribution_mode_fn: self.distribution_mode_fn.clone(),
+            distribution_mode_builder: self.distribution_mode_builder.clone(),
             runtime: self.runtime.clone(),
             semantics: self.semantics.clone(),
             scheduler_mode: self.scheduler_mode.clone(),

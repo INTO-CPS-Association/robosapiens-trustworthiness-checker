@@ -46,6 +46,12 @@ impl From<String> for NodeName {
     }
 }
 
+impl From<NodeName> for String {
+    fn from(node_name: NodeName) -> Self {
+        node_name.0
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct NodeLabel {
     monitors: Vec<VarName>,
