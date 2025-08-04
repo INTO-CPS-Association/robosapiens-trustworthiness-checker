@@ -5,8 +5,8 @@ use futures::{FutureExt, StreamExt};
 use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
-use smol_macros::test as smol_test;
 use tracing::info;
+use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::mqtt::client::provide_mqtt_client;
 use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
 use trustworthiness_checker::{InputProvider, OutputStream};
@@ -18,7 +18,6 @@ mod tests {
 
     use std::{collections::BTreeMap, rc::Rc};
     use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
-    use test_log::test;
     use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
     use trustworthiness_checker::io::mqtt::MQTTLocalityReceiver;
     use trustworthiness_checker::semantics::distributed::localisation::LocalitySpec;
@@ -41,7 +40,7 @@ mod tests {
     use super::*;
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
             .parse(spec_simple_add_monitor())
@@ -93,7 +92,7 @@ mod tests {
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_add_monitor_mqtt_output_float(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
             .parse(spec_simple_add_monitor_typed_float())
@@ -149,7 +148,7 @@ mod tests {
         }
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_manual_output_handler_completion(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -187,7 +186,7 @@ mod tests {
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_add_monitor_mqtt_input(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -285,7 +284,7 @@ mod tests {
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_add_monitor_mqtt_input_float(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -391,7 +390,7 @@ mod tests {
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_mqtt_locality_receiver(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {

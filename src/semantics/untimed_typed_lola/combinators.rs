@@ -185,11 +185,10 @@ pub fn default<T: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::async_test;
     use macro_rules_attribute::apply;
-    use smol_macros::test as smol_test;
-    use test_log::test;
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_not() {
         let x: OutputStream<PossiblyUnknown<bool>> = Box::pin(stream::iter(
             vec![PossiblyUnknown::Known(true), PossiblyUnknown::Known(false)].into_iter(),
@@ -200,7 +199,7 @@ mod tests {
         assert_eq!(res, z);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_plus() {
         let x: OutputStream<PossiblyUnknown<i64>> = Box::pin(stream::iter(
             vec![PossiblyUnknown::Known(1), PossiblyUnknown::Known(3)].into_iter(),
@@ -214,7 +213,7 @@ mod tests {
         assert_eq!(res, z);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_str_plus() {
         let x: OutputStream<PossiblyUnknown<String>> = Box::pin(stream::iter(vec![
             PossiblyUnknown::Known("hello ".into()),

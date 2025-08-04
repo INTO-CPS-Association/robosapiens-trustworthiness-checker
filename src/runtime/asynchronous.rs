@@ -1093,12 +1093,11 @@ mod tests {
 
     use super::*;
 
+    use crate::async_test;
     use futures::stream;
     use macro_rules_attribute::apply;
-    use smol_macros::test as smol_test;
-    use test_log::test;
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_manage_var_gathering(executor: Rc<LocalExecutor<'static>>) {
         let input_stream = Box::pin(stream! {
             yield 1;
@@ -1129,7 +1128,7 @@ mod tests {
         assert_eq!(output2, vec![1, 2, 3]);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_manage_tick_then_run(executor: Rc<LocalExecutor<'static>>) {
         let input_stream = Box::pin(stream! {
             yield 1;
@@ -1173,7 +1172,7 @@ mod tests {
         assert_eq!(output2, vec![3, 4]);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_subctx_regression_727dc01(executor: Rc<LocalExecutor<'static>>) {
         fn mock_indirection<Ctx: StreamContext<Value>>(
             ctx: &Ctx,

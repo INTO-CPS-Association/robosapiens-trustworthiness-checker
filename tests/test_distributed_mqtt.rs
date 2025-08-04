@@ -12,9 +12,8 @@ use trustworthiness_checker::{Specification, Value};
 use winnow::Parser;
 
 use macro_rules_attribute::apply;
-use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
-use test_log::test;
+use trustworthiness_checker::async_test;
 
 use trustworthiness_checker::{
     InputProvider, VarName,
@@ -26,7 +25,7 @@ use trustworthiness_checker::{
 };
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) {
     let model1 = lola_specification
         .parse(spec_simple_add_decomposed_1())
@@ -160,7 +159,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     let model1 = lola_specification
         .parse(spec_simple_add_decomposed_1())
@@ -296,7 +295,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn localisation_distribution_graphs_test(
     executor: Rc<LocalExecutor<'static>>,
 ) -> Result<(), Box<dyn std::error::Error>> {

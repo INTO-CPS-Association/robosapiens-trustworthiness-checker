@@ -55,6 +55,7 @@ mod tests {
     use std::{collections::BTreeMap, rc::Rc};
 
     use super::*;
+    use crate::async_test;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{
@@ -68,10 +69,8 @@ mod tests {
     use macro_rules_attribute::apply;
     use petgraph::graph::DiGraph;
     use smol::LocalExecutor;
-    use smol_macros::test as smol_test;
-    use test_log::test;
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_that_test_can_test(executor: Rc<LocalExecutor<'static>>) {
         // Just a little test to check that we can do our tests... :-)
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
@@ -93,7 +92,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_monitor_at_stream(executor: Rc<LocalExecutor<'static>>) {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -137,7 +136,7 @@ mod tests {
         assert_eq!(res_x, vec![true.into(), true.into(), true.into()]);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_dist_stream_nodes(executor: Rc<LocalExecutor<'static>>) {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -181,7 +180,7 @@ mod tests {
         assert_eq!(res, vec![2.into(), 2.into(), 2.into()]);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_dist_stream_var_node(executor: Rc<LocalExecutor<'static>>) {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -225,7 +224,7 @@ mod tests {
         assert_eq!(res, vec![1.into(), 1.into(), 1.into()]);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_disambiguate_name(executor: Rc<LocalExecutor<'static>>) {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));

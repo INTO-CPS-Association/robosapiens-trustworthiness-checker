@@ -270,6 +270,7 @@ impl<V: StreamData> AsyncManualOutputHandler<V> {
 
 #[cfg(test)]
 mod tests {
+    use crate::async_test;
     use std::cmp::Ordering;
     use std::collections::BTreeSet;
 
@@ -279,8 +280,6 @@ mod tests {
     use futures::select;
     use futures::stream;
     use macro_rules_attribute::apply;
-    use smol_macros::test as smol_test;
-    use test_log::test;
     use tracing::info;
 
     // Implement Eq for Value - only available for testing since this is not
@@ -333,7 +332,7 @@ mod tests {
         }
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn sync_test_combined_output(ex: Rc<LocalExecutor>) {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
@@ -358,7 +357,7 @@ mod tests {
         task.await.expect("Failed to run handler");
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn async_test_combined_output(executor: Rc<LocalExecutor<'static>>) {
         // Helper to create a named stream with delay
         fn create_stream(
@@ -401,7 +400,7 @@ mod tests {
         task.await.expect("Failed to run handler");
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_manual_output_handler_hang(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {

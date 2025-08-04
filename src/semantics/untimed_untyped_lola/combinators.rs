@@ -605,16 +605,15 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::async_test;
     use crate::core::Value;
     use crate::runtime::asynchronous::Context;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
-    use smol_macros::test as smol_test;
     use std::rc::Rc;
-    use test_log::test;
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_not() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Bool(true), false.into()]));
         let res: Vec<Value> = not(x).collect().await;
@@ -622,7 +621,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_plus() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec![Value::Int(1), 3.into()].into_iter()));
@@ -632,7 +631,7 @@ mod tests {
         assert_eq!(res, z);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_str_concat() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
         let y: OutputStream<Value> = Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]));
@@ -641,7 +640,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
@@ -653,7 +652,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_dynamic_x_squared(executor: Rc<LocalExecutor<'static>>) {
         // This test is interesting since we use x twice in the dynamic strings
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
@@ -666,7 +665,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_dynamic_with_start_unknown(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -683,7 +682,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_dynamic_with_mid_unknown(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
             "x + 1".into(),
@@ -700,7 +699,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
@@ -712,7 +711,7 @@ mod tests {
         let exp: Vec<Value> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
     }
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
         // This test is interesting since we use x twice in the dynamic strings
         let e: OutputStream<Value> =
@@ -726,7 +725,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
         // Using unknown to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, "x + 1".into()]));
@@ -739,7 +738,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
         // Unknown followed by property followed by unknown returns [U; val; val].
         let e = Box::pin(stream::iter(vec![
@@ -757,7 +756,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_defer_only_unknown(executor: Rc<LocalExecutor<'static>>) {
         // Using unknown to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, Value::Unknown]));
@@ -770,7 +769,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_update_both_init() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec!["x0".into(), "x1".into()]));
         let y: OutputStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
@@ -779,7 +778,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_default_no_unknown() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
@@ -789,7 +788,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_default_all_unknown() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -802,7 +801,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_default_one_unknown() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), Value::Unknown, "x2".into()]));
@@ -812,7 +811,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_update_first_x_then_y() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             "x0".into(),
@@ -831,7 +830,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_update_first_y_then_x() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -850,7 +849,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_update_neither() {
         use Value::Unknown;
         let x: OutputStream<Value> =
@@ -862,7 +861,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_update_first_x_then_y_value_sync() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
             Value::Unknown,
@@ -882,7 +881,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -896,7 +895,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_exprs() {
         let x: Vec<OutputStream<Value>> = vec![
             plus(
@@ -916,7 +915,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_idx() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -928,7 +927,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_idx_varying() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -941,7 +940,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_idx_expr() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -956,7 +955,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_idx_var(executor: Rc<LocalExecutor<'static>>) {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -971,7 +970,7 @@ mod tests {
         assert_eq!(res, exp)
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_append() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -986,7 +985,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_concat() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -1004,7 +1003,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_head() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -1015,7 +1014,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_tail() {
         let x: Vec<OutputStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -1030,7 +1029,7 @@ mod tests {
         assert_eq!(res, exp);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_list_tail_one_el() {
         let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![1.into(), 2.into()]))];
         let res: Vec<Value> = ltail(list(x)).collect().await;

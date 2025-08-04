@@ -43,9 +43,9 @@ impl InputProvider for UntimedInputFileData {
 
 #[cfg(test)]
 mod tests {
+    use crate::async_test;
     use futures::StreamExt;
     use macro_rules_attribute::apply;
-    use smol_macros::test as smol_test;
     use std::collections::BTreeMap;
 
     use super::*;
@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_input_file_as_stream() {
         let mut data: UntimedInputFileData = BTreeMap::new();
         data.insert(0, {

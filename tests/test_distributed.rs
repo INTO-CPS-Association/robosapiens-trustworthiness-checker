@@ -6,8 +6,7 @@ use smol::{
     LocalExecutor,
     stream::{self, StreamExt},
 };
-use smol_macros::test as smol_test;
-use test_log::test;
+use trustworthiness_checker::async_test;
 use trustworthiness_checker::{
     OutputStream, Value,
     core::{AbstractMonitorBuilder, Runnable},
@@ -19,7 +18,7 @@ use trustworthiness_checker::{
 };
 use winnow::Parser;
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
     let input_handler = BTreeMap::from([("x".into(), x)]);
@@ -76,7 +75,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![true.into(), 4.into(), 5.into()]);
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
     let input_handler = BTreeMap::from([("x".into(), x)]);
@@ -133,7 +132,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![0.into(), 4.into(), 5.into()]);
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
     let input_handler = BTreeMap::from([("x".into(), x)]);
@@ -190,7 +189,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![2.into(), 4.into(), 5.into()]);
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
     let input_handler = BTreeMap::from([("x".into(), x)]);
@@ -247,7 +246,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(output[2], vec![1.into(), 4.into(), 5.into()]);
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
     let input_handler = BTreeMap::from([("x".into(), x)]);

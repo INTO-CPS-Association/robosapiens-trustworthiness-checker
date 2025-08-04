@@ -2,11 +2,10 @@ use approx::assert_abs_diff_eq;
 use futures::stream::StreamExt;
 use macro_rules_attribute::apply;
 use smol::LocalExecutor;
-use smol_macros::test as smol_test;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use strum::IntoEnumIterator;
-use test_log::test;
+use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Runtime, Semantics};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
@@ -66,7 +65,7 @@ fn create_builder_from_config(
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -117,7 +116,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -168,7 +167,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -219,7 +218,7 @@ async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -270,7 +269,7 @@ async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -330,7 +329,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -381,7 +380,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -434,7 +433,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
 }
 
 // #[ignore = "Hangs for unknown reasons"]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only works on untyped_configurations
     for config in TestConfiguration::untyped_configurations() {
@@ -487,7 +486,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on constraints due to defer/update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
@@ -545,7 +544,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only works on the constraint-based runtime
     for config in vec![TestConfiguration::Constraints] {
@@ -600,7 +599,7 @@ async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) {
 // When defer receives a prop stream it changes state from being a defer expression into
 // the received prop stream. Thus, it cannot be used recursively.
 // This is the reason why we also need dynamic for the constraint based runtime.
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on the constraint-based runtime due to update/defer functionality
     // limitations
@@ -674,7 +673,7 @@ pub fn input_streams_constraint() -> BTreeMap<VarName, OutputStream<Value>> {
 }
 
 #[ignore = "Cannot have empty spec or inputs"]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_empty()).unwrap();
@@ -711,7 +710,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_var(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -763,7 +762,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -815,7 +814,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_addition(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -867,7 +866,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -919,7 +918,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -978,7 +977,7 @@ async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>)
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -1032,7 +1031,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_string_append(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -1080,7 +1079,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_default_no_unknown(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -1132,7 +1131,7 @@ async fn test_default_no_unknown(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
     // TODO: not supported by the type checker
     for config in TestConfiguration::untyped_configurations() {
@@ -1188,7 +1187,7 @@ async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_default_one_unknown(executor: Rc<LocalExecutor<'static>>) {
     // TODO: not supported by the type checker
     for config in TestConfiguration::untyped_configurations() {
@@ -1242,7 +1241,7 @@ async fn test_default_one_unknown(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
@@ -1295,7 +1294,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
@@ -1348,7 +1347,7 @@ async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'st
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
@@ -1443,7 +1442,7 @@ pub fn input_streams_constraint_style() -> BTreeMap<VarName, OutputStream<Value>
     input_streams
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
@@ -1479,7 +1478,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_simple_modulo_monitor_typed()).unwrap();
@@ -1526,7 +1525,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::async_configurations() {
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
@@ -1571,7 +1570,7 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
 // This was fixed by improving VarManager lifecycle management to stop immediately when subscribers
 // are dropped, addressing the multiple subscription issue for output variables.
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_count_monitor_mixed_configurations(executor: Rc<LocalExecutor<'static>>) {
     // Test that multiple different configurations can run sequentially without hanging
     let test_cases = vec![
@@ -1625,7 +1624,7 @@ async fn test_count_monitor_mixed_configurations(executor: Rc<LocalExecutor<'sta
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecutor<'static>>) {
     // Test running monitors sequentially using drop guard cancellation approach
 
@@ -1708,7 +1707,7 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_direct_varmanager_cancellation(executor: Rc<LocalExecutor<'static>>) {
     use async_stream::stream;
     use std::sync::Arc;
@@ -1776,7 +1775,7 @@ async fn test_direct_varmanager_cancellation(executor: Rc<LocalExecutor<'static>
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'static>>) {
     // Test to verify that drop guard properly stops VarManagers when output streams are dropped
 
@@ -1817,7 +1816,7 @@ async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'stati
     smol::Timer::after(std::time::Duration::from_millis(100)).await;
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         // Use different specifications based on configuration to ensure type compatibility
@@ -1870,7 +1869,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::async_configurations() {
         let mut spec = "in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y";
@@ -1911,7 +1910,7 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only works with untimed semantics due to dynamic evaluation
     let input_streams = input_streams2();
@@ -1943,7 +1942,7 @@ async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_typed_string_concat()).unwrap();
@@ -1982,7 +1981,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nin y: Int\nout z: Int\nz = x[-1]";
@@ -2030,7 +2029,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_maple_sequence()).unwrap();
@@ -2084,7 +2083,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
     for config in vec![TestConfiguration::AsyncUntimed] {
         // Use different specifications based on configuration to ensure type compatibility
@@ -2144,7 +2143,7 @@ async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         // Use different specifications based on configuration to ensure type compatibility
@@ -2215,7 +2214,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         // Use different specifications based on configuration to ensure type compatibility
@@ -2286,7 +2285,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         // Use different specifications based on configuration to ensure type compatibility
@@ -2362,7 +2361,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test currently only runs AsyncUntimed due to bugs in other configurations:
     // - Constraints configuration produces different output counts and values
@@ -2442,7 +2441,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         // Use different specifications based on configuration to ensure type compatibility

@@ -90,15 +90,14 @@ impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
 
 #[cfg(test)]
 mod tests {
+    use crate::async_test;
     use crate::core::{OutputStream, Value};
     use futures::stream;
 
     use super::*;
     use macro_rules_attribute::apply;
-    use smol_macros::test as smol_test;
-    use test_log::test;
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_run_null_output_handler(executor: Rc<LocalExecutor<'static>>) {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
@@ -113,7 +112,7 @@ mod tests {
         task.await.expect("Failed to run handler");
     }
 
-    #[test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_run_limited_output_handler(executor: Rc<LocalExecutor<'static>>) {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =

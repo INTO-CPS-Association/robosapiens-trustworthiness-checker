@@ -118,7 +118,6 @@ use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use smol::process::Command;
-use smol_macros::test as smol_test;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -126,8 +125,8 @@ use tc_testutils::{
     mqtt::{dummy_mqtt_publisher, start_mqtt},
     redis::{dummy_redis_receiver, dummy_redis_sender, start_redis},
 };
-use test_log::test;
 use trustworthiness_checker::Value;
+use trustworthiness_checker::async_test;
 
 /// Helper function to get the path to the binary
 fn get_binary_path() -> String {
@@ -263,7 +262,7 @@ fn fixture_path(filename: &str) -> String {
 }
 
 /// Test simple addition with typed inputs
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_simple_add_typed() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -296,7 +295,7 @@ async fn test_simple_add_typed() {
 }
 
 /// Test simple addition with typed inputs: check default stdout usage
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_simple_add_typed_no_stdout() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -328,7 +327,7 @@ async fn test_simple_add_typed_no_stdout() {
 }
 
 /// Test counter with past indexing
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_counter() {
     let output = run_cli(&[
         &fixture_path("counter.lola"),
@@ -371,7 +370,7 @@ async fn test_counter() {
 }
 
 /// Test string concatenation
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_string_concat() {
     let output = run_cli(&[
         &fixture_path("string_concat.lola"),
@@ -414,7 +413,7 @@ async fn test_string_concat() {
 }
 
 /// Test float arithmetic operations
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_float_arithmetic() {
     let output = run_cli(&[
         &fixture_path("float_arithmetic.lola"),
@@ -457,7 +456,7 @@ async fn test_float_arithmetic() {
 }
 
 /// Test if-else conditional logic
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_if_else() {
     let output = run_cli(&[
         &fixture_path("if_else.lola"),
@@ -503,7 +502,7 @@ async fn test_if_else() {
 }
 
 /// Test past indexing functionality
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_past_indexing() {
     let output = run_cli(&[
         &fixture_path("past_indexing.lola"),
@@ -549,7 +548,7 @@ async fn test_past_indexing() {
 }
 
 /// Test error handling for invalid model file
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_invalid_model_file() {
     let output = run_cli(&[
         "nonexistent_model.lola",
@@ -574,7 +573,7 @@ async fn test_invalid_model_file() {
 }
 
 /// Test error handling for invalid input file
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_invalid_input_file() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -599,7 +598,7 @@ async fn test_invalid_input_file() {
 }
 
 /// Test error handling for malformed input
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_malformed_input() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -624,7 +623,7 @@ async fn test_malformed_input() {
 }
 
 /// Test CLI with different parser modes
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_combinator_parser() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -657,7 +656,7 @@ async fn test_combinator_parser() {
 }
 
 /// Test CLI with different language modes
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_lola_language() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -690,7 +689,7 @@ async fn test_lola_language() {
 }
 
 /// Test CLI with different language modes
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_dynsrv_language() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -723,7 +722,7 @@ async fn test_dynsrv_language() {
 }
 
 /// Test CLI with centralised distribution mode (default)
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_centralised_mode() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -755,7 +754,7 @@ async fn test_centralised_mode() {
 }
 
 /// Test CLI with empty input file
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_empty_input(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -781,7 +780,7 @@ async fn test_empty_input(_executor: Rc<LocalExecutor>) {
 }
 
 /// Test CLI with single timestep input
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_single_timestep(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -807,7 +806,7 @@ async fn test_single_timestep(_executor: Rc<LocalExecutor>) {
 }
 
 /// Test that CLI produces help output
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_help_output(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&["--help"]).await.expect("Failed to run CLI");
 
@@ -836,7 +835,7 @@ async fn test_help_output(_executor: Rc<LocalExecutor>) {
 }
 
 /// Test CLI with missing required arguments
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_missing_required_args() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"), // Missing input mode
@@ -870,7 +869,7 @@ fn test_binary_exists() {
 
 /// Test MQTT connection on the cli
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
     let xs = vec![Value::Int(1), Value::Int(2)];
     let ys = vec![Value::Int(3), Value::Int(4)];
@@ -937,7 +936,7 @@ async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
 
 /// Test Redis connection on the cli
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_add_monitor_redis_input_cli(executor: Rc<LocalExecutor>) {
     let xs = vec![Value::Int(1), Value::Int(2)];
     let ys = vec![Value::Int(3), Value::Int(4)];
@@ -1013,7 +1012,7 @@ async fn test_add_monitor_redis_input_cli(executor: Rc<LocalExecutor>) {
 
 /// Test file input with Redis output
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_file_input_redis_output(executor: Rc<LocalExecutor>) {
     let redis_server = start_redis().await;
     let redis_port = TokioCompat::new(redis_server.get_host_port_ipv4(6379))
@@ -1103,7 +1102,7 @@ async fn test_file_input_redis_output(executor: Rc<LocalExecutor>) {
 
 /// Test file input with MQTT output
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_file_input_mqtt_output(executor: Rc<LocalExecutor>) {
     let mqtt_server = start_mqtt().await;
     let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
@@ -1207,7 +1206,7 @@ async fn test_file_input_mqtt_output(executor: Rc<LocalExecutor>) {
     assert_eq!(results[2], Value::Int(11), "Third result should be 11");
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distribution_graph_with_local_node(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1230,7 +1229,7 @@ async fn test_distribution_graph_with_local_node(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distribution_graph_missing_local_node(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1250,7 +1249,7 @@ async fn test_distribution_graph_missing_local_node(_executor: Rc<LocalExecutor>
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_local_topics_mode(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1272,7 +1271,7 @@ async fn test_local_topics_mode(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_mqtt_centralised_distributed_mode(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1294,7 +1293,7 @@ async fn test_mqtt_centralised_distributed_mode(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_mqtt_randomized_distributed_mode(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1315,7 +1314,7 @@ async fn test_mqtt_randomized_distributed_mode(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_mqtt_static_optimized_with_constraints(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1339,7 +1338,7 @@ async fn test_mqtt_static_optimized_with_constraints(_executor: Rc<LocalExecutor
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_mqtt_static_optimized_missing_constraints(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1360,7 +1359,7 @@ async fn test_mqtt_static_optimized_missing_constraints(_executor: Rc<LocalExecu
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_mqtt_dynamic_optimized_with_constraints(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1383,7 +1382,7 @@ async fn test_mqtt_dynamic_optimized_with_constraints(_executor: Rc<LocalExecuto
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_mqtt_dynamic_optimized_missing_constraints(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1403,7 +1402,7 @@ async fn test_mqtt_dynamic_optimized_missing_constraints(_executor: Rc<LocalExec
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distributed_work_with_local_node(_executor: Rc<LocalExecutor>) {
     // Use streaming version since --distributed-work waits indefinitely for work assignment
     let (_stdout, stderr, exit_status) = run_cli_streaming(
@@ -1439,7 +1438,7 @@ async fn test_distributed_work_with_local_node(_executor: Rc<LocalExecutor>) {
     // If no exit status, the process was terminated due to timeout (expected behavior)
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distributed_work_missing_local_node(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1458,7 +1457,7 @@ async fn test_distributed_work_missing_local_node(_executor: Rc<LocalExecutor>) 
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_scheduling_mode_mock(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1478,7 +1477,7 @@ async fn test_scheduling_mode_mock(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_scheduling_mode_mqtt(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1498,7 +1497,7 @@ async fn test_scheduling_mode_mqtt(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_scheduling_mode_invalid(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1518,7 +1517,7 @@ async fn test_scheduling_mode_invalid(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_distribution_constraints_standalone(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1540,7 +1539,7 @@ async fn test_distribution_constraints_standalone(_executor: Rc<LocalExecutor>) 
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_mqtt_port_configuration(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1560,7 +1559,7 @@ async fn test_mqtt_port_configuration(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_redis_port_configuration(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1580,7 +1579,7 @@ async fn test_redis_port_configuration(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_multiple_distribution_modes_conflict(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1602,7 +1601,7 @@ async fn test_multiple_distribution_modes_conflict(_executor: Rc<LocalExecutor>)
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_complex_distributed_configuration(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1630,7 +1629,7 @@ async fn test_complex_distributed_configuration(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_default_centralised_mode(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1656,7 +1655,7 @@ async fn test_default_centralised_mode(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_explicit_centralised_mode(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1682,7 +1681,7 @@ async fn test_explicit_centralised_mode(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_async_runtime_with_distribution(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1706,7 +1705,7 @@ async fn test_async_runtime_with_distribution(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_async_runtime_default_with_mqtt_distributed(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1728,7 +1727,7 @@ async fn test_async_runtime_default_with_mqtt_distributed(_executor: Rc<LocalExe
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_runtime_async(_executor: Rc<LocalExecutor>) {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
@@ -1755,7 +1754,7 @@ async fn test_runtime_async(_executor: Rc<LocalExecutor>) {
     );
 }
 
-#[test(apply(smol_test))]
+#[apply(async_test)]
 async fn test_runtime_constraints() {
     let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
