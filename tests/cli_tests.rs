@@ -263,14 +263,15 @@ fn fixture_path(filename: &str) -> String {
 }
 
 /// Test simple addition with typed inputs
-#[test]
-fn test_simple_add_typed() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_simple_add_typed() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -295,13 +296,14 @@ fn test_simple_add_typed() {
 }
 
 /// Test simple addition with typed inputs: check default stdout usage
-#[test]
-fn test_simple_add_typed_no_stdout() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_simple_add_typed_no_stdout() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -326,14 +328,15 @@ fn test_simple_add_typed_no_stdout() {
 }
 
 /// Test counter with past indexing
-#[test]
-fn test_counter() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_counter() {
+    let output = run_cli(&[
         &fixture_path("counter.lola"),
         "--input-file",
         &fixture_path("counter.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -368,14 +371,15 @@ fn test_counter() {
 }
 
 /// Test string concatenation
-#[test]
-fn test_string_concat() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_string_concat() {
+    let output = run_cli(&[
         &fixture_path("string_concat.lola"),
         "--input-file",
         &fixture_path("string_concat.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -410,14 +414,15 @@ fn test_string_concat() {
 }
 
 /// Test float arithmetic operations
-#[test]
-fn test_float_arithmetic() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_float_arithmetic() {
+    let output = run_cli(&[
         &fixture_path("float_arithmetic.lola"),
         "--input-file",
         &fixture_path("float_arithmetic.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -452,14 +457,15 @@ fn test_float_arithmetic() {
 }
 
 /// Test if-else conditional logic
-#[test]
-fn test_if_else() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_if_else() {
+    let output = run_cli(&[
         &fixture_path("if_else.lola"),
         "--input-file",
         &fixture_path("if_else.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -497,14 +503,15 @@ fn test_if_else() {
 }
 
 /// Test past indexing functionality
-#[test]
-fn test_past_indexing() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_past_indexing() {
+    let output = run_cli(&[
         &fixture_path("past_indexing.lola"),
         "--input-file",
         &fixture_path("past_indexing.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -542,14 +549,15 @@ fn test_past_indexing() {
 }
 
 /// Test error handling for invalid model file
-#[test]
-fn test_invalid_model_file() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_invalid_model_file() {
+    let output = run_cli(&[
         "nonexistent_model.lola",
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -566,14 +574,15 @@ fn test_invalid_model_file() {
 }
 
 /// Test error handling for invalid input file
-#[test]
-fn test_invalid_input_file() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_invalid_input_file() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         "nonexistent_input.input",
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -590,14 +599,15 @@ fn test_invalid_input_file() {
 }
 
 /// Test error handling for malformed input
-#[test]
-fn test_malformed_input() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_malformed_input() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("malformed.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -614,16 +624,17 @@ fn test_malformed_input() {
 }
 
 /// Test CLI with different parser modes
-#[test]
-fn test_combinator_parser() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_combinator_parser() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
         "--parser-mode",
         "combinator",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -646,16 +657,17 @@ fn test_combinator_parser() {
 }
 
 /// Test CLI with different language modes
-#[test]
-fn test_lola_language() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_lola_language() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
         "--language",
         "lola",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -678,16 +690,17 @@ fn test_lola_language() {
 }
 
 /// Test CLI with different language modes
-#[test]
-fn test_dynsrv_language() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_dynsrv_language() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
         "--language",
         "dynsrv",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -710,15 +723,16 @@ fn test_dynsrv_language() {
 }
 
 /// Test CLI with centralised distribution mode (default)
-#[test]
-fn test_centralised_mode() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_centralised_mode() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
         "--centralised",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -741,14 +755,15 @@ fn test_centralised_mode() {
 }
 
 /// Test CLI with empty input file
-#[test]
-fn test_empty_input() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_empty_input(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("empty.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     // This should fail because empty input is not valid
@@ -766,14 +781,15 @@ fn test_empty_input() {
 }
 
 /// Test CLI with single timestep input
-#[test]
-fn test_single_timestep() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_single_timestep(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("single_timestep.input"),
         "--output-stdout",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -791,9 +807,9 @@ fn test_single_timestep() {
 }
 
 /// Test that CLI produces help output
-#[test]
-fn test_help_output() {
-    let output = futures::executor::block_on(run_cli(&["--help"])).expect("Failed to run CLI");
+#[test(apply(smol_test))]
+async fn test_help_output(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&["--help"]).await.expect("Failed to run CLI");
 
     assert!(
         output.status.success(),
@@ -820,11 +836,12 @@ fn test_help_output() {
 }
 
 /// Test CLI with missing required arguments
-#[test]
-fn test_missing_required_args() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_missing_required_args() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"), // Missing input mode
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -1711,16 +1728,17 @@ async fn test_async_runtime_default_with_mqtt_distributed(_executor: Rc<LocalExe
     );
 }
 
-#[test]
-fn test_runtime_async() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_runtime_async(_executor: Rc<LocalExecutor>) {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
         "--runtime",
         "async",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
@@ -1737,16 +1755,17 @@ fn test_runtime_async() {
     );
 }
 
-#[test]
-fn test_runtime_constraints() {
-    let output = futures::executor::block_on(run_cli(&[
+#[test(apply(smol_test))]
+async fn test_runtime_constraints() {
+    let output = run_cli(&[
         &fixture_path("simple_add_typed.lola"),
         "--input-file",
         &fixture_path("simple_add_typed.input"),
         "--output-stdout",
         "--runtime",
         "constraints",
-    ]))
+    ])
+    .await
     .expect("Failed to run CLI");
 
     assert!(
