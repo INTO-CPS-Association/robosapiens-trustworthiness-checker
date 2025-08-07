@@ -20,10 +20,6 @@ use trustworthiness_checker::{self as tc, io::file::parse_file};
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{Cli, Language, ParserMode};
-#[cfg(feature = "ros")]
-use trustworthiness_checker::io::ros::{
-    input_provider::ROSInputProvider, ros_topic_stream_mapping,
-};
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;

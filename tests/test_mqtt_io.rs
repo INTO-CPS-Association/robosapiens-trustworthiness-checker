@@ -211,7 +211,7 @@ mod tests {
         .into_iter()
         .collect::<BTreeMap<VarName, _>>();
 
-        // Create the ROS input provider
+        // Create the MQTT input provider
         let input_provider = MQTTInputProvider::new(
             executor.clone(),
             "localhost",
@@ -251,7 +251,7 @@ mod tests {
         ));
 
         // Test we have the expected outputs
-        // We have to specify how many outputs we want to take as the ROS
+        // We have to specify how many outputs we want to take as the MQTT
         // topic is not assumed to tell us when it is done
         info!("Waiting for {:?} outputs", zs.len());
         let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;
@@ -309,7 +309,7 @@ mod tests {
         .into_iter()
         .collect::<BTreeMap<VarName, _>>();
 
-        // Create the ROS input provider
+        // Create the MQTT input provider
         let input_provider = MQTTInputProvider::new(
             executor.clone(),
             "localhost",
@@ -349,7 +349,7 @@ mod tests {
         ));
 
         // Test we have the expected outputs
-        // We have to specify how many outputs we want to take as the ROS
+        // We have to specify how many outputs we want to take as the MQTT
         // topic is not assumed to tell us when it is done
         info!("Waiting for {:?} outputs", zs.len());
         let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;

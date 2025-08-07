@@ -24,3 +24,15 @@ Note that if you want to provide e.g., an Unknown value then it must be done wit
     "Unknown": null
 }
 ```
+
+## ROS2:
+For a minimum example of running with ROS2 open a terminal and source ROS2. Then run the following specification:
+```bash
+cargo run --features ros -- --input-ros-topics examples/counter_ros_map.json examples/counter.lola
+```
+In another terminal, source ROS2 and run the following command:
+```bash
+ros2 topic pub /x std_msgs/msg/Int32 "{data: 1}"
+```
+The output in the first terminal should now be counting forever.
+

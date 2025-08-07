@@ -1,15 +1,18 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::utils::cancellation_token::CancellationToken;
-use futures::StreamExt;
+use async_cell::unsync::AsyncCell;
+use futures::FutureExt;
 use futures::select;
+use futures::{StreamExt, future::LocalBoxFuture};
 use r2r;
 use smol::LocalExecutor;
+use tracing::{Level, instrument};
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
 
 use crate::stream_utils::drop_guard_stream;
+use crate::utils::cancellation_token::CancellationToken;
 use crate::{InputProvider, OutputStream, Value, core::VarName};
 
 pub struct VarData {
@@ -21,6 +24,8 @@ pub struct ROSInputProvider {
     #[allow(dead_code)]
     executor: Rc<LocalExecutor<'static>>,
     pub var_map: BTreeMap<VarName, VarData>,
+    pub result: Rc<AsyncCell<anyhow::Result<()>>>,
+    pub started: Rc<AsyncCell<bool>>,
     // node: Arc<Mutex<r2r::Node>>,
 }
 
@@ -39,7 +44,7 @@ impl ROSMsgType {
             ),
             ROSMsgType::String => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::String>(topic, qos)?
-                    .map(|val| Value::Str(val.data)),
+                    .map(|val| Value::Str(val.data.into())),
             ),
             ROSMsgType::Int64 => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Int64>(topic, qos)?
@@ -62,6 +67,7 @@ impl ROSMsgType {
 }
 
 impl ROSInputProvider {
+    #[instrument(level = Level::INFO, skip(var_topics))]
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_topics: ROSStreamMapping,
@@ -88,7 +94,7 @@ impl ROSInputProvider {
             // is still being consumed
             let stream = drop_guard_stream(stream, drop_guard.clone());
             var_map.insert(
-                VarName(var_name),
+                VarName::from(var_name),
                 VarData {
                     mapping_data: var_data,
                     stream: Some(stream),
@@ -112,7 +118,15 @@ impl ROSInputProvider {
             })
             .detach();
 
-        Ok(Self { executor, var_map })
+        let started = AsyncCell::new_with(false).into_shared();
+        let result = AsyncCell::shared();
+
+        Ok(Self {
+            executor,
+            var_map,
+            result,
+            started,
+        })
     }
 }
 
@@ -123,5 +137,13 @@ impl InputProvider for ROSInputProvider {
         let var_data = self.var_map.get_mut(var)?;
         let stream = var_data.stream.take()?;
         Some(stream)
+    }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(self.result.take_shared())
+    }
+
+    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        Box::pin(futures::future::ready(Ok(())))
     }
 }

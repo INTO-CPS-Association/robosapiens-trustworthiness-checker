@@ -7,6 +7,9 @@ use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::{self as tc, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
 
+#[cfg(feature = "ros")]
+use crate::io::ros::{input_provider::ROSInputProvider, ros_topic_stream_mapping};
+
 #[derive(Debug, Clone)]
 pub enum InputProviderSpec {
     /// File input provider
@@ -122,7 +125,7 @@ impl InputProviderBuilder {
                         ros_topic_stream_mapping::json_to_mapping(&input_mapping_str)
                             .expect("Input mapping file could not be parsed");
                     Box::new(
-                        ROSInputProvider::new(executor.clone(), input_mapping)
+                        ROSInputProvider::new(self.executor.clone().expect(""), input_mapping)
                             .expect("ROS input provider could not be created"),
                     )
                 }
