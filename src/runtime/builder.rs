@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::rc::Rc;
 
 use smol::LocalExecutor;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::{
     LOLASpecification, Monitor, Value, VarName,
