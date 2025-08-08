@@ -95,13 +95,15 @@ impl OutputHandlerBuilder {
                     .iter()
                     .map(|var| (var.clone(), var.into()))
                     .collect();
-                let hostname = match self.redis_port {
-                    Some(port) => format!("redis://{}:{}", REDIS_HOSTNAME, port),
-                    None => format!("redis://{}", REDIS_HOSTNAME),
-                };
                 Box::new(
-                    RedisOutputHandler::new(executor.clone(), output_var_names, &hostname, topics)
-                        .expect("Redis output handler could not be created"),
+                    RedisOutputHandler::new(
+                        executor.clone(),
+                        output_var_names,
+                        REDIS_HOSTNAME,
+                        self.redis_port,
+                        topics,
+                    )
+                    .expect("Redis output handler could not be created"),
                 )
             }
             OutputMode {
@@ -120,6 +122,7 @@ impl OutputHandlerBuilder {
                         executor.clone(),
                         output_var_names,
                         REDIS_HOSTNAME,
+                        self.redis_port,
                         topics,
                     )
                     .expect("Redis output handler could not be created"),

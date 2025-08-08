@@ -40,7 +40,7 @@ async fn async_main() -> anyhow::Result<()> {
 
     // Initialize logging
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(std::io::stderr))
         .with(EnvFilter::from_default_env())
         .init();
 

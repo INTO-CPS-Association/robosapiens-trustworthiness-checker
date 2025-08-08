@@ -41,7 +41,7 @@ pub enum ParserMode {
 /// Specifies how the monitoring system should receive input data streams.
 /// Exactly one input mode must be selected from the available options.
 /// Supports file-based, MQTT, Redis, and ROS input sources.
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Debug)]
 #[group(required = true, multiple = false)]
 pub struct InputMode {
     #[clap(long, help = "Path to input file containing trace data")]

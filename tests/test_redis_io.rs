@@ -28,6 +28,7 @@ use tc_testutils::redis::{dummy_redis_receiver, dummy_redis_sender, start_redis}
 use tracing::{debug, info};
 use trustworthiness_checker::{
     InputProvider, OutputStream, Value, VarName,
+    core::REDIS_HOSTNAME,
     core::{OutputHandler, Runnable},
     dep_manage::interface::{DependencyKind, create_dependency_manager},
     io::{
@@ -62,7 +63,7 @@ async fn test_dummy_redis_sender_receiver(
     // Start receiver before sending to ensure we don't miss the message
     let mut outputs = dummy_redis_receiver(
         executor.clone(),
-        "localhost",
+        REDIS_HOSTNAME,
         Some(port),
         vec![channel.to_string()],
         ready_tx,
@@ -79,7 +80,7 @@ async fn test_dummy_redis_sender_receiver(
 
     // Re-send the message after receiver is set up
     dummy_redis_sender(
-        "localhost",
+        REDIS_HOSTNAME,
         Some(port),
         channel.to_string(),
         messages.clone(),
@@ -120,7 +121,6 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
         .get_host_port_ipv4(6379)
         .await
         .expect("Failed to get host port for Redis server");
-    let host_uri = format!("redis://127.0.0.1:{}", redis_port);
 
     let var_topics = [
         ("x".into(), "redis_input_x".to_string()),
@@ -130,8 +130,13 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
     .collect::<BTreeMap<VarName, _>>();
 
     // Create the Redis input provider
-    let input_provider = RedisInputProvider::new(executor.clone(), &host_uri, var_topics)
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+    let input_provider = RedisInputProvider::new(
+        executor.clone(),
+        REDIS_HOSTNAME,
+        Some(redis_port),
+        var_topics,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
 
     input_provider.ready().await?;
 
@@ -157,7 +162,7 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
     // Spawn dummy Redis publisher tasks
     executor
         .spawn(dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             "redis_input_x".to_string(),
             xs,
@@ -167,7 +172,7 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
 
     executor
         .spawn(dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             "redis_input_y".to_string(),
             ys,
@@ -227,7 +232,6 @@ async fn test_add_monitor_redis_input_float(
         .get_host_port_ipv4(6379)
         .await
         .expect("Failed to get host port for Redis server");
-    let host_uri = format!("redis://127.0.0.1:{}", redis_port);
 
     let var_topics = [
         ("x".into(), "redis_input_x_float".to_string()),
@@ -237,8 +241,13 @@ async fn test_add_monitor_redis_input_float(
     .collect::<BTreeMap<VarName, _>>();
 
     // Create the Redis input provider
-    let input_provider = RedisInputProvider::new(executor.clone(), &host_uri, var_topics)
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+    let input_provider = RedisInputProvider::new(
+        executor.clone(),
+        REDIS_HOSTNAME,
+        Some(redis_port),
+        var_topics,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
 
     input_provider.ready().await?;
 
@@ -264,7 +273,7 @@ async fn test_add_monitor_redis_input_float(
     // Spawn dummy Redis publisher tasks
     executor
         .spawn(dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             "redis_input_x_float".to_string(),
             xs,
@@ -274,7 +283,7 @@ async fn test_add_monitor_redis_input_float(
 
     executor
         .spawn(dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             "redis_input_y_float".to_string(),
             ys,
@@ -336,7 +345,6 @@ async fn test_redis_input_provider_multiple_channels(
         .get_host_port_ipv4(6379)
         .await
         .expect("Failed to get host port for Redis server");
-    let host_uri = format!("redis://127.0.0.1:{}", redis_port);
 
     let var_topics = [
         ("var1".into(), "channel1".to_string()),
@@ -346,8 +354,13 @@ async fn test_redis_input_provider_multiple_channels(
     .into_iter()
     .collect::<BTreeMap<VarName, _>>();
 
-    let mut input_provider = RedisInputProvider::new(executor.clone(), &host_uri, var_topics)
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+    let mut input_provider = RedisInputProvider::new(
+        executor.clone(),
+        REDIS_HOSTNAME,
+        Some(redis_port),
+        var_topics,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
 
     // Create oneshot channels for coordination
     let ready_channel_1 = oneshot::channel();
@@ -376,7 +389,7 @@ async fn test_redis_input_provider_multiple_channels(
     // Send test messages to different channels
     executor
         .spawn(dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             "channel1".to_string(),
             vec![Value::Str("message1".into())],
@@ -386,7 +399,7 @@ async fn test_redis_input_provider_multiple_channels(
 
     executor
         .spawn(dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             "channel2".to_string(),
             vec![Value::Int(42)],
@@ -396,7 +409,7 @@ async fn test_redis_input_provider_multiple_channels(
 
     executor
         .spawn(dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             "channel3".to_string(),
             vec![Value::Float(3.14)],
@@ -476,7 +489,7 @@ async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let mut receiver_outputs = dummy_redis_receiver(
             executor.clone(),
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             vec![channel.clone()],
             ready_tx,
@@ -493,7 +506,7 @@ async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         // Send the value using our existing helper
         dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             channel,
             vec![value.clone()],
@@ -592,7 +605,7 @@ async fn test_serialization_edge_cases(executor: Rc<LocalExecutor<'static>>) -> 
 
         let mut receiver_outputs = dummy_redis_receiver(
             executor.clone(),
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             vec![channel.clone()],
             ready_tx,
@@ -609,7 +622,7 @@ async fn test_serialization_edge_cases(executor: Rc<LocalExecutor<'static>>) -> 
 
         // Send the value
         dummy_redis_sender(
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             channel,
             vec![test_value.clone()],
@@ -788,7 +801,7 @@ async fn test_json_interoperability(executor: Rc<LocalExecutor<'static>>) -> any
 
         let mut receiver_outputs = dummy_redis_receiver(
             executor.clone(),
-            "localhost",
+            REDIS_HOSTNAME,
             Some(redis_port),
             vec![channel.clone()],
             ready_tx,
@@ -899,7 +912,13 @@ async fn test_redis_output_handler_basic(
     var_topics.insert(var2.clone(), "topic2".to_string());
 
     // Create RedisOutputHandler
-    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+    let mut handler = RedisOutputHandler::new(
+        executor.clone(),
+        var_names,
+        REDIS_HOSTNAME,
+        Some(host),
+        var_topics,
+    )?;
 
     // Create test output streams
     let stream1 = create_test_output_stream(vec![Value::Int(42), Value::Str("hello".into())]);
@@ -975,7 +994,13 @@ async fn test_redis_output_handler_single_variable(
     var_topics.insert(var.clone(), "single_topic".to_string());
 
     // Create RedisOutputHandler
-    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+    let mut handler = RedisOutputHandler::new(
+        executor.clone(),
+        var_names,
+        REDIS_HOSTNAME,
+        Some(host),
+        var_topics,
+    )?;
 
     // Create test output stream with various data types
     let stream = create_test_output_stream(vec![
@@ -1041,7 +1066,13 @@ async fn test_redis_output_handler_empty_stream(
     var_topics.insert(var.clone(), "empty_topic".to_string());
 
     // Create RedisOutputHandler
-    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+    let mut handler = RedisOutputHandler::new(
+        executor.clone(),
+        var_names,
+        REDIS_HOSTNAME,
+        Some(host),
+        var_topics,
+    )?;
 
     // Create empty output stream
     let stream = create_test_output_stream(vec![]);
@@ -1101,7 +1132,13 @@ async fn test_redis_output_handler_multiple_variables(
     var_topics.insert(var3.clone(), "multi_topic3".to_string());
 
     // Create RedisOutputHandler
-    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+    let mut handler = RedisOutputHandler::new(
+        executor.clone(),
+        var_names,
+        REDIS_HOSTNAME,
+        Some(host),
+        var_topics,
+    )?;
 
     // Create test output streams
     let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2)]);
@@ -1180,7 +1217,6 @@ async fn test_redis_output_handler_var_names(
 ) -> anyhow::Result<()> {
     let redis = start_redis().await;
     let host = redis.get_host_port_ipv4(6379).await.unwrap();
-    let host_uri = format!("redis://127.0.0.1:{}", host);
 
     // Create test variables
     let var1 = VarName::new("var1");
@@ -1192,8 +1228,13 @@ async fn test_redis_output_handler_var_names(
     var_topics.insert(var2.clone(), "topic2".to_string());
 
     // Create RedisOutputHandler
-    let handler =
-        RedisOutputHandler::new(executor.clone(), var_names.clone(), &host_uri, var_topics)?;
+    let handler = RedisOutputHandler::new(
+        executor.clone(),
+        var_names.clone(),
+        REDIS_HOSTNAME,
+        Some(host),
+        var_topics,
+    )?;
 
     // Test var_names method
     let returned_var_names = handler.var_names();
@@ -1218,7 +1259,13 @@ async fn test_redis_output_handler_json_serialization(
     var_topics.insert(var.clone(), "json_topic".to_string());
 
     // Create RedisOutputHandler
-    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+    let mut handler = RedisOutputHandler::new(
+        executor.clone(),
+        var_names,
+        REDIS_HOSTNAME,
+        Some(host),
+        var_topics,
+    )?;
 
     // Create test output stream with complex data
     let stream = create_test_output_stream(vec![
@@ -1294,7 +1341,13 @@ async fn test_redis_output_handler_concurrent_streams(
     var_topics.insert(var2.clone(), "concurrent_topic2".to_string());
 
     // Create RedisOutputHandler
-    let mut handler = RedisOutputHandler::new(executor.clone(), var_names, &host_uri, var_topics)?;
+    let mut handler = RedisOutputHandler::new(
+        executor.clone(),
+        var_names,
+        REDIS_HOSTNAME,
+        Some(host),
+        var_topics,
+    )?;
 
     // Create output streams with timing delays to test concurrency
     let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
@@ -1366,8 +1419,6 @@ async fn test_redis_output_handler_error_handling(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     // Test with invalid Redis host
-    let invalid_host = "redis://invalid-host:6379";
-
     let var = VarName::new("error_var");
     let var_names = vec![var.clone()];
 
@@ -1375,7 +1426,13 @@ async fn test_redis_output_handler_error_handling(
     var_topics.insert(var.clone(), "error_topic".to_string());
 
     // Creating the handler should succeed even with invalid host
-    let result = RedisOutputHandler::new(executor.clone(), var_names, invalid_host, var_topics);
+    let result = RedisOutputHandler::new(
+        executor.clone(),
+        var_names,
+        "invalid-host",
+        Some(9999),
+        var_topics,
+    );
     assert!(result.is_ok());
 
     Ok(())

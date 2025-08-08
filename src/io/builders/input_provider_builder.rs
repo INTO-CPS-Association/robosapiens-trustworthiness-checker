@@ -178,7 +178,7 @@ impl InputProviderBuilder {
                 };
                 let mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
                     self.executor.unwrap().clone(),
-                    REDIS_HOSTNAME,
+                    MQTT_HOSTNAME,
                     var_topics,
                 )
                 .expect("MQTT input provider could not be created");
@@ -201,13 +201,10 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let hostname = match self.redis_port {
-                    Some(port) => format!("redis://{}:{}", REDIS_HOSTNAME, port),
-                    None => format!("redis://{}", REDIS_HOSTNAME),
-                };
                 let redis_input_provider = tc::io::redis::RedisInputProvider::new(
                     self.executor.unwrap().clone(),
-                    &hostname,
+                    REDIS_HOSTNAME,
+                    self.redis_port,
                     var_topics,
                 )
                 .expect("Redis input provider could not be created");

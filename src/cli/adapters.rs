@@ -29,6 +29,10 @@ impl From<InputMode> for InputProviderSpec {
                 ..
             } => InputProviderSpec::MQTT(Some(input_mqtt_topics)),
             InputMode {
+                input_redis_topics: Some(input_redis_topics),
+                ..
+            } => InputProviderSpec::Redis(Some(input_redis_topics)),
+            InputMode {
                 input_map_mqtt_topics: Some(input_map_mqtt_topics),
                 ..
             } => InputProviderSpec::MQTTMap(Some(input_map_mqtt_topics)),
@@ -38,7 +42,7 @@ impl From<InputMode> for InputProviderSpec {
             InputMode {
                 redis_input: true, ..
             } => InputProviderSpec::Redis(None),
-            _ => panic!("Input provider not specified"),
+            _ => panic!("Invalid input provider specification"),
         }
     }
 }

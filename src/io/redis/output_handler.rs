@@ -40,6 +40,7 @@ pub struct RedisOutputHandler {
     pub var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     pub hostname: String,
+    pub port: Option<u16>,
 }
 
 impl OutputHandler for RedisOutputHandler {
@@ -67,10 +68,11 @@ impl OutputHandler for RedisOutputHandler {
             })
             .collect::<Vec<_>>();
         let hostname = self.hostname.clone();
+        let port = self.port;
         info!(name: "OutputProvider MQTT startup task launched",
             ?hostname, num_streams = ?streams.len());
 
-        Box::pin(RedisOutputHandler::inner_handler(hostname, streams))
+        Box::pin(RedisOutputHandler::inner_handler(hostname, port, streams))
     }
 }
 
@@ -78,10 +80,11 @@ impl RedisOutputHandler {
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
-        host: &str,
+        hostname: &str,
+        port: Option<u16>,
         var_topics: OutputChannelMap,
     ) -> Result<Self, anyhow::Error> {
-        let hostname = host.to_string();
+        let hostname = hostname.to_string();
 
         let var_map = var_topics
             .into_iter()
@@ -101,16 +104,22 @@ impl RedisOutputHandler {
             var_names,
             var_map,
             hostname,
+            port,
         })
     }
 
     async fn inner_handler(
-        host: String,
+        hostname: String,
+        port: Option<u16>,
         streams: Vec<(String, OutputStream<Value>)>,
     ) -> anyhow::Result<()> {
         debug!("Awaiting client creation");
         debug!("Client created");
-        let client = redis::Client::open(host.clone())?;
+        let url = match port {
+            Some(p) => format!("redis://{}:{}", hostname, p),
+            None => format!("redis://{}", hostname),
+        };
+        let client = redis::Client::open(url)?;
 
         join_all(streams.into_iter().map(|(channel_name, stream)| async {
             let con = client.get_multiplexed_async_connection().await.unwrap();

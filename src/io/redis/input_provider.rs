@@ -25,10 +25,14 @@ pub struct RedisInputProvider {
 impl RedisInputProvider {
     pub fn new(
         ex: Rc<LocalExecutor<'static>>,
-        host: &str,
+        hostname: &str,
+        port: Option<u16>,
         var_topics: BTreeMap<VarName, String>,
     ) -> Result<RedisInputProvider, Box<dyn Error>> {
-        let host: String = host.to_string();
+        let url = match port {
+            Some(p) => format!("redis://{}:{}", hostname, p),
+            None => format!("redis://{}", hostname),
+        };
 
         let (senders, receivers): (BTreeMap<_, Sender<Value>>, BTreeMap<_, Receiver<Value>>) =
             var_topics
@@ -45,7 +49,7 @@ impl RedisInputProvider {
 
         let started = AsyncCell::shared();
 
-        let client = redis::Client::open(host.clone())?;
+        let client = redis::Client::open(url.clone())?;
 
         let result = AsyncCell::shared();
 
@@ -80,7 +84,7 @@ impl RedisInputProvider {
             .collect();
 
         Ok(RedisInputProvider {
-            host,
+            host: url,
             result,
             var_data,
             started,

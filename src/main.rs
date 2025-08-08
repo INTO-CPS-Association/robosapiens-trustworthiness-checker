@@ -27,7 +27,7 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(std::io::stderr))
         // Uncomment the following line to enable full span events which logs
         // every time the code enters/exits an instrumented function/block
         // .with(fmt::layer().with_span_events(FmtSpan::FULL))
