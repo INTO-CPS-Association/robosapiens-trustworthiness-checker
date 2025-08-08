@@ -1,5 +1,5 @@
 use lalrpop_util::lalrpop_mod;
-lalrpop_mod!(pub lalr_parser, "/lang/dynamic_lola/lalr_parser.rs");
+lalrpop_mod!(pub lalr, "/lang/dynamic_lola/lalr.rs");
 
 pub mod ast;
 pub mod parser;
