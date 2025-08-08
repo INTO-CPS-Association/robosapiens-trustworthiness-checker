@@ -26,7 +26,16 @@ Note that if you want to provide e.g., an Unknown value then it must be done wit
 ```
 
 ## ROS2:
-For a minimum example of running with ROS2 open a terminal and source ROS2. Then run the following specification:
+For a minimum example of running with ROS2 open a terminal and source ROS2.
+Then run colcon to compile the custom message types:
+```bash
+colcon build
+```
+And source the install file:
+```bash
+source install/setup.bash
+```
+Start monitoring the specification:
 ```bash
 cargo run --features ros -- --input-ros-topics examples/counter_ros_map.json examples/counter.lola
 ```

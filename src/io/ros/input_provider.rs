@@ -39,29 +39,64 @@ impl ROSMsgType {
     ) -> Result<OutputStream<Value>, r2r::Error> {
         Ok(match self {
             ROSMsgType::Bool => Box::pin(
-                node.subscribe::<r2r::std_msgs::msg::Bool>(topic, qos)?
-                    .map(|val| Value::Bool(val.data)),
-            ),
+                        node.subscribe::<r2r::std_msgs::msg::Bool>(topic, qos)?
+                            .map(|val| Value::Bool(val.data)),
+                    ),
             ROSMsgType::String => Box::pin(
-                node.subscribe::<r2r::std_msgs::msg::String>(topic, qos)?
-                    .map(|val| Value::Str(val.data.into())),
-            ),
+                        node.subscribe::<r2r::std_msgs::msg::String>(topic, qos)?
+                            .map(|val| Value::Str(val.data.into())),
+                    ),
             ROSMsgType::Int64 => Box::pin(
-                node.subscribe::<r2r::std_msgs::msg::Int64>(topic, qos)?
-                    .map(|val| Value::Int(val.data)),
-            ),
+                        node.subscribe::<r2r::std_msgs::msg::Int64>(topic, qos)?
+                            .map(|val| Value::Int(val.data)),
+                    ),
             ROSMsgType::Int32 => Box::pin(
-                node.subscribe::<r2r::std_msgs::msg::Int32>(topic, qos)?
-                    .map(|val| Value::Int(val.data.into())),
-            ),
+                        node.subscribe::<r2r::std_msgs::msg::Int32>(topic, qos)?
+                            .map(|val| Value::Int(val.data.into())),
+                    ),
             ROSMsgType::Int16 => Box::pin(
-                node.subscribe::<r2r::std_msgs::msg::Int16>(topic, qos)?
-                    .map(|val| Value::Int(val.data.into())),
-            ),
+                        node.subscribe::<r2r::std_msgs::msg::Int16>(topic, qos)?
+                            .map(|val| Value::Int(val.data.into())),
+                    ),
             ROSMsgType::Int8 => Box::pin(
-                node.subscribe::<r2r::std_msgs::msg::Int8>(topic, qos)?
-                    .map(|val| Value::Int(val.data.into())),
-            ),
+                        node.subscribe::<r2r::std_msgs::msg::Int8>(topic, qos)?
+                            .map(|val| Value::Int(val.data.into())),
+                    ),
+            ROSMsgType::Float64 => Box::pin(
+                        node.subscribe::<r2r::std_msgs::msg::Float64>(topic, qos)?
+                            .map(|val| Value::Float(val.data)),
+                    ),
+            ROSMsgType::Float32 => Box::pin(
+                        node.subscribe::<r2r::std_msgs::msg::Float32>(topic, qos)?
+                            .map(|val| Value::Float(val.data.into())),
+                    ),
+            ROSMsgType::Human => Box::pin(
+                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::Human>(topic, qos)?
+                            .map(|val| {
+                                serde_json::to_value(val)
+                                    .expect("Failed to serialize ROS2 Human msg to JSON")
+                                    .try_into()
+                                    .expect("Failed to serialize ROS2 Human msg to internal representation")
+                            }),
+                    ),
+            ROSMsgType::HumanList => Box::pin(
+                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanList>(topic, qos)?
+                            .map(|val| {
+                                serde_json::to_value(val)
+                                    .expect("Failed to serialize ROS2 HumanList msg to JSON")
+                                    .try_into()
+                                    .expect("Failed to serialize ROS2 HumanList msg to internal representation")
+                            }),
+                    ),
+            ROSMsgType::HumanBodyPart => Box::pin(
+                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanBodyPart>(topic, qos)?
+                            .map(|val| {
+                                serde_json::to_value(val)
+                                    .expect("Failed to serialize ROS2 HumanBodyPart msg to JSON")
+                                    .try_into()
+                                    .expect("Failed to serialize ROS2 HumanBodyPart msg to internal representation")
+                            }),
+                    ),
         })
     }
 }

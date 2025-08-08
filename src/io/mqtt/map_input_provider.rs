@@ -6,7 +6,6 @@ use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_unsync::bounded;
-use ecow::eco_vec;
 use futures::{StreamExt, future::LocalBoxFuture};
 use paho_mqtt as mqtt;
 use serde_json::Value as JValue;
@@ -17,38 +16,6 @@ use super::client::provide_mqtt_client_with_subscription;
 use crate::{InputProvider, OutputStream, Value, core::VarName};
 
 const QOS: i32 = 1;
-
-trait ToValue {
-    fn to_value(self) -> Value;
-}
-
-impl ToValue for JValue {
-    fn to_value(self) -> Value {
-        match self {
-            JValue::Null => Value::Unit,
-            JValue::Bool(val) => Value::Bool(val),
-            JValue::Number(num) => {
-                if num.is_i64() {
-                    Value::Int(num.as_i64().unwrap())
-                } else if num.is_u64() {
-                    panic!("Number too large")
-                } else {
-                    // Guaranteed to be f64 at this point
-                    Value::Float(num.as_f64().unwrap())
-                }
-            }
-            JValue::String(val) => Value::Str(val.into()),
-            JValue::Array(vals) => Value::List(vals.iter().map(|v| v.clone().to_value()).collect()),
-            // Objects currently represented of list of key-value pairs. Since we don't have pairs
-            // it becomes Lists of 2-value Lists
-            JValue::Object(vals) => Value::List(
-                vals.iter()
-                    .map(|(k, v)| Value::List(eco_vec![k.clone().into(), v.clone().to_value()]))
-                    .collect(),
-            ),
-        }
-    }
-}
 
 pub struct VarData {
     pub variable: VarName,
@@ -208,7 +175,7 @@ impl MapMQTTInputProvider {
                 }
             };
             debug!("JValue: {:?}", jvalue);
-            let value = jvalue.to_value();
+            let value: Value = jvalue.try_into()?;
             if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
                 sender
                     .send(value)

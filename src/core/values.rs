@@ -1,8 +1,10 @@
 use std::fmt::{Debug, Display};
 
-use ecow::{EcoString, EcoVec};
+use anyhow::anyhow;
+use ecow::{EcoString, EcoVec, eco_vec};
 use redis::{FromRedisValue, RedisResult, ToRedisArgs};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JValue;
 
 // Anything inside a stream should be clonable in O(1) time in order for the
 // runtimes to be efficiently implemented. This is why we use EcoString and
@@ -115,6 +117,51 @@ impl TryFrom<Value> for () {
         match value {
             Value::Unit => Ok(()),
             _ => Err(()),
+        }
+    }
+}
+impl TryFrom<JValue> for Value {
+    type Error = anyhow::Error;
+
+    fn try_from(value: JValue) -> Result<Self, Self::Error> {
+        match value {
+            JValue::Null => Ok(Value::Unit),
+            JValue::Bool(val) => Ok(Value::Bool(val)),
+            JValue::Number(num) => {
+                if num.is_i64() {
+                    Ok(Value::Int(num.as_i64().unwrap()))
+                } else if num.is_u64() {
+                    Err(anyhow!("Number too large"))
+                } else {
+                    // Guaranteed to be f64 at this point
+                    Ok(Value::Float(num.as_f64().unwrap()))
+                }
+            }
+            JValue::String(val) => Ok(Value::Str(val.into())),
+            // If any element returns Err then this propagates it (because of collect)
+            JValue::Array(vals) => vals
+                .iter()
+                .map(|v| v.clone().try_into())
+                .collect::<Result<EcoVec<Value>, Self::Error>>()
+                .map(Value::List),
+            // Objects currently represented of list of key-value pairs. Since we don't have pairs
+            // it becomes Lists of 2-value Lists
+            JValue::Object(vals) => vals
+                .iter()
+                .map(|(k, v)| {
+                    let x: Result<Value, Self::Error> = v.clone().try_into();
+                    match x {
+                        Ok(x) => Ok(Value::List(eco_vec![k.clone().into(), x])),
+                        Err(e) => Err(e),
+                    }
+                })
+                .collect::<Result<EcoVec<Value>, Self::Error>>()
+                .map(Value::List),
+            // Ok(Value::List(
+            //     vals.iter()
+            //         .map(|(k, v)| Value::List(eco_vec![k.clone().into(), v.clone().to_value()]))
+            //         .collect(),
+            // )),
         }
     }
 }
