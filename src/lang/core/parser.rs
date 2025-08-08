@@ -15,7 +15,7 @@ pub use winnow::ascii::dec_int as integer;
 pub use winnow::ascii::float;
 pub use winnow::ascii::space0 as whitespace;
 
-pub fn presult_to_string<T: Debug>(e: &Result<T>) -> String {
+pub fn presult_to_string<T: Debug, E: Debug>(e: &Result<T, E>) -> String {
     format!("{:?}", e)
 }
 

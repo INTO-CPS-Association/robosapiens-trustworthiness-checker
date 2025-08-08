@@ -197,6 +197,13 @@ pub enum SExpr {
     Dist(VarOrNodeName, VarOrNodeName),
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum SStmt {
+    Input(VarName),
+    Output(VarName),
+    Assignment(VarName, SExpr),
+}
+
 impl SExpr {
     pub fn inputs(&self) -> Vec<VarName> {
         use SExpr::*;

@@ -1416,6 +1416,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_dangling_else() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "if a then b else c + d")),
+            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
+        )
+    }
+
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[-1], 0) + 1",

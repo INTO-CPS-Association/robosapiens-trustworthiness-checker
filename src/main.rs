@@ -12,6 +12,7 @@ use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::builders::OutputHandlerBuilder;
+use trustworthiness_checker::lang::dynamic_lola::lalr_parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
@@ -67,7 +68,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
             .await
             .context("Model file could not be parsed")?,
-        ParserMode::Lalr => anyhow::bail!("LALR parser not currently implemented"),
+        ParserMode::Lalr => lalr_parse_file(cli.model.as_str())
+            .await
+            .context("Model file could not be parsed")?,
     };
     info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Parsed model");
 

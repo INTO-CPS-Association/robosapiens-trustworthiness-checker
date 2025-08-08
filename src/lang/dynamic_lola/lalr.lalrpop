@@ -1,7 +1,7 @@
 use std::str::FromStr;
-use ecow::EcoString;
+use ecow::{EcoString, EcoVec};
 
-use crate::lang::dynamic_lola::ast::{SExpr, SBinOp, NumericalBinOp, CompBinOp};
+use crate::lang::dynamic_lola::ast::{SExpr, SStmt, SBinOp, NumericalBinOp, CompBinOp};
 use crate::core::{Value, VarName};
 
 grammar;
@@ -24,7 +24,7 @@ Bool: bool = {
     "true" => true,
     "false" => false
 };
-String: EcoString = <s:r#""[^\\"\n\r]*(?:\\[tn'"\\][^\\"\n\r]*)*""#> => s.into();
+String: EcoString = <s:r#""[^\\"\n\r]*(?:\\[tn'"\\][^\\"\n\r]*)*""#> => s[1..s.len()-1].into();
 
 // Macros ////////////////////////////////////////////////////////////
 Box<T>: Box<T> = {
@@ -119,19 +119,36 @@ Atom: SExpr = {
     SIndex,
     Literal,
     IdentSExpr,
+    Paren
+}
+
+Ifelse: SExpr = {
+    "if" <c: Expr> "then" <i: Expr> "else" <e: Expr> => SExpr::If(Box::new(c), Box::new(i), Box::new(e))
 }
 
 pub Expr: SExpr = {
+    Ifelse,
     CompExpr,
-    "(" <Expr> ")"
 };
 
-pub InputDecl: SExpr = {
-    "in " <var: IdentSExpr> => var,
+InputDecl: SStmt = {
+    "in " <Ident> => SStmt::Input(<>),
 };
 
-pub OutputDecl: SExpr = {
-    "out " <var: IdentSExpr> => var,
+OutputDecl: SStmt = {
+    "out " <Ident> => SStmt::Output(<>),
 };
 
-// TODO: Figure out how to turn this into a LOLASpecification. Probably need some helper function
+Assignment: SStmt  = {
+    <var: Ident> "=" <expr: Expr> => SStmt::Assignment(var, expr)
+}
+
+pub Stmt: SStmt = {
+    InputDecl,
+    OutputDecl,
+    Assignment
+}
+
+pub Stmts: EcoVec<SStmt> = {
+   Stmt* => <>.into()
+}
