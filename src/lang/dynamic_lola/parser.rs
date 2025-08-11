@@ -624,7 +624,7 @@ pub(crate) fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamTy
     separated(0.., output_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-pub(crate) fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
+pub(crate) fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     seq!((
         _: whitespace,
         ident,
@@ -638,8 +638,8 @@ pub(crate) fn var_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     .parse_next(s)
 }
 
-pub(crate) fn var_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
-    separated(0.., var_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
+pub(crate) fn assignment_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
+    separated(0.., assignment_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
 pub fn lola_specification(s: &mut &str) -> Result<LOLASpecification> {
@@ -649,7 +649,7 @@ pub fn lola_specification(s: &mut &str) -> Result<LOLASpecification> {
         _: loop_ms_or_lb_or_lc,
         output_decls,
         _: loop_ms_or_lb_or_lc,
-        var_decls,
+        assignment_decls,
         _: loop_ms_or_lb_or_lc,
     ))
     .map(|(input_vars, output_vars, exprs)| {
@@ -1192,21 +1192,21 @@ mod tests {
     }
 
     #[test]
-    fn test_var_decl() {
+    fn test_assignment_decl() {
         assert_eq!(
-            presult_to_string(&var_decl(&mut "x = 0")),
+            presult_to_string(&assignment_decl(&mut "x = 0")),
             r#"Ok((VarName::new("x"), Val(Int(0))))"#
         );
         assert_eq!(
-            presult_to_string(&var_decl(&mut r#"x = "hello""#)),
+            presult_to_string(&assignment_decl(&mut r#"x = "hello""#)),
             r#"Ok((VarName::new("x"), Val(Str("hello"))))"#
         );
         assert_eq!(
-            presult_to_string(&var_decl(&mut "x = true")),
+            presult_to_string(&assignment_decl(&mut "x = true")),
             r#"Ok((VarName::new("x"), Val(Bool(true))))"#
         );
         assert_eq!(
-            presult_to_string(&var_decl(&mut "x = false")),
+            presult_to_string(&assignment_decl(&mut "x = false")),
             r#"Ok((VarName::new("x"), Val(Bool(false))))"#
         );
     }
@@ -1335,7 +1335,7 @@ mod tests {
             r#"Ok(Val(List([Int(1), Str("hello")])))"#
         );
         assert_eq!(
-            var_decl(&mut "y = List()"),
+            assignment_decl(&mut "y = List()"),
             Ok(("y".into(), SExpr::Val(Value::List(vec![].into()))))
         )
     }
