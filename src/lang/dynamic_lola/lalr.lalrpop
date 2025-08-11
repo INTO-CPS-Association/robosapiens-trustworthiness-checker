@@ -2,7 +2,7 @@ use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 
 use crate::lang::dynamic_lola::ast::{SExpr, SStmt, SBinOp, NumericalBinOp, CompBinOp};
-use crate::core::{Value, VarName};
+use crate::core::{Value, VarName, StreamType};
 
 grammar;
 
@@ -126,17 +126,29 @@ Ifelse: SExpr = {
     "if" <c: Expr> "then" <i: Expr> "else" <e: Expr> => SExpr::If(Box::new(c), Box::new(i), Box::new(e))
 }
 
+StreamTyp: StreamType = {
+    "Int" => StreamType::Int,
+    "Str" => StreamType::Str,
+    "Float" => StreamType::Float,
+    "Bool" => StreamType::Bool,
+    "Unit" => StreamType::Unit,
+}
+
+TypeAnno: StreamType = {
+    ":" <StreamTyp> => <>
+}
+
 pub Expr: SExpr = {
     Ifelse,
     CompExpr,
 };
 
 InputDecl: SStmt = {
-    "in " <Ident> => SStmt::Input(<>),
+    "in " <id: Ident> <typ: TypeAnno?> => SStmt::Input(id, typ)
 };
 
 OutputDecl: SStmt = {
-    "out " <Ident> => SStmt::Output(<>),
+    "out " <id: Ident> <typ: TypeAnno?> => SStmt::Output(id, typ),
 };
 
 Assignment: SStmt  = {

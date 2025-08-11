@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Error, anyhow};
+use ecow::EcoVec;
 use tracing::warn;
 
 use super::lalr::{ExprParser, StmtParser, StmtsParser};
@@ -18,6 +19,53 @@ pub fn parse_sstmt<'input>(input: &'input str) -> Result<SStmt, Error> {
         .map_err(|e| anyhow!("Parse error: {:?}", e))
 }
 
+pub fn parse_sstmts<'input>(input: &'input str) -> Result<EcoVec<SStmt>, Error> {
+    StmtsParser::new()
+        .parse(input)
+        .map_err(|e| anyhow!("Parse error: {:?}", e))
+}
+
+pub fn create_lola_spec(stmts: &EcoVec<SStmt>) -> LOLASpecification {
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    let mut assignments = BTreeMap::new();
+    let mut type_annotations = BTreeMap::new();
+
+    for stmt in stmts {
+        match stmt {
+            SStmt::Input(var, typ) => {
+                inputs.push(var.clone());
+                if let Some(typ) = typ {
+                    type_annotations.insert(var.clone(), typ.clone());
+                }
+            }
+            SStmt::Output(var, typ) => {
+                outputs.push(var.clone());
+                if let Some(typ) = typ {
+                    type_annotations.insert(var.clone(), typ.clone());
+                }
+            }
+            SStmt::Assignment(var, sexpr) => {
+                assignments.insert(var.clone(), sexpr.clone());
+            }
+        }
+    }
+
+    LOLASpecification {
+        input_vars: inputs,
+        output_vars: outputs,
+        exprs: assignments,
+        type_annotations,
+    }
+}
+
+pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<LOLASpecification> {
+    let stmts = StmtsParser::new().parse(&input).map_err(|e| {
+        anyhow::anyhow!(e.to_string()).context(format!("Failed to parse input {}", input))
+    })?;
+    Ok(create_lola_spec(&stmts))
+}
+
 pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<LOLASpecification> {
     warn!(
         "Use of LALR parser is incomplete, experimental and currently hardcoded for DynSRV specifications"
@@ -26,35 +74,17 @@ pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<LOLASpecifica
     let stmts = StmtsParser::new().parse(&contents).map_err(|e| {
         anyhow::anyhow!(e.to_string()).context(format!("Failed to parse file {}", file))
     })?;
-    let mut inputs = Vec::new();
-    let mut outputs = Vec::new();
-    let mut assignments = BTreeMap::new();
-
-    for stmt in &stmts {
-        match stmt {
-            SStmt::Input(var) => {
-                inputs.push(var.clone());
-            }
-            SStmt::Output(var) => {
-                outputs.push(var.clone());
-            }
-            SStmt::Assignment(var, sexpr) => {
-                assignments.insert(var.clone(), sexpr.clone());
-            }
-        }
-    }
-
-    Ok(LOLASpecification {
-        input_vars: inputs,
-        output_vars: outputs,
-        exprs: assignments,
-        type_annotations: BTreeMap::new(), // TODO: No support for type annotations...
-    })
+    Ok(create_lola_spec(&stmts))
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::core::StreamType;
     use crate::lang::core::parser::presult_to_string;
+
+    use crate::VarName;
+    use crate::lang::dynamic_lola::ast::NumericalBinOp;
+    use crate::lang::dynamic_lola::ast::SBinOp;
 
     use super::*;
     use test_log::test;
@@ -134,7 +164,107 @@ mod tests {
     #[test]
     fn test_input_decl() {
         let parsed = parse_sstmt("in x");
-        let exp = "Ok(Input(VarName::new(\"x\")))";
+        let exp = "Ok(Input(VarName::new(\"x\"), None))";
         assert_eq!(presult_to_string(&parsed), exp);
+    }
+
+    #[test]
+    fn test_typed_input_decl() {
+        let parsed = parse_sstmt("in x: Int");
+        let exp = "Ok(Input(VarName::new(\"x\"), Some(Int)))";
+        assert_eq!(presult_to_string(&parsed), exp);
+
+        let parsed = parse_sstmt("in x: Float");
+        let exp = "Ok(Input(VarName::new(\"x\"), Some(Float)))";
+        assert_eq!(presult_to_string(&parsed), exp);
+    }
+
+    #[test]
+    fn test_input_decls() {
+        let parsed = parse_sstmts("");
+        let exp = "Ok([])";
+        assert_eq!(presult_to_string(&parsed), exp);
+
+        let parsed = parse_sstmts("in x");
+        let exp = r#"Ok([Input(VarName::new("x"), None)])"#;
+        assert_eq!(presult_to_string(&parsed), exp);
+
+        let parsed = parse_sstmts("in x\nin y");
+        let exp = r#"Ok([Input(VarName::new("x"), None), Input(VarName::new("y"), None)])"#;
+        assert_eq!(presult_to_string(&parsed), exp);
+    }
+
+    #[test]
+    fn test_parse_lola_simple_add() {
+        let input = crate::lola_fixtures::spec_simple_add_monitor();
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec!["x".into(), "y".into()],
+            output_vars: vec!["z".into()],
+            exprs: BTreeMap::from([(
+                "z".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Var("x".into())),
+                    Box::new(SExpr::Var("y".into())),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::new(),
+        };
+        let spec = parse_str(input);
+        assert!(spec.is_ok());
+        let spec = spec.unwrap();
+        assert_eq!(spec, simple_add_spec);
+    }
+
+    #[test]
+    fn test_parse_lola_simple_add_typed() {
+        let input = crate::lola_fixtures::spec_simple_add_monitor_typed();
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec!["x".into(), "y".into()],
+            output_vars: vec!["z".into()],
+            exprs: BTreeMap::from([(
+                "z".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Var("x".into())),
+                    Box::new(SExpr::Var("y".into())),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::from([
+                (VarName::new("x"), StreamType::Int),
+                (VarName::new("y"), StreamType::Int),
+                (VarName::new("z"), StreamType::Int),
+            ]),
+        };
+        let spec = parse_str(input);
+        assert!(spec.is_ok());
+        let spec = spec.unwrap();
+        assert_eq!(spec, simple_add_spec);
+    }
+
+    #[test]
+    fn test_parse_lola_simple_add_float_typed() {
+        let input = crate::lola_fixtures::spec_simple_add_monitor_typed_float();
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec!["x".into(), "y".into()],
+            output_vars: vec!["z".into()],
+            exprs: BTreeMap::from([(
+                "z".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Var("x".into())),
+                    Box::new(SExpr::Var("y".into())),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::from([
+                ("x".into(), StreamType::Float),
+                ("y".into(), StreamType::Float),
+                ("z".into(), StreamType::Float),
+            ]),
+        };
+        let spec = parse_str(input);
+        assert!(spec.is_ok());
+        let spec = spec.unwrap();
+        assert_eq!(spec, simple_add_spec);
     }
 }

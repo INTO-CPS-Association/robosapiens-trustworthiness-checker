@@ -199,8 +199,8 @@ pub enum SExpr {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum SStmt {
-    Input(VarName),
-    Output(VarName),
+    Input(VarName, Option<StreamType>),
+    Output(VarName, Option<StreamType>),
     Assignment(VarName, SExpr),
 }
 
