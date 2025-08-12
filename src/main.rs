@@ -72,7 +72,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             .await
             .context("Model file could not be parsed")?,
     };
-    info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Parsed model");
+    info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, aux_info=?model.aux_info, "Parsed model");
 
     // Localise the model to contain only the local variables (if needed)
     let model = if let DistributionMode::LocalMonitor(locality_mode) = &builder.distribution_mode {
@@ -90,6 +90,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     ));
 
     let output_var_names = model.output_vars.clone();
+    let aux_info = model.aux_info.clone();
     let builder = builder.model(model.clone());
 
     // Create the input provider builder
@@ -106,7 +107,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .executor(executor.clone())
         .output_var_names(output_var_names)
         .mqtt_port(mqtt_port)
-        .redis_port(redis_port);
+        .redis_port(redis_port)
+        .aux_info(aux_info);
 
     let builder = builder.output_handler_builder(output_handler_builder);
 

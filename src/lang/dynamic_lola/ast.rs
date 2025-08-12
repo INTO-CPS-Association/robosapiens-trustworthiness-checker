@@ -201,6 +201,7 @@ pub enum SExpr {
 pub enum SStmt {
     Input(VarName, Option<StreamType>),
     Output(VarName, Option<StreamType>),
+    Aux(VarName, Option<StreamType>),
     Assignment(VarName, SExpr),
 }
 
@@ -282,6 +283,7 @@ pub struct LOLASpecification {
     pub output_vars: Vec<VarName>,
     pub exprs: BTreeMap<VarName, SExpr>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
+    pub aux_info: Vec<VarName>,
 }
 
 impl LOLASpecification {
@@ -407,6 +409,7 @@ impl LOLASpecification {
         output_vars: Vec<VarName>,
         exprs: BTreeMap<VarName, SExpr>,
         type_annotations: BTreeMap<VarName, StreamType>,
+        aux_info: Vec<VarName>,
     ) -> Self {
         let exprs = Self::fix_dynamic(&input_vars, &output_vars, &exprs);
         LOLASpecification {
@@ -414,6 +417,7 @@ impl LOLASpecification {
             output_vars,
             exprs,
             type_annotations,
+            aux_info,
         }
     }
 }
@@ -450,8 +454,12 @@ impl Debug for LOLASpecification {
 
         write!(
             f,
-            "LOLASpecification {{ input_vars: {:?}, output_vars: {:?}, exprs: {}, type_annotations: {} }}",
-            self.input_vars, self.output_vars, exprs_formatted, type_annotations_formatted
+            "LOLASpecification {{ input_vars: {:?}, output_vars: {:?}, exprs: {}, type_annotations: {}, aux_info: {:?} }}",
+            self.input_vars,
+            self.output_vars,
+            exprs_formatted,
+            type_annotations_formatted,
+            self.aux_info
         )
     }
 }
@@ -597,6 +605,7 @@ pub mod generation {
                 .prop_map(move |exprs| LOLASpecification {
                     input_vars: input_vars.clone(),
                     output_vars: output_vars.clone(),
+                    aux_info: vec![],
                     exprs,
                     type_annotations: BTreeMap::new(),
                 })

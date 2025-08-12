@@ -135,7 +135,7 @@ StreamTyp: StreamType = {
 }
 
 TypeAnno: StreamType = {
-    ":" <StreamTyp> => <>
+    ": " <StreamTyp> => <>
 }
 
 pub Expr: SExpr = {
@@ -149,6 +149,10 @@ InputDecl: SStmt = {
 
 OutputDecl: SStmt = {
     "out " <id: Ident> <typ: TypeAnno?> => SStmt::Output(id, typ),
+};
+
+AuxDecl: SStmt = {
+    "aux " <id: Ident> <typ: TypeAnno?> => SStmt::Aux(id, typ),
 };
 
 Assignment: SStmt  = {

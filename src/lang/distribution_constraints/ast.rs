@@ -294,6 +294,7 @@ pub mod generation {
                 .prop_map(move |exprs| LOLASpecification {
                     input_vars: input_vars.clone(),
                     output_vars: output_vars.clone(),
+                    aux_info: vec![],
                     exprs,
                     type_annotations: BTreeMap::new(),
                 })

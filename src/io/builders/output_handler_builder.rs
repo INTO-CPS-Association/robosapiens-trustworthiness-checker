@@ -15,6 +15,7 @@ pub struct OutputHandlerBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     output_var_names: Option<Vec<VarName>>,
     output_mode: OutputMode,
+    aux_info: Option<Vec<VarName>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
 }
@@ -25,6 +26,7 @@ impl OutputHandlerBuilder {
             executor: None,
             output_var_names: None,
             output_mode,
+            aux_info: None,
             mqtt_port: None,
             redis_port: None,
         }
@@ -37,6 +39,11 @@ impl OutputHandlerBuilder {
 
     pub fn output_var_names(mut self, output_var_names: Vec<VarName>) -> Self {
         self.output_var_names = Some(output_var_names);
+        self
+    }
+
+    pub fn aux_info(mut self, aux_info: Vec<VarName>) -> Self {
+        self.aux_info = Some(aux_info);
         self
     }
 
@@ -57,6 +64,7 @@ impl OutputHandlerBuilder {
             .clone();
         // Should this also be expect?
         let output_var_names = self.output_var_names.unwrap_or(vec![]).clone();
+        let aux_info = self.aux_info.unwrap_or(vec![]).clone();
 
         match self.output_mode.clone() {
             OutputMode {
@@ -65,6 +73,7 @@ impl OutputHandlerBuilder {
             } => Box::new(StdoutOutputHandler::<tc::Value>::new(
                 executor,
                 output_var_names,
+                aux_info,
             )),
             OutputMode {
                 output_mqtt_topics: Some(topics),
@@ -154,6 +163,7 @@ impl OutputHandlerBuilder {
             _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
                 executor,
                 output_var_names,
+                aux_info,
             )),
         }
     }

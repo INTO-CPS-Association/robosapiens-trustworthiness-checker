@@ -128,6 +128,30 @@ pub fn spec_simple_add_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_simple_add_aux_monitor() -> &'static str {
+    "in x\n\
+     in y\n\
+     out z\n\
+     aux u\n\
+     var w\n\
+     u = x\n\
+     w = y\n\
+     z = u + w"
+}
+
+#[allow(dead_code)]
+pub fn spec_simple_add_aux_typed_monitor() -> &'static str {
+    "in x: Int\n\
+     in y: Int\n\
+     out z: Int\n\
+     aux u: Int\n\
+     var w: Int\n\
+     u = x\n\
+     w = y\n\
+     z = u + w"
+}
+
+#[allow(dead_code)]
 pub fn spec_simple_modulo_monitor() -> &'static str {
     "in x\n\
      in y\n\

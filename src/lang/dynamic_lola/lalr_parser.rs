@@ -28,6 +28,7 @@ pub fn parse_sstmts<'input>(input: &'input str) -> Result<EcoVec<SStmt>, Error> 
 pub fn create_lola_spec(stmts: &EcoVec<SStmt>) -> LOLASpecification {
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
+    let mut aux_info = Vec::new();
     let mut assignments = BTreeMap::new();
     let mut type_annotations = BTreeMap::new();
 
@@ -45,6 +46,13 @@ pub fn create_lola_spec(stmts: &EcoVec<SStmt>) -> LOLASpecification {
                     type_annotations.insert(var.clone(), typ.clone());
                 }
             }
+            SStmt::Aux(var, typ) => {
+                outputs.push(var.clone());
+                aux_info.push(var.clone());
+                if let Some(typ) = typ {
+                    type_annotations.insert(var.clone(), typ.clone());
+                }
+            }
             SStmt::Assignment(var, sexpr) => {
                 assignments.insert(var.clone(), sexpr.clone());
             }
@@ -56,6 +64,7 @@ pub fn create_lola_spec(stmts: &EcoVec<SStmt>) -> LOLASpecification {
         output_vars: outputs,
         exprs: assignments,
         type_annotations,
+        aux_info,
     }
 }
 
@@ -200,6 +209,7 @@ mod tests {
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
+            aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
@@ -222,6 +232,7 @@ mod tests {
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
+            aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
@@ -248,6 +259,7 @@ mod tests {
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
+            aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(

@@ -624,6 +624,23 @@ pub(crate) fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamTy
     separated(0.., output_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
+pub(crate) fn aux_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
+    seq!((
+        _: whitespace,
+        _: alt(("var", "aux")),
+        _: loop_ms_or_lb_or_lc,
+        ident,
+        opt(type_annotation),
+        _: whitespace,
+    ))
+    .map(|(name, typ): (&str, _)| (name.into(), typ))
+    .parse_next(s)
+}
+
+pub(crate) fn aux_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>)>> {
+    separated(0.., aux_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
+}
+
 pub(crate) fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     seq!((
         _: whitespace,
@@ -649,20 +666,29 @@ pub fn lola_specification(s: &mut &str) -> Result<LOLASpecification> {
         _: loop_ms_or_lb_or_lc,
         output_decls,
         _: loop_ms_or_lb_or_lc,
+        aux_decls,
+        _: loop_ms_or_lb_or_lc,
         assignment_decls,
         _: loop_ms_or_lb_or_lc,
     ))
-    .map(|(input_vars, output_vars, exprs)| {
+    .map(|(input_vars, output_vars, aux_vars, exprs)| {
         LOLASpecification::new(
             input_vars.iter().map(|(name, _)| name.clone()).collect(),
-            output_vars.iter().map(|(name, _)| name.clone()).collect(),
+            // Output vars: Both aux and outputs
+            output_vars
+                .iter()
+                .chain(aux_vars.iter())
+                .map(|(name, _)| name.clone())
+                .collect(),
             exprs.into_iter().collect(),
             input_vars
                 .iter()
                 .chain(output_vars.iter())
+                .chain(aux_vars.iter())
                 .cloned()
                 .filter_map(|(name, typ)| typ.map(|typ| (name, typ)))
                 .collect(),
+            aux_vars.iter().map(|(name, _)| name.clone()).collect(),
         )
     })
     .parse_next(s)
@@ -824,11 +850,70 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_aux() -> Result<(), ContextError> {
+        // Tests that aux streams are in aux_info and output_vars
+        let input = crate::lola_fixtures::spec_simple_add_aux_monitor();
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec!["x".into(), "y".into()],
+            output_vars: vec!["z".into(), "u".into(), "w".into()],
+            exprs: BTreeMap::from([
+                (
+                    "z".into(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var("u".into())),
+                        Box::new(SExpr::Var("w".into())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                ),
+                ("u".into(), SExpr::Var("x".into())),
+                ("w".into(), SExpr::Var("y".into())),
+            ]),
+            type_annotations: BTreeMap::new(),
+            aux_info: vec!["u".into(), "w".into()],
+        };
+        assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_aux_typed() -> Result<(), ContextError> {
+        // Tests that aux streams are in aux_info and output_vars
+        let input = crate::lola_fixtures::spec_simple_add_aux_typed_monitor();
+        let simple_add_spec = LOLASpecification {
+            input_vars: vec!["x".into(), "y".into()],
+            output_vars: vec!["z".into(), "u".into(), "w".into()],
+            exprs: BTreeMap::from([
+                (
+                    "z".into(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var("u".into())),
+                        Box::new(SExpr::Var("w".into())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                ),
+                ("u".into(), SExpr::Var("x".into())),
+                ("w".into(), SExpr::Var("y".into())),
+            ]),
+            type_annotations: BTreeMap::from([
+                ("x".into(), StreamType::Int),
+                ("y".into(), StreamType::Int),
+                ("u".into(), StreamType::Int),
+                ("w".into(), StreamType::Int),
+                ("z".into(), StreamType::Int),
+            ]),
+            aux_info: vec!["u".into(), "w".into()],
+        };
+        assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_lola_simple_add() -> Result<(), ContextError> {
         let input = crate::lola_fixtures::spec_simple_add_monitor();
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
+            aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
@@ -849,6 +934,7 @@ mod tests {
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
+            aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
@@ -873,6 +959,7 @@ mod tests {
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
+            aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
@@ -899,6 +986,7 @@ mod tests {
         let count_spec = LOLASpecification {
             input_vars: vec![],
             output_vars: vec!["x".into()],
+            aux_info: vec![],
             exprs: BTreeMap::from([(
                 "x".into(),
                 SExpr::BinOp(
@@ -938,6 +1026,7 @@ mod tests {
                 ("w".into(), SExpr::Dynamic(Box::new(SExpr::Var("s".into())))),
             ]),
             BTreeMap::new(),
+            vec![],
         );
         assert_eq!(lola_specification(&mut (*input).into())?, eval_spec);
         Ok(())
@@ -1427,56 +1516,69 @@ mod tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[-1], 0) + 1",
-            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[-1], 0) + x",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"a\")], exprs: {VarName::new(\"a\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1)}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"a\")], exprs: {VarName::new(\"a\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1)}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"iList\")], output_vars: [VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")], exprs: {VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\"))), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"oList\"): Var(VarName::new(\"iList\"))}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"iList\")], output_vars: [VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")], exprs: {VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\"))), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"oList\"): Var(VarName::new(\"iList\"))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int}, aux_info: [] })",
+        )
+    }
+
+    fn simple_add_aux() -> (&'static str, &'static str) {
+        (
+            crate::lola_fixtures::spec_simple_add_aux_monitor(),
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add))}, type_annotations: {}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
+        )
+    }
+    fn simple_add_aux_typed() -> (&'static str, &'static str) {
+        (
+            crate::lola_fixtures::spec_simple_add_aux_typed_monitor(),
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add))}, type_annotations: {VarName::new(\"u\"): Int, VarName::new(\"w\"): Int, VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int}, aux_info: [] })",
         )
     }
 
     fn if_statement() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if x == 0 then y else 42",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn if_statement_newlines() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
@@ -1493,6 +1595,8 @@ mod tests {
             (function_name(future), future()),
             (function_name(list), list()),
             (function_name(simple_add_typed), simple_add_typed()),
+            (function_name(simple_add_aux), simple_add_aux()),
+            (function_name(simple_add_aux_typed), simple_add_aux_typed()),
             (
                 function_name(simple_add_typed_start_and_end_comment),
                 simple_add_typed_start_and_end_comment(),
