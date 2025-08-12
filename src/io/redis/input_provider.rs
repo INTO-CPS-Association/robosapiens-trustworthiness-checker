@@ -6,6 +6,7 @@ use async_stream::stream;
 use async_unsync::bounded::{self, Receiver, Sender};
 use futures::{StreamExt, future::LocalBoxFuture};
 use smol::{LocalExecutor, future::yield_now};
+use tracing::info;
 
 use crate::{InputProvider, OutputStream, Value, VarName};
 
@@ -53,6 +54,7 @@ impl RedisInputProvider {
 
         let result = AsyncCell::shared();
 
+        info!("Spawning RedisInputProvider on url: {:?}", url);
         ex.spawn(RedisInputProvider::input_monitor(
             result.clone(),
             client,
@@ -117,6 +119,7 @@ impl RedisInputProvider {
     ) -> anyhow::Result<()> {
         let mut pubsub = client.get_async_pubsub().await?;
         let channel_names = var_topics.values().collect::<Vec<_>>();
+        info!("Subscribing to Redis channel_names: {:?}", channel_names);
         pubsub.subscribe(channel_names).await?;
         started.set(true);
         let mut stream = pubsub.on_message();
