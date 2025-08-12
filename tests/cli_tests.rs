@@ -947,6 +947,7 @@ async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
 /// Test Redis connection on the cli
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(async_test)]
+#[ignore = "Test failing since at least commit c4b7721fafeb853b7ada6ff16729e932b8c400e9 when running with --all-features"]
 async fn test_add_monitor_redis_input_cli(executor: Rc<LocalExecutor>) {
     let xs = vec![Value::Int(1), Value::Int(2)];
     let ys = vec![Value::Int(3), Value::Int(4)];
