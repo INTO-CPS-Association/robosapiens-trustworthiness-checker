@@ -18,12 +18,23 @@ The following result should be visible on the "z" topic:
 }
 ```
 
-Note that if you want to provide e.g., an Unknown value then it must be done with:
+### Note:
+If you want to provide e.g., an Unknown value then it must be done with:
 ```json
 {
     "Unknown": null
 }
 ```
+
+## MQTT - Legacy syntax:
+For a minimum example of running with MQTT, run the following specification:
+```bash
+cargo run -- examples/simple_add.lola --input-mqtt-topics x y --output-mqtt-topics z
+```
+Follow the same syntax for sending to topics as decribed above.
+
+### Note:
+If you have auxiliary streams they must currently also be specified in `output-mqtt-topics` but they are not outputted through MQTT. This is a current limitation.
 
 ## ROS2:
 For a minimum example of running with ROS2 open a terminal and source ROS2.
