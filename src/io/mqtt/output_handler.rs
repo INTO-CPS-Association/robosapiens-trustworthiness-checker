@@ -3,7 +3,7 @@ use std::mem;
 use std::rc::Rc;
 
 use futures::StreamExt;
-use futures::future::LocalBoxFuture;
+use futures::future::{Either, LocalBoxFuture};
 use paho_mqtt::{self as mqtt};
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, instrument, warn};
@@ -33,6 +33,7 @@ pub struct MQTTOutputHandler {
     pub var_map: BTreeMap<VarName, VarData>,
     pub hostname: String,
     pub port: Option<u16>,
+    pub aux_info: Vec<VarName>,
 }
 
 #[instrument(level = Level::INFO, skip(stream, client))]
@@ -62,6 +63,12 @@ async fn publish_stream(
     }
 }
 
+async fn await_stream(mut stream: OutputStream<Value>) {
+    while let Some(_) = stream.next().await {
+        // Await the streams but do nothing with them
+    }
+}
+
 impl OutputHandler for MQTTOutputHandler {
     type Val = Value;
 
@@ -81,10 +88,10 @@ impl OutputHandler for MQTTOutputHandler {
         let streams = self
             .var_map
             .iter_mut()
-            .map(|(_, var_data)| {
+            .map(|(var_name, var_data)| {
                 let channel_name = var_data.topic_name.clone();
                 let stream = mem::take(&mut var_data.stream).expect("Stream not found");
-                (channel_name, stream)
+                (var_name.clone(), channel_name, stream)
             })
             .collect::<Vec<_>>();
         let hostname = self.hostname.clone();
@@ -92,7 +99,12 @@ impl OutputHandler for MQTTOutputHandler {
         info!(name: "OutputProvider MQTT startup task launched",
             ?hostname, num_streams = ?streams.len());
 
-        Box::pin(MQTTOutputHandler::inner_handler(hostname, port, streams))
+        Box::pin(MQTTOutputHandler::inner_handler(
+            hostname,
+            port,
+            streams,
+            self.aux_info.clone(),
+        ))
     }
 }
 
@@ -105,6 +117,7 @@ impl MQTTOutputHandler {
         host: &str,
         port: Option<u16>,
         var_topics: OutputChannelMap,
+        aux_info: Vec<VarName>,
     ) -> Result<Self, mqtt::Error> {
         let hostname = host.to_string();
 
@@ -127,13 +140,15 @@ impl MQTTOutputHandler {
             var_map,
             hostname,
             port,
+            aux_info,
         })
     }
 
     async fn inner_handler(
         host: String,
         port: Option<u16>,
-        streams: Vec<(String, OutputStream<Value>)>,
+        streams: Vec<(VarName, String, OutputStream<Value>)>,
+        aux_info: Vec<VarName>,
     ) -> anyhow::Result<()> {
         debug!("Awaiting client creation");
         let uri = match port {
@@ -146,9 +161,13 @@ impl MQTTOutputHandler {
         futures::future::join_all(
             streams
                 .into_iter()
-                .map(|(channel_name, stream)| {
-                    let client = client.clone();
-                    publish_stream(channel_name, stream, client)
+                .map(|(var_name, channel_name, stream)| {
+                    if aux_info.contains(&var_name) {
+                        Either::Left(await_stream(stream))
+                    } else {
+                        let client = client.clone();
+                        Either::Right(publish_stream(channel_name, stream, client))
+                    }
                 })
                 .collect::<Vec<_>>(),
         )

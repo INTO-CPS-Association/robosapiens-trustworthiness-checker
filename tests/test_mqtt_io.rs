@@ -75,6 +75,7 @@ mod tests {
                 mqtt_host,
                 Some(mqtt_port),
                 mqtt_topics,
+                vec![],
             )
             .unwrap(),
         );
@@ -125,6 +126,7 @@ mod tests {
                 mqtt_host,
                 Some(mqtt_port),
                 mqtt_topics,
+                vec![],
             )
             .unwrap(),
         );

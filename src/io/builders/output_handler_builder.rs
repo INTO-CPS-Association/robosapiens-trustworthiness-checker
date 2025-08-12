@@ -93,6 +93,7 @@ impl OutputHandlerBuilder {
                         MQTT_HOSTNAME,
                         self.mqtt_port,
                         topics,
+                        aux_info,
                     )
                     .expect("MQTT output handler could not be created"),
                 )
@@ -151,6 +152,7 @@ impl OutputHandlerBuilder {
                         MQTT_HOSTNAME,
                         self.mqtt_port,
                         topics,
+                        aux_info,
                     )
                     .expect("MQTT output handler could not be created"),
                 )

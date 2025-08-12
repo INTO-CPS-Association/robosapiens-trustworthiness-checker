@@ -70,6 +70,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         mqtt_host,
         Some(mqtt_port),
         var_out_topics_1.into_iter().collect(),
+        vec![],
     )
     .expect("Failed to create output handler 1");
 
@@ -88,6 +89,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         mqtt_host,
         Some(mqtt_port),
         var_out_topics_2.into_iter().collect(),
+        vec![],
     )
     .expect("Failed to create output handler 2");
 
@@ -226,6 +228,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         mqtt_host,
         Some(mqtt_port),
         var_out_topics_1,
+        vec![],
     )
     .expect("Failed to create output handler 1");
     let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
@@ -239,6 +242,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         mqtt_host,
         Some(mqtt_port),
         var_out_topics_2.into_iter().collect(),
+        vec![],
     )
     .expect("Failed to create output handler 2");
 
@@ -370,6 +374,7 @@ async fn localisation_distribution_graphs_test(
         mqtt_host,
         Some(mqtt_port),
         var_out_topics_1,
+        vec![],
     )
     .expect("Failed to create output handler 1");
     let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
@@ -383,6 +388,7 @@ async fn localisation_distribution_graphs_test(
         mqtt_host,
         Some(mqtt_port),
         var_out_topics_2.into_iter().collect(),
+        vec![],
     )
     .expect("Failed to create output handler 2");
 
