@@ -947,7 +947,6 @@ async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
 /// Test Redis connection on the cli
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(async_test)]
-#[ignore = "Test failing since at least commit c4b7721fafeb853b7ada6ff16729e932b8c400e9 when running with --all-features"]
 async fn test_add_monitor_redis_input_cli(executor: Rc<LocalExecutor>) {
     let xs = vec![Value::Int(1), Value::Int(2)];
     let ys = vec![Value::Int(3), Value::Int(4)];
@@ -976,11 +975,11 @@ async fn test_add_monitor_redis_input_cli(executor: Rc<LocalExecutor>) {
 
     // Now start publishers to send data to the waiting CLI
     let ready_rx1 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(50)),
+        smol::Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
     let ready_rx2 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(50)),
+        smol::Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
     let x_publisher_task = executor.spawn(dummy_redis_sender(
@@ -1152,16 +1151,13 @@ async fn test_redis_input_output_specific_topics(executor: Rc<LocalExecutor>) {
         run_cli_streaming(&args_refs, cli_timeout).await
     });
 
-    // Wait for CLI to start and subscribe to Redis channels
-    smol::Timer::after(Duration::from_millis(150)).await;
-
     // Now start publishers to send data to the waiting CLI
     let ready_rx1 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(50)),
+        smol::Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
     let ready_rx2 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(50)),
+        smol::Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
 
