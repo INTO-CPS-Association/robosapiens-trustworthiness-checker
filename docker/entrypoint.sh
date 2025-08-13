@@ -11,6 +11,7 @@ then
   source /opt/setup.bash
   # echo "Sourced TurtleBot4 base workspace"
 fi
+source /opt/ros_interfaces/install/setup.bash
 
 sudo groupadd -g $(stat -c "%g" /var/run/docker.sock) docker &> /dev/null
 sudo usermod -aG docker $(id -nu)

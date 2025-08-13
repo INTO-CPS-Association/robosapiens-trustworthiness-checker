@@ -6,3 +6,6 @@
 target/*
 docker/Dockerfile
 docker/docker-compose.yaml
+ros_interfaces/build/*
+ros_interfaces/log/*
+ros_interfaces/install/*

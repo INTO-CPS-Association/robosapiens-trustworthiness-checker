@@ -16,6 +16,12 @@ COPY docker/entrypoint.sh /opt/entrypoint.sh
 RUN chmod a+rx /opt/entrypoint.sh\
     && chmod a+rx /opt/setup.bash
 
+COPY ros_interfaces /opt/ros_interfaces
+RUN source /opt/ros/humble/setup.bash && \
+    cd /opt/ros_interfaces && \
+    colcon build && \
+    chmod a+rwx -R .
+
 ENTRYPOINT ["/opt/entrypoint.sh"]
 
 FROM base as dev
