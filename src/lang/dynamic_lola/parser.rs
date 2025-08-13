@@ -325,6 +325,22 @@ fn ltail(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+fn llen(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "List.len",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(lst,)| SExpr::LLen(Box::new(lst)))
+    .parse_next(s)
+}
+
 fn var_or_nodename(s: &mut &str) -> Result<VarOrNodeName> {
     ident.map(|w: &str| VarOrNodeName(w.into())).parse_next(s)
 }
@@ -430,6 +446,7 @@ fn atom(s: &mut &str) -> Result<SExpr> {
                 lconcat,
                 lhead,
                 ltail,
+                llen,
                 not,
                 restricted_dynamic,
             )),
@@ -1502,6 +1519,18 @@ mod tests {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.tail(List())"#)),
             r#"Ok(LTail(Val(List([]))))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_llen() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.len(List(1, 2))"#)),
+            r#"Ok(LLen(Val(List([Int(1), Int(2)]))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"List.len(List())"#)),
+            r#"Ok(LLen(Val(List([]))))"#
         );
     }
 

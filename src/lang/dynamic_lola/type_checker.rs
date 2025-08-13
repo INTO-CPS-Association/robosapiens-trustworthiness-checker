@@ -663,6 +663,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::LConcat(_, _) => todo!(),
             SExpr::LHead(_) => todo!(),
             SExpr::LTail(_) => todo!(),
+            SExpr::LLen(_) => todo!(),
             SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
             SExpr::Sin(_) => todo!(),

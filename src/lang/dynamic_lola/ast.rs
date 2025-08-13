@@ -186,6 +186,7 @@ pub enum SExpr {
     LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
     LHead(Box<Self>),             // List head -- get first element of list
     LTail(Box<Self>),             // List tail -- get all but first element of list
+    LLen(Box<Self>),              // List length -- returns length of the list
 
     // Trigonometric functions
     Sin(Box<Self>),
@@ -270,6 +271,7 @@ impl SExpr {
             }
             LHead(lst) => lst.inputs(),
             LTail(lst) => lst.inputs(),
+            LLen(lst) => lst.inputs(),
             Sin(v) => v.inputs(),
             Cos(v) => v.inputs(),
             Tan(v) => v.inputs(),
@@ -346,6 +348,7 @@ impl LOLASpecification {
                 SExpr::Dist(v, u) => SExpr::Dist(v, u),
                 SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::LHead(sexpr) => SExpr::LHead(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::LLen(sexpr) => SExpr::LLen(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Defer(sexpr) => SExpr::Defer(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(traverse_expr(*sexpr, vars))),
                 // Binary:
@@ -533,6 +536,7 @@ impl Display for SExpr {
             LConcat(lst1, lst2) => write!(f, "List.concat({}, {})", lst1, lst2),
             LHead(lst) => write!(f, "List.head({})", lst),
             LTail(lst) => write!(f, "List.tail({})", lst),
+            LLen(lst) => write!(f, "List.len({})", lst),
             Sin(v) => write!(f, "sin({})", v),
             Cos(v) => write!(f, "cos({})", v),
             Tan(v) => write!(f, "tan({})", v),

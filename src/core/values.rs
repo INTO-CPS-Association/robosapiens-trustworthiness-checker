@@ -110,6 +110,16 @@ impl TryFrom<Value> for bool {
         }
     }
 }
+impl TryFrom<Value> for EcoVec<Value> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::List(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
 impl TryFrom<Value> for () {
     type Error = ();
 
@@ -188,6 +198,16 @@ impl From<&str> for Value {
 impl From<bool> for Value {
     fn from(value: bool) -> Self {
         Value::Bool(value)
+    }
+}
+impl From<EcoVec<Value>> for Value {
+    fn from(value: EcoVec<Value>) -> Self {
+        Value::List(value)
+    }
+}
+impl From<Vec<Value>> for Value {
+    fn from(value: Vec<Value>) -> Self {
+        Value::List(value.into())
     }
 }
 impl From<()> for Value {

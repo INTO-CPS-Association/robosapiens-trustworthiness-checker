@@ -111,6 +111,10 @@ where
                 let lst = Self::to_async_stream(*lst, ctx);
                 mc::ltail(lst)
             }
+            SExpr::LLen(lst) => {
+                let lst = Self::to_async_stream(*lst, ctx);
+                mc::llen(lst)
+            }
             SExpr::MonitoredAt(_, _) => {
                 unimplemented!("Function monitored_at only supported in distributed semantics")
             }

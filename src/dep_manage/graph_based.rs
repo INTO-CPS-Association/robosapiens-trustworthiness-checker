@@ -147,6 +147,7 @@ impl DepGraph {
                 | SExpr::Not(sexpr)
                 | SExpr::LHead(sexpr)
                 | SExpr::LTail(sexpr)
+                | SExpr::LLen(sexpr)
                 | SExpr::IsDefined(sexpr)
                 | SExpr::When(sexpr)
                 | SExpr::Defer(sexpr)

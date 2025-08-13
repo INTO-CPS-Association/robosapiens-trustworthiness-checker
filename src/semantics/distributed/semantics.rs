@@ -109,6 +109,10 @@ impl MonitoringSemantics<SExpr, Value, DistributedContext<Value>> for Distribute
                 let lst = Self::to_async_stream(*lst, ctx);
                 mc::ltail(lst)
             }
+            SExpr::LLen(lst) => {
+                let lst = Self::to_async_stream(*lst, ctx);
+                mc::llen(lst)
+            }
             SExpr::Sin(v) => {
                 let v = Self::to_async_stream(*v, ctx);
                 mc::sin(v)

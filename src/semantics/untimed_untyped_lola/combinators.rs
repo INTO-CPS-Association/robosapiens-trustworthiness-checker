@@ -572,6 +572,19 @@ pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
+pub fn llen(mut x: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let Some(l) = x.next().await {
+            match l {
+                Value::List(l) => {
+                    yield Value::Int(l.len() as i64);
+                }
+                l => panic!("Invalid list len. Expected List expression. Received: List.len({:?})", l)
+            }
+        }
+    })
+}
+
 pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
@@ -1034,6 +1047,18 @@ mod tests {
         let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![1.into(), 2.into()]))];
         let res: Vec<Value> = ltail(list(x)).collect().await;
         let exp: Vec<Value> = vec![Value::List(vec![].into()), Value::List(vec![].into())];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_list_len() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            vec![].into(),
+            vec![1.into()].into(),
+            vec![2.into(), "hello".into()].into(),
+        ]));
+        let res: Vec<Value> = llen(x).collect().await;
+        let exp: Vec<Value> = vec![0.into(), 1.into(), 2.into()];
         assert_eq!(res, exp);
     }
 }
