@@ -41,6 +41,7 @@ pub struct RedisOutputHandler {
     pub var_map: BTreeMap<VarName, VarData>,
     pub hostname: String,
     pub port: Option<u16>,
+    pub aux_info: Vec<VarName>,
 }
 
 impl OutputHandler for RedisOutputHandler {
@@ -83,6 +84,7 @@ impl RedisOutputHandler {
         hostname: &str,
         port: Option<u16>,
         var_topics: OutputChannelMap,
+        aux_info: Vec<VarName>,
     ) -> Result<Self, anyhow::Error> {
         let hostname = hostname.to_string();
 
@@ -105,6 +107,7 @@ impl RedisOutputHandler {
             var_map,
             hostname,
             port,
+            aux_info,
         })
     }
 
@@ -123,6 +126,9 @@ impl RedisOutputHandler {
 
         join_all(streams.into_iter().map(|(channel_name, stream)| async {
             let con = client.get_multiplexed_async_connection().await.unwrap();
+            // TODO: Only call `publish_stream` if the var_name is not in aux_info. Else call
+            // `await_stream` (see mqtt/output_handler)
+            // (Reason I haven't done it is because my redis setup does not seem to work)
             publish_stream(channel_name, stream, con).await
         }))
         .await

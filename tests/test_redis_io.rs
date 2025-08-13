@@ -918,6 +918,7 @@ async fn test_redis_output_handler_basic(
         REDIS_HOSTNAME,
         Some(host),
         var_topics,
+        vec![],
     )?;
 
     // Create test output streams
@@ -1000,6 +1001,7 @@ async fn test_redis_output_handler_single_variable(
         REDIS_HOSTNAME,
         Some(host),
         var_topics,
+        vec![],
     )?;
 
     // Create test output stream with various data types
@@ -1072,6 +1074,7 @@ async fn test_redis_output_handler_empty_stream(
         REDIS_HOSTNAME,
         Some(host),
         var_topics,
+        vec![],
     )?;
 
     // Create empty output stream
@@ -1138,6 +1141,7 @@ async fn test_redis_output_handler_multiple_variables(
         REDIS_HOSTNAME,
         Some(host),
         var_topics,
+        vec![],
     )?;
 
     // Create test output streams
@@ -1234,6 +1238,7 @@ async fn test_redis_output_handler_var_names(
         REDIS_HOSTNAME,
         Some(host),
         var_topics,
+        vec![],
     )?;
 
     // Test var_names method
@@ -1265,6 +1270,7 @@ async fn test_redis_output_handler_json_serialization(
         REDIS_HOSTNAME,
         Some(host),
         var_topics,
+        vec![],
     )?;
 
     // Create test output stream with complex data
@@ -1347,6 +1353,7 @@ async fn test_redis_output_handler_concurrent_streams(
         REDIS_HOSTNAME,
         Some(host),
         var_topics,
+        vec![],
     )?;
 
     // Create output streams with timing delays to test concurrency
@@ -1432,6 +1439,7 @@ async fn test_redis_output_handler_error_handling(
         "invalid-host",
         Some(9999),
         var_topics,
+        vec![],
     );
     assert!(result.is_ok());
 

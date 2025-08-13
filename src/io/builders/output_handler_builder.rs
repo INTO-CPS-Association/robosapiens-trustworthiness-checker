@@ -112,6 +112,7 @@ impl OutputHandlerBuilder {
                         REDIS_HOSTNAME,
                         self.redis_port,
                         topics,
+                        aux_info,
                     )
                     .expect("Redis output handler could not be created"),
                 )
@@ -134,6 +135,7 @@ impl OutputHandlerBuilder {
                         REDIS_HOSTNAME,
                         self.redis_port,
                         topics,
+                        aux_info,
                     )
                     .expect("Redis output handler could not be created"),
                 )
