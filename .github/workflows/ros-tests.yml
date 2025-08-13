@@ -1,0 +1,23 @@
+name: Cargo Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build Docker image
+        run: docker build -t robosapiens-test -f docker/Dockerfile --target dev .
+
+      - name: Run cargo test
+        run: |
+          docker run --rm robosapiens-test bash -c "source ~/.cargo/env && cargo test --all-features"
