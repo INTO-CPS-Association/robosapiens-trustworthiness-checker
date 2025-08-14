@@ -1,18 +1,29 @@
-#![cfg(not(feature = "ros"))]
-#![allow(warnings)]
+#![cfg_attr(not(feature = "ros"), allow(unused_imports, dead_code))]
+
 use std::future::Future;
 
+use futures::FutureExt;
 use futures::StreamExt;
+use macro_rules_attribute::apply;
 #[cfg(feature = "ros")]
 use r2r::{WrappedTypesupport, std_msgs::msg::Int32};
-use trustworthiness_checker::lola_fixtures;
-use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
-use trustworthiness_checker::utils::cancellation_token::CancellationToken;
+use smol::LocalExecutor;
+use std::rc::Rc;
+use trustworthiness_checker::async_test;
+use trustworthiness_checker::core::AbstractMonitorBuilder;
+use trustworthiness_checker::core::Runnable;
 #[cfg(feature = "ros")]
-use trustworthiness_checker::{
-    AsyncMonitorRunner, Monitor, UntimedLolaSemantics, Value, VarName, lola_specification,
-    ros_input_provider::ROSInputProvider, ros_topic_stream_mapping::json_to_mapping,
-};
+use trustworthiness_checker::io::ros::ROSInputProvider;
+#[cfg(feature = "ros")]
+use trustworthiness_checker::io::ros::json_to_mapping;
+use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
+use trustworthiness_checker::runtime::asynchronous::AsyncMonitorBuilder;
+use trustworthiness_checker::runtime::asynchronous::AsyncMonitorRunner;
+use trustworthiness_checker::runtime::asynchronous::Context;
+use trustworthiness_checker::semantics::UntimedLolaSemantics;
+use trustworthiness_checker::utils::cancellation_token::CancellationToken;
+use trustworthiness_checker::{Value, lola_specification};
 use winnow::Parser;
 
 /* A simple ROS publisher node which publishes a sequence of values on a topic
@@ -20,6 +31,7 @@ use winnow::Parser;
  * until all the values have been published. */
 #[cfg(feature = "ros")]
 fn dummy_publisher<T: WrappedTypesupport + 'static>(
+    ex: Rc<LocalExecutor<'static>>,
     node_name: String,
     topic: String,
     values: Vec<T>,
@@ -43,7 +55,7 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
 
         // Spawn a background async task to run the ROS node
         // and spin until cancelled
-        smol::spawn(async move {
+        ex.spawn(async move {
             loop {
                 select! {
                     _ = cancellation_token.cancelled().fuse() => {
@@ -66,8 +78,8 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
 }
 
 #[cfg(feature = "ros")]
-#[smol::test]
-async fn test_add_monitor_ros() {
+#[apply(async_test)]
+async fn test_add_monitor_ros(ex: Rc<LocalExecutor<'static>>) {
     let var_topics = json_to_mapping(
         r#"
         {
@@ -95,14 +107,16 @@ async fn test_add_monitor_ros() {
     let zs = vec![Value::Int(4), Value::Int(6)];
 
     // Spawn dummy ROS publisher nodes
-    smol::spawn(dummy_publisher(
+    ex.spawn(dummy_publisher(
+        ex.clone(),
         "x_publisher".to_string(),
         "/x".to_string(),
         xs,
     ))
     .detach();
 
-    smol::spawn(dummy_publisher(
+    ex.spawn(dummy_publisher(
+        ex.clone(),
         "y_publisher".to_string(),
         "/y".to_string(),
         ys,
@@ -110,21 +124,29 @@ async fn test_add_monitor_ros() {
     .detach();
 
     // Create the ROS input provider
-    let input_provider = ROSInputProvider::new(var_topics).unwrap();
+    let input_provider = ROSInputProvider::new(ex.clone(), var_topics).unwrap();
 
-    // Run the monitor
-    let mut runner =
-        AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _>::new(model, input_provider);
+    let mut output_handler = ManualOutputHandler::new(ex.clone(), vec!["z".into()]);
 
-    // Test we have the expected outputs
-    let outputs = runner.monitor_outputs();
+    let outputs = output_handler.get_output();
+
+    // Create the monitor
+    let runner: AsyncMonitorRunner<_, Value, UntimedLolaSemantics, _, Context<Value>> =
+        AsyncMonitorBuilder::new()
+            .executor(ex.clone())
+            .model(model)
+            .input(Box::new(input_provider))
+            .output(Box::new(output_handler))
+            .build();
+
+    // Lauch the monitor runner
+    ex.spawn(runner.run()).detach();
+
     // We have to specify how many outputs we want to take as the ROS
     // topic is not assumed to tell us when it is done
     let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;
     println!("Outputs: {:?}", outputs);
-    let expected_outputs = zs
-        .into_iter()
-        .map(|val| vec![(VarName("z".into()), val)].into_iter().collect())
-        .collect::<Vec<_>>();
+    let expected_outputs = zs.into_iter().map(|z| vec![z]).collect::<Vec<_>>();
+
     assert_eq!(outputs, expected_outputs);
 }
