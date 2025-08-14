@@ -3,55 +3,58 @@ import argparse
 import json
 import sys
 
+
 def find_closing_bracket(data):
     """Finds the index of the closing bracket for a given opening bracket."""
     depth = 1
     for i, char in enumerate(data):
-        if char == '[':
+        if char == "[":
             depth += 1
-        elif char == ']':
+        elif char == "]":
             depth -= 1
             if depth == 0:
                 return i + 1
     raise ValueError(f"No matching closing bracket found '{data}'")
 
+
 def parse(data):
     """Parses the input data and converts it into a Python object."""
     data = data.strip()
-    if data.startswith("Str(\""):
-        end = 5 + data[5:].find("\")")
+    if data.startswith('Str("'):
+        end = 5 + data[5:].find('")')
         val = data[5:end]
-        rest = data[end+2:]
+        rest = data[end + 2 :]
         return val, rest
     elif data.startswith("Float("):
         end = 6 + data[6:].find(")")
-        rest = data[end+1:]
+        rest = data[end + 1 :]
         val = data[6:end]
         return float(val), rest
     elif data.startswith("Int("):
         end = 4 + data[4:].find(")")
-        rest = data[end+1:]
+        rest = data[end + 1 :]
         val = data[4:end]
         return int(val), rest
     elif data.startswith("Bool("):
         end = 5 + data[5:].find(")")
-        rest = data[end+1:]
+        rest = data[end + 1 :]
         val = data[5:-1]
         return val.lower() == "true", rest
     elif data.startswith("List(["):
         end = 6 + find_closing_bracket(data[6:])
         inner = []
-        rem = data[6:end-1]
+        rem = data[6 : end - 1]
         while rem != "":
             if rem.startswith(","):
                 rem = rem[1:].strip()
             inner_raw = parse(rem)
             inner.append(inner_raw[0])
             rem = inner_raw[1]
-        rest = data[end+1:]
+        rest = data[end + 1 :]
         return inner, rest
     else:
         raise ValueError(f"Unknown atom format: {data}")
+
 
 def special_json_rule(data):
     """Transforms the parsed data according to a specific key-value rule."""
@@ -64,12 +67,14 @@ def special_json_rule(data):
     else:
         return data
 
+
 def consume_assignment(data):
     assignment = data.find("=")
     if assignment == -1:
         return "", data.strip()
     else:
-        return data[:assignment].strip(), data[assignment + 1:].strip()
+        return data[:assignment].strip(), data[assignment + 1 :].strip()
+
 
 def transform(data):
     data = data.strip()
@@ -83,8 +88,8 @@ def transform(data):
     return assignment, data
 
 
-
 # --- Transform according to the key-value rule ---
+
 
 def main():
     parser = argparse.ArgumentParser(
