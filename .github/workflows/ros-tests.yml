@@ -27,6 +27,7 @@ jobs:
             -v ${{ github.workspace }}:/ws \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -w /ws \
+            --network host \
             --privileged \
             robosapiens-test \
             bash -c "sudo chmod 666 /var/run/docker.sock && source ~/.cargo/env && cargo test --all-features"
