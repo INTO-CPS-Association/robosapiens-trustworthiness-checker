@@ -15,9 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
       - name: Build Docker image
         run: docker build -t robosapiens-test -f docker/Dockerfile --target dev .
 
       - name: Run cargo test
         run: |
-          docker run --rm robosapiens-test bash -c "source ~/.cargo/env && cargo test --all-features"
+          docker run --rm \
+            -v ${{ github.workspace }}:/ws \
+            -w /ws \
+            robosapiens-test \
+            bash -c "source ~/.cargo/env && cargo test --all-features"
