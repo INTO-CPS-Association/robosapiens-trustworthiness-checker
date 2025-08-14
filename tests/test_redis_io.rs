@@ -894,6 +894,7 @@ async fn consume_redis_messages(
     Ok(messages)
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_basic(
     executor: Rc<LocalExecutor<'static>>,
@@ -979,6 +980,7 @@ async fn test_redis_output_handler_basic(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_single_variable(
     executor: Rc<LocalExecutor<'static>>,
@@ -1052,6 +1054,7 @@ async fn test_redis_output_handler_single_variable(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_empty_stream(
     executor: Rc<LocalExecutor<'static>>,
@@ -1115,6 +1118,7 @@ async fn test_redis_output_handler_empty_stream(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_multiple_variables(
     executor: Rc<LocalExecutor<'static>>,
@@ -1215,6 +1219,7 @@ async fn test_redis_output_handler_multiple_variables(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_var_names(
     executor: Rc<LocalExecutor<'static>>,
@@ -1248,6 +1253,7 @@ async fn test_redis_output_handler_var_names(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_json_serialization(
     executor: Rc<LocalExecutor<'static>>,
@@ -1329,6 +1335,7 @@ async fn test_redis_output_handler_json_serialization(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_concurrent_streams(
     executor: Rc<LocalExecutor<'static>>,
@@ -1421,6 +1428,7 @@ async fn test_redis_output_handler_concurrent_streams(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(smol_test)]
 async fn test_redis_output_handler_error_handling(
     executor: Rc<LocalExecutor<'static>>,
