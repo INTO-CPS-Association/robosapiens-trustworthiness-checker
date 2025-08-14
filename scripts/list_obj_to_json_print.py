@@ -26,11 +26,13 @@ def parse(data):
     elif data.startswith("Float("):
         end = 6 + data[6:].find(")")
         rest = data[end+1:]
-        return float(data[6:end]), rest
+        val = data[6:end]
+        return float(val), rest
     elif data.startswith("Int("):
         end = 4 + data[4:].find(")")
         rest = data[end+1:]
-        return int(data[4:end]), rest
+        val = data[4:end]
+        return int(val), rest
     elif data.startswith("Bool("):
         end = 5 + data[5:].find(")")
         rest = data[end+1:]
@@ -46,7 +48,7 @@ def parse(data):
             inner_raw = parse(rem)
             inner.append(inner_raw[0])
             rem = inner_raw[1]
-        rest = data[end+1:-1]
+        rest = data[end+1:]
         return inner, rest
     else:
         raise ValueError(f"Unknown atom format: {data}")
@@ -102,7 +104,6 @@ def main():
 
     result = map(transform, data)
     result = list(result)
-    print(f"Transformed {result}")
 
     with open(args.output_file, "w", encoding="utf-8") as f:
         # Write: assignment = value
