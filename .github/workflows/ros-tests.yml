@@ -18,6 +18,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      - name: Fix workspace permissions
+        run: sudo chown -R 1000:1000 ${{ github.workspace }}
+
       - name: Build Docker image
         run: docker build -t robosapiens-test -f docker/Dockerfile --target dev .
 
