@@ -1,0 +1,6 @@
+in x
+out y
+// Recursive MA filter with M = 3
+y = default(y[-1], 0) + (x - default(x[-3], 0)) / 3
+// Simple MA filter with taps M = 3
+// y = (x + default(x[-1], 0) + default(x[-2], 0)) / 3
