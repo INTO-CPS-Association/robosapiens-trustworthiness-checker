@@ -19,22 +19,22 @@ lalrpop = "0.22.2"
 
 [dependencies]
 # console-subscriber = "0.4.0"
-winnow = { version = "0.7.10", features = ["simd"] }
+winnow = { version = "0.7.12", features = ["simd"] }
 futures = "0.3.31"
 
-clap = { version = "4.5.40", features = ["derive"] }
+clap = { version = "4.5.45", features = ["derive"] }
 async-stream = "0.3.6"
 r2r = { version = "0.9.5", optional = true }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.140"
-serde_json5 = "0.1.0"
+serde_json = "1.0.142"
+serde_json5 = "0.2.1"
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
 paho-mqtt = { version = "0.13.3", default-features = false, features = [
     "bundled",
     "ssl",
 ] }
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 tracing = { version = "0.1.41", features = [
     "attributes",
     "std",
@@ -43,13 +43,13 @@ tracing = { version = "0.1.41", features = [
     "release_max_level_warn",
 ] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
-uuid = { version = "1.17.0", features = [
+uuid = { version = "1.18.0", features = [
     "v4",                # Lets you generate random UUIDs
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
 ] }
-strum = "0.27.1"
-strum_macros = "0.27.1"
+strum = "0.27.2"
+strum_macros = "0.27.2"
 petgraph = { version = "0.8.2", features = ["serde-1"] }
 enum_inner_method = { git = "https://github.com/mortenhaahr/enum_inner_method", tag = "v0.1.0" }
 smol = "2.0.2"
@@ -58,20 +58,20 @@ smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.2"
 async-compat = "0.2.4"
 jemallocator = "0.5.4"
-ecow = { version = "0.2.5", features = ["serde"] }
-async_cell = "0.2.2"
+ecow = { version = "0.2.6", features = ["serde"] }
+async_cell = "0.2.3"
 ordered-float = "5.0.0"
 approx = "0.5.1"
 lalrpop-util = { version = "0.22.2", features = ["lexer", "unicode"] }
 contracts = "0.6.6"
 static_assertions = "1.1.0"
-thiserror = "2.0.12"
-rand = "0.9.1"
+thiserror = "2.0.14"
+rand = "0.9.2"
 unsync = "0.1.2"
 itertools = "0.14.0"
-redis = { version = "0.32.0", features = ["smol-comp"] }
-anyhow = { version = "1.0.98", features = ["backtrace"] }
-redis-macros = "0.5.5"
+redis = { version = "0.32.5", features = ["smol-comp"] }
+anyhow = { version = "1.0.99", features = ["backtrace"] }
+redis-macros = "0.5.6"
 
 [profile.release]
 lto = "fat"
@@ -85,8 +85,8 @@ testcontainers = []
 bench-full = []
 
 [dev-dependencies]
-criterion = { version = "0.6.0", features = ["async_smol", "html_reports"] }
-test-log = { version = "0.2.17", features = ["trace"] }
+criterion = { version = "0.7.0", features = ["async_smol", "html_reports"] }
+test-log = { version = "0.2.18", features = ["trace"] }
 proptest = "1.7.0"
 tc-testutils = { path = "libs/tc-testutils" }
 
