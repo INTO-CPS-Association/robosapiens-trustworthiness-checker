@@ -588,7 +588,7 @@ pub fn llen(mut x: OutputStream<Value>) -> OutputStream<Value> {
 pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
-            Value::Float(v) => Value::Float(v.sin()),
+            Value::Float(v) => v.sin().into(),
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -598,7 +598,7 @@ pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
 pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
-            Value::Float(v) => Value::Float(v.cos()),
+            Value::Float(v) => v.cos().into(),
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -608,8 +608,19 @@ pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
 pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
-            Value::Float(v) => Value::Float(v.tan()),
+            Value::Float(v) => v.tan().into(),
             _ => panic!("Invalid type of angle input stream"),
+        },
+        v,
+    )
+}
+
+pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
+    lift1(
+        |v| match v {
+            Value::Int(v) => v.abs().into(),
+            Value::Float(v) => v.abs().into(),
+            x => panic!("Invalid abs with type: {:?}", x),
         },
         v,
     )

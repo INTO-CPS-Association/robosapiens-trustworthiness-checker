@@ -133,6 +133,10 @@ where
                 let v = Self::to_async_stream(*v, ctx);
                 mc::tan(v)
             }
+            SExpr::Abs(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::abs(v)
+            }
         }
     }
 }

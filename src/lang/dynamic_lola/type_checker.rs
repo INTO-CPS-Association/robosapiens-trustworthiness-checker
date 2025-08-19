@@ -669,6 +669,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::Sin(_) => todo!(),
             SExpr::Cos(_) => todo!(),
             SExpr::Tan(_) => todo!(),
+            SExpr::Abs(_) => todo!(),
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
         }

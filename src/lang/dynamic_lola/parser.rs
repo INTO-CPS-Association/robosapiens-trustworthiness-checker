@@ -431,6 +431,21 @@ fn tan(s: &mut &str) -> Result<SExpr> {
     .map(|(v,)| SExpr::Tan(Box::new(v)))
     .parse_next(s)
 }
+fn abs(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: "abs",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+        _: whitespace,
+    ))
+    .map(|(v,)| SExpr::Abs(Box::new(v)))
+    .parse_next(s)
+}
 
 /// Fundamental expressions of the language
 fn atom(s: &mut &str) -> Result<SExpr> {
@@ -462,6 +477,7 @@ fn atom(s: &mut &str) -> Result<SExpr> {
                 sin,
                 cos,
                 tan,
+                abs,
             )),
             // Group 3
             alt((default, when, is_defined, sexpr_list, var, paren)),

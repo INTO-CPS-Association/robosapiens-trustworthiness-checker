@@ -254,6 +254,7 @@ impl SExpr {
             SExpr::Tan(_) => todo!(),
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
+            SExpr::Abs(_) => todo!(),
         }
     }
 }
@@ -412,6 +413,7 @@ impl SExpr {
             SExpr::Tan(_) => todo!(),
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
+            SExpr::Abs(_) => todo!(),
         }
     }
 }
@@ -575,6 +577,7 @@ impl Simplifiable for SExpr {
             SExpr::Tan(_) => todo!(),
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
+            SExpr::Abs(_) => todo!(),
         }
     }
 }

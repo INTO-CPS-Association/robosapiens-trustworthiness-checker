@@ -125,6 +125,10 @@ impl MonitoringSemantics<SExpr, Value, DistributedContext<Value>> for Distribute
                 let v = Self::to_async_stream(*v, ctx);
                 mc::tan(v)
             }
+            SExpr::Abs(v) => {
+                let v = Self::to_async_stream(*v, ctx);
+                mc::abs(v)
+            }
             SExpr::MonitoredAt(var_name, label) => dist_mc::monitored_at(var_name, label, ctx),
             SExpr::Dist(u, v) => dist_mc::dist(u, v, ctx),
         }

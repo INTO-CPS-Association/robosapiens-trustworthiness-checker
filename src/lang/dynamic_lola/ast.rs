@@ -193,6 +193,9 @@ pub enum SExpr {
     Cos(Box<Self>),
     Tan(Box<Self>),
 
+    // Other math functions
+    Abs(Box<Self>),
+
     // Distribution Constraint Specific
     MonitoredAt(VarName, NodeName),
     Dist(VarOrNodeName, VarOrNodeName),
@@ -269,12 +272,7 @@ impl SExpr {
                 inputs.extend(lst2.inputs());
                 inputs
             }
-            LHead(lst) => lst.inputs(),
-            LTail(lst) => lst.inputs(),
-            LLen(lst) => lst.inputs(),
-            Sin(v) => v.inputs(),
-            Cos(v) => v.inputs(),
-            Tan(v) => v.inputs(),
+            LHead(e) | LTail(e) | LLen(e) | Sin(e) | Cos(e) | Tan(e) | Abs(e) => e.inputs(),
         }
     }
 }
@@ -344,6 +342,7 @@ impl LOLASpecification {
                 SExpr::Sin(sexpr) => SExpr::Sin(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Cos(sexpr) => SExpr::Cos(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Tan(sexpr) => SExpr::Tan(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::Abs(sexpr) => SExpr::Abs(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::MonitoredAt(v, n) => SExpr::MonitoredAt(v, n),
                 SExpr::Dist(v, u) => SExpr::Dist(v, u),
                 SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, vars))),
@@ -540,6 +539,7 @@ impl Display for SExpr {
             Sin(v) => write!(f, "sin({})", v),
             Cos(v) => write!(f, "cos({})", v),
             Tan(v) => write!(f, "tan({})", v),
+            Abs(v) => write!(f, "abs({})", v),
         }
     }
 }
