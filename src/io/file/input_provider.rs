@@ -7,29 +7,30 @@ use crate::core::Value;
 use crate::core::{InputProvider, OutputStream, VarName};
 pub use crate::lang::untimed_input::UntimedInputFileData;
 
+// Returns an iterator over the values for a given key in the UntimedInputFileData.
+// None if no keys are present.
 fn input_file_data_iter(
     data: UntimedInputFileData,
     key: VarName,
-) -> impl Iterator<Item = Value> + 'static {
-    let keys = data.keys();
-    let max_key = *keys.max().unwrap_or(&0);
-    (0..=max_key).map(move |time| match data.get(&time) {
-        Some(data_for_time) => match data_for_time.get(&key.clone()) {
-            Some(value) => value.clone(),
-            None => Value::Unknown,
-        },
-        None => Value::Unknown,
-    })
+) -> Box<dyn Iterator<Item = Value> + 'static> {
+    let max_key = data.keys().max();
+    if let Some(max_key) = max_key {
+        Box::new((0..=*max_key).map(move |time| {
+            data.get(&time)
+                .and_then(|data_for_time| data_for_time.get(&key).cloned())
+                .unwrap_or(Value::Unknown)
+        }))
+    } else {
+        Box::new(std::iter::empty())
+    }
 }
 
 impl InputProvider for UntimedInputFileData {
     type Val = Value;
 
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
-        Some(Box::pin(stream::iter(input_file_data_iter(
-            self.clone(),
-            var.clone(),
-        ))))
+        let input_file_data_iter = input_file_data_iter(self.clone(), var.clone());
+        Some(Box::pin(stream::iter(input_file_data_iter)))
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {

@@ -107,6 +107,15 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Str(_), Value::Unknown)
+            | (Value::Bool(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Str(_))
+            | (Value::Unknown, Value::Bool(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -123,6 +132,15 @@ pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(!a & b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a < b),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Str(_), Value::Unknown)
+            | (Value::Bool(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Str(_))
+            | (Value::Unknown, Value::Bool(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -139,6 +157,15 @@ pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a >= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Str(_), Value::Unknown)
+            | (Value::Bool(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Str(_))
+            | (Value::Unknown, Value::Bool(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -155,6 +182,15 @@ pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a & !b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a > b),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Str(_), Value::Unknown)
+            | (Value::Bool(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Str(_))
+            | (Value::Unknown, Value::Bool(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -210,6 +246,11 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 + y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid addition with types: {:?}, {:?}", x, y),
         },
         x,
@@ -224,6 +265,11 @@ pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 % y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x % y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x % y),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid modulo with types: {:?}, {:?}", x, y),
         },
         x,
@@ -238,6 +284,11 @@ pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Val
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 - y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x - y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid subtraction with types: {:?}, {:?}", x, y),
         },
         x,
@@ -252,6 +303,11 @@ pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 * y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x * y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid multiplication with types: {:?}, {:?}", x, y),
         },
         x,
@@ -266,6 +322,11 @@ pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 / y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x / y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
+            (Value::Int(_), Value::Unknown)
+            | (Value::Float(_), Value::Unknown)
+            | (Value::Unknown, Value::Int(_))
+            | (Value::Unknown, Value::Float(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid division with types: {:?}, {:?}", x, y),
         },
         x,
@@ -280,6 +341,9 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
                 // ConcreteStreamData::Str(format!("{x}{y}").into());
                 Value::Str(format!("{x}{y}").into())
             }
+            (Value::Str(_), Value::Unknown)
+            | (Value::Unknown, Value::Str(_))
+            | (Value::Unknown, Value::Unknown) => Value::Unknown,
             (x, y) => panic!("Invalid concatenation with types: {:?}, {:?}", x, y),
         },
         x,
@@ -589,6 +653,7 @@ pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
             Value::Float(v) => v.sin().into(),
+            Value::Unknown => Value::Unknown,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -599,6 +664,7 @@ pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
             Value::Float(v) => v.cos().into(),
+            Value::Unknown => Value::Unknown,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -609,6 +675,7 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
             Value::Float(v) => v.tan().into(),
+            Value::Unknown => Value::Unknown,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -620,6 +687,7 @@ pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
         |v| match v {
             Value::Int(v) => v.abs().into(),
             Value::Float(v) => v.abs().into(),
+            Value::Unknown => Value::Unknown,
             x => panic!("Invalid abs with type: {:?}", x),
         },
         v,

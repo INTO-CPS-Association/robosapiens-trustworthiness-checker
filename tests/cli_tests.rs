@@ -766,18 +766,14 @@ async fn test_empty_input(_executor: Rc<LocalExecutor>) {
     .await
     .expect("Failed to run CLI");
 
-    // This should fail because empty input is not valid
     assert!(
-        !output.status.success(),
-        "CLI should have failed with empty input"
+        output.status.success(),
+        "CLI command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Invalid addition") || stderr.contains("parse") || stderr.contains("error"),
-        "Expected error message not found in: {}",
-        stderr
-    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.is_empty(), "Expected empty stdout found: {}", stdout);
 }
 
 /// Test CLI with single timestep input
