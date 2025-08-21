@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+
+use ecow::EcoString;
 use ecow::EcoVec;
 use winnow::Parser;
 use winnow::Result;
@@ -33,6 +36,30 @@ fn sexpr_list(s: &mut &str) -> Result<SExpr> {
     .parse_next(s);
     match res {
         Ok(exprs) => Ok(SExpr::List(exprs)),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn key_sexpr(s: &mut &str) -> Result<(EcoString, SExpr)> {
+    seq!(_: loop_ms_or_lb_or_lc, string, _: ':', _: loop_ms_or_lb_or_lc, sexpr,)
+        .map(|(key, value)| (key.into(), value))
+        .parse_next(s)
+}
+
+// Used for Maps in output streams
+fn sexpr_map(s: &mut &str) -> Result<SExpr> {
+    let res: Result<Vec<(EcoString, SExpr)>> = delimited(
+        seq!("Map", loop_ms_or_lb_or_lc, '('),
+        separated(
+            0..,
+            key_sexpr,
+            seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+        ),
+        ')',
+    )
+    .parse_next(s);
+    match res {
+        Ok(exprs) => Ok(SExpr::Map(BTreeMap::from_iter(exprs.into_iter()))),
         Err(e) => Err(e),
     }
 }
@@ -341,6 +368,86 @@ fn llen(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+fn mget(s: &mut &str) -> Result<SExpr> {
+    seq!(
+        _: whitespace,
+        _: "Map.get",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ',',
+        _: loop_ms_or_lb_or_lc,
+        string,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    )
+    .map(|(e, k)| SExpr::MGet(Box::new(e), k.into()))
+    .parse_next(s)
+}
+
+fn minsert(s: &mut &str) -> Result<SExpr> {
+    seq!(
+        _: whitespace,
+        _: "Map.insert",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ',',
+        _: loop_ms_or_lb_or_lc,
+        string,
+        _: loop_ms_or_lb_or_lc,
+        _: ',',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    )
+    .map(|(e, k, v)| SExpr::MInsert(Box::new(e), k.into(), Box::new(v)))
+    .parse_next(s)
+}
+
+fn mremove(s: &mut &str) -> Result<SExpr> {
+    seq!(
+        _: whitespace,
+        _: "Map.remove",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ',',
+        _: loop_ms_or_lb_or_lc,
+        string,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    )
+    .map(|(e, k)| SExpr::MRemove(Box::new(e), k.into()))
+    .parse_next(s)
+}
+
+fn mhas_key(s: &mut &str) -> Result<SExpr> {
+    seq!(
+        _: whitespace,
+        _: "Map.has_key",
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ',',
+        _: loop_ms_or_lb_or_lc,
+        string,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    )
+    .map(|(e, k)| SExpr::MHasKey(Box::new(e), k.into()))
+    .parse_next(s)
+}
+
 fn var_or_nodename(s: &mut &str) -> Result<VarOrNodeName> {
     ident.map(|w: &str| VarOrNodeName(w.into())).parse_next(s)
 }
@@ -454,19 +561,13 @@ fn atom(s: &mut &str) -> Result<SExpr> {
         whitespace,
         alt((
             // Group 1
+            alt((sindex, lindex, lappend, lconcat, lhead, ltail, llen)),
+            // Group 2
+            alt((mget, minsert, mremove, mhas_key)),
+            // Group 3
             alt((
-                sindex,
-                lindex,
-                lappend,
-                lconcat,
-                lhead,
-                ltail,
-                llen,
                 not,
                 restricted_dynamic,
-            )),
-            // Group 2
-            alt((
                 dynamic,
                 sval,
                 ifelse,
@@ -479,8 +580,8 @@ fn atom(s: &mut &str) -> Result<SExpr> {
                 tan,
                 abs,
             )),
-            // Group 3
-            alt((default, when, is_defined, sexpr_list, var, paren)),
+            // Group 4
+            alt((default, when, is_defined, sexpr_list, sexpr_map, var, paren)),
         )),
         whitespace,
     )
@@ -732,6 +833,7 @@ mod tests {
     use crate::core::Value;
     use std::collections::BTreeMap;
 
+    use ecow::eco_vec;
     use winnow::error::ContextError;
 
     use super::*;
@@ -1425,8 +1527,11 @@ mod tests {
 
     #[test]
     fn test_parse_list() {
-        // Note: value_list has higher precedence than sexpr_list hence why
-        // this becomes a val
+        assert_eq!(
+            sexpr(&mut r#"List()"#),
+            Ok(SExpr::Val(Value::List(eco_vec![]))),
+        );
+        // Same as above
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List()"#)),
             r#"Ok(Val(List([])))"#
@@ -1547,6 +1652,129 @@ mod tests {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.len(List())"#)),
             r#"Ok(LLen(Val(List([]))))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_map() {
+        assert_eq!(
+            sexpr(&mut r#"Map()"#),
+            Ok(SExpr::Val(Value::Map(BTreeMap::new()))),
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map()"#)),
+            r#"Ok(Val(Map({})))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map("x": 1, "y": 2)"#)),
+            r#"Ok(Val(Map({"x": Int(1), "y": Int(2)})))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map("x": 1+2,"y": 2*5)"#)),
+            r#"Ok(Map({"x": BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), "y": BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))}))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map("x": "hello", "y": "world")"#)),
+            r#"Ok(Val(Map({"x": Str("hello"), "y": Str("world")})))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(
+                &mut r#"Map("xxxx": true || false, "yyyy": true && false)"#
+            )),
+            r#"Ok(Map({"xxxx": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), "yyyy": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))}))"#
+        );
+        // Can mix expressions - not that it is necessarily a good idea
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map( "x": 1, "y": "hello" )"#)),
+            r#"Ok(Val(Map({"x": Int(1), "y": Str("hello")})))"#
+        );
+        assert_eq!(
+            assignment_decl(&mut "y = Map()"),
+            Ok(("y".into(), SExpr::Val(Value::Map(BTreeMap::new()))))
+        )
+    }
+
+    #[test]
+    fn test_parse_mget() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.get(Map("x": 2, "y": true), "x")"#)),
+            r#"Ok(MGet(Val(Map({"x": Int(2), "y": Bool(true)})), "x"))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.get(x, "key")"#)),
+            r#"Ok(MGet(Var(VarName::new("x")), "key"))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.get(x, "")"#)),
+            r#"Ok(MGet(Var(VarName::new("x")), ""))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(
+                &mut r#"Map.get(Map.get(Map.get(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
+            )),
+            r#"Ok(MGet(MGet(MGet(Val(Map({"three": Map({"two": Map({"one": Int(42)})})})), "three"), "two"), "one"))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_mremove() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.remove(Map("x": 2, "y": true), "x")"#)),
+            r#"Ok(MRemove(Val(Map({"x": Int(2), "y": Bool(true)})), "x"))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.remove(x, "key")"#)),
+            r#"Ok(MRemove(Var(VarName::new("x")), "key"))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.remove(x, "")"#)),
+            r#"Ok(MRemove(Var(VarName::new("x")), ""))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(
+                &mut r#"Map.remove(Map.remove(Map.remove(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
+            )),
+            r#"Ok(MRemove(MRemove(MRemove(Val(Map({"three": Map({"two": Map({"one": Int(42)})})})), "three"), "two"), "one"))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_mhas_key() {
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.has_key(Map("x": 2, "y": true), "x")"#)),
+            r#"Ok(MHasKey(Val(Map({"x": Int(2), "y": Bool(true)})), "x"))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.has_key(x, "key")"#)),
+            r#"Ok(MHasKey(Var(VarName::new("x")), "key"))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.has_key(x, "")"#)),
+            r#"Ok(MHasKey(Var(VarName::new("x")), ""))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(
+                &mut r#"Map.has_key(Map.has_key(Map.has_key(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
+            )),
+            r#"Ok(MHasKey(MHasKey(MHasKey(Val(Map({"three": Map({"two": Map({"one": Int(42)})})})), "three"), "two"), "one"))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_minsert() {
+        assert_eq!(
+            presult_to_string(&sexpr(
+                &mut r#"Map.insert(Map("x": 2, "y": true), "z", 42)"#
+            )),
+            r#"Ok(MInsert(Val(Map({"x": Int(2), "y": Bool(true)})), "z", Val(Int(42))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.insert(x, "key", true)"#)),
+            r#"Ok(MInsert(Var(VarName::new("x")), "key", Val(Bool(true))))"#
+        );
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"Map.insert(x, "", 1)"#)),
+            r#"Ok(MInsert(Var(VarName::new("x")), "", Val(Int(1))))"#
         );
     }
 

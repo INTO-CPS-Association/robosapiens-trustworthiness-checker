@@ -1,0 +1,13 @@
+in iMap
+out oMap
+out nestedMap
+out mapGet
+out mapRemove
+out mapInsert
+out mapHasKey
+oMap = iMap
+nestedMap = Map("a": iMap, "b": iMap)
+mapGet = Map.get(iMap, "x")
+mapRemove = Map.remove(iMap, "x")
+mapInsert = Map.insert(iMap, "z", 42)
+mapHasKey = Map.has_key(iMap, "x")

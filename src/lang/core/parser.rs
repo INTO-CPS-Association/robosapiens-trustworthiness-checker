@@ -1,4 +1,4 @@
-use ecow::EcoVec;
+use ecow::{EcoString, EcoVec};
 use winnow::{
     Result,
     ascii::{line_ending, multispace1},
@@ -8,7 +8,7 @@ use winnow::{
 };
 
 use crate::Value;
-use std::fmt::Debug;
+use std::{collections::BTreeMap, fmt::Debug};
 use winnow::Parser;
 pub use winnow::ascii::alphanumeric1 as ident;
 pub use winnow::ascii::dec_int as integer;
@@ -30,6 +30,23 @@ pub fn value_list(s: &mut &str) -> Result<EcoVec<Value>> {
     .parse_next(s)
 }
 
+pub fn key_value(s: &mut &str) -> Result<(EcoString, Value)> {
+    seq!(_: whitespace, string, _: whitespace, _: ':', _: whitespace, val,)
+        .map(|(key, value)| (key.into(), value))
+        .parse_next(s)
+}
+
+// Used for Lists in input streams (can only be Values)
+pub fn value_map(s: &mut &str) -> Result<BTreeMap<EcoString, Value>> {
+    delimited(
+        seq!("Map", whitespace, '('),
+        separated(0.., key_value, seq!(whitespace, ',', whitespace)),
+        ')',
+    )
+    .map(|v: Vec<_>| BTreeMap::from_iter(v.into_iter()))
+    .parse_next(s)
+}
+
 pub fn string<'a>(s: &mut &'a str) -> Result<&'a str> {
     delimited('"', take_until(0.., "\""), '\"').parse_next(s)
 }
@@ -40,7 +57,7 @@ pub fn val(s: &mut &str) -> Result<Value> {
         alt((
             // Order matters here, as prefixes of float can also be parsed as
             // an integer
-            // We also specifically excude integrers from being parsed as floats
+            // We also specifically exclude integers from being parsed as floats
             // (e.g. 1.0 is a float, 1 is an integer)
             float.with_taken().verify_map(|(x, s): (f64, &str)| {
                 match (integer::<&str, i64, ContextError>).parse(s) {
@@ -54,6 +71,7 @@ pub fn val(s: &mut &str) -> Result<Value> {
             literal("true").map(|_| Value::Bool(true)),
             literal("false").map(|_| Value::Bool(false)),
             value_list.map(Value::List),
+            value_map.map(Value::Map),
         )),
         whitespace,
     )
