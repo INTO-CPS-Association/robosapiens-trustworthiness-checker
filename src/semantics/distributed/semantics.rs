@@ -118,7 +118,7 @@ impl MonitoringSemantics<SExpr, Value, DistributedContext<Value>> for Distribute
             SExpr::Map(map) => {
                 let map: BTreeMap<_, _> = map
                     .into_iter()
-                    .map(|(k, v)| (k, Self::to_async_stream(*v, ctx)))
+                    .map(|(k, v)| (k, Self::to_async_stream(v, ctx)))
                     .collect();
                 mc::map(map)
             }

@@ -189,8 +189,8 @@ pub enum SExpr {
     LLen(Box<Self>),              // List length -- returns length of the list
 
     // Map and map expressions
-    Map(BTreeMap<EcoString, Box<Self>>), // Map from String to SExpr
-    MGet(Box<Self>, EcoString),          // Get from map
+    Map(BTreeMap<EcoString, Self>), // Map from String to SExpr
+    MGet(Box<Self>, EcoString),     // Get from map
     MInsert(Box<Self>, EcoString, Box<Self>), // Insert into map -- First is map, second is key, third is value
     MRemove(Box<Self>, EcoString),            // Remove from map -- First is map, second is key
     MHasKey(Box<Self>, EcoString),            // Check if map has key -- First is map, second is key
@@ -404,7 +404,7 @@ impl LOLASpecification {
                     let m = map.clone(); // TODO: Delete when no
                     // longer cloning and just iter() instead of into_iter()...
                     m.into_iter().for_each(|(_, v)| {
-                        traverse_expr(*v, vars);
+                        traverse_expr(v, vars);
                     });
                     SExpr::Map(map)
                 }
