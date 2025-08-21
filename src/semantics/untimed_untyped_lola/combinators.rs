@@ -543,6 +543,9 @@ pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
 
 pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     Box::pin(stream! {
+        if xs.is_empty() {
+            return;
+        }
         loop {
             let vals = join_all(xs.iter_mut().map(|x| x.next())).await;
             if vals.iter().all(|x| x.is_some()) {
@@ -653,6 +656,9 @@ pub fn llen(mut x: OutputStream<Value>) -> OutputStream<Value> {
 
 pub fn map(mut xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> {
     Box::pin(stream! {
+        if xs.is_empty() {
+            return;
+        }
         loop {
             let iters = xs.iter_mut().map(|(k, v)| {
                 // We need to clone the key because we are moving it into the closure
@@ -785,6 +791,7 @@ mod tests {
     use crate::async_test;
     use crate::core::Value;
     use crate::runtime::asynchronous::Context;
+    use ecow::eco_vec;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -1073,7 +1080,39 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn test_list_no_stream() {
+        let x: Vec<OutputStream<Value>> = vec![];
+        let res: Vec<Value> = list(x).collect().await;
+        let exp: Vec<Value> = vec![];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_list_empty_stream() {
+        let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![]))];
+        let res: Vec<Value> = list(x).collect().await;
+        let exp: Vec<Value> = vec![];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_list_stream_sending_empty_lists() {
+        // Stream that sends empty list twice
+        let s: OutputStream<Value> = Box::pin(stream::repeat(Value::List(eco_vec![])).take(2));
+        let x: Vec<OutputStream<Value>> = vec![s];
+        let res: Vec<Value> = list(x).collect().await;
+        // Expected is a bit hard to grasp. s is sending List([]) but since we are using the list
+        // combinator, we get List(List([]))
+        let exp: Vec<Value> = vec![
+            Value::List(eco_vec![Value::List(eco_vec![])]),
+            Value::List(eco_vec![Value::List(eco_vec![])]),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
     async fn test_list_exprs() {
+        // Stream sending Lists containing an int and a string
         let x: Vec<OutputStream<Value>> = vec![
             plus(
                 Box::pin(stream::iter(vec![1.into(), 2.into()])),
@@ -1223,6 +1262,153 @@ mod tests {
         ]));
         let res: Vec<Value> = llen(x).collect().await;
         let exp: Vec<Value> = vec![0.into(), 1.into(), 2.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
+        let m: BTreeMap<EcoString, OutputStream<Value>> =
+            BTreeMap::from([("x".into(), s1), ("y".into(), s2)]);
+        let res: Vec<Value> = map(m).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), 1.into()),
+                ("y".into(), 3.into()),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("x".into(), 2.into()),
+                ("y".into(), 4.into()),
+            ])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_no_stream() {
+        let x: BTreeMap<EcoString, OutputStream<Value>> = BTreeMap::new();
+        let res: Vec<Value> = map(x).collect().await;
+        let exp: Vec<Value> = vec![];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_empty_stream() {
+        let s: OutputStream<Value> = Box::pin(stream::iter(vec![]));
+        let x: BTreeMap<EcoString, OutputStream<Value>> = BTreeMap::from([("x".into(), s)]);
+        let res: Vec<Value> = map(x).collect().await;
+        // No values in the stream generating values, so we get an empty stream even if we have the
+        // "x" key
+        let exp: Vec<Value> = vec![];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_stream_sending_empty_lists() {
+        // Stream that sends empty list twice
+        let s: OutputStream<Value> = Box::pin(stream::repeat(Value::Map(BTreeMap::new())).take(2));
+        let x: BTreeMap<EcoString, OutputStream<Value>> = BTreeMap::from([("x".into(), s)]);
+        let res: Vec<Value> = map(x).collect().await;
+        // Streams of Maps with single key (x) sending empty maps
+        let exp: Vec<Value> = vec![
+            BTreeMap::from([("x".into(), BTreeMap::new().into())]).into(),
+            BTreeMap::from([("x".into(), BTreeMap::new().into())]).into(),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_exprs() {
+        let m = BTreeMap::from([
+            (
+                "x".into(),
+                plus(
+                    Box::pin(stream::iter(vec![1.into(), 2.into()])),
+                    Box::pin(stream::iter(vec![3.into(), 4.into()])),
+                ),
+            ),
+            (
+                "y".into(),
+                concat(
+                    Box::pin(stream::iter(vec!["Hello ".into(), "Goddag ".into()])),
+                    Box::pin(stream::iter(vec!["World".into(), "Verden".into()])),
+                ),
+            ),
+        ]);
+        let res: Vec<Value> = map(m).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), 4.into()),
+                ("y".into(), "Hello World".into()),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("x".into(), 6.into()),
+                ("y".into(), "Goddag Verden".into()),
+            ])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_get() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
+        let res: Vec<Value> = mget(map(m), "y".into()).collect().await;
+        let exp: Vec<Value> = vec![2.into(), 4.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_remove() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
+        let res: Vec<Value> = mremove(map(m), "y".into()).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_insert() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let m = BTreeMap::from([(EcoString::from("x"), s1)]);
+        let res: Vec<Value> = minsert(map(m), "y".into(), s2).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), 1.into()),
+                ("y".into(), 2.into()),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("x".into(), 3.into()),
+                ("y".into(), 4.into()),
+            ])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_has_key_true() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
+        let res: Vec<Value> = mhas_key(map(m), "y".into()).collect().await;
+        let exp: Vec<Value> = vec![true.into(), true.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_has_key_false() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
+        let res: Vec<Value> = mhas_key(map(m), "z".into()).collect().await;
+        let exp: Vec<Value> = vec![false.into(), false.into()];
         assert_eq!(res, exp);
     }
 }

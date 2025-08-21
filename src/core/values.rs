@@ -211,7 +211,12 @@ impl From<EcoVec<Value>> for Value {
 }
 impl From<Vec<Value>> for Value {
     fn from(value: Vec<Value>) -> Self {
-        Value::List(value.into())
+        Value::List(value.into()) // Into = from Vec -> EcoVec
+    }
+}
+impl From<BTreeMap<EcoString, Value>> for Value {
+    fn from(value: BTreeMap<EcoString, Value>) -> Self {
+        Value::Map(value)
     }
 }
 impl From<()> for Value {
