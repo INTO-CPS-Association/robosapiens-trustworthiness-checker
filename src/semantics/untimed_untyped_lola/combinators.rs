@@ -1393,6 +1393,27 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn test_map_insert_overwrite() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 4.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 5.into()]));
+        let s3: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 6.into()]));
+        let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
+        // Overwrite y with new stream
+        let res: Vec<Value> = minsert(map(m), "y".into(), s3).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), 1.into()),
+                ("y".into(), 3.into()),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("x".into(), 4.into()),
+                ("y".into(), 6.into()),
+            ])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
     async fn test_map_has_key_true() {
         let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
         let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
