@@ -338,6 +338,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
             )))),
             Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PossiblyUnknown::Known(*v)))),
             Value::List(_) => todo!(),
+            Value::Map(_) => todo!(),
             Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PossiblyUnknown::Known(())))),
             Value::Unknown => {
                 errs.push(SemanticError::UnknownError(format!(
@@ -672,6 +673,11 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::Abs(_) => todo!(),
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
+            SExpr::Map(_) => todo!(),
+            SExpr::MGet(_, _) => todo!(),
+            SExpr::MInsert(_, _, _) => todo!(),
+            SExpr::MRemove(_, _) => todo!(),
+            SExpr::MHasKey(_, _) => todo!(),
         }
     }
 }

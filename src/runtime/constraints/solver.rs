@@ -255,6 +255,11 @@ impl SExpr {
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
             SExpr::Abs(_) => todo!(),
+            SExpr::Map(_) => todo!(),
+            SExpr::MGet(_, _) => todo!(),
+            SExpr::MInsert(_, _, _) => todo!(),
+            SExpr::MRemove(_, _) => todo!(),
+            SExpr::MHasKey(_, _) => todo!(),
         }
     }
 }
@@ -414,6 +419,11 @@ impl SExpr {
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
             SExpr::Abs(_) => todo!(),
+            SExpr::Map(_) => todo!(),
+            SExpr::MGet(_, _) => todo!(),
+            SExpr::MInsert(_, _, _) => todo!(),
+            SExpr::MRemove(_, _) => todo!(),
+            SExpr::MHasKey(_, _) => todo!(),
         }
     }
 }
@@ -578,6 +588,11 @@ impl Simplifiable for SExpr {
             SExpr::MonitoredAt(_, _) => todo!(),
             SExpr::Dist(_, _) => todo!(),
             SExpr::Abs(_) => todo!(),
+            SExpr::Map(_) => todo!(),
+            SExpr::MGet(_, _) => todo!(),
+            SExpr::MInsert(_, _, _) => todo!(),
+            SExpr::MRemove(_, _) => todo!(),
+            SExpr::MHasKey(_, _) => todo!(),
         }
     }
 }

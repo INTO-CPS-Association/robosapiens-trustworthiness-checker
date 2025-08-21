@@ -1,4 +1,7 @@
-use std::fmt::{Debug, Display};
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Display},
+};
 
 use anyhow::anyhow;
 use ecow::{EcoString, EcoVec, eco_vec};
@@ -18,6 +21,7 @@ pub enum Value {
     Str(EcoString),
     Bool(bool),
     List(EcoVec<Value>),
+    Map(BTreeMap<EcoString, Value>),
     Unknown,
     Unit,
 }
@@ -229,6 +233,13 @@ impl Display for Value {
                     write!(f, "{}, ", val)?;
                 }
                 write!(f, "]")
+            }
+            Value::Map(map) => {
+                write!(f, "{{")?;
+                for (key, val) in map.iter() {
+                    write!(f, "{}: {}, ", key, val)?;
+                }
+                write!(f, "}}")
             }
             Value::Unknown => write!(f, "unknown"),
             Value::Unit => write!(f, "()"),

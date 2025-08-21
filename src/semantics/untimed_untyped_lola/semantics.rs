@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::Value;
@@ -114,6 +116,30 @@ where
             SExpr::LLen(lst) => {
                 let lst = Self::to_async_stream(*lst, ctx);
                 mc::llen(lst)
+            }
+            SExpr::Map(map) => {
+                let map: BTreeMap<_, _> = map
+                    .into_iter()
+                    .map(|(k, v)| (k, Self::to_async_stream(*v, ctx)))
+                    .collect();
+                mc::map(map)
+            }
+            SExpr::MGet(map, k) => {
+                let map = Self::to_async_stream(*map, ctx);
+                mc::mget(map, k)
+            }
+            SExpr::MRemove(map, k) => {
+                let map = Self::to_async_stream(*map, ctx);
+                mc::mremove(map, k)
+            }
+            SExpr::MInsert(map, k, v) => {
+                let map = Self::to_async_stream(*map, ctx);
+                let v = Self::to_async_stream(*v, ctx);
+                mc::minsert(map, k, v)
+            }
+            SExpr::MHasKey(map, k) => {
+                let map = Self::to_async_stream(*map, ctx);
+                mc::mhas_key(map, k)
             }
             SExpr::MonitoredAt(_, _) => {
                 unimplemented!("Function monitored_at only supported in distributed semantics")

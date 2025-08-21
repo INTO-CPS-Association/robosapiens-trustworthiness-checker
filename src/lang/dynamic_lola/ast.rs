@@ -1,4 +1,4 @@
-use ecow::EcoVec;
+use ecow::{EcoString, EcoVec};
 
 use crate::core::{Specification, VarName};
 use crate::core::{StreamType, Value};
@@ -188,6 +188,13 @@ pub enum SExpr {
     LTail(Box<Self>),             // List tail -- get all but first element of list
     LLen(Box<Self>),              // List length -- returns length of the list
 
+    // Map and map expressions
+    Map(BTreeMap<EcoString, Box<Self>>), // Map from String to SExpr
+    MGet(Box<Self>, EcoString),          // Get from map
+    MInsert(Box<Self>, EcoString, Box<Self>), // Insert into map -- First is map, second is key, third is value
+    MRemove(Box<Self>, EcoString),            // Remove from map -- First is map, second is key
+    MHasKey(Box<Self>, EcoString),            // Check if map has key -- First is map, second is key
+
     // Trigonometric functions
     Sin(Box<Self>),
     Cos(Box<Self>),
@@ -228,7 +235,6 @@ impl SExpr {
             }
             Var(v) => vec![v.clone()],
             Not(b) => b.inputs(),
-            // TODO: is this correct?
             Dynamic(e) => e.inputs(),
             RestrictedDynamic(_, vs) => vs.iter().cloned().collect(),
             Defer(e) => e.inputs(),
@@ -251,28 +257,35 @@ impl SExpr {
                 }
                 inputs
             }
+            Map(map) => {
+                let mut inputs = vec![];
+                for (_, e) in map {
+                    inputs.extend(e.inputs());
+                }
+                inputs
+            }
+            LIndex(e1, e2) | LAppend(e1, e2) | LConcat(e1, e2) => {
+                let mut inputs = e1.inputs();
+                inputs.extend(e2.inputs());
+                inputs
+            }
+            MGet(e, _)
+            | MInsert(e, _, _)
+            | MRemove(e, _)
+            | MHasKey(e, _)
+            | LHead(e)
+            | LTail(e)
+            | LLen(e)
+            | Sin(e)
+            | Cos(e)
+            | Tan(e)
+            | Abs(e) => e.inputs(),
             MonitoredAt(_, _) => {
                 vec![]
             }
             Dist(_, _) => {
                 vec![]
             }
-            LIndex(e, i) => {
-                let mut inputs = e.inputs();
-                inputs.extend(i.inputs());
-                inputs
-            }
-            LAppend(lst, el) => {
-                let mut inputs = lst.inputs();
-                inputs.extend(el.inputs());
-                inputs
-            }
-            LConcat(lst1, lst2) => {
-                let mut inputs = lst1.inputs();
-                inputs.extend(lst2.inputs());
-                inputs
-            }
-            LHead(e) | LTail(e) | LLen(e) | Sin(e) | Cos(e) | Tan(e) | Abs(e) => e.inputs(),
         }
     }
 }
@@ -311,6 +324,8 @@ impl LOLASpecification {
     // 3.5. We discussed whether this should be in statements, live in Context, etc. Might require
     //   a lot of thought.
     // 4. Profit - this hack is no longer needed and we have a more correct solution
+    //
+    // TODO: Fix hack to not clone every SExpr - take it by reference instead.
     fn fix_dynamic(
         input_vars: &Vec<VarName>,
         output_vars: &Vec<VarName>,
@@ -319,7 +334,6 @@ impl LOLASpecification {
         // Helper function to do the changes...
         fn traverse_expr(expr: SExpr, vars: &EcoVec<VarName>) -> SExpr {
             match expr {
-                // Fixes:
                 SExpr::Dynamic(sexpr) => {
                     SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), vars.clone())
                 }
@@ -332,10 +346,8 @@ impl LOLASpecification {
                         .collect();
                     SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), new_restricted)
                 }
-                // Terminators:
                 SExpr::Var(v) => SExpr::Var(v.clone()),
                 SExpr::Val(v) => SExpr::Val(v.clone()),
-                // Unary:
                 SExpr::When(sexpr) => SExpr::When(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Not(sexpr) => SExpr::Not(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::SIndex(sexpr, i) => SExpr::SIndex(Box::new(traverse_expr(*sexpr, vars)), i),
@@ -350,7 +362,6 @@ impl LOLASpecification {
                 SExpr::LLen(sexpr) => SExpr::LLen(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Defer(sexpr) => SExpr::Defer(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(traverse_expr(*sexpr, vars))),
-                // Binary:
                 SExpr::BinOp(sexpr, sexpr1, sbin_op) => SExpr::BinOp(
                     Box::new(traverse_expr(*sexpr, vars)),
                     Box::new(traverse_expr(*sexpr1, vars)),
@@ -376,20 +387,35 @@ impl LOLASpecification {
                     Box::new(traverse_expr(*sexpr, vars)),
                     Box::new(traverse_expr(*sexpr1, vars)),
                 ),
-                // Ternary:
                 SExpr::If(sexpr, sexpr1, sexpr2) => SExpr::If(
                     Box::new(traverse_expr(*sexpr, vars)),
                     Box::new(traverse_expr(*sexpr1, vars)),
                     Box::new(traverse_expr(*sexpr2, vars)),
                 ),
-                // Collection
-                SExpr::List(sexprs) => SExpr::List(
-                    sexprs
-                        .iter()
-                        .cloned()
-                        .map(|sexpr| traverse_expr(sexpr, vars))
-                        .collect(),
+                SExpr::List(vec) => {
+                    let v = vec.clone(); // TODO: Delete when no longer cloning and
+                    // just iter() instead of into_iter()...
+                    v.into_iter().for_each(|sexpr| {
+                        traverse_expr(sexpr, vars);
+                    });
+                    SExpr::List(vec)
+                }
+                SExpr::Map(map) => {
+                    let m = map.clone(); // TODO: Delete when no
+                    // longer cloning and just iter() instead of into_iter()...
+                    m.into_iter().for_each(|(_, v)| {
+                        traverse_expr(*v, vars);
+                    });
+                    SExpr::Map(map)
+                }
+                SExpr::MGet(map, k) => SExpr::MGet(Box::new(traverse_expr(*map.clone(), vars)), k),
+                SExpr::MInsert(map, k, v) => SExpr::MInsert(
+                    Box::new(traverse_expr(*map, vars)),
+                    k,
+                    Box::new(traverse_expr(*v, vars)),
                 ),
+                SExpr::MRemove(map, k) => SExpr::MRemove(Box::new(traverse_expr(*map, vars)), k),
+                SExpr::MHasKey(map, k) => SExpr::MHasKey(Box::new(traverse_expr(*map, vars)), k),
             }
         }
         let vars: EcoVec<VarName> = input_vars
@@ -536,6 +562,15 @@ impl Display for SExpr {
             LHead(lst) => write!(f, "List.head({})", lst),
             LTail(lst) => write!(f, "List.tail({})", lst),
             LLen(lst) => write!(f, "List.len({})", lst),
+            Map(map) => {
+                let map_str: Vec<String> =
+                    map.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
+                write!(f, "{{{}}}", map_str.join(", "))
+            }
+            MGet(map, k) => write!(f, "Map.get({}, {})", map, k),
+            MInsert(map, k, v) => write!(f, "Map.insert({}, {}, {})", map, k, v),
+            MRemove(map, k) => write!(f, "Map.remove({}, {})", map, k),
+            MHasKey(map, k) => write!(f, "Map.has_key({}, {})", map, k),
             Sin(v) => write!(f, "sin({})", v),
             Cos(v) => write!(f, "cos({})", v),
             Tan(v) => write!(f, "tan({})", v),

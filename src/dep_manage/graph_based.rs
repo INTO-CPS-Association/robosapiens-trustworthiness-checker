@@ -142,11 +142,18 @@ impl DepGraph {
                     vec.iter()
                         .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node));
                 }
+                SExpr::Map(m) => {
+                    m.iter()
+                        .for_each(|(_, v)| deps_impl(v, steps, map, current_node));
+                }
                 SExpr::Dynamic(sexpr)
                 | SExpr::RestrictedDynamic(sexpr, _)
                 | SExpr::Not(sexpr)
                 | SExpr::LHead(sexpr)
                 | SExpr::LTail(sexpr)
+                | SExpr::MGet(sexpr, _)
+                | SExpr::MRemove(sexpr, _)
+                | SExpr::MHasKey(sexpr, _)
                 | SExpr::LLen(sexpr)
                 | SExpr::IsDefined(sexpr)
                 | SExpr::When(sexpr)
@@ -160,7 +167,8 @@ impl DepGraph {
                 | SExpr::Update(sexpr1, sexpr2)
                 | SExpr::LIndex(sexpr1, sexpr2)
                 | SExpr::LAppend(sexpr1, sexpr2)
-                | SExpr::LConcat(sexpr1, sexpr2) => {
+                | SExpr::LConcat(sexpr1, sexpr2)
+                | SExpr::MInsert(sexpr1, _, sexpr2) => {
                     deps_impl(sexpr1, steps, map, current_node);
                     deps_impl(sexpr2, steps, map, current_node);
                 }

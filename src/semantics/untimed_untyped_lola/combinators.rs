@@ -6,6 +6,7 @@ use crate::semantics::{MonitoringSemantics, StreamContext};
 use crate::{OutputStream, VarName};
 use async_stream::stream;
 use core::panic;
+use ecow::EcoString;
 use ecow::EcoVec;
 use futures::join;
 use futures::stream::LocalBoxStream;
@@ -14,6 +15,7 @@ use futures::{
     future::join_all,
     stream::{self},
 };
+use std::collections::BTreeMap;
 use tracing::debug;
 use tracing::info;
 use tracing::instrument;
@@ -644,6 +646,89 @@ pub fn llen(mut x: OutputStream<Value>) -> OutputStream<Value> {
                     yield Value::Int(l.len() as i64);
                 }
                 l => panic!("Invalid list len. Expected List expression. Received: List.len({:?})", l)
+            }
+        }
+    })
+}
+
+pub fn map(mut xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        loop {
+            let iters = xs.iter_mut().map(|(k, v)| {
+                // We need to clone the key because we are moving it into the closure
+                let k = k.clone();
+                async move {
+                    let v = v.next().await;
+                    (k, v)
+                }
+            });
+            let k_v = join_all(iters).await;
+            if k_v.iter().all(|(_, v)| v.is_some()) {
+                yield Value::Map(k_v.iter().map(|(k, v)| (k.clone(), v.clone().unwrap())).collect());
+            } else {
+                return;
+            }
+        }
+    })
+}
+
+pub fn mget(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let Some(val) = xs.next().await {
+            match val {
+                Value::Map(map) => {
+                        if let Some(val) = map.get(&k) {
+                            yield val.clone();
+                        } else {
+                            panic!("Missing key for map get: {}", k);
+                        }
+                }
+                v => panic!("Invalid map get. Expected Map expression. Received: Map.get({:?})", v)
+            }
+        }
+    })
+}
+
+pub fn mremove(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let Some(val) = xs.next().await {
+            match val {
+                Value::Map(mut map) => {
+                        map.remove(&k);
+                        yield Value::Map(map);
+                }
+                v => panic!("Invalid map remove. Expected Map expression. Received: Map.remove({:?})", v)
+            }
+        }
+    })
+}
+
+pub fn minsert(
+    mut xs: OutputStream<Value>,
+    k: EcoString,
+    mut v: OutputStream<Value>,
+) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let (Some(m_val), Some(val)) = join!(xs.next(), v.next()) {
+            match m_val {
+                Value::Map(mut map) => {
+                    map.insert(k.clone(), val);
+                    yield Value::Map(map);
+                }
+                v => panic!("Invalid map insert. Expected Map expression. Received: Map.insert({:?})", v)
+            }
+        }
+    })
+}
+
+pub fn mhas_key(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let Some(val) = xs.next().await {
+            match val {
+                Value::Map(map) => {
+                        yield Value::Bool(map.contains_key(&k));
+                }
+                v => panic!("Invalid map has_key. Expected Map expression. Received: Map.has_key({:?})", v)
             }
         }
     })

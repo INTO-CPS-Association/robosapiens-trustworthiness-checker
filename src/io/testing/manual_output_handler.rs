@@ -300,6 +300,7 @@ mod tests {
                 Float(_) => 4,
                 Str(_) => 5,
                 List(_) => 6,
+                Map(_) => 7,
             };
 
             // First compare based on variant order
