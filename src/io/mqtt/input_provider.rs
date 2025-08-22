@@ -182,6 +182,18 @@ impl MQTTInputProvider {
                     )));
                 }
             };
+
+            // Handle wrapped format {"value": actual_value} from output handler
+            let value = match &value {
+                Value::Map(map) => {
+                    if let Some(actual_value) = map.get("value") {
+                        actual_value.clone()
+                    } else {
+                        value
+                    }
+                }
+                _ => value,
+            };
             if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
                 sender
                     .send(value)

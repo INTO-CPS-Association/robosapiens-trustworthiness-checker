@@ -691,12 +691,12 @@ async fn test_raw_wire_format_inspection(
 
     // Test values and their actual Redis wire format (Rust enum serialization)
     let test_cases = vec![
-        (Value::Int(123), "{\"Int\":123}"),
-        (Value::Float(45.67), "{\"Float\":45.67}"),
-        (Value::Str("test".into()), "{\"Str\":\"test\"}"),
-        (Value::Bool(true), "{\"Bool\":true}"),
-        (Value::Bool(false), "{\"Bool\":false}"),
-        (Value::Unit, "\"Unit\""),
+        (Value::Int(123), "123"),
+        (Value::Float(45.67), "45.67"),
+        (Value::Str("test".into()), "\"test\""),
+        (Value::Bool(true), "true"),
+        (Value::Bool(false), "false"),
+        (Value::Unit, "null"),
     ];
 
     for (value, expected_json) in test_cases {
@@ -755,17 +755,14 @@ async fn test_json_interoperability(executor: Rc<LocalExecutor<'static>>) -> any
 
     // Test cases: manually crafted enum format JSON and expected Value
     let json_test_cases = vec![
-        ("{\"Int\":42}", Value::Int(42)),
-        ("{\"Float\":3.14159}", Value::Float(3.14159)),
+        ("42", Value::Int(42)),
+        ("3.14159", Value::Float(3.14159)),
+        ("\"Hello, Redis!\"", Value::Str("Hello, Redis!".into())),
+        ("true", Value::Bool(true)),
+        ("false", Value::Bool(false)),
+        ("null", Value::Unit),
         (
-            "{\"Str\":\"Hello, Redis!\"}",
-            Value::Str("Hello, Redis!".into()),
-        ),
-        ("{\"Bool\":true}", Value::Bool(true)),
-        ("{\"Bool\":false}", Value::Bool(false)),
-        ("\"Unit\"", Value::Unit),
-        (
-            "{\"List\":[{\"Int\":1},{\"Str\":\"two\"},{\"Bool\":true},{\"Float\":4.5}]}",
+            "[1,\"two\",true,4.5]",
             Value::List(
                 vec![
                     Value::Int(1),
@@ -777,7 +774,7 @@ async fn test_json_interoperability(executor: Rc<LocalExecutor<'static>>) -> any
             ),
         ),
         (
-            "{\"List\":[{\"List\":[{\"Int\":1},{\"Int\":2}]},{\"List\":[{\"Str\":\"a\"},{\"Str\":\"b\"}]}]}",
+            "[[1,2],[\"a\",\"b\"]]",
             Value::List(
                 vec![
                     Value::List(vec![Value::Int(1), Value::Int(2)].into()),

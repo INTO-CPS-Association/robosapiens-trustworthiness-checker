@@ -46,9 +46,20 @@ pub async fn get_mqtt_outputs(
     return Box::pin(stream.map(|msg| {
         let binding = msg;
         let payload = binding.payload_str();
-        let res = serde_json::from_str(&payload).unwrap();
+        let res: Value = serde_json::from_str(&payload).unwrap();
         debug!(name:"Received message", ?res, topic=?binding.topic());
-        res
+
+        // Handle wrapped format {"value": actual_value} from output handler
+        match &res {
+            Value::Map(map) => {
+                if let Some(actual_value) = map.get("value") {
+                    actual_value.clone()
+                } else {
+                    res
+                }
+            }
+            _ => res,
+        }
     }));
 }
 
