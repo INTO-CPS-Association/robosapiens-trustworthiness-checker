@@ -148,7 +148,7 @@ impl TryFrom<JValue> for Value {
                 if num.is_i64() {
                     Ok(Value::Int(num.as_i64().unwrap()))
                 } else if num.is_u64() {
-                    Err(anyhow!("Number too large"))
+                    Err(anyhow!("u64 too large for Value::Int"))
                 } else {
                     // Guaranteed to be f64 at this point
                     Ok(Value::Float(num.as_f64().unwrap()))
