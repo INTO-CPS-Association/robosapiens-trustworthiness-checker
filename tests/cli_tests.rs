@@ -118,6 +118,7 @@ use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use smol::process::Command;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{os::unix::process::ExitStatusExt, path::Path};
@@ -1363,9 +1364,14 @@ async fn test_file_input_mqtt_output(executor: Rc<LocalExecutor>) {
         "Expected 3 output values, got {}",
         results.len()
     );
-    assert_eq!(results[0], Value::Int(3), "First result should be 3");
-    assert_eq!(results[1], Value::Int(7), "Second result should be 7");
-    assert_eq!(results[2], Value::Int(11), "Third result should be 11");
+    let wrap = |val: Value| Value::Map(BTreeMap::from([("value".into(), val)]));
+    assert_eq!(results[0], wrap(Value::Int(3)), "First result should be 3");
+    assert_eq!(results[1], wrap(Value::Int(7)), "Second result should be 7");
+    assert_eq!(
+        results[2],
+        wrap(Value::Int(11)),
+        "Third result should be 11"
+    );
 }
 
 #[apply(async_test)]
