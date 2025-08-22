@@ -324,8 +324,6 @@ impl LOLASpecification {
     // 3.5. We discussed whether this should be in statements, live in Context, etc. Might require
     //   a lot of thought.
     // 4. Profit - this hack is no longer needed and we have a more correct solution
-    //
-    // TODO: Fix hack to not clone every SExpr - take it by reference instead.
     fn fix_dynamic(
         input_vars: &Vec<VarName>,
         output_vars: &Vec<VarName>,
