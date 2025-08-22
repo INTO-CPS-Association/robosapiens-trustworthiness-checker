@@ -1,0 +1,93 @@
+in rawHuman
+out rForearmConstantLength
+out lForearmConstantLength
+
+aux human0
+aux humanId
+aux bodyParts
+
+aux head
+aux neck
+aux torso
+aux rShoulder
+aux rUpperArm
+aux rElbow
+aux rForearm
+aux rHand
+aux lShoulder
+aux lUpperArm
+aux lElbow
+aux lForearm
+aux lHand
+aux rHip
+aux rThigh
+aux rKnee
+aux rLowerLeg
+aux rFoot
+aux lHip
+aux lThigh
+aux lKnee
+aux lLowerLeg
+aux lFoot
+
+// Forearm aux
+aux forearmSymEps
+aux forearmSymmetry
+aux rForearmHeight
+aux rForearmHeightSmooth
+aux rForearmDiff
+aux rForearmDiffSmooth
+aux lForearmHeight
+aux lForearmHeightSmooth
+aux lForearmDiff
+aux lForearmDiffSmooth
+
+human0 = List.get(Map.get(rawHuman, "humans"), 0)
+humanId = Map.get(human0, "human_id")
+bodyParts = Map.get(human0, "body_parts")
+
+head = List.get(bodyParts, 0)
+neck = List.get(bodyParts, 1)
+torso = List.get(bodyParts, 2)
+rShoulder = List.get(bodyParts, 3)
+rUpperArm = List.get(bodyParts, 4)
+rElbow = List.get(bodyParts, 5)
+rForearm = List.get(bodyParts, 6)
+rHand = List.get(bodyParts, 7)
+lShoulder = List.get(bodyParts, 8)
+lUpperArm = List.get(bodyParts, 9)
+lElbow = List.get(bodyParts, 10)
+lForearm = List.get(bodyParts, 11)
+lHand = List.get(bodyParts, 12)
+rHip = List.get(bodyParts, 13)
+rThigh = List.get(bodyParts, 14)
+rKnee = List.get(bodyParts, 15)
+rLowerLeg = List.get(bodyParts, 16)
+rFoot = List.get(bodyParts, 17)
+lHip = List.get(bodyParts, 18)
+lThigh = List.get(bodyParts, 19)
+lKnee = List.get(bodyParts, 20)
+lLowerLeg = List.get(bodyParts, 21)
+lFoot = List.get(bodyParts, 22)
+
+// Forearm symmetry check
+forearmSymEps = 0.1
+rForearmHeight = Map.get(rForearm, "p_2")
+lForearmHeight = Map.get(lForearm, "p_2")
+forearmSymmetry = abs(rForearmHeight - lForearmHeight) < forearmSymEps
+
+// Smooth forearm height - averaged over 4 samples
+rForearmHeightSmooth = default(rForearmHeightSmooth[-1], 0.0) + (rForearmHeight - default(rForearmHeight[-4], 0.0)) / 4
+lForearmHeightSmooth = default(lForearmHeightSmooth[-1], 0.0) + (lForearmHeight - default(lForearmHeight[-4], 0.0)) / 4
+
+// Forearm constant bone length:
+rForearmDiff = default(rForearmHeight - rForearmHeight[-1], 0)
+rForearmDiffSmooth =  default(rForearmHeightSmooth - rForearmHeightSmooth[-1], 0)
+rForearmConstantLength = abs(rForearmDiff) < 0.1 && abs(rForearmDiffSmooth) < 0.1
+lForearmDiff = default(lForearmHeight - lForearmHeight[-1], 0)
+lForearmDiffSmooth =  default(lForearmHeightSmooth - lForearmHeightSmooth[-1], 0)
+lForearmConstantLength = abs(lForearmDiff) < 0.1 && abs(lForearmDiffSmooth) < 0.1
+
+// Next steps:
+// Max Velocity of arms
+// Allow changing the diff - with an absolute truth instead - refinement pattern
