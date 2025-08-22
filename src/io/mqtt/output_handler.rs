@@ -43,7 +43,10 @@ async fn publish_stream(
     client: mqtt::AsyncClient,
 ) {
     while let Some(data) = stream.next().await {
-        let data = serde_json::to_string(&data).unwrap();
+        let json_str = serde_json5::to_string(&data).unwrap();
+        // Wrap it in e.g., "{value: 42}" because some MQTT clients don't like to receive the
+        // raw JSON primitives such as "42"...
+        let data = format!(r#"{{"value": {}}}"#, json_str);
         let message = mqtt::Message::new(topic_name.clone(), data, 1);
         loop {
             debug!(

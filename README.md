@@ -7,14 +7,12 @@ cargo run -- examples/simple_add.lola --input-mqtt-topics x y --output-mqtt-topi
 ```
 In MQTT Explorer or similar, send the following message on the topic "x" followed by sending the same message on the topic "y":
 ```json
-{
-    "Int": 42
-}
+42
 ```
 The following result should be visible on the "z" topic:
 ```json
 {
-    "Int": 84
+    "value": 84
 }
 ```
 
