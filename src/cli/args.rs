@@ -50,9 +50,6 @@ pub struct InputMode {
     #[clap(long, value_delimiter = ' ', num_args = 1.., help = "List of MQTT topics to subscribe to for input")]
     pub input_mqtt_topics: Option<Vec<String>>,
 
-    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "List of MQTT topics with custom variable mapping for input")]
-    pub input_map_mqtt_topics: Option<Vec<String>>,
-
     #[clap(long, help = "Enable generic MQTT input mode")]
     pub mqtt_input: bool,
 

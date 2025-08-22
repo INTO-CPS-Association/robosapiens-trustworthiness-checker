@@ -26,11 +26,6 @@ pub enum InputProviderSpec {
         /// Topics
         Option<Vec<String>>,
     ),
-    /// MQTT distributed input provider with data handling
-    MQTTMap(
-        /// Topics
-        Option<Vec<String>>,
-    ),
 }
 
 #[derive(Clone)]
@@ -65,10 +60,6 @@ impl InputProviderBuilder {
 
     pub fn mqtt(topics: Option<Vec<String>>) -> Self {
         Self::new(InputProviderSpec::MQTT(topics))
-    }
-
-    pub fn mqtt_map(topics: Option<Vec<String>>) -> Self {
-        Self::new(InputProviderSpec::MQTTMap(topics))
     }
 
     pub fn redis(topics: Option<Vec<String>>) -> Self {
@@ -161,31 +152,6 @@ impl InputProviderBuilder {
                         }
                     })
                     .await;
-                Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
-            }
-            InputProviderSpec::MQTTMap(topics) => {
-                let var_topics = match topics {
-                    Some(topics) => topics
-                        .into_iter()
-                        .map(|topic| (VarName::new(topic.as_str()), topic))
-                        .collect(),
-                    None => self
-                        .input_vars
-                        .unwrap()
-                        .into_iter()
-                        .map(|topic| (topic.clone(), format!("{}", topic)))
-                        .collect(),
-                };
-                let mqtt_input_provider = tc::io::mqtt::MapMQTTInputProvider::new(
-                    self.executor.unwrap().clone(),
-                    MQTT_HOSTNAME,
-                    var_topics,
-                )
-                .expect("MQTT input provider could not be created");
-                mqtt_input_provider
-                    .ready()
-                    .await
-                    .expect("MQTT input provider failed to start");
                 Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::Redis(topics) => {

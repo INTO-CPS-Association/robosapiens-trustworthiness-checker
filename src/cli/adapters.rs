@@ -33,10 +33,6 @@ impl From<InputMode> for InputProviderSpec {
                 ..
             } => InputProviderSpec::Redis(Some(input_redis_topics)),
             InputMode {
-                input_map_mqtt_topics: Some(input_map_mqtt_topics),
-                ..
-            } => InputProviderSpec::MQTTMap(Some(input_map_mqtt_topics)),
-            InputMode {
                 mqtt_input: true, ..
             } => InputProviderSpec::MQTT(None),
             InputMode {
