@@ -1,7 +1,7 @@
 use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dynamic_lola::ast::{SExpr, SStmt, SBinOp, NumericalBinOp, CompBinOp};
+use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp};
 use crate::core::{Value, VarName, StreamType};
 
 grammar;
@@ -143,28 +143,28 @@ pub Expr: SExpr = {
     CompExpr,
 };
 
-InputDecl: SStmt = {
-    "in " <id: Ident> <typ: TypeAnno?> => SStmt::Input(id, typ)
+InputDecl: STopDecl = {
+    "in " <id: Ident> <typ: TypeAnno?> => STopDecl::Input(id, typ)
 };
 
-OutputDecl: SStmt = {
-    "out " <id: Ident> <typ: TypeAnno?> => SStmt::Output(id, typ),
+OutputDecl: STopDecl = {
+    "out " <id: Ident> <typ: TypeAnno?> => STopDecl::Output(id, typ),
 };
 
-AuxDecl: SStmt = {
-    "aux " <id: Ident> <typ: TypeAnno?> => SStmt::Aux(id, typ),
+AuxDecl: STopDecl = {
+    "aux " <id: Ident> <typ: TypeAnno?> => STopDecl::Aux(id, typ),
 };
 
-Assignment: SStmt  = {
-    <var: Ident> "=" <expr: Expr> => SStmt::Assignment(var, expr)
+Assignment: STopDecl = {
+    <var: Ident> "=" <expr: Expr> => STopDecl::Assignment(var, expr)
 }
 
-pub Stmt: SStmt = {
+pub TopDecl: STopDecl = {
     InputDecl,
     OutputDecl,
     Assignment
 }
 
-pub Stmts: EcoVec<SStmt> = {
-   Stmt* => <>.into()
+pub TopDecls: EcoVec<STopDecl> = {
+   TopDecl* => <>.into()
 }

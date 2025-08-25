@@ -4,8 +4,8 @@ use anyhow::{Error, anyhow};
 use ecow::EcoVec;
 use tracing::warn;
 
-use super::lalr::{ExprParser, StmtParser, StmtsParser};
-use crate::{LOLASpecification, SExpr, lang::dynamic_lola::ast::SStmt};
+use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
+use crate::{LOLASpecification, SExpr, lang::dynamic_lola::ast::STopDecl};
 
 pub fn parse_sexpr<'input>(input: &'input str) -> Result<SExpr, Error> {
     ExprParser::new()
@@ -13,19 +13,19 @@ pub fn parse_sexpr<'input>(input: &'input str) -> Result<SExpr, Error> {
         .map_err(|e| anyhow!("Parse error: {:?}", e))
 }
 
-pub fn parse_sstmt<'input>(input: &'input str) -> Result<SStmt, Error> {
-    StmtParser::new()
+pub fn parse_stopdecl<'input>(input: &'input str) -> Result<STopDecl, Error> {
+    TopDeclParser::new()
         .parse(input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))
 }
 
-pub fn parse_sstmts<'input>(input: &'input str) -> Result<EcoVec<SStmt>, Error> {
-    StmtsParser::new()
+pub fn parse_stopdecls<'input>(input: &'input str) -> Result<EcoVec<STopDecl>, Error> {
+    TopDeclsParser::new()
         .parse(input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))
 }
 
-pub fn create_lola_spec(stmts: &EcoVec<SStmt>) -> LOLASpecification {
+pub fn create_lola_spec(stmts: &EcoVec<STopDecl>) -> LOLASpecification {
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     let mut aux_info = Vec::new();
@@ -34,26 +34,26 @@ pub fn create_lola_spec(stmts: &EcoVec<SStmt>) -> LOLASpecification {
 
     for stmt in stmts {
         match stmt {
-            SStmt::Input(var, typ) => {
+            STopDecl::Input(var, typ) => {
                 inputs.push(var.clone());
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ.clone());
                 }
             }
-            SStmt::Output(var, typ) => {
+            STopDecl::Output(var, typ) => {
                 outputs.push(var.clone());
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ.clone());
                 }
             }
-            SStmt::Aux(var, typ) => {
+            STopDecl::Aux(var, typ) => {
                 outputs.push(var.clone());
                 aux_info.push(var.clone());
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ.clone());
                 }
             }
-            SStmt::Assignment(var, sexpr) => {
+            STopDecl::Assignment(var, sexpr) => {
                 assignments.insert(var.clone(), sexpr.clone());
             }
         }
@@ -69,7 +69,7 @@ pub fn create_lola_spec(stmts: &EcoVec<SStmt>) -> LOLASpecification {
 }
 
 pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<LOLASpecification> {
-    let stmts = StmtsParser::new().parse(&input).map_err(|e| {
+    let stmts = TopDeclsParser::new().parse(&input).map_err(|e| {
         anyhow::anyhow!(e.to_string()).context(format!("Failed to parse input {}", input))
     })?;
     Ok(create_lola_spec(&stmts))
@@ -80,7 +80,7 @@ pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<LOLASpecifica
         "Use of LALR parser is incomplete, experimental and currently hardcoded for DynSRV specifications"
     );
     let contents = smol::fs::read_to_string(file).await?;
-    let stmts = StmtsParser::new().parse(&contents).map_err(|e| {
+    let stmts = TopDeclsParser::new().parse(&contents).map_err(|e| {
         anyhow::anyhow!(e.to_string()).context(format!("Failed to parse file {}", file))
     })?;
     Ok(create_lola_spec(&stmts))
@@ -172,33 +172,33 @@ mod tests {
 
     #[test]
     fn test_input_decl() {
-        let parsed = parse_sstmt("in x");
+        let parsed = parse_stopdecl("in x");
         let exp = "Ok(Input(VarName::new(\"x\"), None))";
         assert_eq!(presult_to_string(&parsed), exp);
     }
 
     #[test]
     fn test_typed_input_decl() {
-        let parsed = parse_sstmt("in x: Int");
+        let parsed = parse_stopdecl("in x: Int");
         let exp = "Ok(Input(VarName::new(\"x\"), Some(Int)))";
         assert_eq!(presult_to_string(&parsed), exp);
 
-        let parsed = parse_sstmt("in x: Float");
+        let parsed = parse_stopdecl("in x: Float");
         let exp = "Ok(Input(VarName::new(\"x\"), Some(Float)))";
         assert_eq!(presult_to_string(&parsed), exp);
     }
 
     #[test]
     fn test_input_decls() {
-        let parsed = parse_sstmts("");
+        let parsed = parse_stopdecls("");
         let exp = "Ok([])";
         assert_eq!(presult_to_string(&parsed), exp);
 
-        let parsed = parse_sstmts("in x");
+        let parsed = parse_stopdecls("in x");
         let exp = r#"Ok([Input(VarName::new("x"), None)])"#;
         assert_eq!(presult_to_string(&parsed), exp);
 
-        let parsed = parse_sstmts("in x\nin y");
+        let parsed = parse_stopdecls("in x\nin y");
         let exp = r#"Ok([Input(VarName::new("x"), None), Input(VarName::new("y"), None)])"#;
         assert_eq!(presult_to_string(&parsed), exp);
     }

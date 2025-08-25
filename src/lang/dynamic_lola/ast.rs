@@ -209,7 +209,7 @@ pub enum SExpr {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum SStmt {
+pub enum STopDecl {
     Input(VarName, Option<StreamType>),
     Output(VarName, Option<StreamType>),
     Aux(VarName, Option<StreamType>),
