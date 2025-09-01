@@ -138,8 +138,14 @@ TypeAnno: StreamType = {
     ": " <StreamTyp> => <>
 }
 
+Dynamic: SExpr = {
+    "dynamic" "(" <e: Expr> ")" => SExpr::Dynamic(Box::new(e)),
+    "eval" "(" <e: Expr> ")" => SExpr::Dynamic(Box::new(e)),
+}
+
 pub Expr: SExpr = {
     Ifelse,
+    Dynamic,
     CompExpr,
 };
 
@@ -152,7 +158,8 @@ OutputDecl: STopDecl = {
 };
 
 AuxDecl: STopDecl = {
-    "aux " <id: Ident> <typ: TypeAnno?> => STopDecl::Aux(id, typ),
+    "aux" <id: Ident> <typ: TypeAnno?> => STopDecl::Aux(id, typ),
+    "var" <id: Ident> <typ: TypeAnno?> => STopDecl::Aux(id, typ),
 };
 
 Assignment: STopDecl = {
@@ -162,6 +169,7 @@ Assignment: STopDecl = {
 pub TopDecl: STopDecl = {
     InputDecl,
     OutputDecl,
+    AuxDecl,
     Assignment
 }
 

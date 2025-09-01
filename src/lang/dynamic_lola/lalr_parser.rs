@@ -59,13 +59,7 @@ pub fn create_lola_spec(stmts: &EcoVec<STopDecl>) -> LOLASpecification {
         }
     }
 
-    LOLASpecification {
-        input_vars: inputs,
-        output_vars: outputs,
-        exprs: assignments,
-        type_annotations,
-        aux_info,
-    }
+    LOLASpecification::new(inputs, outputs, assignments, type_annotations, aux_info)
 }
 
 pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<LOLASpecification> {
@@ -278,5 +272,63 @@ mod tests {
         assert!(spec.is_ok());
         let spec = spec.unwrap();
         assert_eq!(spec, simple_add_spec);
+    }
+
+    #[test]
+    fn test_parse_lola_count() {
+        let input = "\
+            out x\n\
+            x = 1 + (x)[-1]";
+        let count_spec = LOLASpecification {
+            input_vars: vec![],
+            output_vars: vec!["x".into()],
+            aux_info: vec![],
+            exprs: BTreeMap::from([(
+                "x".into(),
+                SExpr::BinOp(
+                    Box::new(SExpr::Val(1.into())),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                ),
+            )]),
+            type_annotations: BTreeMap::new(),
+        };
+        let spec = parse_str(input);
+        assert!(spec.is_ok());
+        let spec = spec.unwrap();
+        assert_eq!(spec, count_spec);
+    }
+
+    #[test]
+    fn test_parse_lola_dynamic() {
+        let input = "\
+            in x\n\
+            in y\n\
+            in s\n\
+            out z\n\
+            out w\n\
+            z = x + y\n\
+            w = dynamic(s)";
+        let dynamic_spec = LOLASpecification::new(
+            vec!["x".into(), "y".into(), "s".into()],
+            vec!["z".into(), "w".into()],
+            BTreeMap::from([
+                (
+                    "z".into(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var("x".into())),
+                        Box::new(SExpr::Var("y".into())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                ),
+                ("w".into(), SExpr::Dynamic(Box::new(SExpr::Var("s".into())))),
+            ]),
+            BTreeMap::new(),
+            vec![],
+        );
+        let spec = parse_str(input);
+        assert!(spec.is_ok());
+        let spec = spec.unwrap();
+        assert_eq!(spec, dynamic_spec);
     }
 }
