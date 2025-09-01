@@ -18,8 +18,8 @@ match {
 }
 
 Ident: VarName = <s:r"[a-z_]\w*"> => VarName::from(s);
-Int: i64 = <s:r"-?[0-9]+"> => i64::from_str(s).unwrap();
-Float: f64 = <s:r"-?(?:0|[1-9][0-9]*)\.[0-9]*(?:[eE]-?[0-9]+)?"> => f64::from_str(s).unwrap();
+Int: i64 = <s:r"[0-9]+"> => i64::from_str(s).unwrap();
+Float: f64 = <s:r"(?:0|[1-9][0-9]*)\.[0-9]*(?:[eE]-?[0-9]+)?"> => f64::from_str(s).unwrap();
 Bool: bool = {
     "true" => true,
     "false" => false
@@ -61,7 +61,7 @@ MultExpr: SExpr = {
     <lhs: Box<MultExpr>> <op: MultExprHelp> <rhs: Box<Atom>> => {
         SExpr::BinOp(lhs, rhs, op)
     },
-    Atom
+    UnaryExpr
 };
 
 AddExprHelp: SBinOp  = {
@@ -95,9 +95,23 @@ SIndexHelp: Box<SExpr> = {
 };
 
 SIndex: SExpr = {
-    <expr: SIndexHelp> "[" <idx: Int> "]" => {
-        SExpr::SIndex(expr, idx.try_into().unwrap())
+    <expr: SIndexHelp> "[" <neg: "-"?> <idx: Int> "]" => {
+        let i: isize = idx.try_into().unwrap();
+        let i = if neg.is_some() { -i } else { i };
+        SExpr::SIndex(expr, i)
     },
+};
+
+UnaryMinusHelper: SExpr = {
+    <n: Int> => SExpr::Val(Value::Int(-n)),
+    <n: Float> => SExpr::Val(Value::Float(-n)),
+    <x: IdentSExpr> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), Box::new(x), SBinOp::NOp(NumericalBinOp::Sub)),
+    <x: Paren> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), Box::new(x), SBinOp::NOp(NumericalBinOp::Sub)),
+};
+
+UnaryExpr: SExpr = {
+    "-" <n: UnaryMinusHelper> => n,
+    Atom
 };
 
 LiteralVal: Value = {

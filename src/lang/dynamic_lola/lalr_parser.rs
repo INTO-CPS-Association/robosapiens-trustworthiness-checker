@@ -331,4 +331,65 @@ mod tests {
         let spec = spec.unwrap();
         assert_eq!(spec, dynamic_spec);
     }
+
+    #[test]
+    fn test_unary() {
+        assert_eq!(presult_to_string(&parse_sexpr("-1")), "Ok(Val(Int(-1)))");
+        assert_eq!(
+            presult_to_string(&parse_sexpr("-1.0")),
+            "Ok(Val(Float(-1.0)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("-x")),
+            r#"Ok(BinOp(Val(Int(0)), Var(VarName::new("x")), NOp(Sub)))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("-(1+2)")),
+            "Ok(BinOp(Val(Int(0)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), NOp(Sub)))"
+        );
+    }
+
+    #[test]
+    fn test_float_exprs() {
+        // Add
+        assert_eq!(
+            presult_to_string(&parse_sexpr("0.0")),
+            "Ok(Val(Float(0.0)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("-1.0")),
+            "Ok(Val(Float(-1.0)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1.0 +2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 1.0  + 2.0 +3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
+        );
+        // Sub
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1.0 -2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 1.0  - 2.0 -3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
+        );
+        // Mul
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1.0 *2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 1.0  * 2.0 *3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
+        );
+        // Div
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1.0 /2.0  ")),
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Div)))"
+        );
+    }
 }

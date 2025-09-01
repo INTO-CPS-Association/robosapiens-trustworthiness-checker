@@ -153,7 +153,7 @@ pub enum SExpr {
         // Inner SExpr e
         Box<Self>,
         // Index i
-        isize,
+        isize, // TODO: Change to i64 to be the same as Value::Int...
     ),
 
     // Arithmetic Stream expression

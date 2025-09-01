@@ -1168,6 +1168,18 @@ mod tests {
     }
 
     #[test]
+    fn test_unary() {
+        assert_eq!(presult_to_string(&sexpr(&mut "-1")), "Ok(Val(Int(-1)))");
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "-1.0")),
+            "Ok(Val(Float(-1.0)))"
+        );
+        // TODO: These currently fail
+        // assert_eq!(presult_to_string(&sexpr(&mut "-x")), "");
+        // assert_eq!(presult_to_string(&sexpr(&mut "-(1+2)")), "");
+    }
+
+    #[test]
     fn test_float_exprs() {
         // Add
         assert_eq!(presult_to_string(&sexpr(&mut "0.0")), "Ok(Val(Float(0.0)))");
