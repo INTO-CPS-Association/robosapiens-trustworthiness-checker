@@ -1,0 +1,6 @@
+{
+    "rawHuman": {
+        "topic": "/human_list",
+        "msg_type": "HumanList"
+    }
+}
