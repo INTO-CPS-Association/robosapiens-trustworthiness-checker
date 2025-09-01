@@ -1,10 +1,20 @@
 in rawHuman
-out rForearmConstantLength
-out lForearmConstantLength
+out rForearmVelX
+out rForearmVelY
+out rForearmVelZ
+out rForearmRealisticVel
+out hasHumansCp
 
+out DSUAllowed
+
+aux humans
+aux hasHumans
+aux hasHumansPrev4
 aux human0
 aux humanId
 aux bodyParts
+aux time
+aux dt
 
 aux head
 aux neck
@@ -41,52 +51,78 @@ aux lForearmHeight
 aux lForearmHeightSmooth
 aux lForearmDiff
 aux lForearmDiffSmooth
+aux lForearmDiffSmooth
+aux rForearmConstantLength
+aux lForearmConstantLength
 
-human0 = List.get(Map.get(rawHuman, "humans"), 0)
-humanId = Map.get(human0, "human_id")
-bodyParts = Map.get(human0, "body_parts")
+// Forarm velocity
+aux rForearmX
+aux rForearmY
+aux rForearmZ
 
-head = List.get(bodyParts, 0)
-neck = List.get(bodyParts, 1)
-torso = List.get(bodyParts, 2)
-rShoulder = List.get(bodyParts, 3)
-rUpperArm = List.get(bodyParts, 4)
-rElbow = List.get(bodyParts, 5)
-rForearm = List.get(bodyParts, 6)
-rHand = List.get(bodyParts, 7)
-lShoulder = List.get(bodyParts, 8)
-lUpperArm = List.get(bodyParts, 9)
-lElbow = List.get(bodyParts, 10)
-lForearm = List.get(bodyParts, 11)
-lHand = List.get(bodyParts, 12)
-rHip = List.get(bodyParts, 13)
-rThigh = List.get(bodyParts, 14)
-rKnee = List.get(bodyParts, 15)
-rLowerLeg = List.get(bodyParts, 16)
-rFoot = List.get(bodyParts, 17)
-lHip = List.get(bodyParts, 18)
-lThigh = List.get(bodyParts, 19)
-lKnee = List.get(bodyParts, 20)
-lLowerLeg = List.get(bodyParts, 21)
-lFoot = List.get(bodyParts, 22)
+humans = Map.get(rawHuman, "humans")
+hasHumans = List.len(humans) > 0
+hasHumansPrev4 = update(false, hasHumans[-1]) && update(false, hasHumans[-2]) && update(false, hasHumans[-3]) && update(false, hasHumans[-4])
+human0 = if hasHumans then List.get(humans, 0) else Map()
+humanId = if hasHumans then Map.get(human0, "human_id") else -1
+bodyParts = if hasHumans then Map.get(human0, "body_parts") else List()
+time = Map.get(rawHuman, "time")
+dt = time - time[-1]
+
+head = if hasHumans then List.get(bodyParts, 0) else Map()
+neck = if hasHumans then List.get(bodyParts, 1) else Map()
+torso = if hasHumans then List.get(bodyParts, 2) else Map()
+rShoulder = if hasHumans then List.get(bodyParts, 3) else Map()
+rUpperArm = if hasHumans then List.get(bodyParts, 4) else Map()
+rElbow = if hasHumans then List.get(bodyParts, 5) else Map()
+rForearm = if hasHumans then List.get(bodyParts, 6) else Map()
+rHand = if hasHumans then List.get(bodyParts, 7) else Map()
+lShoulder = if hasHumans then List.get(bodyParts, 8) else Map()
+lUpperArm = if hasHumans then List.get(bodyParts, 9) else Map()
+lElbow = if hasHumans then List.get(bodyParts, 10) else Map()
+lForearm = if hasHumans then List.get(bodyParts, 11) else Map()
+lHand = if hasHumans then List.get(bodyParts, 12) else Map()
+rHip = if hasHumans then List.get(bodyParts, 13) else Map()
+rThigh = if hasHumans then List.get(bodyParts, 14) else Map()
+rKnee = if hasHumans then List.get(bodyParts, 15) else Map()
+rLowerLeg = if hasHumans then List.get(bodyParts, 16) else Map()
+rFoot = if hasHumans then List.get(bodyParts, 17) else Map()
+lHip = if hasHumans then List.get(bodyParts, 18) else Map()
+lThigh = if hasHumans then List.get(bodyParts, 19) else Map()
+lKnee = if hasHumans then List.get(bodyParts, 20) else Map()
+lLowerLeg = if hasHumans then List.get(bodyParts, 21) else Map()
+lFoot = if hasHumans then List.get(bodyParts, 22) else Map()
 
 // Forearm symmetry check
 forearmSymEps = 0.1
-rForearmHeight = Map.get(rForearm, "p_2")
-lForearmHeight = Map.get(lForearm, "p_2")
-forearmSymmetry = abs(rForearmHeight - lForearmHeight) < forearmSymEps
+rForearmHeight = if hasHumans then Map.get(rForearm, "p_2") else -1.0
+lForearmHeight = if hasHumans then Map.get(lForearm, "p_2") else -1
+forearmSymmetry = if hasHumans then abs(rForearmHeight - lForearmHeight) < forearmSymEps else true
 
 // Smooth forearm height - averaged over 4 samples
-rForearmHeightSmooth = default(rForearmHeightSmooth[-1], 0.0) + (rForearmHeight - default(rForearmHeight[-4], 0.0)) / 4
-lForearmHeightSmooth = default(lForearmHeightSmooth[-1], 0.0) + (lForearmHeight - default(lForearmHeight[-4], 0.0)) / 4
+rForearmHeightSmooth = if hasHumansPrev4 then update(0.0, rForearmHeightSmooth[-1]) + (rForearmHeight - update(0.0, rForearmHeight[-4])) / 4 else update(0.0, rForearmHeightSmooth[-1])
+lForearmHeightSmooth = if hasHumansPrev4 then update(0.0, lForearmHeightSmooth[-1]) + (lForearmHeight - update(0.0, lForearmHeight[-4])) / 4 else update(0.0, lForearmHeightSmooth[-1])
 
 // Forearm constant bone length:
-rForearmDiff = default(rForearmHeight - rForearmHeight[-1], 0)
-rForearmDiffSmooth =  default(rForearmHeightSmooth - rForearmHeightSmooth[-1], 0)
+rForearmDiff = if hasHumans then update(0.0, rForearmHeight - rForearmHeight[-1]) else update(0.0, rForearmDiff[-1])
+rForearmDiffSmooth = if hasHumans then update(0.0, rForearmHeightSmooth - rForearmHeightSmooth[-1]) else update(0.0, rForearmDiffSmooth[-1])
 rForearmConstantLength = abs(rForearmDiff) < 0.1 && abs(rForearmDiffSmooth) < 0.1
-lForearmDiff = default(lForearmHeight - lForearmHeight[-1], 0)
-lForearmDiffSmooth =  default(lForearmHeightSmooth - lForearmHeightSmooth[-1], 0)
+lForearmDiff = if hasHumans then update(0.0, lForearmHeight - lForearmHeight[-1]) else update(0.0, lForearmDiff[-1])
+lForearmDiffSmooth = if hasHumans then update(0.0, lForearmHeightSmooth - lForearmHeightSmooth[-1]) else update(0.0, lForearmDiffSmooth[-1])
 lForearmConstantLength = abs(lForearmDiff) < 0.1 && abs(lForearmDiffSmooth) < 0.1
+
+// Forearm Velocity:
+rForearmX = if hasHumans then Map.get(rForearm, "x") else update(0.0, rForearmX[-1])
+rForearmY = if hasHumans then Map.get(rForearm, "y") else update(0.0, rForearmY[-1])
+rForearmZ = if hasHumans then Map.get(rForearm, "z") else update(0.0, rForearmZ[-1])
+rForearmVelX = update(0.0, (rForearmX - rForearmX[-1]) / dt)
+rForearmVelY = update(0.0, (rForearmY - rForearmY[-1]) / dt)
+rForearmVelZ = update(0.0, (rForearmZ - rForearmZ[-1]) / dt)
+rForearmRealisticVel = abs(rForearmVelX) < 0.01 && abs(rForearmVelY) < 0.01 && abs(rForearmVelZ) < 0.01
+
+DSUAllowed = !hasHumans
+
+hasHumansCp = hasHumans
 
 // Next steps:
 // Max Velocity of arms
