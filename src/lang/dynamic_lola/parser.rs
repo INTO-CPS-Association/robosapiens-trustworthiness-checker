@@ -1420,6 +1420,13 @@ mod tests {
             presult_to_string(&sexpr(&mut "x[1] * (y + 3)")),
             r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)))"#
         );
+        // Case to test precedence of if-then-else with arithmetic
+        // Most languages implement this as "if a then b else (c + d)" and so should we.
+        // Programmers can write "(if a then b else c) + d" if they want the other behavior.
+        assert_eq!(
+            presult_to_string(&sexpr(&mut "if a then b else c + d")),
+            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
+        );
         // Complex expression with nested if-then-else and mixed operations
         assert_eq!(
             presult_to_string(&sexpr(&mut "(1 + x) * if y then 3 else z / 2")),

@@ -58,7 +58,7 @@ MultExprHelp: SBinOp  = {
 };
 
 MultExpr: SExpr = {
-    <lhs: Box<MultExpr>> <op: MultExprHelp> <rhs: Box<Atom>> => {
+    <lhs: Box<MultExpr>> <op: MultExprHelp> <rhs: Box<UnaryExpr>> => {
         SExpr::BinOp(lhs, rhs, op)
     },
     UnaryExpr
@@ -131,6 +131,7 @@ Paren: SExpr = {
 
 Atom: SExpr = {
     SIndex,
+    Dynamic,
     Literal,
     IdentSExpr,
     Paren
@@ -158,8 +159,7 @@ Dynamic: SExpr = {
 }
 
 pub Expr: SExpr = {
-    Ifelse,
-    Dynamic,
+    Ifelse, // If-else binds weaker than the Expr chain to ensure that if a then b else c + d is parsed as if a then b else (c + d)
     CompExpr,
 };
 

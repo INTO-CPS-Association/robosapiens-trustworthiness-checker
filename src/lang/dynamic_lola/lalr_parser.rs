@@ -392,4 +392,248 @@ mod tests {
             "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Div)))"
         );
     }
+
+    #[test]
+    fn test_mixed_float_int_exprs() {
+        // Add
+        assert_eq!(
+            presult_to_string(&parse_sexpr("0.0 + 2")),
+            "Ok(BinOp(Val(Float(0.0)), Val(Int(2)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 + 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1.0 + 2 + 3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
+        );
+        // Sub
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 - 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Sub)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1.0 - 2 - 3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
+        );
+        // Mul
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 * 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Mul)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1.0 * 2 * 3.0")),
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
+        );
+        // Div
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 / 2.0")),
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Div)))"
+        );
+    }
+
+    #[test]
+    fn test_integer_exprs() {
+        // Add
+        assert_eq!(presult_to_string(&parse_sexpr("0")), "Ok(Val(Int(0)))");
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1 +2  ")),
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 1  + 2 +3")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Add)))"
+        );
+        // Sub
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1 -2  ")),
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 1  - 2 -3")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)), Val(Int(3)), NOp(Sub)))"
+        );
+        // Mul
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1 *2  ")),
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 1  * 2 *3")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Mul)))"
+        );
+        // Div
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  1 /2  ")),
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 1  / 2 /3")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)), Val(Int(3)), NOp(Div)))"
+        );
+        // Var
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  x  ")),
+            r#"Ok(Var(VarName::new("x")))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  xsss ")),
+            r#"Ok(Var(VarName::new("xsss")))"#
+        );
+        // Time index
+        assert_eq!(
+            presult_to_string(&parse_sexpr("x [-1]")),
+            r#"Ok(SIndex(Var(VarName::new("x")), -1))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("x[1 ]")),
+            r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
+        );
+        // Paren
+        assert_eq!(
+            presult_to_string(&parse_sexpr("  (1)  ")),
+            "Ok(Val(Int(1)))"
+        );
+        // Don't care about order of eval; care about what the AST looks like
+        assert_eq!(
+            presult_to_string(&parse_sexpr(" 2 + (2 + 3)")),
+            "Ok(BinOp(Val(Int(2)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Add)), NOp(Add)))"
+        );
+        // If then else
+        assert_eq!(
+            presult_to_string(&parse_sexpr("if true then 1 else 2")),
+            "Ok(If(Val(Bool(true)), Val(Int(1)), Val(Int(2))))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("if true then x+x else y+y")),
+            r#"Ok(If(Val(Bool(true)), BinOp(Var(VarName::new("x")), Var(VarName::new("x")), NOp(Add)), BinOp(Var(VarName::new("y")), Var(VarName::new("y")), NOp(Add))))"#
+        );
+
+        // ChatGPT generated tests with mixed arithmetic and parentheses iexprs. It only had knowledge of the tests above.
+        // Basic mixed addition and multiplication
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 + 2 * 3")),
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 * 2 + 3")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)))"
+        );
+        // Mixed addition, subtraction, and multiplication
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 + 2 * 3 - 4")),
+            "Ok(BinOp(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 * 2 + 3 - 4")),
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
+        );
+        // Mixed addition and division
+        assert_eq!(
+            presult_to_string(&parse_sexpr("10 + 20 / 5")),
+            "Ok(BinOp(Val(Int(10)), BinOp(Val(Int(20)), Val(Int(5)), NOp(Div)), NOp(Add)))"
+        );
+        // Nested parentheses with mixed operations
+        assert_eq!(
+            presult_to_string(&parse_sexpr("(1 + 2) * (3 - 4)")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Sub)), NOp(Mul)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 + (2 * (3 + 4))")),
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)), NOp(Add)))"
+        );
+        // Complex nested expressions
+        assert_eq!(
+            presult_to_string(&parse_sexpr("((1 + 2) * 3) + (4 / (5 - 6))")),
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Mul)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("(1 + (2 * (3 - (4 / 5))))")),
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), Val(Int(5)), NOp(Div)), NOp(Sub)), NOp(Mul)), NOp(Add)))"
+        );
+        // More complex expressions with deep nesting
+        assert_eq!(
+            presult_to_string(&parse_sexpr("((1 + 2) * (3 + 4))")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("((1 * 2) + (3 * 4)) / 5")),
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul)), NOp(Add)), Val(Int(5)), NOp(Div)))"
+        );
+        // Multiple levels of nested expressions
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 + (2 * (3 + (4 / (5 - 6))))")),
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)), NOp(Mul)), NOp(Add)))"
+        );
+
+        // ChatGPT generated tests with mixed iexprs. It only had knowledge of the tests above.
+        // Mixing addition, subtraction, and variables
+        assert_eq!(
+            presult_to_string(&parse_sexpr("x + 2 - y")),
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Val(Int(2)), NOp(Add)), Var(VarName::new("y")), NOp(Sub)))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("(x + y) * 3")),
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), NOp(Add)), Val(Int(3)), NOp(Mul)))"#
+        );
+        // Nested arithmetic with variables and parentheses
+        assert_eq!(
+            presult_to_string(&parse_sexpr("(a + b) / (c - d)")),
+            r#"Ok(BinOp(BinOp(Var(VarName::new("a")), Var(VarName::new("b")), NOp(Add)), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Sub)), NOp(Div)))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("x * (y + 3) - z / 2")),
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)), BinOp(Var(VarName::new("z")), Val(Int(2)), NOp(Div)), NOp(Sub)))"#
+        );
+        // If-then-else with mixed arithmetic
+        assert_eq!(
+            presult_to_string(&parse_sexpr("if true then 1 + 2 else 3 * 4")),
+            "Ok(If(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul))))"
+        );
+        // Time index in arithmetic expression
+        assert_eq!(
+            presult_to_string(&parse_sexpr("x[0] + y[-1]")),
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), -1), NOp(Add)))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("x[1] * (y + 3)")),
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)))"#
+        );
+        // Case to test precedence of if-then-else with arithmetic
+        // Most languages implement this as "if a then b else (c + d)" and so should we.
+        // Programmers can write "(if a then b else c) + d" if they want the other behavior.
+        assert_eq!(
+            presult_to_string(&parse_sexpr("if a then b else c + d")),
+            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
+        );
+    }
+
+    // NOTE: I have not been able to find a way to parse this expression. Starting to believe it is not possible with LALR(1).
+    // The issue is: We don't have any identifiers determining when the else branch ends.
+    // So if we want "if a then b else c + d" to be (c + d), it must be implemented with if
+    // expressions having lower precedence than arithmetic.
+    // But then we can't parse "1 + if a then b else c" because we cannot the if-statement comes
+    // earlier in the precedence chain...
+    //
+    // Note that I haven't found any other parsers using LALRPop that was able to resolve this.
+    // One of the most advanced are:
+    // https://github.com/Storyyeller/cubiml-demo/tree/master?tab=readme-ov-file
+    // and it has the same issue...
+    // See also: https://github.com/lalrpop/lalrpop/issues/1022 and
+    // https://github.com/lalrpop/lalrpop/issues/705 for analogous issues
+    //
+    // (OCaml has syntax similar to ours, and the only way they can support this type of grammar is by
+    // using %prec macros. They use the #prec macro to make a special case.)
+    //
+    // The user can wrap the if-statement in parentheses to get around this.
+    // We should probably change our syntax to be easier to support
+    #[ignore]
+    #[test]
+    fn test_ambiguous_case() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 + if a then b else c")),
+            r#""#
+        );
+    }
 }
