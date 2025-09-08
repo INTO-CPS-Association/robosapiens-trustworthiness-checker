@@ -980,7 +980,7 @@ mod tests {
     fn test_parse_lindex() {
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.get(List(1, 2), 42)"#)),
-            r#"Ok(LIndex(Val(List([Int(1), Int(2)])), Val(Int(42))))"#
+            r#"Ok(LIndex(List([Val(Int(1)), Val(Int(2))]), Val(Int(42))))"#
         );
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.get(x, 42)"#)),
@@ -994,7 +994,7 @@ mod tests {
             presult_to_string(&dist_constraint_body(
                 &mut r#"List.get(List.get(List(List(1, 2), List(3, 4)), 0), 1)"#
             )),
-            r#"Ok(LIndex(LIndex(Val(List([List([Int(1), Int(2)]), List([Int(3), Int(4)])])), Val(Int(0))), Val(Int(1))))"#
+            r#"Ok(LIndex(LIndex(List([List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])]), Val(Int(0))), Val(Int(1))))"#
         );
     }
 
@@ -1004,11 +1004,11 @@ mod tests {
             presult_to_string(&dist_constraint_body(
                 &mut r#"List.concat(List(1, 2), List(3, 4))"#
             )),
-            r#"Ok(LConcat(Val(List([Int(1), Int(2)])), Val(List([Int(3), Int(4)]))))"#
+            r#"Ok(LConcat(List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])))"#
         );
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.concat(List(), List())"#)),
-            r#"Ok(LConcat(Val(List([])), Val(List([]))))"#
+            r#"Ok(LConcat(List([]), List([])))"#
         );
     }
 
@@ -1016,15 +1016,15 @@ mod tests {
     fn test_parse_lappend() {
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.append(List(1, 2), 3)"#)),
-            r#"Ok(LAppend(Val(List([Int(1), Int(2)])), Val(Int(3))))"#
+            r#"Ok(LAppend(List([Val(Int(1)), Val(Int(2))]), Val(Int(3))))"#
         );
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.append(List(), 3)"#)),
-            r#"Ok(LAppend(Val(List([])), Val(Int(3))))"#
+            r#"Ok(LAppend(List([]), Val(Int(3))))"#
         );
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.append(List(), x)"#)),
-            r#"Ok(LAppend(Val(List([])), Var(VarName::new("x"))))"#
+            r#"Ok(LAppend(List([]), Var(VarName::new("x"))))"#
         );
     }
 
@@ -1032,12 +1032,12 @@ mod tests {
     fn test_parse_lhead() {
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.head(List(1, 2))"#)),
-            r#"Ok(LHead(Val(List([Int(1), Int(2)]))))"#
+            r#"Ok(LHead(List([Val(Int(1)), Val(Int(2))])))"#
         );
         // Ok for parser but will result in runtime error:
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.head(List())"#)),
-            r#"Ok(LHead(Val(List([]))))"#
+            r#"Ok(LHead(List([])))"#
         );
     }
 
@@ -1045,12 +1045,12 @@ mod tests {
     fn test_parse_ltail() {
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.tail(List(1, 2))"#)),
-            r#"Ok(LTail(Val(List([Int(1), Int(2)]))))"#
+            r#"Ok(LTail(List([Val(Int(1)), Val(Int(2))])))"#
         );
         // Ok for parser but will result in runtime error:
         assert_eq!(
             presult_to_string(&dist_constraint_body(&mut r#"List.tail(List())"#)),
-            r#"Ok(LTail(Val(List([]))))"#
+            r#"Ok(LTail(List([])))"#
         );
     }
 }

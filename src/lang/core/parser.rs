@@ -20,24 +20,24 @@ pub fn presult_to_string<T: Debug, E: Debug>(e: &Result<T, E>) -> String {
 }
 
 // Used for Lists in input streams (can only be Values)
-pub fn value_list(s: &mut &str) -> Result<EcoVec<Value>> {
+fn value_list(s: &mut &str) -> Result<EcoVec<Value>> {
     delimited(
         seq!("List", whitespace, '('),
-        separated(0.., val, seq!(whitespace, ',', whitespace)),
+        separated(0.., val_or_container, seq!(whitespace, ',', whitespace)),
         ')',
     )
     .map(|v: Vec<_>| EcoVec::from(v))
     .parse_next(s)
 }
 
-pub fn key_value(s: &mut &str) -> Result<(EcoString, Value)> {
-    seq!(_: whitespace, string, _: whitespace, _: ':', _: whitespace, val,)
+fn key_value(s: &mut &str) -> Result<(EcoString, Value)> {
+    seq!(_: whitespace, string, _: whitespace, _: ':', _: whitespace, val_or_container,)
         .map(|(key, value)| (key.into(), value))
         .parse_next(s)
 }
 
-// Used for Lists in input streams (can only be Values)
-pub fn value_map(s: &mut &str) -> Result<BTreeMap<EcoString, Value>> {
+// Used for Maps in input streams (can only be Values)
+fn value_map(s: &mut &str) -> Result<BTreeMap<EcoString, Value>> {
     delimited(
         seq!("Map", whitespace, '('),
         separated(0.., key_value, seq!(whitespace, ',', whitespace)),
@@ -70,9 +70,16 @@ pub fn val(s: &mut &str) -> Result<Value> {
             string.map(|s: &str| Value::Str(s.into())),
             literal("true").map(|_| Value::Bool(true)),
             literal("false").map(|_| Value::Bool(false)),
-            value_list.map(Value::List),
-            value_map.map(Value::Map),
         )),
+        whitespace,
+    )
+    .parse_next(s)
+}
+
+pub fn val_or_container(s: &mut &str) -> Result<Value> {
+    delimited(
+        whitespace,
+        alt((val, value_list.map(Value::List), value_map.map(Value::Map))),
         whitespace,
     )
     .parse_next(s)

@@ -1546,22 +1546,19 @@ mod tests {
 
     #[test]
     fn test_parse_list() {
-        assert_eq!(
-            sexpr(&mut r#"List()"#),
-            Ok(SExpr::Val(Value::List(eco_vec![]))),
-        );
+        assert_eq!(sexpr(&mut r#"List()"#), Ok(SExpr::List(eco_vec![])));
         // Same as above
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List()"#)),
-            r#"Ok(Val(List([])))"#
+            r#"Ok(List([]))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List () "#)),
-            r#"Ok(Val(List([])))"#
+            r#"Ok(List([]))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List(1,2)"#)),
-            r#"Ok(Val(List([Int(1), Int(2)])))"#
+            r#"Ok(List([Val(Int(1)), Val(Int(2))]))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List(1+2,2*5)"#)),
@@ -1569,7 +1566,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List("hello","world")"#)),
-            r#"Ok(Val(List([Str("hello"), Str("world")])))"#
+            r#"Ok(List([Val(Str("hello")), Val(Str("world"))]))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List(true || false, true && false)"#)),
@@ -1578,11 +1575,11 @@ mod tests {
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List(1,"hello")"#)),
-            r#"Ok(Val(List([Int(1), Str("hello")])))"#
+            r#"Ok(List([Val(Int(1)), Val(Str("hello"))]))"#
         );
         assert_eq!(
             assignment_decl(&mut "y = List()"),
-            Ok(("y".into(), SExpr::Val(Value::List(vec![].into()))))
+            Ok(("y".into(), SExpr::List(eco_vec![])))
         )
     }
 
@@ -1590,7 +1587,7 @@ mod tests {
     fn test_parse_lindex() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.get(List(1, 2), 42)"#)),
-            r#"Ok(LIndex(Val(List([Int(1), Int(2)])), Val(Int(42))))"#
+            r#"Ok(LIndex(List([Val(Int(1)), Val(Int(2))]), Val(Int(42))))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.get(x, 42)"#)),
@@ -1604,7 +1601,7 @@ mod tests {
             presult_to_string(&sexpr(
                 &mut r#"List.get(List.get(List(List(1, 2), List(3, 4)), 0), 1)"#
             )),
-            r#"Ok(LIndex(LIndex(Val(List([List([Int(1), Int(2)]), List([Int(3), Int(4)])])), Val(Int(0))), Val(Int(1))))"#
+            r#"Ok(LIndex(LIndex(List([List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])]), Val(Int(0))), Val(Int(1))))"#
         );
     }
 
@@ -1612,11 +1609,11 @@ mod tests {
     fn test_parse_lconcat() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.concat(List(1, 2), List(3, 4))"#)),
-            r#"Ok(LConcat(Val(List([Int(1), Int(2)])), Val(List([Int(3), Int(4)]))))"#
+            r#"Ok(LConcat(List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.concat(List(), List())"#)),
-            r#"Ok(LConcat(Val(List([])), Val(List([]))))"#
+            r#"Ok(LConcat(List([]), List([])))"#
         );
     }
 
@@ -1624,15 +1621,15 @@ mod tests {
     fn test_parse_lappend() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.append(List(1, 2), 3)"#)),
-            r#"Ok(LAppend(Val(List([Int(1), Int(2)])), Val(Int(3))))"#
+            r#"Ok(LAppend(List([Val(Int(1)), Val(Int(2))]), Val(Int(3))))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.append(List(), 3)"#)),
-            r#"Ok(LAppend(Val(List([])), Val(Int(3))))"#
+            r#"Ok(LAppend(List([]), Val(Int(3))))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.append(List(), x)"#)),
-            r#"Ok(LAppend(Val(List([])), Var(VarName::new("x"))))"#
+            r#"Ok(LAppend(List([]), Var(VarName::new("x"))))"#
         );
     }
 
@@ -1640,12 +1637,12 @@ mod tests {
     fn test_parse_lhead() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.head(List(1, 2))"#)),
-            r#"Ok(LHead(Val(List([Int(1), Int(2)]))))"#
+            r#"Ok(LHead(List([Val(Int(1)), Val(Int(2))])))"#
         );
         // Ok for parser but will result in runtime error:
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.head(List())"#)),
-            r#"Ok(LHead(Val(List([]))))"#
+            r#"Ok(LHead(List([])))"#
         );
     }
 
@@ -1653,12 +1650,12 @@ mod tests {
     fn test_parse_ltail() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.tail(List(1, 2))"#)),
-            r#"Ok(LTail(Val(List([Int(1), Int(2)]))))"#
+            r#"Ok(LTail(List([Val(Int(1)), Val(Int(2))])))"#
         );
         // Ok for parser but will result in runtime error:
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.tail(List())"#)),
-            r#"Ok(LTail(Val(List([]))))"#
+            r#"Ok(LTail(List([])))"#
         );
     }
 
@@ -1666,27 +1663,21 @@ mod tests {
     fn test_parse_llen() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.len(List(1, 2))"#)),
-            r#"Ok(LLen(Val(List([Int(1), Int(2)]))))"#
+            r#"Ok(LLen(List([Val(Int(1)), Val(Int(2))])))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"List.len(List())"#)),
-            r#"Ok(LLen(Val(List([]))))"#
+            r#"Ok(LLen(List([])))"#
         );
     }
 
     #[test]
     fn test_parse_map() {
-        assert_eq!(
-            sexpr(&mut r#"Map()"#),
-            Ok(SExpr::Val(Value::Map(BTreeMap::new()))),
-        );
-        assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map()"#)),
-            r#"Ok(Val(Map({})))"#
-        );
+        assert_eq!(sexpr(&mut r#"Map()"#), Ok(SExpr::Map(BTreeMap::new())),);
+        assert_eq!(presult_to_string(&sexpr(&mut r#"Map()"#)), r#"Ok(Map({}))"#);
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map("x": 1, "y": 2)"#)),
-            r#"Ok(Val(Map({"x": Int(1), "y": Int(2)})))"#
+            r#"Ok(Map({"x": Val(Int(1)), "y": Val(Int(2))}))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map("x": 1+2,"y": 2*5)"#)),
@@ -1694,7 +1685,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map("x": "hello", "y": "world")"#)),
-            r#"Ok(Val(Map({"x": Str("hello"), "y": Str("world")})))"#
+            r#"Ok(Map({"x": Val(Str("hello")), "y": Val(Str("world"))}))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(
@@ -1705,11 +1696,11 @@ mod tests {
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map( "x": 1, "y": "hello" )"#)),
-            r#"Ok(Val(Map({"x": Int(1), "y": Str("hello")})))"#
+            r#"Ok(Map({"x": Val(Int(1)), "y": Val(Str("hello"))}))"#
         );
         assert_eq!(
             assignment_decl(&mut "y = Map()"),
-            Ok(("y".into(), SExpr::Val(Value::Map(BTreeMap::new()))))
+            Ok(("y".into(), SExpr::Map(BTreeMap::new())))
         )
     }
 
@@ -1717,7 +1708,7 @@ mod tests {
     fn test_parse_mget() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map.get(Map("x": 2, "y": true), "x")"#)),
-            r#"Ok(MGet(Val(Map({"x": Int(2), "y": Bool(true)})), "x"))"#
+            r#"Ok(MGet(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map.get(x, "key")"#)),
@@ -1731,7 +1722,7 @@ mod tests {
             presult_to_string(&sexpr(
                 &mut r#"Map.get(Map.get(Map.get(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
             )),
-            r#"Ok(MGet(MGet(MGet(Val(Map({"three": Map({"two": Map({"one": Int(42)})})})), "three"), "two"), "one"))"#
+            r#"Ok(MGet(MGet(MGet(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
         );
     }
 
@@ -1739,7 +1730,7 @@ mod tests {
     fn test_parse_mremove() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map.remove(Map("x": 2, "y": true), "x")"#)),
-            r#"Ok(MRemove(Val(Map({"x": Int(2), "y": Bool(true)})), "x"))"#
+            r#"Ok(MRemove(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map.remove(x, "key")"#)),
@@ -1753,7 +1744,7 @@ mod tests {
             presult_to_string(&sexpr(
                 &mut r#"Map.remove(Map.remove(Map.remove(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
             )),
-            r#"Ok(MRemove(MRemove(MRemove(Val(Map({"three": Map({"two": Map({"one": Int(42)})})})), "three"), "two"), "one"))"#
+            r#"Ok(MRemove(MRemove(MRemove(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
         );
     }
 
@@ -1761,7 +1752,7 @@ mod tests {
     fn test_parse_mhas_key() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map.has_key(Map("x": 2, "y": true), "x")"#)),
-            r#"Ok(MHasKey(Val(Map({"x": Int(2), "y": Bool(true)})), "x"))"#
+            r#"Ok(MHasKey(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map.has_key(x, "key")"#)),
@@ -1775,7 +1766,7 @@ mod tests {
             presult_to_string(&sexpr(
                 &mut r#"Map.has_key(Map.has_key(Map.has_key(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
             )),
-            r#"Ok(MHasKey(MHasKey(MHasKey(Val(Map({"three": Map({"two": Map({"one": Int(42)})})})), "three"), "two"), "one"))"#
+            r#"Ok(MHasKey(MHasKey(MHasKey(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
         );
     }
 
@@ -1785,7 +1776,7 @@ mod tests {
             presult_to_string(&sexpr(
                 &mut r#"Map.insert(Map("x": 2, "y": true), "z", 42)"#
             )),
-            r#"Ok(MInsert(Val(Map({"x": Int(2), "y": Bool(true)})), "z", Val(Int(42))))"#
+            r#"Ok(MInsert(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "z", Val(Int(42))))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map.insert(x, "key", true)"#)),

@@ -18,7 +18,7 @@ fn value_assignment(s: &mut &str) -> Result<(VarName, Value)> {
         _: whitespace,
         _: literal("="),
         _: whitespace,
-        val,
+        val_or_container,
         _: whitespace,
     ))
     .map(|(name, value)| (name.into(), value))
