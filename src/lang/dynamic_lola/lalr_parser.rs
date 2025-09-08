@@ -166,35 +166,34 @@ mod tests {
 
     #[test]
     fn test_input_decl() {
-        let parsed = parse_stopdecl("in x");
-        let exp = "Ok(Input(VarName::new(\"x\"), None))";
+        let parsed = parse_stopdecl(&mut "in x");
+        let exp = r#"Ok(Input(VarName::new("x"), None))"#;
         assert_eq!(presult_to_string(&parsed), exp);
+
+        // Not sure if we should allow this, but this is how it currently works. As long as we
+        // start with "in"
+        let parsed = parse_stopdecl(&mut "inx");
+        assert_eq!(parsed.is_err(), true);
+        let err = parsed.err().unwrap();
+        assert!(err.to_string().contains("Parse error"));
     }
 
     #[test]
     fn test_typed_input_decl() {
         let parsed = parse_stopdecl("in x: Int");
-        let exp = "Ok(Input(VarName::new(\"x\"), Some(Int)))";
+        let exp = r#"Ok(Input(VarName::new("x"), Some(Int)))"#;
         assert_eq!(presult_to_string(&parsed), exp);
 
         let parsed = parse_stopdecl("in x: Float");
-        let exp = "Ok(Input(VarName::new(\"x\"), Some(Float)))";
-        assert_eq!(presult_to_string(&parsed), exp);
-    }
-
-    #[test]
-    fn test_input_decls() {
-        let parsed = parse_stopdecls("");
-        let exp = "Ok([])";
+        let exp = r#"Ok(Input(VarName::new("x"), Some(Float)))"#;
         assert_eq!(presult_to_string(&parsed), exp);
 
-        let parsed = parse_stopdecls("in x");
-        let exp = r#"Ok([Input(VarName::new("x"), None)])"#;
-        assert_eq!(presult_to_string(&parsed), exp);
-
-        let parsed = parse_stopdecls("in x\nin y");
-        let exp = r#"Ok([Input(VarName::new("x"), None), Input(VarName::new("y"), None)])"#;
-        assert_eq!(presult_to_string(&parsed), exp);
+        // Not sure if we should allow this, but this is how it currently works. As long as we
+        // start with "in"
+        let parsed = parse_stopdecl("inx:Int");
+        assert_eq!(parsed.is_err(), true);
+        let err = parsed.err().unwrap();
+        assert!(err.to_string().contains("Parse error"));
     }
 
     #[test]
@@ -788,6 +787,221 @@ mod tests {
         assert_eq!(
             presult_to_string(&parse_stopdecl("y = List()")),
             r#"Ok(Assignment(VarName::new("y"), List([])))"#
+        )
+    }
+
+    #[test]
+    fn test_parse_lindex() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.get(List(1, 2), 42)"#)),
+            r#"Ok(LIndex(List([Val(Int(1)), Val(Int(2))]), Val(Int(42))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.get(x, 42)"#)),
+            r#"Ok(LIndex(Var(VarName::new("x")), Val(Int(42))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.get(x, 1+2)"#)),
+            r#"Ok(LIndex(Var(VarName::new("x")), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(
+                r#"List.get(List.get(List(List(1, 2), List(3, 4)), 0), 1)"#
+            )),
+            r#"Ok(LIndex(LIndex(List([List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])]), Val(Int(0))), Val(Int(1))))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_lconcat() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.concat(List(1, 2), List(3, 4))"#)),
+            r#"Ok(LConcat(List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.concat(List(), List())"#)),
+            r#"Ok(LConcat(List([]), List([])))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_lappend() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.append(List(1, 2), 3)"#)),
+            r#"Ok(LAppend(List([Val(Int(1)), Val(Int(2))]), Val(Int(3))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.append(List(), 3)"#)),
+            r#"Ok(LAppend(List([]), Val(Int(3))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.append(List(), x)"#)),
+            r#"Ok(LAppend(List([]), Var(VarName::new("x"))))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_lhead() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.head(List(1, 2))"#)),
+            r#"Ok(LHead(List([Val(Int(1)), Val(Int(2))])))"#
+        );
+        // Ok for parser but will result in runtime error:
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.head(List())"#)),
+            r#"Ok(LHead(List([])))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_ltail() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.tail(List(1, 2))"#)),
+            r#"Ok(LTail(List([Val(Int(1)), Val(Int(2))])))"#
+        );
+        // Ok for parser but will result in runtime error:
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.tail(List())"#)),
+            r#"Ok(LTail(List([])))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_llen() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.len(List(1, 2))"#)),
+            r#"Ok(LLen(List([Val(Int(1)), Val(Int(2))])))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List.len(List())"#)),
+            r#"Ok(LLen(List([])))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_map() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map()"#)),
+            r#"Ok(Map({}))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map("x": 1, "y": 2)"#)),
+            r#"Ok(Map({"x": Val(Int(1)), "y": Val(Int(2))}))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map("x": 1+2,"y": 2*5)"#)),
+            r#"Ok(Map({"x": BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), "y": BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))}))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map("x": "hello", "y": "world")"#)),
+            r#"Ok(Map({"x": Val(Str("hello")), "y": Val(Str("world"))}))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(
+                r#"Map("xxxx": true || false, "yyyy": true && false)"#
+            )),
+            r#"Ok(Map({"xxxx": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), "yyyy": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))}))"#
+        );
+        // Can mix expressions - not that it is necessarily a good idea
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map( "x": 1, "y": "hello" )"#)),
+            r#"Ok(Map({"x": Val(Int(1)), "y": Val(Str("hello"))}))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_stopdecl("y = Map()")),
+            r#"Ok(Assignment(VarName::new("y"), Map({})))"#
+        )
+    }
+
+    #[test]
+    fn test_parse_mget() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.get(Map("x": 2, "y": true), "x")"#)),
+            r#"Ok(MGet(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.get(x, "key")"#)),
+            r#"Ok(MGet(Var(VarName::new("x")), "key"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.get(x, "")"#)),
+            r#"Ok(MGet(Var(VarName::new("x")), ""))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(
+                r#"Map.get(Map.get(Map.get(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
+            )),
+            r#"Ok(MGet(MGet(MGet(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_mremove() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.remove(Map("x": 2, "y": true), "x")"#)),
+            r#"Ok(MRemove(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.remove(x, "key")"#)),
+            r#"Ok(MRemove(Var(VarName::new("x")), "key"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.remove(x, "")"#)),
+            r#"Ok(MRemove(Var(VarName::new("x")), ""))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(
+                r#"Map.remove(Map.remove(Map.remove(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
+            )),
+            r#"Ok(MRemove(MRemove(MRemove(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_mhas_key() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.has_key(Map("x": 2, "y": true), "x")"#)),
+            r#"Ok(MHasKey(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.has_key(x, "key")"#)),
+            r#"Ok(MHasKey(Var(VarName::new("x")), "key"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.has_key(x, "")"#)),
+            r#"Ok(MHasKey(Var(VarName::new("x")), ""))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(
+                r#"Map.has_key(Map.has_key(Map.has_key(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
+            )),
+            r#"Ok(MHasKey(MHasKey(MHasKey(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_minsert() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(
+                r#"Map.insert(Map("x": 2, "y": true), "z", 42)"#
+            )),
+            r#"Ok(MInsert(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "z", Val(Int(42))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.insert(x, "key", true)"#)),
+            r#"Ok(MInsert(Var(VarName::new("x")), "key", Val(Bool(true))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Map.insert(x, "", 1)"#)),
+            r#"Ok(MInsert(Var(VarName::new("x")), "", Val(Int(1))))"#
+        );
+    }
+
+    #[test]
+    fn test_dangling_else() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr("if a then b else c + d")),
+            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
         )
     }
 }

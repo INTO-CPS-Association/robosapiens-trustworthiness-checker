@@ -1,12 +1,11 @@
 use std::str::FromStr;
+use std::collections::BTreeMap;
 use ecow::{EcoString, EcoVec};
 
 use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp};
 use crate::core::{Value, VarName, StreamType};
 
 grammar;
-
-// Parser inspired by: https://github.com/Storyyeller/cubiml-demo/blob/master/src/grammar.lalr
 
 // Tokens ////////////////////////////////////////////////////////////
 match {
@@ -43,6 +42,11 @@ SepList<T, Sep>: EcoVec<T> = {
 SepListOpt<T, Sep>: EcoVec<T> = {
     SepList<T, Sep>,
     => EcoVec::new(),
+};
+
+// Key-value pair:
+KVPair<K, V>: (K, V) = {
+    <k: K> ":" <v: V> => (k, v)
 };
 
 // Expressions ///////////////////////////////////////////////////////
@@ -134,8 +138,9 @@ UnaryExpr<Next>: SExpr = {
     Next
 };
 
-ListExpr: SExpr = {
-    "List" "(" <SepListOpt<Expr, ",">> ")" => SExpr::List(<>)
+ContainerExpr: SExpr = {
+    "List" "(" <SepListOpt<Expr, ",">> ")" => SExpr::List(<>),
+    "Map" "(" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> ")" => SExpr::Map(BTreeMap::from_iter(kv_pairs.into_iter()))
 }
 
 LiteralVal: Value = {
@@ -157,7 +162,7 @@ Atom: SExpr = {
     SIndex,
     SpecialKeywords,
     Literal,
-    ListExpr,
+    ContainerExpr,
     IdentSExpr,
     Paren
 }
@@ -175,7 +180,7 @@ StreamTyp: StreamType = {
 }
 
 TypeAnno: StreamType = {
-    ": " <StreamTyp> => <>
+    ":" <StreamTyp> => <>
 }
 
 SpecialKeywords: SExpr = {
@@ -184,6 +189,16 @@ SpecialKeywords: SExpr = {
     "defer" "(" <e: Box<Expr>> ")" => SExpr::Defer(e),
     "update" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Update(e1, e2),
     "default" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Default(e1, e2),
+    "List.get" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LIndex(e1, e2),
+    "List.concat" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LConcat(e1, e2),
+    "List.append" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LAppend(e1, e2),
+    "List.head" "(" <e: Box<Expr>> ")" => SExpr::LHead(e),
+    "List.tail" "(" <e: Box<Expr>> ")" => SExpr::LTail(e),
+    "List.len" "(" <e: Box<Expr>> ")" => SExpr::LLen(e),
+    "Map.get" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MGet(e, k),
+    "Map.remove" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MRemove(e, k),
+    "Map.has_key" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MHasKey(e, k),
+    "Map.insert" "(" <e1: Box<Expr>> "," <k: String> "," <e2: Box<Expr>> ")" => SExpr::MInsert(e1, k, e2),
 }
 
 // Operator precedence chain with Final having highest precedence
@@ -197,11 +212,11 @@ pub Expr: SExpr = {
 };
 
 InputDecl: STopDecl = {
-    "in " <id: Ident> <typ: TypeAnno?> => STopDecl::Input(id, typ)
+    "in" <id: Ident> <typ: TypeAnno?> => STopDecl::Input(id, typ)
 };
 
 OutputDecl: STopDecl = {
-    "out " <id: Ident> <typ: TypeAnno?> => STopDecl::Output(id, typ),
+    "out" <id: Ident> <typ: TypeAnno?> => STopDecl::Output(id, typ),
 };
 
 AuxDecl: STopDecl = {

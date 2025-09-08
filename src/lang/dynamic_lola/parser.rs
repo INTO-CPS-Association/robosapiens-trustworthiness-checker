@@ -949,25 +949,31 @@ mod tests {
     }
 
     #[test]
-    fn test_input_decl() -> Result<(), ContextError> {
-        assert_eq!(
-            input_decl(&mut (*"in x".to_string()).into())?,
-            ("x".into(), None),
-        );
-        Ok(())
+    fn test_input_decl() {
+        let res = input_decl(&mut "in x");
+        let exp = Ok(("x".into(), None));
+        assert_eq!(res, exp);
+
+        // TODO: This should not be allowed... In should be followed by at least one space
+        let res = input_decl(&mut "inx");
+        let exp = Ok(("x".into(), None));
+        assert_eq!(res, exp);
     }
 
     #[test]
-    fn test_typed_input_decl() -> Result<(), ContextError> {
-        assert_eq!(
-            input_decl(&mut (*"in x: Int".to_string()).into())?,
-            ("x".into(), Some(StreamType::Int)),
-        );
-        assert_eq!(
-            input_decl(&mut (*"in x: Float".to_string()).into())?,
-            ("x".into(), Some(StreamType::Float)),
-        );
-        Ok(())
+    fn test_typed_input_decl() {
+        let res = input_decl(&mut "in x: Int");
+        let exp = Ok(("x".into(), Some(StreamType::Int)));
+        assert_eq!(res, exp);
+
+        let res = input_decl(&mut "in x: Float");
+        let exp = Ok(("x".into(), Some(StreamType::Float)));
+        assert_eq!(res, exp);
+
+        // TODO: This should not be allowed... In should be followed by at least one space
+        let res = input_decl(&mut "inx:Int");
+        let exp = Ok(("x".into(), Some(StreamType::Int)));
+        assert_eq!(res, exp);
     }
 
     #[test]
