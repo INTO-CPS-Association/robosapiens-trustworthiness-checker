@@ -24,7 +24,7 @@ fn paren(s: &mut &str) -> Result<SExpr> {
 
 // Used for Lists in output streams
 fn sexpr_list(s: &mut &str) -> Result<SExpr> {
-    let res = delimited(
+    let res: Result<Vec<SExpr>, _> = delimited(
         seq!("List", loop_ms_or_lb_or_lc, '('),
         separated(
             0..,
@@ -35,7 +35,7 @@ fn sexpr_list(s: &mut &str) -> Result<SExpr> {
     )
     .parse_next(s);
     match res {
-        Ok(exprs) => Ok(SExpr::List(exprs)),
+        Ok(exprs) => Ok(SExpr::List(exprs.into())),
         Err(e) => Err(e),
     }
 }

@@ -180,7 +180,7 @@ pub enum SExpr {
     Not(Box<Self>),
 
     // List and list expressions
-    List(Vec<Self>),
+    List(EcoVec<Self>),
     LIndex(Box<Self>, Box<Self>), // List index: First is list, second is index
     LAppend(Box<Self>, Box<Self>), // List append -- First is list, second is el to add
     LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
