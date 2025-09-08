@@ -1,7 +1,7 @@
 use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp};
+use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp};
 use crate::core::{Value, VarName, StreamType};
 
 grammar;
@@ -32,18 +32,17 @@ Box<T>: Box<T> = {
 }
 
 // A list of elements separated by Sep
-SepList<T, Sep>: Vec<T> = {
-    <v:(<T> Sep)*> <e:T> => {
-        let mut v = v;
+SepList<T, Sep>: EcoVec<T> = {
+    <mut v:(<T> Sep)*> <e:T> => {
         v.push(e);
-        v
+        v.into()
     }
 };
 
 // An optional list of elements separated by Sep
-SepListOpt<T, Sep>: Vec<T> = {
+SepListOpt<T, Sep>: EcoVec<T> = {
     SepList<T, Sep>,
-    => Vec::new(),
+    => EcoVec::new(),
 };
 
 // Expressions ///////////////////////////////////////////////////////
@@ -57,11 +56,11 @@ MultExprHelp: SBinOp  = {
     "/" => SBinOp::NOp(NumericalBinOp::Div),
 };
 
-MultExpr: SExpr = {
-    <lhs: Box<MultExpr>> <op: MultExprHelp> <rhs: Box<UnaryExpr>> => {
+MultExpr<Next>: SExpr = {
+    <lhs: Box<MultExpr<Next>>> <op: MultExprHelp> <rhs: Box<Next>> => {
         SExpr::BinOp(lhs, rhs, op)
     },
-    UnaryExpr
+    Next
 };
 
 AddExprHelp: SBinOp  = {
@@ -69,23 +68,44 @@ AddExprHelp: SBinOp  = {
     "-" => SBinOp::NOp(NumericalBinOp::Sub),
 };
 
-AddExpr: SExpr = {
-    <lhs: Box<AddExpr>> <op: AddExprHelp> <rhs: Box<MultExpr>> => {
+AddExpr<Next>: SExpr = {
+    <lhs: Box<AddExpr<Next>>> <op: AddExprHelp> <rhs: Box<Next>> => {
         SExpr::BinOp(lhs, rhs, op)
     },
-    MultExpr
+    Next
 };
+
+OrExpr<Next>: SExpr = {
+    <lhs: Box<OrExpr<Next>>> "||" <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or))
+    },
+    Next
+};
+
+AndExpr<Next>: SExpr = {
+    <lhs: Box<AndExpr<Next>>> "&&" <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And))
+    },
+    Next
+};
+
+ConcatExpr<Next>: SExpr = {
+    <lhs: Box<ConcatExpr<Next>>> "++" <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, SBinOp::SOp(StrBinOp::Concat))
+    },
+    Next
+}
 
 CompExprHelp: SBinOp = {
     "<=" => SBinOp::COp(CompBinOp::Le),
     "==" => SBinOp::COp(CompBinOp::Eq),
 }
 
-CompExpr: SExpr = {
-    <lhs: Box<CompExpr>> <op: CompExprHelp> <rhs: Box<AddExpr>> => {
+CompExpr<Next>: SExpr = {
+    <lhs: Box<CompExpr<Next>>> <op: CompExprHelp> <rhs: Box<Next>> => {
         SExpr::BinOp(lhs, rhs, op)
     },
-    AddExpr
+    Next
 };
 
 SIndexHelp: Box<SExpr> = {
@@ -109,10 +129,14 @@ UnaryMinusHelper: SExpr = {
     <x: Paren> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), Box::new(x), SBinOp::NOp(NumericalBinOp::Sub)),
 };
 
-UnaryExpr: SExpr = {
+UnaryExpr<Next>: SExpr = {
     "-" <n: UnaryMinusHelper> => n,
-    Atom
+    Next
 };
+
+ListExpr: SExpr = {
+    "List" "(" <SepListOpt<Expr, ",">> ")" => SExpr::List(<>)
+}
 
 LiteralVal: Value = {
     Int => Value::Int(<>),
@@ -131,14 +155,15 @@ Paren: SExpr = {
 
 Atom: SExpr = {
     SIndex,
-    Dynamic,
+    SpecialKeywords,
     Literal,
+    ListExpr,
     IdentSExpr,
     Paren
 }
 
 Ifelse: SExpr = {
-    "if" <c: Expr> "then" <i: Expr> "else" <e: Expr> => SExpr::If(Box::new(c), Box::new(i), Box::new(e))
+    "if" <c: Box<Expr>> "then" <i: Box<Expr>> "else" <e: Box<Expr>> => SExpr::If(c, i, e)
 }
 
 StreamTyp: StreamType = {
@@ -153,14 +178,22 @@ TypeAnno: StreamType = {
     ": " <StreamTyp> => <>
 }
 
-Dynamic: SExpr = {
-    "dynamic" "(" <e: Expr> ")" => SExpr::Dynamic(Box::new(e)),
-    "eval" "(" <e: Expr> ")" => SExpr::Dynamic(Box::new(e)),
+SpecialKeywords: SExpr = {
+    "dynamic" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e),
+    "eval" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e),
+    "defer" "(" <e: Box<Expr>> ")" => SExpr::Defer(e),
+    "update" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Update(e1, e2),
+    "default" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Default(e1, e2),
+}
+
+// Operator precedence chain with Final having highest precedence
+PrecChain<Final>: SExpr = {
+    ConcatExpr<OrExpr<AndExpr<CompExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>,
 }
 
 pub Expr: SExpr = {
-    Ifelse, // If-else binds weaker than the Expr chain to ensure that if a then b else c + d is parsed as if a then b else (c + d)
-    CompExpr,
+    Ifelse, // If-else binds weaker than the PrecChain chain to ensure that if a then b else c + d is parsed as if a then b else (c + d)
+    PrecChain<Atom>
 };
 
 InputDecl: STopDecl = {

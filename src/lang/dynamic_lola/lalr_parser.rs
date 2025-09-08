@@ -636,4 +636,158 @@ mod tests {
             r#""#
         );
     }
+
+    #[test]
+    fn test_assignment_decl() {
+        assert_eq!(
+            presult_to_string(&parse_stopdecl("x = 0")),
+            r#"Ok(Assignment(VarName::new("x"), Val(Int(0))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_stopdecl(r#"x = "hello""#)),
+            r#"Ok(Assignment(VarName::new("x"), Val(Str("hello"))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_stopdecl("x = true")),
+            r#"Ok(Assignment(VarName::new("x"), Val(Bool(true))))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_stopdecl("x = false")),
+            r#"Ok(Assignment(VarName::new("x"), Val(Bool(false))))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_string() {
+        let res = parse_str("");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert_eq!(
+            res,
+            LOLASpecification::new(vec![], vec![], BTreeMap::new(), BTreeMap::new(), vec![])
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_expression() {
+        let res = parse_sexpr("1 +");
+        assert_eq!(res.is_err(), true);
+        let err = res.err().unwrap();
+        assert!(err.to_string().contains("Parse error"));
+
+        let res = parse_sexpr("&& true");
+        assert_eq!(res.is_err(), true);
+        let err = res.err().unwrap();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_parse_boolean_expressions() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr("true && false")),
+            "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("true || false")),
+            "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)))"
+        );
+    }
+
+    #[test]
+    fn test_parse_mixed_boolean_and_arithmetic() {
+        // Expressions do not make sense but parser should allow it
+        assert_eq!(
+            presult_to_string(&parse_sexpr("1 + 2 && 3")),
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), BOp(And)))"
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr("true || 1 * 2")),
+            "Ok(BinOp(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BOp(Or)))"
+        );
+    }
+
+    #[test]
+    fn test_parse_string_concatenation() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#""foo" ++ "bar""#)),
+            r#"Ok(BinOp(Val(Str("foo")), Val(Str("bar")), SOp(Concat)))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#""hello" ++ " " ++ "world""#)),
+            r#"Ok(BinOp(BinOp(Val(Str("hello")), Val(Str(" ")), SOp(Concat)), Val(Str("world")), SOp(Concat)))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#""a" ++ "b" ++ "c""#)),
+            r#"Ok(BinOp(BinOp(Val(Str("a")), Val(Str("b")), SOp(Concat)), Val(Str("c")), SOp(Concat)))"#
+        );
+    }
+
+    #[test]
+    fn test_parse_defer() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"defer(x)"#)),
+            r#"Ok(Defer(Var(VarName::new("x"))))"#
+        )
+    }
+
+    #[test]
+    fn test_parse_update() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"update(x, y)"#)),
+            r#"Ok(Update(Var(VarName::new("x")), Var(VarName::new("y"))))"#
+        )
+    }
+
+    #[test]
+    fn test_parse_default() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"default(x, 0)"#)),
+            r#"Ok(Default(Var(VarName::new("x")), Val(Int(0))))"#
+        )
+    }
+
+    #[test]
+    fn test_parse_default_parse_sexpr() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"default(x, y)"#)),
+            r#"Ok(Default(Var(VarName::new("x")), Var(VarName::new("y"))))"#
+        )
+    }
+
+    #[test]
+    fn test_parse_list() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List()"#)),
+            r#"Ok(List([]))"#,
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List () "#)),
+            r#"Ok(List([]))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List(1,2)"#)),
+            r#"Ok(List([Val(Int(1)), Val(Int(2))]))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List(1+2,2*5)"#)),
+            r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))]))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List("hello","world")"#)),
+            r#"Ok(List([Val(Str("hello")), Val(Str("world"))]))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List(true || false, true && false)"#)),
+            r#"Ok(List([BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))]))"#
+        );
+        // Can mix expressions - not that it is necessarily a good idea
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"List(1,"hello")"#)),
+            r#"Ok(List([Val(Int(1)), Val(Str("hello"))]))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_stopdecl("y = List()")),
+            r#"Ok(Assignment(VarName::new("y"), List([])))"#
+        )
+    }
 }
