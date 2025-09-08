@@ -58,6 +58,7 @@ IdentSExpr : SExpr = {
 MultExprHelp: SBinOp  = {
     "*" => SBinOp::NOp(NumericalBinOp::Mul),
     "/" => SBinOp::NOp(NumericalBinOp::Div),
+    "%" => SBinOp::NOp(NumericalBinOp::Mod),
 };
 
 MultExpr<Next>: SExpr = {
@@ -101,12 +102,28 @@ ConcatExpr<Next>: SExpr = {
 }
 
 CompExprHelp: SBinOp = {
-    "<=" => SBinOp::COp(CompBinOp::Le),
     "==" => SBinOp::COp(CompBinOp::Eq),
+    // "!=" => SBinOp::COp(CompBinOp::Ne), // Not implemented yet
 }
 
 CompExpr<Next>: SExpr = {
     <lhs: Box<CompExpr<Next>>> <op: CompExprHelp> <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    Next
+};
+
+// Relational expressions
+RelExprHelp: SBinOp = {
+    "<=" => SBinOp::COp(CompBinOp::Le),
+    ">=" => SBinOp::COp(CompBinOp::Ge),
+    "<" => SBinOp::COp(CompBinOp::Lt),
+    ">" => SBinOp::COp(CompBinOp::Gt),
+}
+
+// Relational expressions
+RelExpr<Next>: SExpr = {
+    <lhs: Box<RelExpr<Next>>> <op: RelExprHelp> <rhs: Box<Next>> => {
         SExpr::BinOp(lhs, rhs, op)
     },
     Next
@@ -129,12 +146,13 @@ SIndex: SExpr = {
 UnaryMinusHelper: SExpr = {
     <n: Int> => SExpr::Val(Value::Int(-n)),
     <n: Float> => SExpr::Val(Value::Float(-n)),
-    <x: IdentSExpr> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), Box::new(x), SBinOp::NOp(NumericalBinOp::Sub)),
-    <x: Paren> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), Box::new(x), SBinOp::NOp(NumericalBinOp::Sub)),
+    <x: Box<IdentSExpr>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
+    <x: Box<Paren>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
 };
 
 UnaryExpr<Next>: SExpr = {
     "-" <n: UnaryMinusHelper> => n,
+    "!" <b: Box<UnaryExpr<Next>>> => SExpr::Not(b),
     Next
 };
 
@@ -184,26 +202,30 @@ TypeAnno: StreamType = {
 }
 
 SpecialKeywords: SExpr = {
-    "dynamic" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e),
-    "eval" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e),
-    "defer" "(" <e: Box<Expr>> ")" => SExpr::Defer(e),
+    "dynamic" "(" <Box<Expr>> ")" => SExpr::Dynamic(<>),
+    "eval" "(" <Box<Expr>> ")" => SExpr::Dynamic(<>),
+    "defer" "(" <Box<Expr>> ")" => SExpr::Defer(<>),
     "update" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Update(e1, e2),
     "default" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Default(e1, e2),
     "List.get" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LIndex(e1, e2),
     "List.concat" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LConcat(e1, e2),
     "List.append" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LAppend(e1, e2),
-    "List.head" "(" <e: Box<Expr>> ")" => SExpr::LHead(e),
-    "List.tail" "(" <e: Box<Expr>> ")" => SExpr::LTail(e),
-    "List.len" "(" <e: Box<Expr>> ")" => SExpr::LLen(e),
+    "List.head" "(" <Box<Expr>> ")" => SExpr::LHead(<>),
+    "List.tail" "(" <Box<Expr>> ")" => SExpr::LTail(<>),
+    "List.len" "(" <Box<Expr>> ")" => SExpr::LLen(<>),
     "Map.get" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MGet(e, k),
     "Map.remove" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MRemove(e, k),
     "Map.has_key" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MHasKey(e, k),
     "Map.insert" "(" <e1: Box<Expr>> "," <k: String> "," <e2: Box<Expr>> ")" => SExpr::MInsert(e1, k, e2),
+    "sin" "(" <Box<Expr>> ")" => SExpr::Sin(<>),
+    "cos" "(" <Box<Expr>> ")" => SExpr::Cos(<>),
+    "tan" "(" <Box<Expr>> ")" => SExpr::Tan(<>),
+    "abs" "(" <Box<Expr>> ")" => SExpr::Abs(<>),
 }
 
 // Operator precedence chain with Final having highest precedence
 PrecChain<Final>: SExpr = {
-    ConcatExpr<OrExpr<AndExpr<CompExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>,
+    ConcatExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>>,
 }
 
 pub Expr: SExpr = {
