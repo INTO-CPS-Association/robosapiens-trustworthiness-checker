@@ -1801,6 +1801,14 @@ mod tests {
             r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
         )
     }
+}
+
+#[cfg(test)]
+mod spec_tests {
+    use crate::lang::core::parser::presult_to_string;
+
+    use super::*;
+    use test_log::test;
 
     fn counter_inf() -> (&'static str, &'static str) {
         (
