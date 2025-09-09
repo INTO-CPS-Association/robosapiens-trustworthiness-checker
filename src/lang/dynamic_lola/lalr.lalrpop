@@ -7,7 +7,9 @@ use crate::core::{Value, VarName, StreamType};
 
 grammar;
 
-// Tokens ////////////////////////////////////////////////////////////
+// -----------------------------------------------------------------------------
+// Tokens
+// -----------------------------------------------------------------------------
 match {
     r"\s*" => { }, // Ignore whitespace
     r"//[^\n\r]*[\n\r]*" => { }, // Ignore `// comments`
@@ -25,7 +27,11 @@ Bool: bool = {
 };
 String: EcoString = <s:r#""[^\\"\n\r]*(?:\\[tn'"\\][^\\"\n\r]*)*""#> => s[1..s.len()-1].into();
 
-// Macros ////////////////////////////////////////////////////////////
+// -----------------------------------------------------------------------------
+// Macros / generic helpers
+// -----------------------------------------------------------------------------
+
+// Box<T> helper
 Box<T>: Box<T> = {
     <T> => Box::new(<>),
 }
@@ -49,92 +55,41 @@ KVPair<K, V>: (K, V) = {
     <k: K> ":" <v: V> => (k, v)
 };
 
-// Expressions ///////////////////////////////////////////////////////
+// -----------------------------------------------------------------------------
+// Terminals / simple expressions
+// -----------------------------------------------------------------------------
 
+// Literal values mapped to Value
+LiteralVal: Value = {
+    Int => Value::Int(<>),
+    Float => Value::Float(<>),
+    Bool => Value::Bool(<>),
+    String => Value::Str(<>),
+}
+
+// Literal expression wrapper
+Literal: SExpr = {
+    LiteralVal => SExpr::Val(<>),
+};
+
+// Parenthesized expression
+Paren: SExpr = {
+    "(" <Expr> ")"
+};
+
+// Identifier as an SExpr (variable reference)
 IdentSExpr : SExpr = {
     Ident => SExpr::Var(<>),
 };
 
-MultExprHelp: SBinOp  = {
-    "*" => SBinOp::NOp(NumericalBinOp::Mul),
-    "/" => SBinOp::NOp(NumericalBinOp::Div),
-    "%" => SBinOp::NOp(NumericalBinOp::Mod),
-};
-
-MultExpr<Next>: SExpr = {
-    <lhs: Box<MultExpr<Next>>> <op: MultExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
-    },
-    Next
-};
-
-AddExprHelp: SBinOp  = {
-    "+" => SBinOp::NOp(NumericalBinOp::Add),
-    "-" => SBinOp::NOp(NumericalBinOp::Sub),
-};
-
-AddExpr<Next>: SExpr = {
-    <lhs: Box<AddExpr<Next>>> <op: AddExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
-    },
-    Next
-};
-
-OrExpr<Next>: SExpr = {
-    <lhs: Box<OrExpr<Next>>> "||" <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or))
-    },
-    Next
-};
-
-AndExpr<Next>: SExpr = {
-    <lhs: Box<AndExpr<Next>>> "&&" <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And))
-    },
-    Next
-};
-
-ConcatExpr<Next>: SExpr = {
-    <lhs: Box<ConcatExpr<Next>>> "++" <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, SBinOp::SOp(StrBinOp::Concat))
-    },
-    Next
-}
-
-CompExprHelp: SBinOp = {
-    "==" => SBinOp::COp(CompBinOp::Eq),
-    // "!=" => SBinOp::COp(CompBinOp::Ne), // Not implemented yet
-}
-
-CompExpr<Next>: SExpr = {
-    <lhs: Box<CompExpr<Next>>> <op: CompExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
-    },
-    Next
-};
-
-// Relational expressions
-RelExprHelp: SBinOp = {
-    "<=" => SBinOp::COp(CompBinOp::Le),
-    ">=" => SBinOp::COp(CompBinOp::Ge),
-    "<" => SBinOp::COp(CompBinOp::Lt),
-    ">" => SBinOp::COp(CompBinOp::Gt),
-}
-
-// Relational expressions
-RelExpr<Next>: SExpr = {
-    <lhs: Box<RelExpr<Next>>> <op: RelExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
-    },
-    Next
-};
-
+// Helpers for indexing base (literal, ident, or paren)
 SIndexHelp: Box<SExpr> = {
     Box<Literal>,
     Box<IdentSExpr>,
     Box<Paren>
 };
 
+// Indexing expression e[idx] (supports negative via "-")
 SIndex: SExpr = {
     <expr: SIndexHelp> "[" <neg: "-"?> <idx: Int> "]" => {
         let i: isize = idx.try_into().unwrap();
@@ -143,63 +98,15 @@ SIndex: SExpr = {
     },
 };
 
-UnaryMinusHelper: SExpr = {
-    <n: Int> => SExpr::Val(Value::Int(-n)),
-    <n: Float> => SExpr::Val(Value::Float(-n)),
-    <x: Box<IdentSExpr>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
-    <x: Box<Paren>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
-};
-
-UnaryExpr<Next>: SExpr = {
-    "-" <n: UnaryMinusHelper> => n,
-    "!" <b: Box<UnaryExpr<Next>>> => SExpr::Not(b),
-    Next
-};
-
+// Container constructors
 ContainerExpr: SExpr = {
     "List" "(" <SepListOpt<Expr, ",">> ")" => SExpr::List(<>),
     "Map" "(" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> ")" => SExpr::Map(BTreeMap::from_iter(kv_pairs.into_iter()))
 }
 
-LiteralVal: Value = {
-    Int => Value::Int(<>),
-    Float => Value::Float(<>),
-    Bool => Value::Bool(<>),
-    String => Value::Str(<>),
-}
-
-Literal: SExpr = {
-    LiteralVal => SExpr::Val(<>),
-};
-
-Paren: SExpr = {
-    "(" <Expr> ")"
-};
-
-Atom: SExpr = {
-    SIndex,
-    SpecialKeywords,
-    Literal,
-    ContainerExpr,
-    IdentSExpr,
-    Paren
-}
-
-Ifelse: SExpr = {
-    "if" <c: Box<Expr>> "then" <i: Box<Expr>> "else" <e: Box<Expr>> => SExpr::If(c, i, e)
-}
-
-StreamTyp: StreamType = {
-    "Int" => StreamType::Int,
-    "Str" => StreamType::Str,
-    "Float" => StreamType::Float,
-    "Bool" => StreamType::Bool,
-    "Unit" => StreamType::Unit,
-}
-
-TypeAnno: StreamType = {
-    ":" <StreamTyp> => <>
-}
+// -----------------------------------------------------------------------------
+// Special keywords / builtins (function-like forms)
+// -----------------------------------------------------------------------------
 
 SpecialKeywords: SExpr = {
     "dynamic" "(" <Box<Expr>> ")" => SExpr::Dynamic(<>),
@@ -225,15 +132,160 @@ SpecialKeywords: SExpr = {
     "abs" "(" <Box<Expr>> ")" => SExpr::Abs(<>),
 }
 
+// -----------------------------------------------------------------------------
+// Atom (base expressions with same precedence)
+// -----------------------------------------------------------------------------
+
+Atom: SExpr = {
+    SIndex,
+    SpecialKeywords,
+    Literal,
+    ContainerExpr,
+    IdentSExpr,
+    Paren
+}
+
+// -----------------------------------------------------------------------------
+// Unary expressions
+// -----------------------------------------------------------------------------
+
+UnaryMinusHelper: SExpr = {
+    <n: Int> => SExpr::Val(Value::Int(-n)),
+    <n: Float> => SExpr::Val(Value::Float(-n)),
+    <x: Box<IdentSExpr>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
+    <x: Box<Paren>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
+};
+
+UnaryExpr<Next>: SExpr = {
+    "-" <n: UnaryMinusHelper> => n,
+    "!" <b: Box<UnaryExpr<Next>>> => SExpr::Not(b),
+    Next
+};
+
+// -----------------------------------------------------------------------------
+// Binary operators
+// -----------------------------------------------------------------------------
+
+// Multiplicative helpers
+MultExprHelp: SBinOp  = {
+    "*" => SBinOp::NOp(NumericalBinOp::Mul),
+    "/" => SBinOp::NOp(NumericalBinOp::Div),
+    "%" => SBinOp::NOp(NumericalBinOp::Mod),
+};
+
+MultExpr<Next>: SExpr = {
+    <lhs: Box<MultExpr<Next>>> <op: MultExprHelp> <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    Next
+};
+
+// Additive helpers
+AddExprHelp: SBinOp  = {
+    "+" => SBinOp::NOp(NumericalBinOp::Add),
+    "-" => SBinOp::NOp(NumericalBinOp::Sub),
+};
+
+AddExpr<Next>: SExpr = {
+    <lhs: Box<AddExpr<Next>>> <op: AddExprHelp> <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    Next
+};
+
+// Relational operators ( < <= > >= )
+RelExprHelp: SBinOp = {
+    "<=" => SBinOp::COp(CompBinOp::Le),
+    ">=" => SBinOp::COp(CompBinOp::Ge),
+    "<" => SBinOp::COp(CompBinOp::Lt),
+    ">" => SBinOp::COp(CompBinOp::Gt),
+}
+
+RelExpr<Next>: SExpr = {
+    <lhs: Box<RelExpr<Next>>> <op: RelExprHelp> <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    Next
+};
+
+// Comparison (==)
+CompExprHelp: SBinOp = {
+    "==" => SBinOp::COp(CompBinOp::Eq),
+    // "!=" => SBinOp::COp(CompBinOp::Ne), // Not implemented yet
+}
+
+CompExpr<Next>: SExpr = {
+    <lhs: Box<CompExpr<Next>>> <op: CompExprHelp> <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, op)
+    },
+    Next
+};
+
+// Boolean
+AndExpr<Next>: SExpr = {
+    <lhs: Box<AndExpr<Next>>> "&&" <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And))
+    },
+    Next
+};
+
+OrExpr<Next>: SExpr = {
+    <lhs: Box<OrExpr<Next>>> "||" <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or))
+    },
+    Next
+};
+
+// String concat
+ConcatExpr<Next>: SExpr = {
+    <lhs: Box<ConcatExpr<Next>>> "++" <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, SBinOp::SOp(StrBinOp::Concat))
+    },
+    Next
+}
+
+// -----------------------------------------------------------------------------
+// If-then-else (binds weaker than the precedence chain)
+// -----------------------------------------------------------------------------
+
+Ifelse: SExpr = {
+    "if" <c: Box<Expr>> "then" <i: Box<Expr>> "else" <e: Box<Expr>> => SExpr::If(c, i, e)
+}
+
+// -----------------------------------------------------------------------------
+// Types / annotations
+// -----------------------------------------------------------------------------
+
+StreamTyp: StreamType = {
+    "Int" => StreamType::Int,
+    "Str" => StreamType::Str,
+    "Float" => StreamType::Float,
+    "Bool" => StreamType::Bool,
+    "Unit" => StreamType::Unit,
+}
+
+TypeAnno: StreamType = {
+    ":" <StreamTyp> => <>
+}
+
+// -----------------------------------------------------------------------------
+// Precedence chain: compose operator precedence from lowest → highest
+// -----------------------------------------------------------------------------
+
 // Operator precedence chain with Final having highest precedence
 PrecChain<Final>: SExpr = {
     ConcatExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>>,
 }
 
+// The top-level expression
 pub Expr: SExpr = {
-    Ifelse, // If-else binds weaker than the PrecChain chain to ensure that if a then b else c + d is parsed as if a then b else (c + d)
+    Ifelse, // If-else binds weaker than the PrecChain chain to handle dangling else, i.e., if a then b else c + d is parsed as if a then b else (c + d)
     PrecChain<Atom>
 };
+
+// -----------------------------------------------------------------------------
+// Top-level declarations
+// -----------------------------------------------------------------------------
 
 InputDecl: STopDecl = {
     "in" <id: Ident> <typ: TypeAnno?> => STopDecl::Input(id, typ)
