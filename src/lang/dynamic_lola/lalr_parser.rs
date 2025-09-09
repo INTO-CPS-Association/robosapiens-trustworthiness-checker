@@ -759,6 +759,22 @@ mod tests {
     }
 
     #[test]
+    fn test_when() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"when(x)"#)),
+            r#"Ok(When(Var(VarName::new("x"))))"#
+        )
+    }
+
+    #[test]
+    fn test_is_defined() {
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"is_defined(x)"#)),
+            r#"Ok(IsDefined(Var(VarName::new("x"))))"#
+        )
+    }
+
+    #[test]
     fn test_parse_list() {
         assert_eq!(
             presult_to_string(&parse_sexpr(r#"List()"#)),
