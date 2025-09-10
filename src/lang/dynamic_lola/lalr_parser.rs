@@ -2,9 +2,21 @@ use std::collections::BTreeMap;
 
 use anyhow::{Error, anyhow};
 use ecow::EcoVec;
+use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
+use crate::lang::core::parser::ExprParser as EParserTrait;
 use crate::{LOLASpecification, SExpr, lang::dynamic_lola::ast::STopDecl};
+
+#[derive(Clone)]
+pub struct LALRExprParser;
+
+impl EParserTrait<SExpr> for LALRExprParser {
+    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
+        debug!("Parsing expr: {}", input);
+        parse_sexpr(input)
+    }
+}
 
 pub fn parse_sexpr<'input>(input: &'input str) -> Result<SExpr, Error> {
     ExprParser::new()

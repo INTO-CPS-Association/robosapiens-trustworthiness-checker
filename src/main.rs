@@ -51,6 +51,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.maybe_runtime(cli.runtime);
 
+    let builder = builder.parser(parser.clone());
+
     let model_parser = match language {
         Language::DynSRV => tc::lang::dynamic_lola::parser::lola_specification,
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,

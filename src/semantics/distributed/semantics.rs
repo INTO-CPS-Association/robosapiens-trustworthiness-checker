@@ -4,6 +4,7 @@ use crate::SExpr;
 use crate::core::OutputStream;
 use crate::core::Value;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
+use crate::lang::dynamic_lola::parser::CombExprParser;
 use crate::semantics::MonitoringSemantics;
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_untyped_lola::combinators as mc;
@@ -43,15 +44,15 @@ impl MonitoringSemantics<SExpr, Value, DistributedContext<Value>> for Distribute
             SExpr::Var(v) => mc::var(ctx, v),
             SExpr::Dynamic(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic(ctx, e, None, 10)
+                mc::dynamic::<DistributedContext<Value>, CombExprParser>(ctx, e, None, 10)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic(ctx, e, Some(vs), 10)
+                mc::dynamic::<DistributedContext<Value>, CombExprParser>(ctx, e, Some(vs), 10)
             }
             SExpr::Defer(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::defer(ctx, e, 10)
+                mc::defer::<CombExprParser>(ctx, e, 10)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = Self::to_async_stream(*e1, ctx);

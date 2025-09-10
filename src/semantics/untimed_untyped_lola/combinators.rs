@@ -1,6 +1,7 @@
+use crate::SExpr;
 use crate::core::StreamData;
 use crate::core::Value;
-use crate::lang::dynamic_lola::parser::lola_expression;
+use crate::lang::core::parser::ExprParser;
 use crate::semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics;
 use crate::semantics::{MonitoringSemantics, StreamContext};
 use crate::{OutputStream, VarName};
@@ -19,7 +20,6 @@ use std::collections::BTreeMap;
 use tracing::debug;
 use tracing::info;
 use tracing::instrument;
-use winnow::Parser;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
@@ -353,12 +353,15 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
     )
 }
 
-pub fn dynamic<Ctx: StreamContext<Value>>(
+pub fn dynamic<Ctx: StreamContext<Value>, Parser>(
     ctx: &Ctx,
     mut eval_stream: OutputStream<Value>,
     vs: Option<EcoVec<VarName>>,
     history_length: usize,
-) -> OutputStream<Value> {
+) -> OutputStream<Value>
+where
+    Parser: ExprParser<SExpr> + 'static,
+{
     // Create a subcontext with a history window length
     let mut subcontext = match vs {
         Some(vs) => ctx.restricted_subcontext(vs, history_length),
@@ -401,10 +404,10 @@ pub fn dynamic<Ctx: StreamContext<Value>>(
                     yield Value::Unknown;
                 }
                 Value::Str(s) => {
-                    let expr = lola_expression.parse_next(&mut s.as_ref())
+                    let expr = Parser::parse(&mut s.as_ref())
                         .expect("Invalid dynamic str");
                     debug!("Dynamic evaluated to expression {:?}", expr);
-                    let mut eval_output_stream = UntimedLolaSemantics::to_async_stream(expr, &subcontext);
+                    let mut eval_output_stream = UntimedLolaSemantics::<Parser>::to_async_stream(expr, &subcontext);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
                     subcontext.tick().await;
@@ -435,11 +438,14 @@ pub fn var(ctx: &impl StreamContext<Value>, x: VarName) -> OutputStream<Value> {
 
 // Defer for an UntimedLolaExpression using the lola_expression parser
 #[instrument(skip(ctx, prop_stream))]
-pub fn defer(
+pub fn defer<Parser>(
     ctx: &impl StreamContext<Value>,
     mut prop_stream: OutputStream<Value>,
     history_length: usize,
-) -> OutputStream<Value> {
+) -> OutputStream<Value>
+where
+    Parser: ExprParser<SExpr> + 'static,
+{
     /* Subcontext with current values only*/
     let mut subcontext = ctx.subcontext(history_length);
     // let mut prog = subcontext.progress_sender.subscriber();
@@ -454,9 +460,9 @@ pub fn defer(
             match current {
                 Value::Str(defer_s) => {
                     // We have a string to evaluate so do so
-                    let expr = lola_expression.parse_next(&mut defer_s.as_ref())
+                    let expr = Parser::parse(&mut defer_s.as_ref())
                         .expect("Invalid dynamic str");
-                    eval_output_stream = Some(UntimedLolaSemantics::to_async_stream(expr, &subcontext));
+                    eval_output_stream = Some(UntimedLolaSemantics::<Parser>::to_async_stream(expr, &subcontext));
                     debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
                     subcontext.run().await;
                     break;

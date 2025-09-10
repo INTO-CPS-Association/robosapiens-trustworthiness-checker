@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use ecow::EcoString;
 use ecow::EcoVec;
+use tracing::debug;
 use winnow::Parser;
 use winnow::Result;
 use winnow::combinator::*;
@@ -12,6 +13,16 @@ use super::ast::*;
 use crate::core::StreamType;
 use crate::core::VarName;
 use crate::distributed::distribution_graphs::NodeName;
+
+#[derive(Clone)]
+pub struct CombExprParser;
+
+impl ExprParser<SExpr> for CombExprParser {
+    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
+        debug!("Parsing expr: {}", input);
+        lola_expression(input).map_err(|e| anyhow::anyhow!(e))
+    }
+}
 
 // This is the top-level parser for LOLA expressions
 pub fn lola_expression(s: &mut &str) -> Result<SExpr> {

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::Value;
+use crate::lang::core::parser::ExprParser;
 use crate::lang::dynamic_lola::ast::{
     BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
 };
@@ -10,11 +11,17 @@ use crate::semantics::MonitoringSemantics;
 use crate::semantics::StreamContext;
 
 #[derive(Clone)]
-pub struct UntimedLolaSemantics;
+pub struct UntimedLolaSemantics<Parser>
+where
+    Parser: ExprParser<SExpr> + 'static,
+{
+    _parser: std::marker::PhantomData<Parser>,
+}
 
-impl<Ctx> MonitoringSemantics<SExpr, Value, Ctx> for UntimedLolaSemantics
+impl<Ctx, Parser> MonitoringSemantics<SExpr, Value, Ctx> for UntimedLolaSemantics<Parser>
 where
     Ctx: StreamContext<Value>,
+    Parser: ExprParser<SExpr> + 'static,
 {
     fn to_async_stream(expr: SExpr, ctx: &Ctx) -> OutputStream<Value> {
         match expr {
@@ -45,15 +52,15 @@ where
             SExpr::Var(v) => mc::var(ctx, v),
             SExpr::Dynamic(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic(ctx, e, None, 1)
+                mc::dynamic::<Ctx, Parser>(ctx, e, None, 1)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic(ctx, e, Some(vs), 1)
+                mc::dynamic::<Ctx, Parser>(ctx, e, Some(vs), 1)
             }
             SExpr::Defer(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::defer(ctx, e, 1)
+                mc::defer::<Parser>(ctx, e, 1)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = Self::to_async_stream(*e1, ctx);

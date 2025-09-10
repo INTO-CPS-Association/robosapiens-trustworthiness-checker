@@ -15,6 +15,10 @@ pub use winnow::ascii::dec_int as integer;
 pub use winnow::ascii::float;
 pub use winnow::ascii::space0 as whitespace;
 
+pub trait ExprParser<Expr>: Clone {
+    fn parse(input: &mut &str) -> anyhow::Result<Expr>;
+}
+
 pub fn presult_to_string<T: Debug, E: Debug>(e: &Result<T, E>) -> String {
     format!("{:?}", e)
 }
