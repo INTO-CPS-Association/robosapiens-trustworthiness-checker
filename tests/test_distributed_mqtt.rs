@@ -20,8 +20,7 @@ use trustworthiness_checker::{
     dep_manage::interface::{DependencyKind, create_dependency_manager},
     io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
     lola_specification,
-    runtime::asynchronous::AsyncMonitorRunner,
-    semantics::{UntimedLolaSemantics, distributed::localisation::Localisable},
+    semantics::distributed::localisation::Localisable,
 };
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
@@ -96,7 +95,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     let input_provider_1_ready = input_provider_1.ready();
     let input_provider_2_ready = input_provider_2.ready();
 
-    let runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_1 = TestMonitorRunner::new(
         executor.clone(),
         model1.clone(),
         Box::new(input_provider_1),
@@ -108,7 +107,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .await
         .expect("Input provider 1 should be ready");
 
-    let runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_2 = TestMonitorRunner::new(
         executor.clone(),
         model2.clone(),
         Box::new(input_provider_2),
@@ -246,7 +245,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
     )
     .expect("Failed to create output handler 2");
 
-    let runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_1 = TestMonitorRunner::new(
         executor.clone(),
         model1.clone(),
         Box::new(input_provider_1),
@@ -254,7 +253,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         create_dependency_manager(DependencyKind::Empty, model1),
     );
 
-    let runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_2 = TestMonitorRunner::new(
         executor.clone(),
         model2.clone(),
         Box::new(input_provider_2),
@@ -392,7 +391,7 @@ async fn localisation_distribution_graphs_test(
     )
     .expect("Failed to create output handler 2");
 
-    let runner_1 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_1 = TestMonitorRunner::new(
         executor.clone(),
         model1.clone(),
         Box::new(input_provider_1),
@@ -400,7 +399,7 @@ async fn localisation_distribution_graphs_test(
         create_dependency_manager(DependencyKind::Empty, model1),
     );
 
-    let runner_2 = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner_2 = TestMonitorRunner::new(
         executor.clone(),
         model2.clone(),
         Box::new(input_provider_2),

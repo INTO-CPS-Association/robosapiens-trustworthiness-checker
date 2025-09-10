@@ -35,10 +35,10 @@ use trustworthiness_checker::{
         redis::{input_provider::RedisInputProvider, output_handler::RedisOutputHandler},
         testing::manual_output_handler::ManualOutputHandler,
     },
-    lola_fixtures::{spec_simple_add_monitor, spec_simple_add_monitor_typed_float},
+    lola_fixtures::{
+        TestMonitorRunner, spec_simple_add_monitor, spec_simple_add_monitor_typed_float,
+    },
     lola_specification,
-    runtime::asynchronous::AsyncMonitorRunner,
-    semantics::UntimedLolaSemantics,
 };
 use winnow::Parser;
 
@@ -149,7 +149,7 @@ async fn test_add_monitor_redis_input(executor: Rc<LocalExecutor<'static>>) -> a
     // Run the monitor
     let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
     let outputs = output_handler.get_output();
-    let runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner = TestMonitorRunner::new(
         executor.clone(),
         model.clone(),
         Box::new(input_provider),
@@ -260,7 +260,7 @@ async fn test_add_monitor_redis_input_float(
     // Run the monitor
     let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
     let outputs = output_handler.get_output();
-    let runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+    let runner = TestMonitorRunner::new(
         executor.clone(),
         model.clone(),
         Box::new(input_provider),

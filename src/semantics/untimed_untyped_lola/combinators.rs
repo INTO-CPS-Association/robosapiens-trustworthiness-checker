@@ -803,6 +803,8 @@ mod tests {
     use smol::LocalExecutor;
     use std::rc::Rc;
 
+    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+
     #[apply(async_test)]
     async fn test_not() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Bool(true), false.into()]));
@@ -835,7 +837,7 @@ mod tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic(&ctx, e, None, 10);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
@@ -848,7 +850,7 @@ mod tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic(&ctx, e, None, 10);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -864,7 +866,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic(&ctx, e, None, 10);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-unknown value
@@ -881,7 +883,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic(&ctx, e, None, 10);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-unknown value
@@ -895,7 +897,7 @@ mod tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer(&ctx, e, 2);
+        let res_stream = defer::<Parser>(&ctx, e, 2);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 3.into()];
@@ -908,7 +910,7 @@ mod tests {
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer(&ctx, e, 10);
+        let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -921,7 +923,7 @@ mod tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, "x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer(&ctx, e, 10);
+        let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, 4.into()];
@@ -939,7 +941,7 @@ mod tests {
         ])) as OutputStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer(&ctx, e, 10);
+        let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 4.into(), 5.into()];
@@ -952,7 +954,7 @@ mod tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, Value::Unknown]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer(&ctx, e, 10);
+        let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Unknown, Value::Unknown];

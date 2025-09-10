@@ -1,10 +1,22 @@
-use crate::{InputProvider, OutputStream, Value, VarName};
+use crate::{
+    InputProvider, LOLASpecification, OutputStream, SExpr, Value, VarName,
+    lang::dynamic_lola::lalr_parser::LALRExprParser,
+    runtime::asynchronous::{AsyncMonitorRunner, Context},
+    semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics,
+};
 use futures::stream;
 use smol::stream::StreamExt;
 use std::collections::BTreeMap;
 
 // Dead code is allowed in this file since cargo does not correctly
 // track when functions are used in tests or with specific features.
+
+// Default semantics to use in tests
+pub type TestSemantics = UntimedLolaSemantics<LALRExprParser>;
+
+// Default monitor runner to use in tests
+pub type TestMonitorRunner<Ctx = Context<Value>> =
+    AsyncMonitorRunner<SExpr, Value, TestSemantics, LOLASpecification, Ctx>;
 
 pub fn input_empty() -> BTreeMap<VarName, OutputStream<Value>> {
     BTreeMap::new()

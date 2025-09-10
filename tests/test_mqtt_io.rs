@@ -22,7 +22,7 @@ mod tests {
     use trustworthiness_checker::io::mqtt::MQTTLocalityReceiver;
     use trustworthiness_checker::semantics::distributed::localisation::LocalitySpec;
 
-    use trustworthiness_checker::lola_fixtures::input_streams1;
+    use trustworthiness_checker::lola_fixtures::{TestMonitorRunner, input_streams1};
     use trustworthiness_checker::{
         Value, VarName,
         core::{OutputHandler, Runnable},
@@ -33,8 +33,6 @@ mod tests {
         },
         lola_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         lola_specification,
-        runtime::asynchronous::AsyncMonitorRunner,
-        semantics::UntimedLolaSemantics,
     };
 
     use super::*;
@@ -79,7 +77,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+        let async_monitor = TestMonitorRunner::new(
             executor.clone(),
             spec.clone(),
             Box::new(input_streams),
@@ -130,7 +128,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let async_monitor = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+        let async_monitor = TestMonitorRunner::new(
             executor.clone(),
             spec.clone(),
             Box::new(input_streams),
@@ -227,7 +225,7 @@ mod tests {
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
-        let runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+        let runner = TestMonitorRunner::new(
             executor.clone(),
             model.clone(),
             Box::new(input_provider),
@@ -325,7 +323,7 @@ mod tests {
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
-        let runner = AsyncMonitorRunner::<_, _, UntimedLolaSemantics, _, _>::new(
+        let runner = TestMonitorRunner::new(
             executor.clone(),
             model.clone(),
             Box::new(input_provider),

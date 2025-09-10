@@ -56,6 +56,7 @@ mod tests {
 
     use super::*;
     use crate::async_test;
+    use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{
@@ -85,8 +86,10 @@ mod tests {
             .node_names(vec!["A".into(), "B".into(), "C".into()])
             .build();
         let exp = vec![Value::Int(2), Value::Int(4)];
-        let res_stream =
-            crate::semantics::untimed_untyped_lola::combinators::dynamic(&ctx, e, None, 10);
+        let res_stream = crate::semantics::untimed_untyped_lola::combinators::dynamic::<
+            DistributedContext<Value>,
+            LALRExprParser,
+        >(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         assert_eq!(res, exp);

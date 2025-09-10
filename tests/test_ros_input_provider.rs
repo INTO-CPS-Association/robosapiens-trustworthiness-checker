@@ -80,6 +80,8 @@ fn dummy_publisher<T: WrappedTypesupport + 'static>(
 #[cfg(feature = "ros")]
 #[apply(async_test)]
 async fn test_add_monitor_ros(ex: Rc<LocalExecutor<'static>>) {
+    use trustworthiness_checker::lola_fixtures::TestMonitorRunner;
+
     let var_topics = json_to_mapping(
         r#"
         {
@@ -131,13 +133,12 @@ async fn test_add_monitor_ros(ex: Rc<LocalExecutor<'static>>) {
     let outputs = output_handler.get_output();
 
     // Create the monitor
-    let runner: AsyncMonitorRunner<_, Value, UntimedLolaSemantics, _, Context<Value>> =
-        AsyncMonitorBuilder::new()
-            .executor(ex.clone())
-            .model(model)
-            .input(Box::new(input_provider))
-            .output(Box::new(output_handler))
-            .build();
+    let runner: TestMonitorRunner = AsyncMonitorBuilder::new()
+        .executor(ex.clone())
+        .model(model)
+        .input(Box::new(input_provider))
+        .output(Box::new(output_handler))
+        .build();
 
     // Lauch the monitor runner
     ex.spawn(runner.run()).detach();
