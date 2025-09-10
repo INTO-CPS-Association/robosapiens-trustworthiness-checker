@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::SExpr;
 use crate::core::OutputStream;
 use crate::core::Value;
+use crate::lang::core::parser::ExprParser;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
-use crate::lang::dynamic_lola::parser::CombExprParser;
 use crate::semantics::MonitoringSemantics;
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_untyped_lola::combinators as mc;
@@ -12,9 +12,18 @@ use crate::semantics::untimed_untyped_lola::combinators as mc;
 use super::contexts::DistributedContext;
 
 #[derive(Clone)]
-pub struct DistributedSemantics;
+pub struct DistributedSemantics<Parser>
+where
+    Parser: ExprParser<SExpr> + 'static,
+{
+    _parser: std::marker::PhantomData<Parser>,
+}
 
-impl MonitoringSemantics<SExpr, Value, DistributedContext<Value>> for DistributedSemantics {
+impl<Parser> MonitoringSemantics<SExpr, Value, DistributedContext<Value>>
+    for DistributedSemantics<Parser>
+where
+    Parser: ExprParser<SExpr> + 'static,
+{
     fn to_async_stream(expr: SExpr, ctx: &DistributedContext<Value>) -> OutputStream<Value> {
         match expr {
             SExpr::Val(v) => mc::val(v),
@@ -44,15 +53,15 @@ impl MonitoringSemantics<SExpr, Value, DistributedContext<Value>> for Distribute
             SExpr::Var(v) => mc::var(ctx, v),
             SExpr::Dynamic(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic::<DistributedContext<Value>, CombExprParser>(ctx, e, None, 10)
+                mc::dynamic::<DistributedContext<Value>, Parser>(ctx, e, None, 10)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic::<DistributedContext<Value>, CombExprParser>(ctx, e, Some(vs), 10)
+                mc::dynamic::<DistributedContext<Value>, Parser>(ctx, e, Some(vs), 10)
             }
             SExpr::Defer(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::defer::<CombExprParser>(ctx, e, 10)
+                mc::defer::<Parser>(ctx, e, 10)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = Self::to_async_stream(*e1, ctx);

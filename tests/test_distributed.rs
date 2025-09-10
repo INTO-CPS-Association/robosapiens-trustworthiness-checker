@@ -6,9 +6,8 @@ use smol::{
     LocalExecutor,
     stream::{self, StreamExt},
 };
-use trustworthiness_checker::async_test;
 use trustworthiness_checker::{
-    OutputStream, Value,
+    LOLASpecification, OutputStream, SExpr, Value,
     core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     io::testing::ManualOutputHandler,
@@ -16,7 +15,12 @@ use trustworthiness_checker::{
     runtime::distributed::DistAsyncMonitorBuilder,
     semantics::distributed::semantics::DistributedSemantics,
 };
+use trustworthiness_checker::{async_test, lang::dynamic_lola::lalr_parser::LALRExprParser};
 use winnow::Parser;
+
+type TestDistSemantics = DistributedSemantics<LALRExprParser>;
+type TestDistMonitorBuilder<Ctx> =
+    DistAsyncMonitorBuilder<LOLASpecification, Ctx, Value, SExpr, TestDistSemantics>;
 
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
@@ -57,7 +61,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
-    let monitor = DistAsyncMonitorBuilder::<_, _, _, _, DistributedSemantics>::new()
+    let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -114,7 +118,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
-    let monitor = DistAsyncMonitorBuilder::<_, _, _, _, DistributedSemantics>::new()
+    let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -171,7 +175,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
-    let monitor = DistAsyncMonitorBuilder::<_, _, _, _, DistributedSemantics>::new()
+    let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -228,7 +232,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
-    let monitor = DistAsyncMonitorBuilder::<_, _, _, _, DistributedSemantics>::new()
+    let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -285,7 +289,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
-    let monitor = DistAsyncMonitorBuilder::<_, _, _, _, DistributedSemantics>::new()
+    let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)

@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::rc::Rc;
 
 use smol::LocalExecutor;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     LOLASpecification, Monitor, Value, VarName,
@@ -393,109 +393,121 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
     ) -> Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> {
-        let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> =
-            match (runtime, semantics, parser) {
-                (Runtime::Async, Semantics::Untimed, ParserMode::Lalr) => {
-                    Box::new(AsyncMonitorBuilder::<
-                        LOLASpecification,
-                        Context<Value>,
-                        Value,
-                        _,
-                        UntimedLolaSemantics<LALRExprParser>,
-                    >::new())
-                }
-                (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
-                    Box::new(AsyncMonitorBuilder::<
-                        LOLASpecification,
-                        Context<Value>,
-                        Value,
-                        _,
-                        UntimedLolaSemantics<CombExprParser>,
-                    >::new())
-                }
-                (Runtime::Async, Semantics::TypedUntimed, _) => {
-                    Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
-                        TypedLOLASpecification,
-                        Context<Value>,
-                        Value,
-                        _,
-                        TypedUntimedLolaSemantics,
-                    >::new()))
-                }
-                (Runtime::Constraints, Semantics::Untimed, _) => {
-                    Box::new(ConstraintBasedMonitorBuilder::new())
-                }
-                (Runtime::ReconfigurableAsync, Semantics::Untimed, _) => {
-                    Box::new(ReconfAsyncMonitorBuilder::<
-                        LOLASpecification,
-                        DistributedContext<Value>,
-                        Value,
-                        _,
-                        DistributedSemantics,
-                    >::new())
-                }
-                (Runtime::Distributed, Semantics::Untimed, _) => {
-                    debug!(
-                        "Setting up distributed runtime with distribution_mode = {:?}",
-                        distribution_mode
+        let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> = match (
+            runtime, semantics, parser,
+        ) {
+            (Runtime::Async, Semantics::Untimed, ParserMode::Lalr) => {
+                Box::new(AsyncMonitorBuilder::<
+                    LOLASpecification,
+                    Context<Value>,
+                    Value,
+                    _,
+                    UntimedLolaSemantics<LALRExprParser>,
+                >::new())
+            }
+            (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
+                Box::new(AsyncMonitorBuilder::<
+                    LOLASpecification,
+                    Context<Value>,
+                    Value,
+                    _,
+                    UntimedLolaSemantics<CombExprParser>,
+                >::new())
+            }
+            (Runtime::Async, Semantics::TypedUntimed, _) => {
+                Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
+                    TypedLOLASpecification,
+                    Context<Value>,
+                    Value,
+                    _,
+                    TypedUntimedLolaSemantics,
+                >::new()))
+            }
+            (Runtime::Constraints, Semantics::Untimed, _) => {
+                Box::new(ConstraintBasedMonitorBuilder::new())
+            }
+            (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Lalr) => {
+                Box::new(ReconfAsyncMonitorBuilder::<
+                    LOLASpecification,
+                    DistributedContext<Value>,
+                    Value,
+                    _,
+                    DistributedSemantics<LALRExprParser>,
+                >::new())
+            }
+            (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Combinator) => {
+                Box::new(ReconfAsyncMonitorBuilder::<
+                    LOLASpecification,
+                    DistributedContext<Value>,
+                    Value,
+                    _,
+                    DistributedSemantics<CombExprParser>,
+                >::new())
+            }
+            (Runtime::Distributed, Semantics::Untimed, _) => {
+                debug!(
+                    "Setting up distributed runtime with distribution_mode = {:?}",
+                    distribution_mode
+                );
+                if matches!(parser, ParserMode::Combinator) {
+                    // Because we would need to duplicate all this DistAsyncMonitorBuilder code or
+                    // implement an AnonymousDistAsyncMonitorBuilder...
+                    warn!(
+                        "Combinator parser not supported for DUPs with Distributed Runtime. Defaulting to LALR parser."
                     );
-                    let builder = DistAsyncMonitorBuilder::<
-                        LOLASpecification,
-                        DistributedContext<Value>,
-                        Value,
-                        _,
-                        DistributedSemantics,
-                    >::new();
-
-                    let builder = builder.scheduler_mode(scheduler_mode);
-
-                    let builder = match distribution_mode {
-                        DistributionMode::CentralMonitor => builder,
-                        DistributionMode::LocalMonitor(_) => {
-                            todo!("Local monitor not implemented here yet")
-                        }
-                        DistributionMode::DistributedCentralised(locations) => {
-                            let locations = locations
-                                .into_iter()
-                                .map(|loc| (loc.clone().into(), loc))
-                                .collect();
-                            builder.mqtt_centralised_dist_graph(locations)
-                        }
-                        DistributionMode::DistributedRandom(locations) => {
-                            let locations = locations
-                                .into_iter()
-                                .map(|loc| (loc.clone().into(), loc))
-                                .collect();
-                            builder.mqtt_random_dist_graph(locations)
-                        }
-                        DistributionMode::DistributedOptimizedStatic(
-                            locations,
-                            dist_constraints,
-                        ) => {
-                            let locations = locations
-                                .into_iter()
-                                .map(|loc| (loc.clone().into(), loc))
-                                .collect();
-                            builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
-                        }
-                        DistributionMode::DistributedOptimizedDynamic(
-                            locations,
-                            dist_constraints,
-                        ) => {
-                            let locations = locations
-                                .into_iter()
-                                .map(|loc| (loc.clone().into(), loc))
-                                .collect();
-                            builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
-                        }
-                    };
-
-                    Box::new(builder)
                 }
-                _ => {
-                    panic!("Unsupported runtime and semantics combination");
-                }
-            };
+
+                let builder = DistAsyncMonitorBuilder::<
+                    LOLASpecification,
+                    DistributedContext<Value>,
+                    Value,
+                    _,
+                    DistributedSemantics<LALRExprParser>,
+                >::new();
+
+                let builder = builder.scheduler_mode(scheduler_mode);
+
+                let builder = match distribution_mode {
+                    DistributionMode::CentralMonitor => builder,
+                    DistributionMode::LocalMonitor(_) => {
+                        todo!("Local monitor not implemented here yet")
+                    }
+                    DistributionMode::DistributedCentralised(locations) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.mqtt_centralised_dist_graph(locations)
+                    }
+                    DistributionMode::DistributedRandom(locations) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.mqtt_random_dist_graph(locations)
+                    }
+                    DistributionMode::DistributedOptimizedStatic(locations, dist_constraints) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
+                    }
+                    DistributionMode::DistributedOptimizedDynamic(locations, dist_constraints) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
+                    }
+                };
+
+                Box::new(builder)
+            }
+            _ => {
+                panic!("Unsupported runtime and semantics combination");
+            }
+        };
 
         let builder = match executor {
             Some(ex) => builder.executor(ex),
