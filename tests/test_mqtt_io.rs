@@ -403,15 +403,14 @@ mod tests {
         let mqtt_uri = format!("tcp://localhost:{}", mqtt_port);
         let node_name = "test_node".to_string();
 
-        // Create oneshot channel for synchronization
+        // Create locality receiver and wait for it to be ready
         let locality_receiver = MQTTLocalityReceiver::new(mqtt_uri.clone(), node_name);
-        let ready = locality_receiver.ready();
+        locality_receiver.ready().await?;
 
         executor
             .spawn(async move {
-                // Wait for receiver to signal it's actually subscribed
-                ready.await;
-                println!("Receiver is subscribed, publishing message");
+                // Receiver is already ready, publish immediately
+                println!("Receiver is ready, publishing message");
 
                 let mqtt_client = provide_mqtt_client(mqtt_uri)
                     .await

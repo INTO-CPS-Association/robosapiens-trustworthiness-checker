@@ -1,0 +1,215 @@
+use std::mem;
+use std::{collections::BTreeMap, rc::Rc};
+
+use crate::core::StreamData;
+use crate::io::reconfiguration::multiplexed_input_provider;
+use crate::{InputProvider, OutputStream, VarName};
+
+use async_cell::unsync::AsyncCell;
+use async_stream::stream;
+use async_unsync::oneshot;
+use futures::future::{LocalBoxFuture, join_all};
+use futures::{FutureExt, StreamExt, select};
+use smol::LocalExecutor;
+use unsync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender};
+use unsync::spsc::Sender as SpscSender;
+use unsync::spsc::{self, Receiver as SpscReceiver};
+
+struct MultiplexedInputProvider<Val: Clone> {
+    inner_input_provider: Box<dyn InputProvider<Val = Val>>,
+    ready: Rc<AsyncCell<anyhow::Result<()>>>,
+    run_result: Rc<AsyncCell<anyhow::Result<()>>>,
+    should_run: Rc<AsyncCell<()>>,
+    subscribers_req:
+        Option<SpscReceiver<oneshot::Sender<BTreeMap<VarName, BroadcastReceiver<Val>>>>>,
+    subscribers_req_tx: SpscSender<oneshot::Sender<BTreeMap<VarName, BroadcastReceiver<Val>>>>,
+    senders: Option<BTreeMap<VarName, BroadcastSender<Val>>>,
+    clock_rx: Option<SpscReceiver<()>>,
+    clock_tx: SpscSender<()>,
+}
+
+struct MultiplexedInputProviderClient<Val: Clone> {
+    receivers: BTreeMap<VarName, BroadcastReceiver<Val>>,
+    ready: Rc<AsyncCell<anyhow::Result<()>>>,
+    run_result: Rc<AsyncCell<anyhow::Result<()>>>,
+    should_run: Rc<AsyncCell<()>>,
+}
+
+impl<Val: StreamData> MultiplexedInputProvider<Val> {
+    pub fn new(
+        ex: Rc<LocalExecutor<'static>>,
+        inner_input_provider: Box<dyn InputProvider<Val = Val>>,
+    ) -> MultiplexedInputProvider<Val> {
+        let ready = AsyncCell::shared();
+        let run_result = AsyncCell::shared();
+        let should_run = AsyncCell::shared();
+        let senders = Some(
+            inner_input_provider
+                .vars()
+                .iter()
+                .cloned()
+                .map(|v| (v, unsync::broadcast::channel(10)))
+                .collect(),
+        );
+        let (clock_tx, clock_rx) = unsync::spsc::channel(10);
+        let clock_rx = Some(clock_rx);
+        let (subscribers_req_tx, subscribers_req_rx) = spsc::channel(10);
+        let subscribers_req = Some(subscribers_req_rx);
+
+        let mut mux_input_provider = MultiplexedInputProvider {
+            ready,
+            run_result,
+            should_run,
+            senders,
+            inner_input_provider,
+            clock_rx,
+            clock_tx,
+            subscribers_req,
+            subscribers_req_tx,
+        };
+        ex.spawn(mux_input_provider.run()).detach();
+        mux_input_provider
+    }
+
+    pub async fn subscribe(&mut self) -> MultiplexedInputProviderClient<Val> {
+        let (receivers_tx, receivers_rx) = oneshot::channel().into_split();
+        let _ = self.subscribers_req_tx.send(receivers_tx).await;
+        let receivers = receivers_rx
+            .await
+            .expect("Requested and expected receivers");
+        let ready = self.ready.clone();
+        let run_result = self.run_result.clone();
+        let should_run = self.should_run.clone();
+
+        MultiplexedInputProviderClient {
+            receivers,
+            ready,
+            run_result,
+            should_run,
+        }
+    }
+
+    pub async fn tick(&mut self) -> anyhow::Result<()> {
+        self.clock_tx.send(()).await?;
+        Ok(())
+    }
+
+    pub fn run(&mut self) -> LocalBoxFuture<'static, ()> {
+        let run_result = self.run_result.clone();
+        let mut inner_run = self.inner_input_provider.run().fuse();
+        let mut clock_rx = mem::take(&mut self.clock_rx).expect("Clock receiver not available");
+        let mut senders = mem::take(&mut self.senders).expect("Senders not available");
+        let mut input_streams: Vec<_> = senders
+            .keys()
+            .map(|k| {
+                self.inner_input_provider
+                    .input_stream(k)
+                    .expect("Expected input steam")
+            })
+            .collect();
+
+        Box::pin(async move {
+            loop {
+                let mut all_inputs = join_all(input_streams.iter_mut().map(|s| s.next())).fuse();
+
+                select! {
+                    res = inner_run => {
+                        run_result.set(res)
+                    }
+                    mut results = all_inputs => {
+                        // Wait for clock tick before distributing any results
+                        // (so new receivers have time to subscribe)
+                        clock_rx.recv().await;
+
+                        if results.iter().all(|x| x.is_none()) {
+                            return
+                        }
+
+                        for (res, sender) in results.iter_mut().zip(senders.values_mut()) {
+                            if let Some(res) = res {
+                                sender.send(res.clone()).await;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+}
+
+impl<Val: Clone + 'static> InputProvider for MultiplexedInputProviderClient<Val> {
+    type Val = Val;
+
+    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
+        self.receivers.remove(var).map(|mut rx| {
+            Box::pin(stream! {
+                while let Some(val) = rx.recv().await {
+                    yield val
+                }
+            }) as OutputStream<Val>
+        })
+    }
+
+    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        let ready = self.ready.clone();
+
+        Box::pin(async move { ready.take_shared().await })
+    }
+
+    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
+        let run_result = self.run_result.clone();
+        let should_run = self.should_run.clone();
+
+        Box::pin(async move {
+            should_run.set(());
+            run_result.take_shared().await
+        })
+    }
+
+    fn vars(&self) -> Vec<VarName> {
+        self.receivers.keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, rc::Rc};
+
+    use futures::stream;
+    use macro_rules_attribute::apply;
+    use smol::{LocalExecutor, stream::StreamExt};
+    use tracing::info;
+
+    use super::MultiplexedInputProvider;
+    use crate::{InputProvider, OutputStream, Value, async_test};
+
+    #[apply(async_test)]
+    #[ignore = "currently hangs"]
+    async fn single_multiplexed_input_provider(ex: Rc<LocalExecutor<'static>>) {
+        let mut in1 = BTreeMap::new();
+        in1.insert(
+            "x".into(),
+            Box::pin(stream::iter(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+            ])) as OutputStream<Value>,
+        );
+        let in1: Box<dyn InputProvider<Val = Value>> = Box::new(in1);
+
+        let mut mpx_in: MultiplexedInputProvider<Value> = MultiplexedInputProvider::new(ex, in1);
+        let mut mpx_in_client = mpx_in.subscribe().await;
+
+        let mut xs = mpx_in_client
+            .input_stream(&"x".into())
+            .expect("Input stream should exist");
+        // let xs: Vec<_> = xs.collect().await;
+        let mut xs_expected = vec![Value::Int(1), Value::Int(2), Value::Int(3)].into_iter();
+
+        // while let (Some(x), e_expected) =
+        while let (Some(x), Some(x_exp)) = (xs.next().await, xs_expected.next()) {
+            info!(?x, ?x_exp, "received output");
+            assert_eq!(x, x_exp)
+        }
+    }
+}

@@ -20,6 +20,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures::FutureExt;
 use futures::StreamExt;
+use futures::future::LocalBoxFuture;
 use futures::future::join_all;
 use futures::select;
 use futures::stream::LocalBoxStream;
@@ -256,6 +257,10 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for ConstraintBasedMonitor
             has_inputs,
             dependencies,
         }
+    }
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+        Box::pin(async move { (*self).build() })
     }
 }
 

@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use async_trait::async_trait;
-use futures::join;
+use futures::{future::LocalBoxFuture, join};
 use smol::LocalExecutor;
 use tracing::debug;
 
@@ -81,7 +81,7 @@ pub struct DistAsyncMonitorBuilder<
     M: Specification<Expr = Expr>,
     Ctx: StreamContext<V>,
     V: StreamData,
-    Expr,
+    Expr: 'static,
     S: MonitoringSemantics<Expr, V, Ctx>,
 > {
     pub async_monitor_builder: AsyncMonitorBuilder<M, Ctx, V, Expr, S>,
@@ -96,7 +96,7 @@ impl<
     Ctx: StreamContext<Val>,
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val, Ctx>,
-    Expr,
+    Expr: 'static,
 > DistAsyncMonitorBuilder<M, Ctx, Val, Expr, S>
 {
     pub fn static_dist_graph(mut self, graph: LabelledDistributionGraph) -> Self {
@@ -412,6 +412,10 @@ where
             scheduler: scheduler.take().unwrap(),
         }
     }
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+        Box::pin(async move { self.build() })
+    }
 }
 
 /// A Monitor instance implementing the Async Runtime.
@@ -440,6 +444,7 @@ where
 #[async_trait(?Send)]
 impl<Expr, M, S, V> Monitor<M, V> for DistributedMonitorRunner<Expr, V, S, M>
 where
+    Expr: 'static,
     M: Specification<Expr = Expr>,
     S: MonitoringSemantics<Expr, V, DistributedContext<V>>,
     V: StreamData,
@@ -452,6 +457,7 @@ where
 #[async_trait(?Send)]
 impl<Expr, M, S, V> Runnable for DistributedMonitorRunner<Expr, V, S, M>
 where
+    Expr: 'static,
     M: Specification<Expr = Expr>,
     S: MonitoringSemantics<Expr, V, DistributedContext<V>>,
     V: StreamData,

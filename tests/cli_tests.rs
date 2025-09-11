@@ -1941,3 +1941,102 @@ async fn test_runtime_constraints() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// Test distributed work mode with MQTT input and local node
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
+#[apply(async_test)]
+async fn test_distributed_work_mqtt_input() {
+    let mqtt_server = start_mqtt().await;
+    let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
+        .await
+        .expect("Failed to get host port for MQTT server");
+
+    // Use streaming version since --distributed-work waits indefinitely for work assignment
+    let (_stdout, stderr, exit_status) = run_cli_streaming(
+        &[
+            &fixture_path("simple_add_typed.lola"),
+            "--distributed-work",
+            "--local-node",
+            "a",
+            "--mqtt-input",
+            "--mqtt-port",
+            &format!("{}", mqtt_port),
+        ],
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("Failed to run CLI streaming");
+
+    // Process should start successfully (no immediate error)
+    // It will be terminated by timeout since it waits for work assignment
+
+    if let Some(status) = exit_status {
+        assert!(
+            status.signal().is_some(),
+            "Command failed:\nexit_status = {}\nstderr = {}",
+            status,
+            stderr
+        );
+    }
+    // If no exit status, the process was terminated due to timeout (expected behavior)
+}
+
+/// Test successful operation of reconfigurable-async runtime with mqtt-input
+///
+/// The reconfigurable-async runtime now properly supports mqtt-input by converting
+/// input providers to input builders. This test verifies that the CLI starts
+/// successfully and runs indefinitely, waiting for MQTT input or reconfiguration.
+///
+/// Command being tested:
+/// ```
+/// trustworthiness_checker examples/simple_add_typed.lola \
+///   --runtime reconfigurable-async \
+///   --local-node a \
+///   --mqtt-input \
+///   --output-stdout \
+///   --distributed-work \
+///   --mqtt-port <port>
+/// ```
+///
+/// Expected behavior: Command should start successfully and run indefinitely until
+/// terminated by timeout, waiting for work assignment from scheduler and MQTT input.
+#[cfg_attr(not(feature = "testcontainers"), ignore)]
+#[apply(async_test)]
+async fn test_reconfigurable_async_runtime_mqtt_input_success(_executor: Rc<LocalExecutor>) {
+    let mqtt_server = start_mqtt().await;
+    let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
+        .await
+        .expect("Failed to get host port for MQTT server");
+
+    // Use streaming version since reconfigurable-async waits indefinitely for work assignment and MQTT input
+    let (_stdout, stderr, exit_status) = run_cli_streaming(
+        &[
+            &fixture_path("simple_add_typed.lola"),
+            "--runtime",
+            "reconfigurable-async",
+            "--local-node",
+            "a",
+            "--mqtt-input",
+            "--output-stdout",
+            "--distributed-work",
+            "--mqtt-port",
+            &format!("{}", mqtt_port),
+        ],
+        Duration::from_secs(3),
+    )
+    .await
+    .expect("Failed to run CLI streaming");
+
+    // Process should start successfully (no immediate error)
+    // It will be terminated by timeout since it waits for work assignment and MQTT input
+
+    if let Some(status) = exit_status {
+        assert!(
+            status.signal().is_some(),
+            "Command failed:\nexit_status = {}\nstderr = {}",
+            status,
+            stderr
+        );
+    }
+    // If no exit status, the process was terminated due to timeout (expected behavior)
+}

@@ -6,4 +6,5 @@ pub mod mqtt;
 pub mod ros;
 pub mod testing;
 pub use self::builders::InputProviderBuilder;
+mod reconfiguration;
 pub mod redis;

@@ -554,7 +554,7 @@ pub fn input_streams_paper_benchmark(
 ) -> BTreeMap<VarName, OutputStream<Value>> {
     let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
     let y: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(false)));
-    let e1 = stream::repeat(Value::Unknown).take(size * percent / 100 - 1);
+    let e1 = stream::repeat(Value::Unknown).take((size * percent / 100).saturating_sub(1));
     let e2 = stream::repeat(Value::Str("x && y".into()));
     let e: OutputStream<Value> = if percent == 100 {
         Box::pin(e1)

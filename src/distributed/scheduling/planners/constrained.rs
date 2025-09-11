@@ -20,6 +20,7 @@ use super::core::SchedulerPlanner;
 
 pub struct StaticOptimizedSchedulerPlanner<Expr, S, M>
 where
+    Expr: 'static,
     S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
     M: Specification<Expr = Expr> + Localisable,
 {

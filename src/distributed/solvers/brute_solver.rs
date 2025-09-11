@@ -26,6 +26,7 @@ use crate::{
 
 pub struct BruteForceDistConstraintSolver<Expr, S, M>
 where
+    Expr: 'static,
     S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
     M: Specification<Expr = Expr> + Localisable,
 {

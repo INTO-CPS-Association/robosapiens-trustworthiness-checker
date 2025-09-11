@@ -17,17 +17,16 @@ use async_trait::async_trait;
 use async_unsync::bounded;
 use async_unsync::oneshot;
 use async_unsync::semaphore;
-use futures::StreamExt;
 use futures::future::LocalBoxFuture;
 use futures::future::join_all;
-use futures::{FutureExt, select};
+use futures::{FutureExt, StreamExt, select};
 use smol::LocalExecutor;
 use strum_macros::Display;
-use tracing::Level;
 use tracing::debug;
 use tracing::info;
 use tracing::instrument;
 use tracing::warn;
+use tracing::{Level, error};
 
 use crate::core::AbstractMonitorBuilder;
 use crate::core::InputProvider;
@@ -804,7 +803,7 @@ pub struct AsyncMonitorBuilder<
     M: Specification<Expr = Expr>,
     Ctx: StreamContext<V>,
     V: StreamData,
-    Expr,
+    Expr: 'static,
     S: MonitoringSemantics<Expr, V, Ctx>,
 > {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
@@ -1012,10 +1011,15 @@ impl<
             context_t: PhantomData,
         }
     }
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+        Box::pin(async move { self.build() })
+    }
 }
 
 impl<Expr, Val, S, M> AsyncMonitorRunner<Expr, Val, S, M, Context<Val>>
 where
+    Expr: 'static,
     Val: StreamData,
     S: MonitoringSemantics<Expr, Val, Context<Val>, Val>,
     M: Specification<Expr = Expr>,
@@ -1040,6 +1044,7 @@ where
 #[async_trait(?Send)]
 impl<Expr, Val, S, M, Ctx> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M, Ctx>
 where
+    Expr: 'static,
     Val: StreamData,
     Ctx: StreamContext<Val>,
     S: MonitoringSemantics<Expr, Val, Ctx, Val>,
@@ -1065,25 +1070,49 @@ where
 
         debug!("AsyncMonitorRunner: Creating futures for input and output handlers");
         let mut output_fut = self.output_handler.run().fuse();
-        let mut input_fut = self.input_provider.run().fuse();
+
+        // Wrap input provider's run with cancellation support
+        let cancellation_token = self.cancellation_token.clone();
+        let input_provider_future = self.input_provider.run();
+        let mut input_fut = Box::pin(async move {
+            futures::select! {
+                result = input_provider_future.fuse() => result,
+                _ = cancellation_token.cancelled().fuse() => {
+                    debug!("AsyncMonitorRunner: Input provider cancelled");
+                    Ok(())
+                }
+            }
+        })
+        .fuse();
 
         debug!("AsyncMonitorRunner: Entering select! to wait for input or output completion");
-        select! {
+        let result = select! {
             output_res = output_fut => {
                 debug!("AsyncMonitorRunner: Output handler completed with result: {:?}", output_res);
-                output_res?
+                if let Err(e) = output_res {
+                    debug!("AsyncMonitorRunner: Output handler failed with error: {:?}", e);
+                    return Err(e)
+                }
+                // When output completes, we're done - trigger cancellation and return
+                self.cancellation_token.cancel();
+                error!("AsyncMonitorRunner: Triggered cancellation after output completion");
+                output_res
             },
             input_res = input_fut => {
                 debug!("AsyncMonitorRunner: Input provider completed with result: {:?}", input_res);
-                input_res?
+                if let Err(e) = input_res {
+                    error!("AsyncMonitorRunner: Input provider failed with error: {:?}", e);
+                    return Err(e)
+                }
+                // Input provider completion also triggers cancellation
+                self.cancellation_token.cancel();
+                debug!("AsyncMonitorRunner: Triggered cancellation after input completion");
+                input_res
             },
         };
 
-        // Trigger cancellation when output handler completes to stop all var managers
-        debug!("AsyncMonitorRunner: Monitor execution completed, triggering cancellation");
-        self.cancellation_token.cancel();
-
-        Ok(())
+        debug!("AsyncMonitorRunner: Monitor execution completed");
+        result
     }
 }
 

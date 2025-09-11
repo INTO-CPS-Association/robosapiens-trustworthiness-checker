@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::rc::Rc;
 
+use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use tracing::{debug, warn};
 
@@ -30,7 +31,7 @@ use super::{
 
 use static_assertions::assert_obj_safe;
 
-trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
+pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     fn executor(
         self: Box<Self>,
         ex: Rc<LocalExecutor<'static>>,
@@ -44,6 +45,11 @@ trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
         input: Box<dyn crate::InputProvider<Val = V>>,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
+    fn input_builder(
+        self: Box<Self>,
+        input_builder: InputProviderBuilder,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+
     fn output(
         self: Box<Self>,
         output: Box<dyn OutputHandler<Val = V>>,
@@ -55,6 +61,8 @@ trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
     fn build(self: Box<Self>) -> Box<dyn Runnable>;
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>>;
 }
 
 assert_obj_safe!(AnonymousMonitorBuilder<(), ()>);
@@ -84,6 +92,13 @@ impl<
         Box::new(MonBuilder::input(*self, input))
     }
 
+    fn input_builder(
+        self: Box<Self>,
+        _input_builder: InputProviderBuilder,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+        panic!("This builder type does not support input_builder method")
+    }
+
     fn output(
         self: Box<Self>,
         output: Box<dyn OutputHandler<Val = V>>,
@@ -100,6 +115,10 @@ impl<
 
     fn build(self: Box<Self>) -> Box<dyn Runnable> {
         Box::new(MonBuilder::build(*self))
+    }
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>> {
+        Box::pin(async move { Box::new(MonBuilder::async_build(self).await) as Box<dyn Runnable> })
     }
 }
 
@@ -143,11 +162,16 @@ impl<
         // Perform type checking here
         builder
     }
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+        Box::pin(async move { (*self).build() })
+    }
 }
 
 pub enum DistributionMode {
     CentralMonitor,
     LocalMonitor(Box<dyn LocalitySpec>), // Local topics
+    LocalMonitorWithReceiver(Box<dyn LocalitySpec>, crate::io::mqtt::MQTTLocalityReceiver), // Local topics with receiver for reconfiguration
     DistributedCentralised(
         /// Location names
         Vec<String>,
@@ -175,6 +199,9 @@ impl Debug for DistributionMode {
         match self {
             DistributionMode::CentralMonitor => write!(f, "CentralMonitor"),
             DistributionMode::LocalMonitor(_) => write!(f, "LocalMonitor"),
+            DistributionMode::LocalMonitorWithReceiver(_, _) => {
+                write!(f, "LocalMonitorWithReceiver")
+            }
             DistributionMode::DistributedCentralised(locations) => {
                 write!(f, "DistributedCentralised({:?})", locations)
             }
@@ -364,6 +391,8 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                 self.model,
                 self.distribution_mode,
                 self.scheduler_mode,
+                self.input_provider_builder.clone(),
+                self.output_handler_builder.clone(),
             );
 
         let builder = if let Some(output) = self.output {
@@ -379,6 +408,10 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
 
         builder.build()
     }
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+        Box::pin(async move { (*self).async_build().await })
+    }
 }
 
 impl GenericMonitorBuilder<LOLASpecification, Value> {
@@ -392,6 +425,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         model: Option<LOLASpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
+        input_provider_builder: Option<InputProviderBuilder>,
+        output_handler_builder: Option<OutputHandlerBuilder>,
     ) -> Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> {
         let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> = match (
             runtime, semantics, parser,
@@ -427,22 +462,52 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 Box::new(ConstraintBasedMonitorBuilder::new())
             }
             (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(ReconfAsyncMonitorBuilder::<
+                let mut builder = ReconfAsyncMonitorBuilder::<
                     LOLASpecification,
                     DistributedContext<Value>,
                     Value,
                     _,
                     DistributedSemantics<LALRExprParser>,
-                >::new())
+                >::new();
+
+                // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
+                if let DistributionMode::LocalMonitorWithReceiver(_, receiver) = distribution_mode {
+                    builder = builder.reconf_provider(receiver.clone());
+                }
+
+                // For reconfigurable runtime, pass builders instead of built providers
+                if let Some(input_provider_builder) = input_provider_builder {
+                    builder = builder.input_builder(input_provider_builder);
+                }
+                if let Some(output_handler_builder) = output_handler_builder {
+                    builder = builder.output_builder(output_handler_builder);
+                }
+
+                Box::new(builder)
             }
             (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Combinator) => {
-                Box::new(ReconfAsyncMonitorBuilder::<
+                let mut builder = ReconfAsyncMonitorBuilder::<
                     LOLASpecification,
                     DistributedContext<Value>,
                     Value,
                     _,
                     DistributedSemantics<CombExprParser>,
-                >::new())
+                >::new();
+
+                // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
+                if let DistributionMode::LocalMonitorWithReceiver(_, receiver) = distribution_mode {
+                    builder = builder.reconf_provider(receiver.clone());
+                }
+
+                // For reconfigurable runtime, pass builders instead of built providers
+                if let Some(input_provider_builder) = input_provider_builder {
+                    builder = builder.input_builder(input_provider_builder);
+                }
+                if let Some(output_handler_builder) = output_handler_builder {
+                    builder = builder.output_builder(output_handler_builder);
+                }
+
+                Box::new(builder)
             }
             (Runtime::Distributed, Semantics::Untimed, _) => {
                 debug!(
@@ -462,14 +527,15 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     DistributedContext<Value>,
                     Value,
                     _,
-                    DistributedSemantics<LALRExprParser>,
+                    DistributedSemantics<CombExprParser>,
                 >::new();
 
                 let builder = builder.scheduler_mode(scheduler_mode);
 
                 let builder = match distribution_mode {
                     DistributionMode::CentralMonitor => builder,
-                    DistributionMode::LocalMonitor(_) => {
+                    DistributionMode::LocalMonitor(_)
+                    | DistributionMode::LocalMonitorWithReceiver(_, _) => {
                         todo!("Local monitor not implemented here yet")
                     }
                     DistributionMode::DistributedCentralised(locations) => {
@@ -544,29 +610,36 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 self.model,
                 distribution_mode,
                 self.scheduler_mode,
+                self.input_provider_builder.clone(),
+                self.output_handler_builder.clone(),
             );
 
-        // Construct inputs:
-        let builder = if let Some(input_provider_builder) = self.input_provider_builder {
-            let input = input_provider_builder.async_build().await;
-            builder.input(input)
-        } else if let Some(input) = self.input {
-            builder.input(input)
-        } else {
+        // Construct inputs and outputs:
+        // Skip this for ReconfigurableAsync runtime since we handle builders directly in the match above
+        let builder = if self.runtime == Runtime::ReconfigurableAsync {
             builder
+        } else {
+            // Normal handling for non-reconfigurable runtimes
+            let builder = if let Some(input_provider_builder) = self.input_provider_builder {
+                let input = input_provider_builder.async_build().await;
+                builder.input(input)
+            } else if let Some(input) = self.input {
+                builder.input(input)
+            } else {
+                builder
+            };
+
+            if let Some(output_handler_builder) = self.output_handler_builder {
+                let output = output_handler_builder.async_build().await;
+                builder.output(output)
+            } else if let Some(output) = self.output {
+                builder.output(output)
+            } else {
+                builder
+            }
         };
 
-        // Construct outputs:
-        let builder = if let Some(output_handler_builder) = self.output_handler_builder {
-            let output = output_handler_builder.async_build().await;
-            builder.output(output)
-        } else if let Some(output) = self.output {
-            builder.output(output)
-        } else {
-            builder
-        };
-
-        builder.build()
+        builder.async_build().await
     }
 
     pub fn partial_clone(self) -> Self {

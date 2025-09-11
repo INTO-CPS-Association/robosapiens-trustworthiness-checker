@@ -40,6 +40,20 @@ impl InputProvider for UntimedInputFileData {
     fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         Box::pin(futures::future::ready(Ok(())))
     }
+
+    fn vars(&self) -> Vec<VarName> {
+        fn union(xs: Vec<VarName>, ys: Vec<VarName>) -> Vec<VarName> {
+            xs.iter()
+                .cloned()
+                .chain(ys.into_iter().filter(|y| xs.iter().any(|x| y == x)))
+                .collect()
+        }
+
+        self.values()
+            .fold(vec![], |acc, m| union(acc, m.keys().cloned().collect()))
+            .into_iter()
+            .collect()
+    }
 }
 
 #[cfg(test)]

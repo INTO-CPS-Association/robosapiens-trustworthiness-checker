@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
-use futures::StreamExt;
 use futures::future::LocalBoxFuture;
+use futures::{FutureExt, StreamExt, select_biased};
 use smol::LocalExecutor;
+use tracing::info;
 
 use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
 use crate::io::testing::ManualOutputHandler;
@@ -43,25 +44,45 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        let executor = self.manual_output_handler.executor.clone();
         let output_stream = self.manual_output_handler.get_output();
-        let mut enumerated_outputs = output_stream.enumerate();
-        let task = self.manual_output_handler.run();
+        let enumerated_outputs = output_stream.enumerate();
+        let mut task = FutureExt::fuse(executor.spawn(self.manual_output_handler.run()));
         let var_names = self
             .var_names()
             .iter()
             .map(|x| x.name())
             .collect::<Vec<_>>();
         let aux_names = self.aux_info.iter().map(|x| x.name()).collect::<Vec<_>>();
+        let mut outputs = StreamExt::fuse(enumerated_outputs);
 
         Box::pin(async move {
-            while let Some((i, output)) = enumerated_outputs.next().await {
-                for (var, data) in var_names.iter().zip(output) {
-                    if !aux_names.contains(var) {
-                        println!("{}[{}] = {:?}", var, i, data);
+            loop {
+                // TODO: check that we do not incorrectly drop results in between the
+                // end of the handler, and the output stream finishing being consumed.
+                // Should the output stream always end when the output has finished, or do
+                // we need to manually detect the end of the output as the current code is doing?
+                select_biased! {
+                    res = outputs.next() => {
+                        match res {
+                            Some((i, output)) => for (var, data) in var_names.iter().zip(output) {
+                                info!(?var, ?i, ?data, "Handling output");
+                                if !aux_names.contains(var) {
+                                    println!("{}[{}] = {:?}", var, i, data);
+                                }
+                            }
+                            None => {
+                                return Ok(())
+                            }
+                        }
+                    }
+                    res = task => {
+                        // TODO: should this stop us whenever there is a result, or only if it is
+                        // successful?
+                        return res
                     }
                 }
             }
-            task.await
         })
     }
 }
@@ -70,6 +91,7 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
 mod tests {
     use crate::core::{OutputStream, Value};
     use futures::stream;
+    use tracing::info;
 
     use super::*;
     use crate::async_test;
@@ -86,5 +108,6 @@ mod tests {
         handler.provide_streams(vec![x_stream, y_stream].into_iter().collect());
 
         handler.run().await.expect("Failed to run output handler");
+        info!("Finished running output handler");
     }
 }

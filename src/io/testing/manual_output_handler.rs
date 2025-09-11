@@ -7,6 +7,7 @@ use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::{LocalBoxFuture, join_all};
 use smol::LocalExecutor;
+use tracing::warn;
 use tracing::{Level, debug, instrument};
 
 use crate::{
@@ -21,7 +22,7 @@ use crate::{
 pub struct ManualOutputHandler<V: StreamData> {
     var_names: Vec<VarName>,
     #[allow(dead_code)]
-    executor: Rc<LocalExecutor<'static>>,
+    pub executor: Rc<LocalExecutor<'static>>,
     stream_senders: Option<Vec<oneshot::Sender<OutputStream<V>>>>,
     stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
     output_receiver: Option<oneshot::Receiver<OutputStream<Vec<V>>>>,
@@ -102,10 +103,25 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             name = "Running ManualOutputHandler",
             num_streams = receivers.len()
         );
-        let mut streams: Vec<_> = receivers
-            .into_iter()
-            .map(|mut r| r.try_recv().unwrap())
-            .collect();
+        // Create a list of streams for each of the receivers or an error
+        // if this is not possible
+        let streams: anyhow::Result<Vec<_>> =
+            receivers
+                .into_iter()
+                .map(|mut r| r.try_recv())
+                .fold(Ok(Vec::new()), |mut acc, res| {
+                    acc = match acc {
+                        Ok(mut acc) => match res {
+                            Ok(x) => {
+                                acc.push(x);
+                                Ok(acc)
+                            }
+                            Err(e) => Err(anyhow::anyhow!(e)),
+                        },
+                        Err(e) => Err(e),
+                    };
+                    acc
+                });
 
         let (result_tx, result_rx) = oneshot::channel().into_split();
         let (cancel_tx, cancel_rx) = oneshot::channel().into_split();
@@ -121,39 +137,54 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             }
         }).detach();
 
-        mem::take(&mut self.output_sender)
-            .expect("Output sender not found")
-            .send(Box::pin(stream! {
-                loop {
-                    let num_streams = streams.len();
-                    debug!("ManualOutputHandler: Stream generator loop iteration, {} streams", num_streams);
-                    let nexts = join_all(streams.iter_mut().map(|s| s.next()));
-                    debug!("ManualOutputHandler: Waiting for values from streams");
+        let res: anyhow::Result<()> = match streams {
+            Ok(mut streams) => {
+                mem::take(&mut self.output_sender)
+                .expect("Output sender not found")
+                .send(Box::pin(stream! {
+                    loop {
+                        let num_streams = streams.len();
+                        debug!("ManualOutputHandler: Stream generator loop iteration, {} streams", num_streams);
+                        let nexts = join_all(streams.iter_mut().map(|s| s.next()));
+                        debug!("ManualOutputHandler: Waiting for values from streams");
 
-                    if let Some(vals) = nexts.await
-                        .into_iter()
-                        .collect::<Option<Vec<V>>>()
-                    {
-                        // Collect the values into a Vec<V>
-                        let output = vals;
-                        // Output the combined data
-                        debug!(name = "Outputting data", ?output);
-                        yield output;
-                    } else {
-                        // One of the streams has ended, so we should stop
-                        debug!(
-                            "Stopping ManualOutputHandler with len(nexts) = {}",
-                            num_streams
-                        );
-                        break;
+                        if let Some(vals) = nexts.await
+                            .into_iter()
+                            .collect::<Option<Vec<V>>>()
+                        {
+                            // Collect the values into a Vec<V>
+                            let output = vals;
+                            // Output the combined data
+                            debug!(name = "Outputting data", ?output);
+                            yield output;
+                        } else {
+                            // One of the streams has ended, so we should stop
+                            debug!(
+                                "Stopping ManualOutputHandler with len(nexts) = {}",
+                                num_streams
+                            );
+                            break;
+                        }
                     }
-                }
-                debug!("ManualOutputHandler: Stream generator completed naturally");
-                let _ = result_tx.send(Ok(()));
-            }))
-            .expect("Output sender channel dropped");
+                    debug!("ManualOutputHandler: Stream generator completed naturally");
+                    let _ = result_tx.send(Ok(()));
+                }))
+                .expect("Output sender channel dropped");
+                anyhow::Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "ManualOutputHandler: Stream generator failed with error: {}",
+                    e
+                );
+                Err(e)
+            }
+        };
 
         Box::pin(async move {
+            // Error if the streams were not received
+            res?;
+
             debug!("ManualOutputHandler: Waiting for result or drop signal");
             futures::select! {
                 result = result_rx.fuse() => {

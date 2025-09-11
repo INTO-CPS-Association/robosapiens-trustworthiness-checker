@@ -60,6 +60,7 @@ async-compat = "0.2.4"
 jemallocator = "0.5.4"
 ecow = { version = "0.2.6", features = ["serde"] }
 async_cell = "0.2.3"
+async-channel = "2.3.0"
 ordered-float = "5.0.0"
 approx = "0.5.1"
 lalrpop-util = { version = "0.22.2", features = ["lexer", "unicode"] }

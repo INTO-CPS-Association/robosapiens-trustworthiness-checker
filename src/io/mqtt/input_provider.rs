@@ -3,13 +3,15 @@ use std::{collections::BTreeMap, rc::Rc};
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_unsync::bounded;
-use futures::{StreamExt, future::LocalBoxFuture};
+use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, info_span, instrument, warn};
 
 use super::client::provide_mqtt_client_with_subscription;
-use crate::{InputProvider, OutputStream, Value, core::VarName};
+use crate::{
+    InputProvider, OutputStream, Value, core::VarName, utils::cancellation_token::CancellationToken,
+};
 use anyhow::anyhow;
 
 const QOS: i32 = 1;
@@ -30,6 +32,7 @@ pub struct MQTTInputProvider {
     pub var_map: BTreeMap<VarName, VarData>,
     pub result: Rc<AsyncCell<anyhow::Result<()>>>,
     pub started: Rc<AsyncCell<bool>>,
+    cancellation_token: CancellationToken,
 }
 
 impl MQTTInputProvider {
@@ -63,9 +66,10 @@ impl MQTTInputProvider {
 
         let started = AsyncCell::new_with(false).into_shared();
         let result = AsyncCell::shared();
+        let cancellation_token = CancellationToken::new();
 
         executor
-            .spawn(MQTTInputProvider::input_monitor(
+            .spawn(Self::input_monitor(
                 result.clone(),
                 var_topics.clone(),
                 topic_vars,
@@ -75,6 +79,7 @@ impl MQTTInputProvider {
                 senders,
                 started.clone(),
                 max_reconnect_attempts,
+                cancellation_token.clone(),
             ))
             .detach();
 
@@ -106,6 +111,7 @@ impl MQTTInputProvider {
             result,
             var_map: var_data,
             started,
+            cancellation_token,
         })
     }
 
@@ -119,6 +125,7 @@ impl MQTTInputProvider {
         senders: BTreeMap<VarName, bounded::Sender<Value>>,
         started: Rc<AsyncCell<bool>>,
         max_reconnect_attempts: u32,
+        cancellation_token: CancellationToken,
     ) {
         let result = result.guard_shared(Err(anyhow::anyhow!("InputProvider crashed")));
         result.set(
@@ -131,6 +138,7 @@ impl MQTTInputProvider {
                 senders,
                 started,
                 max_reconnect_attempts,
+                cancellation_token,
             )
             .await,
         )
@@ -145,6 +153,7 @@ impl MQTTInputProvider {
         senders: BTreeMap<VarName, bounded::Sender<Value>>,
         started: Rc<AsyncCell<bool>>,
         max_reconnect_attempts: u32,
+        cancellation_token: CancellationToken,
     ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
@@ -170,44 +179,64 @@ impl MQTTInputProvider {
         info!(name: "Connected to MQTT broker", ?host, ?var_topics);
         started.set(true);
 
-        while let Some(msg) = stream.next().await {
-            // Process the message
-            debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-            let value = match serde_json5::from_str(&msg.payload_str()) {
-                Ok(value) => value,
-                Err(e) => {
-                    return Err(anyhow!(e).context(format!(
-                        "Failed to parse value {:?} sent from MQTT",
-                        msg.payload_str(),
-                    )));
-                }
-            };
-
-            // Handle wrapped format {"value": actual_value} from output handler
-            let value = match &value {
-                Value::Map(map) => {
-                    if let Some(actual_value) = map.get("value") {
-                        actual_value.clone()
-                    } else {
-                        value
+        let result = async {
+            loop {
+                futures::select! {
+                    msg = stream.next().fuse() => {
+                        match msg {
+                            Some(msg) => {
+                                // Process the message
+                                debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
+                                let value = match serde_json5::from_str(&msg.payload_str()) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Err(anyhow!(e).context(format!(
+                                            "Failed to parse value {:?} sent from MQTT",
+                                            msg.payload_str(),
+                                        )));
+                                    }
+                                };
+                                let value = match &value {
+                                    Value::Map(map) => {
+                                        if let Some(actual_value) = map.get("value") {
+                                            actual_value.clone()
+                                        } else {
+                                            value
+                                        }
+                                    }
+                                    _ => value,
+                                };
+                                if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
+                                    sender
+                                        .send(value)
+                                        .await
+                                        .map_err(|_| anyhow::anyhow!("Failed to send value"))?;
+                                } else {
+                                    return Err(anyhow::anyhow!(
+                                        "Channel not found for topic {}",
+                                        msg.topic()
+                                    ));
+                                }
+                            }
+                            None => {
+                                debug!("MQTT stream ended");
+                                return Ok(());
+                            }
+                        }
+                    }
+                    _ = cancellation_token.cancelled().fuse() => {
+                        debug!("MQTTInputProvider: Input monitor task cancelled");
+                        return Ok(());
                     }
                 }
-                _ => value,
-            };
-            if let Some(sender) = senders.get(topic_vars.get(msg.topic()).unwrap()) {
-                sender
-                    .send(value)
-                    .await
-                    .map_err(|_| anyhow::anyhow!("Failed to send value"))?;
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Channel not found for topic {}",
-                    msg.topic()
-                ));
             }
-        }
+        }.await;
 
-        Ok(())
+        // Always disconnect the client when we're done, regardless of success or error
+        debug!("Disconnecting MQTT client");
+        let _ = client.disconnect(None).await;
+
+        result
     }
 }
 
@@ -232,5 +261,16 @@ impl InputProvider for MQTTInputProvider {
             }
             Ok(())
         })
+    }
+
+    fn vars(&self) -> Vec<VarName> {
+        self.var_map.keys().cloned().collect()
+    }
+}
+
+impl Drop for MQTTInputProvider {
+    fn drop(&mut self) {
+        debug!("MQTTInputProvider: Dropping, cancelling background task");
+        self.cancellation_token.cancel();
     }
 }

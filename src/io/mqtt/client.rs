@@ -43,16 +43,17 @@ fn message_stream(
                 }
             }
 
-            // Stream exhausted, try to reconnect
+            // Stream exhausted, check if we should reconnect
+            if max_reconnect_attempts == 0 {
+                warn!("Connection lost. Reconnection disabled (max_reconnect_attempts=0), stopping MQTT stream");
+                break;
+            }
+
             warn!("Connection lost. Attempting reconnect...");
             reconnect_attempts += 1;
 
             if reconnect_attempts > max_reconnect_attempts {
-                if max_reconnect_attempts == 0 {
-                    warn!("Reconnection disabled (max_reconnect_attempts=0), stopping MQTT stream immediately");
-                } else {
-                    warn!("Max reconnection attempts ({}) reached, stopping MQTT stream", max_reconnect_attempts);
-                }
+                warn!("Max reconnection attempts ({}) reached, stopping MQTT stream", max_reconnect_attempts);
                 break;
             }
 
@@ -100,7 +101,7 @@ pub async fn provide_mqtt_client_with_subscription(
 
     let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
         .keep_alive_interval(Duration::from_secs(30))
-        .clean_session(false)
+        .clean_session(true)
         .finalize();
 
     let mqtt_client = match mqtt::AsyncClient::new(create_opts) {
@@ -142,7 +143,7 @@ pub async fn provide_mqtt_client(uri: String) -> Result<mqtt::AsyncClient, mqtt:
 
     let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
         .keep_alive_interval(Duration::from_secs(30))
-        .clean_session(false)
+        .clean_session(true)
         .finalize();
 
     let mqtt_client = match mqtt::AsyncClient::new(create_opts) {

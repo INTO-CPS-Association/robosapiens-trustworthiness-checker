@@ -90,7 +90,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
                 .build(),
         };
         let executor = ctx.executor.clone();
-        let graph_stream = self.graph_stream.unwrap();
+        let graph_stream = self.graph_stream.expect("graph_stream not provided");
         let graph_name = self.graph_name.unwrap_or("graph".into());
         let node_names = self.node_names.unwrap();
         let graph_manager = Rc::new(RefCell::new(Some(VarManager::new(

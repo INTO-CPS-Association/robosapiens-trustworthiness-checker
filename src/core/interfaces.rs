@@ -37,6 +37,8 @@ pub trait InputProvider {
     /// Input providers should run forever, unless there is an error, in which case they halt with
     /// an error result
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
+
+    fn vars(&self) -> Vec<VarName>;
 }
 
 impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
@@ -54,6 +56,10 @@ impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
 
     fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(futures::future::ready(Ok(())))
+    }
+
+    fn vars(&self) -> Vec<VarName> {
+        self.iter().map(|(k, _)| k.clone()).collect()
     }
 }
 
@@ -73,6 +79,10 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(futures::future::ready(Ok(())))
     }
+
+    fn vars(&self) -> Vec<VarName> {
+        self.keys().cloned().collect()
+    }
 }
 
 impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
@@ -90,6 +100,10 @@ impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
     fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(futures::future::ready(Ok(())))
     }
+
+    fn vars(&self) -> Vec<VarName> {
+        self.keys().cloned().collect()
+    }
 }
 
 impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
@@ -106,6 +120,10 @@ impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
 
     fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(futures::future::ready(Ok(())))
+    }
+
+    fn vars(&self) -> Vec<VarName> {
+        self.keys().cloned().collect()
     }
 }
 
@@ -217,6 +235,8 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
     }
 
     fn build(self) -> Self::Mon;
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon>;
 }
 
 #[async_trait(?Send)]

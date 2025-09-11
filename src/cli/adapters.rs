@@ -123,12 +123,17 @@ impl DistributionModeBuilder {
                     MQTT_HOSTNAME.to_string(),
                     local_node.into(),
                 );
+                receiver
+                    .ready()
+                    .await
+                    .context("Failed to initialize MQTT locality receiver")?;
                 let locality = receiver
                     .receive()
                     .await
                     .context("Work could not be received")?;
                 info!("Received work: {:?}", locality.local_vars());
-                BuilderDistributionMode::LocalMonitor(Box::new(locality))
+                // Pass both locality and receiver for reconfigurable runtime
+                BuilderDistributionMode::LocalMonitorWithReceiver(Box::new(locality), receiver)
             }
             DistributionMode {
                 mqtt_centralised_distributed: Some(locations),

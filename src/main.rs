@@ -77,12 +77,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, aux_info=?model.aux_info, "Parsed model");
 
     // Localise the model to contain only the local variables (if needed)
-    let model = if let DistributionMode::LocalMonitor(locality_mode) = &builder.distribution_mode {
-        let model = model.localise(locality_mode);
-        info!(name: "Localised model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
-        model
-    } else {
-        model
+    let model = match &builder.distribution_mode {
+        DistributionMode::LocalMonitor(locality_mode)
+        | DistributionMode::LocalMonitorWithReceiver(locality_mode, _) => {
+            let model = model.localise(locality_mode);
+            info!(name: "Localised model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
+            model
+        }
+        _ => model,
     };
 
     // Create the dependency manager
