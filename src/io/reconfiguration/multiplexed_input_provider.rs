@@ -11,11 +11,13 @@ use async_unsync::oneshot;
 use futures::future::{LocalBoxFuture, join_all};
 use futures::{FutureExt, StreamExt, select};
 use smol::LocalExecutor;
+use tracing::info;
 use unsync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender};
 use unsync::spsc::Sender as SpscSender;
 use unsync::spsc::{self, Receiver as SpscReceiver};
 
 struct MultiplexedInputProvider<Val: Clone> {
+    executor: Rc<LocalExecutor<'static>>,
     inner_input_provider: Box<dyn InputProvider<Val = Val>>,
     ready: Rc<AsyncCell<anyhow::Result<()>>>,
     run_result: Rc<AsyncCell<anyhow::Result<()>>>,
@@ -25,7 +27,6 @@ struct MultiplexedInputProvider<Val: Clone> {
     subscribers_req_tx: SpscSender<oneshot::Sender<BTreeMap<VarName, BroadcastReceiver<Val>>>>,
     senders: Option<BTreeMap<VarName, BroadcastSender<Val>>>,
     clock_rx: Option<SpscReceiver<()>>,
-    clock_tx: SpscSender<()>,
 }
 
 struct MultiplexedInputProviderClient<Val: Clone> {
@@ -37,8 +38,9 @@ struct MultiplexedInputProviderClient<Val: Clone> {
 
 impl<Val: StreamData> MultiplexedInputProvider<Val> {
     pub fn new(
-        ex: Rc<LocalExecutor<'static>>,
+        executor: Rc<LocalExecutor<'static>>,
         inner_input_provider: Box<dyn InputProvider<Val = Val>>,
+        clock_rx: SpscReceiver<()>,
     ) -> MultiplexedInputProvider<Val> {
         let ready = AsyncCell::shared();
         let run_result = AsyncCell::shared();
@@ -51,32 +53,33 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
                 .map(|v| (v, unsync::broadcast::channel(10)))
                 .collect(),
         );
-        let (clock_tx, clock_rx) = unsync::spsc::channel(10);
-        let clock_rx = Some(clock_rx);
         let (subscribers_req_tx, subscribers_req_rx) = spsc::channel(10);
         let subscribers_req = Some(subscribers_req_rx);
+        let clock_rx = Some(clock_rx);
 
         let mut mux_input_provider = MultiplexedInputProvider {
+            executor,
             ready,
             run_result,
             should_run,
             senders,
             inner_input_provider,
             clock_rx,
-            clock_tx,
             subscribers_req,
             subscribers_req_tx,
         };
-        ex.spawn(mux_input_provider.run()).detach();
+        // ex.spawn(mux_input_provider.run()).detach();
         mux_input_provider
     }
 
     pub async fn subscribe(&mut self) -> MultiplexedInputProviderClient<Val> {
         let (receivers_tx, receivers_rx) = oneshot::channel().into_split();
         let _ = self.subscribers_req_tx.send(receivers_tx).await;
+        info!("Waiting for receivers");
         let receivers = receivers_rx
             .await
             .expect("Requested and expected receivers");
+        info!("Got receivers");
         let ready = self.ready.clone();
         let run_result = self.run_result.clone();
         let should_run = self.should_run.clone();
@@ -89,14 +92,9 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
         }
     }
 
-    pub async fn tick(&mut self) -> anyhow::Result<()> {
-        self.clock_tx.send(()).await?;
-        Ok(())
-    }
-
     pub fn run(&mut self) -> LocalBoxFuture<'static, ()> {
         let run_result = self.run_result.clone();
-        let mut inner_run = self.inner_input_provider.run().fuse();
+        let mut inner_run = self.executor.spawn(self.inner_input_provider.run()).fuse();
         let mut clock_rx = mem::take(&mut self.clock_rx).expect("Clock receiver not available");
         let mut senders = mem::take(&mut self.senders).expect("Senders not available");
         let mut input_streams: Vec<_> = senders
@@ -107,27 +105,84 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
                     .expect("Expected input steam")
             })
             .collect();
+        let subscribers_req_rx =
+            mem::take(&mut self.subscribers_req).expect("Subscribers req channel is gone");
 
         Box::pin(async move {
-            loop {
-                let mut all_inputs = join_all(input_streams.iter_mut().map(|s| s.next())).fuse();
+            let mut next_subscribers_req_stream = Box::pin(StreamExt::fuse(stream! {
+                let mut subscribers_req_rx = subscribers_req_rx;
+                while let Some(res) = subscribers_req_rx.recv().await {
+                    yield res
+                }
+            }));
+            let mut all_inputs_stream = Box::pin(StreamExt::fuse(stream! {
+                loop {
+                    yield join_all(input_streams.iter_mut().map(|s| s.next())).await;
+                }
+            }));
 
+            loop {
                 select! {
                     res = inner_run => {
+                        info!("Inner run returned");
                         run_result.set(res)
                     }
-                    mut results = all_inputs => {
-                        // Wait for clock tick before distributing any results
-                        // (so new receivers have time to subscribe)
-                        clock_rx.recv().await;
-
-                        if results.iter().all(|x| x.is_none()) {
-                            return
+                    receiver_req_tx = next_subscribers_req_stream.next() => {
+                        match receiver_req_tx {
+                            Some(receiver_req_tx) => {
+                                let receivers = senders.iter_mut()
+                                    .map(|(k, tx)| (k.clone(), tx.subscribe()))
+                                    .collect();
+                                receiver_req_tx.send(receivers).expect("Tried to send ");
+                            }
+                            None => {
+                                return
+                            }
                         }
+                    }
+                    results = all_inputs_stream.next() => {
+                        match results {
+                            Some(mut results) => {
+                                info!("Inputs returned, waiting for clock tick");
+                                // Wait for clock tick before distributing any results
+                                // (so new receivers have time to subscribe)
+                                let mut clock_ticked = false;
+                                let mut clock_tick = Box::pin(clock_rx.recv().fuse());
+                                while !clock_ticked {
+                                    select!{
+                                        _ = clock_tick => {clock_ticked = true}
+                                        // Also allow new requests whilst waiting to distribute the
+                                        // input
+                                        receiver_req_tx = next_subscribers_req_stream.next() => {
+                                            match receiver_req_tx {
+                                                Some(receiver_req_tx) => {
+                                                    let receivers = senders.iter_mut()
+                                                        .map(|(k, tx)| (k.clone(), tx.subscribe()))
+                                                        .collect();
+                                                    receiver_req_tx.send(receivers).expect("Tried to send ");
+                                                }
+                                                None => {
+                                                    return
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
 
-                        for (res, sender) in results.iter_mut().zip(senders.values_mut()) {
-                            if let Some(res) = res {
-                                sender.send(res.clone()).await;
+                                info!("Clocks ticked");
+
+                                if results.iter().all(|x| x.is_none()) {
+                                    return
+                                }
+
+                                for (res, sender) in results.iter_mut().zip(senders.values_mut()) {
+                                    if let Some(res) = res {
+                                        sender.send(res.clone()).await;
+                                    }
+                                }
+                            }
+                            None => {
+                                return
                             }
                         }
                     }
@@ -184,8 +239,9 @@ mod tests {
     use crate::{InputProvider, OutputStream, Value, async_test};
 
     #[apply(async_test)]
-    #[ignore = "currently hangs"]
+    // #[ignore = "currently hangs"]
     async fn single_multiplexed_input_provider(ex: Rc<LocalExecutor<'static>>) {
+        info!("In test");
         let mut in1 = BTreeMap::new();
         in1.insert(
             "x".into(),
@@ -197,10 +253,31 @@ mod tests {
         );
         let in1: Box<dyn InputProvider<Val = Value>> = Box::new(in1);
 
-        let mut mpx_in: MultiplexedInputProvider<Value> = MultiplexedInputProvider::new(ex, in1);
-        let mut mpx_in_client = mpx_in.subscribe().await;
+        let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
 
-        let mut xs = mpx_in_client
+        let mut mux_in: MultiplexedInputProvider<Value> =
+            MultiplexedInputProvider::new(ex.clone(), in1, clock_rx);
+
+        info!("Detaching monitor");
+        ex.spawn(mux_in.run()).detach();
+
+        info!("Subscribing");
+        let mut mux_in_client = mux_in.subscribe().await;
+
+        // Tick the clock 3 times
+        info!("Tick 0");
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 1");
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 2");
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 3");
+        // TODO: we need a fourth tick to detect that the stream has ended
+        // is this correct
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 4");
+
+        let mut xs = mux_in_client
             .input_stream(&"x".into())
             .expect("Input stream should exist");
         // let xs: Vec<_> = xs.collect().await;
