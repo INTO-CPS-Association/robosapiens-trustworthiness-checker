@@ -1941,6 +1941,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_capital_varname() {
+        assert_eq!(
+            presult_to_string(&input_decl(&mut "in G")),
+            r#"Ok((VarName::new("G"), None))"#
+        );
+        assert_eq!(
+            presult_to_string(&output_decl(&mut "out F")),
+            r#"Ok((VarName::new("F"), None))"#
+        );
+        assert_eq!(
+            presult_to_string(&input_decl(&mut "in GANDALF")),
+            r#"Ok((VarName::new("GANDALF"), None))"#
+        );
+        assert_eq!(
+            presult_to_string(&output_decl(&mut "out FRODO")),
+            r#"Ok((VarName::new("FRODO"), None))"#
+        );
+    }
+
     // TODO: Parser currently takes too long to parse this test
     #[test]
     #[ignore]
