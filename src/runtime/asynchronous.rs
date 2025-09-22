@@ -214,8 +214,7 @@ impl<V: StreamData> VarManager<V> {
                                     return;
                                 }
                             }
-                        }) as OutputStream<V>)
-                        .unwrap();
+                        }) as OutputStream<V>).expect(&format!("VarManager {var} with id {id}: Failed to send stream to subscriber - receiver dropped"));
                     debug!("VarManager {id}: done sending stream to subscriber");
                 } else {
                     unreachable!()
