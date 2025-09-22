@@ -450,17 +450,24 @@ impl LOLASpecification {
 
 impl Debug for LOLASpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn var_fmt(vars: &Vec<VarName>) -> String {
+            vars.iter()
+                .map(|v| "\t\t".to_string() + &v.to_string())
+                .collect::<Vec<String>>()
+                .join(",\n")
+        }
+
         // Format the expressions map ordered lexicographically by key
         // rather than by variable ordering
         let exprs_by_name: BTreeMap<String, &SExpr> =
             self.exprs.iter().map(|(k, v)| (k.to_string(), v)).collect();
         let exprs_formatted = format!(
-            "{{{}}}",
+            "{{\n{}\n\t}}",
             exprs_by_name
                 .iter()
-                .map(|(k, v)| format!("{:?}: {:?}", VarName::new(k), v))
+                .map(|(k, v)| format!("\t\t{} = {:?}", k, v))
                 .collect::<Vec<String>>()
-                .join(", ")
+                .join(",\n")
         );
 
         // Type annotations ordered lexicographically by name
@@ -473,19 +480,22 @@ impl Debug for LOLASpecification {
             "{{{}}}",
             type_annotations_by_name
                 .iter()
-                .map(|(k, v)| format!("{:?}: {:?}", VarName::new(k), v))
+                .map(|(k, v)| format!("\t\t{}: {:?}", k, v))
                 .collect::<Vec<String>>()
-                .join(", ")
+                .join(",\n")
         );
+        let input_vars_fmt = var_fmt(&self.input_vars);
+        let output_vars_fmt = var_fmt(&self.output_vars);
+        let aux_vars_fmt = var_fmt(&self.aux_info);
 
         write!(
             f,
-            "LOLASpecification {{ input_vars: {:?}, output_vars: {:?}, exprs: {}, type_annotations: {}, aux_info: {:?} }}",
-            self.input_vars,
-            self.output_vars,
+            "LOLASpecification {{\n\tinput_vars: [\n{}\n\t],\n\toutput_vars: [\n{}\n\t],\n\taux_vars: [\n{}\n\t],\n\texprs: {},\n\ttype_annotations: {}\n}}",
+            input_vars_fmt,
+            output_vars_fmt,
+            aux_vars_fmt,
             exprs_formatted,
             type_annotations_formatted,
-            self.aux_info
         )
     }
 }

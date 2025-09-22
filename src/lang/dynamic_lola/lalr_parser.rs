@@ -1159,69 +1159,69 @@ mod spec_tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[-1], 0) + 1",
-            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\n\t],\n\toutput_vars: [\n\t\tz\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\tz = BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Val(Int(1)), NOp(Add))\n\t},\n\ttype_annotations: {}\n})",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[-1], 0) + x",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx\n\t],\n\toutput_vars: [\n\t\tz\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\tz = BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))\n\t},\n\ttype_annotations: {}\n})",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"a\")], exprs: {VarName::new(\"a\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1)}, type_annotations: {}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx,\n\t\ty\n\t],\n\toutput_vars: [\n\t\tz,\n\t\ta\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\ta = Var(VarName::new(\"y\")),\n\t\tz = SIndex(Var(VarName::new(\"x\")), 1)\n\t},\n\ttype_annotations: {}\n})",
         )
     }
 
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"iList\")], output_vars: [VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")], exprs: {VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\"))), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"oList\"): Var(VarName::new(\"iList\"))}, type_annotations: {}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tiList\n\t],\n\toutput_vars: [\n\t\toList,\n\t\tnestedList,\n\t\tlistIndex,\n\t\tlistAppend,\n\t\tlistConcat,\n\t\tlistHead,\n\t\tlistTail\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\tlistAppend = LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))),\n\t\tlistConcat = LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))),\n\t\tlistHead = LHead(Var(VarName::new(\"iList\"))),\n\t\tlistIndex = LIndex(Var(VarName::new(\"iList\")), Val(Int(0))),\n\t\tlistTail = LTail(Var(VarName::new(\"iList\"))),\n\t\tnestedList = List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]),\n\t\toList = Var(VarName::new(\"iList\"))\n\t},\n\ttype_annotations: {}\n})",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx,\n\t\ty\n\t],\n\toutput_vars: [\n\t\tz\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\tz = BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))\n\t},\n\ttype_annotations: {\t\tx: Int,\n\t\ty: Int,\n\t\tz: Int}\n})",
         )
     }
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::lola_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add))}, type_annotations: {}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx,\n\t\ty\n\t],\n\toutput_vars: [\n\t\tz,\n\t\tu,\n\t\tw\n\t],\n\taux_vars: [\n\t\tu,\n\t\tw\n\t],\n\texprs: {\n\t\tu = Var(VarName::new(\"x\")),\n\t\tw = Var(VarName::new(\"y\")),\n\t\tz = BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add))\n\t},\n\ttype_annotations: {}\n})",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
             crate::lola_fixtures::spec_simple_add_aux_typed_monitor(),
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add))}, type_annotations: {VarName::new(\"u\"): Int, VarName::new(\"w\"): Int, VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx,\n\t\ty\n\t],\n\toutput_vars: [\n\t\tz,\n\t\tu,\n\t\tw\n\t],\n\taux_vars: [\n\t\tu,\n\t\tw\n\t],\n\texprs: {\n\t\tu = Var(VarName::new(\"x\")),\n\t\tw = Var(VarName::new(\"y\")),\n\t\tz = BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add))\n\t},\n\ttype_annotations: {\t\tu: Int,\n\t\tw: Int,\n\t\tx: Int,\n\t\ty: Int,\n\t\tz: Int}\n})",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx,\n\t\ty\n\t],\n\toutput_vars: [\n\t\tz\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\tz = BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))\n\t},\n\ttype_annotations: {\t\tx: Int,\n\t\ty: Int,\n\t\tz: Int}\n})",
         )
     }
 
     fn if_statement() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if x == 0 then y else 42",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx,\n\t\ty\n\t],\n\toutput_vars: [\n\t\tz\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\tz = If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))\n\t},\n\ttype_annotations: {}\n})",
         )
     }
 
     fn if_statement_newlines() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
+            "Ok(LOLASpecification {\n\tinput_vars: [\n\t\tx,\n\t\ty\n\t],\n\toutput_vars: [\n\t\tz\n\t],\n\taux_vars: [\n\n\t],\n\texprs: {\n\t\tz = If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))\n\t},\n\ttype_annotations: {}\n})",
         )
     }
 

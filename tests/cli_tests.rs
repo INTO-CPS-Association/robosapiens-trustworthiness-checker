@@ -126,6 +126,7 @@ use tc_testutils::{
     mqtt::{dummy_mqtt_publisher, start_mqtt},
     redis::{dummy_redis_receiver, dummy_redis_sender, start_redis},
 };
+use tracing::error;
 use trustworthiness_checker::Value;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
@@ -209,6 +210,7 @@ async fn run_cli_streaming(
                         if stdout_line.contains("4") || stdout_line.contains("6") {
                             expected_lines += 1;
                             if expected_lines >= 2 {
+                                error!("Too much output in CLI test, terminating process");
                                 break; // Got both expected outputs
                             }
                         }
