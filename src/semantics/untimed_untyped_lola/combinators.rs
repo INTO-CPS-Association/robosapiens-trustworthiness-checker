@@ -550,7 +550,7 @@ pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
 pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     Box::pin(stream! {
         if xs.is_empty() {
-            return;
+            Value::List(EcoVec::new());
         }
         loop {
             let vals = join_all(xs.iter_mut().map(|x| x.next())).await;
@@ -663,7 +663,7 @@ pub fn llen(mut x: OutputStream<Value>) -> OutputStream<Value> {
 pub fn map(mut xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> {
     Box::pin(stream! {
         if xs.is_empty() {
-            return;
+            Value::Map(BTreeMap::new());
         }
         loop {
             let iters = xs.iter_mut().map(|(k, v)| {
@@ -1090,8 +1090,8 @@ mod tests {
     #[apply(async_test)]
     async fn test_list_no_stream() {
         let x: Vec<OutputStream<Value>> = vec![];
-        let res: Vec<Value> = list(x).collect().await;
-        let exp: Vec<Value> = vec![];
+        let res: Vec<Value> = list(x).take(2).collect().await;
+        let exp: Vec<Value> = vec![Value::List(eco_vec![]), Value::List(eco_vec![])];
         assert_eq!(res, exp);
     }
 
@@ -1296,8 +1296,8 @@ mod tests {
     #[apply(async_test)]
     async fn test_map_no_stream() {
         let x: BTreeMap<EcoString, OutputStream<Value>> = BTreeMap::new();
-        let res: Vec<Value> = map(x).collect().await;
-        let exp: Vec<Value> = vec![];
+        let res: Vec<Value> = map(x).take(2).collect().await;
+        let exp: Vec<Value> = vec![Value::Map(BTreeMap::new()), Value::Map(BTreeMap::new())];
         assert_eq!(res, exp);
     }
 
