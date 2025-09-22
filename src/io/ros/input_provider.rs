@@ -181,4 +181,8 @@ impl InputProvider for ROSInputProvider {
     fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         Box::pin(futures::future::ready(Ok(())))
     }
+
+    fn vars(&self) -> Vec<VarName> {
+        self.var_map.keys().cloned().collect()
+    }
 }
