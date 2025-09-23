@@ -527,7 +527,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     DistributedContext<Value>,
                     Value,
                     _,
-                    DistributedSemantics<CombExprParser>,
+                    DistributedSemantics<LALRExprParser>,
                 >::new();
 
                 let builder = builder.scheduler_mode(scheduler_mode);
