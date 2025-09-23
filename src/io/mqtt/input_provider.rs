@@ -45,6 +45,7 @@ impl MQTTInputProvider {
         var_topics: InputChannelMap,
         max_reconnect_attempts: u32,
     ) -> Result<Self, mqtt::Error> {
+        info!("Start of new for input provider");
         let host: String = host.to_string();
 
         let (senders, receivers): (
@@ -68,6 +69,7 @@ impl MQTTInputProvider {
         let result = AsyncCell::shared();
         let cancellation_token = CancellationToken::new();
 
+        debug!(?executor, "Spawning input monitor");
         executor
             .spawn(Self::input_monitor(
                 result.clone(),
@@ -82,6 +84,8 @@ impl MQTTInputProvider {
                 cancellation_token.clone(),
             ))
             .detach();
+        // smol::future::yield_now().await;
+        debug!(?executor, "Spawned input monitor");
 
         let var_data = var_topics
             .into_iter()
@@ -106,6 +110,8 @@ impl MQTTInputProvider {
             })
             .collect();
 
+        info!(?executor, "End of new for input provider");
+
         Ok(MQTTInputProvider {
             executor,
             result,
@@ -127,6 +133,7 @@ impl MQTTInputProvider {
         max_reconnect_attempts: u32,
         cancellation_token: CancellationToken,
     ) {
+        debug!("In input monitor");
         let result = result.guard_shared(Err(anyhow::anyhow!("InputProvider crashed")));
         result.set(
             Self::input_monitor_with_result(
@@ -155,6 +162,7 @@ impl MQTTInputProvider {
         max_reconnect_attempts: u32,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<()> {
+        info!("In input_monitor_with_result");
         let mqtt_input_span = info_span!("InputProvider MQTT startup task", ?host, ?var_topics);
         let _enter = mqtt_input_span.enter();
         let uri = match port {
@@ -162,9 +170,10 @@ impl MQTTInputProvider {
             None => format!("tcp://{}", host),
         };
         // Create and connect to the MQTT client
+        info!("Getting client with subscription");
         let (client, mut stream) =
             provide_mqtt_client_with_subscription(uri.clone(), max_reconnect_attempts).await?;
-        info_span!("InputProvider MQTT client connected", ?host, ?var_topics);
+        info!(?host, ?var_topics, "InputProvider MQTT client connected");
         let qos = topics.iter().map(|_| QOS).collect::<Vec<_>>();
         loop {
             match client.subscribe_many(&topics, &qos).await {
@@ -177,6 +186,7 @@ impl MQTTInputProvider {
             }
         }
         info!(name: "Connected to MQTT broker", ?host, ?var_topics);
+        debug!("Set started");
         started.set(true);
 
         let result = async {
@@ -256,7 +266,9 @@ impl InputProvider for MQTTInputProvider {
     fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         let started = self.started.clone();
         Box::pin(async move {
+            debug!("In ready");
             while !started.get().await {
+                debug!("Checking if ready");
                 smol::future::yield_now().await;
             }
             Ok(())

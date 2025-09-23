@@ -83,6 +83,7 @@ panic = "abort"
 [features]
 ros = ["dep:r2r"]
 testcontainers = []
+span-tracing = []
 bench-full = []
 
 [dev-dependencies]

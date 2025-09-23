@@ -194,7 +194,7 @@ impl<V: StreamData> VarManager<V> {
                     // Take the stream out of the RefCell by replacing it with None
                     let mut input_ref = input_stream_ref.borrow_mut();
                     let stream = input_ref.take().unwrap();
-                    output_tx.send(stream).unwrap();
+                    output_tx.send(stream).expect(format!("VarManager {}: Tried to send output for variable {}", id, var).as_str());
                     subscribers_ref.borrow_mut().pop();
                 } else if current_var_stage == VarStage::Open
                     || current_var_stage == VarStage::Closed

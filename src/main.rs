@@ -6,6 +6,7 @@ use clap::Parser;
 use smol::LocalExecutor;
 use tracing::{debug, info};
 use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
@@ -27,13 +28,18 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(std::io::stderr))
-        // Uncomment the following line to enable full span events which logs
-        // every time the code enters/exits an instrumented function/block
-        // .with(fmt::layer().with_span_events(FmtSpan::FULL))
-        .with(EnvFilter::from_default_env())
-        .init();
+    if cfg!(feature = "span-tracing") {
+        tracing_subscriber::registry()
+            .with(fmt::layer().with_writer(std::io::stderr))
+            .with(fmt::layer().with_span_events(FmtSpan::FULL))
+            .with(EnvFilter::from_default_env())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(fmt::layer().with_writer(std::io::stderr))
+            .with(EnvFilter::from_default_env())
+            .init();
+    }
 
     let cli = Cli::parse();
 

@@ -464,10 +464,13 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfAsyncMonitorBuilder::<
                     LOLASpecification,
-                    DistributedContext<Value>,
+                    // Reconfigurable async runtime does not work with DistributedContext
+                    // or DistributedSemantics as it has no way of proving the graph stream for the
+                    // network topology
+                    Context<Value>,
                     Value,
                     _,
-                    DistributedSemantics<LALRExprParser>,
+                    UntimedLolaSemantics<LALRExprParser>,
                 >::new();
 
                 // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
@@ -488,10 +491,12 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Combinator) => {
                 let mut builder = ReconfAsyncMonitorBuilder::<
                     LOLASpecification,
-                    DistributedContext<Value>,
+                    // Reconfigurable async runtime does not work with DistributedContext
+                    // as it has no way of proving the graph stream for the network topology
+                    Context<Value>,
                     Value,
                     _,
-                    DistributedSemantics<CombExprParser>,
+                    UntimedLolaSemantics<CombExprParser>,
                 >::new();
 
                 // If we have a LocalMonitorWithReceiver, pass the receiver to the builder

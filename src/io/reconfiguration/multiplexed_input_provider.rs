@@ -2,7 +2,6 @@ use std::mem;
 use std::{collections::BTreeMap, rc::Rc};
 
 use crate::core::StreamData;
-use crate::io::reconfiguration::multiplexed_input_provider;
 use crate::{InputProvider, OutputStream, VarName};
 
 use async_cell::unsync::AsyncCell;
@@ -17,7 +16,7 @@ use unsync::spsc::Sender as SpscSender;
 use unsync::spsc::{self, Receiver as SpscReceiver};
 
 /// An input provider that multiplexes a single inner input provider to multiple clients.
-struct MultiplexedInputProvider<Val: Clone> {
+pub struct MultiplexedInputProvider<Val: Clone> {
     executor: Rc<LocalExecutor<'static>>,
     inner_input_provider: Box<dyn InputProvider<Val = Val>>,
     ready: Rc<AsyncCell<anyhow::Result<()>>>,
@@ -30,7 +29,7 @@ struct MultiplexedInputProvider<Val: Clone> {
     clock_rx: Option<SpscReceiver<()>>,
 }
 
-struct MultiplexedInputProviderClient<Val: Clone> {
+pub struct MultiplexedInputProviderClient<Val: Clone> {
     receivers: BTreeMap<VarName, BroadcastReceiver<Val>>,
     ready: Rc<AsyncCell<anyhow::Result<()>>>,
     run_result: Rc<AsyncCell<anyhow::Result<()>>>,
@@ -58,7 +57,7 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
         let subscribers_req = Some(subscribers_req_rx);
         let clock_rx = Some(clock_rx);
 
-        let mut mux_input_provider = MultiplexedInputProvider {
+        MultiplexedInputProvider {
             executor,
             ready,
             run_result,
@@ -68,9 +67,7 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
             clock_rx,
             subscribers_req,
             subscribers_req_tx,
-        };
-        // ex.spawn(mux_input_provider.run()).detach();
-        mux_input_provider
+        }
     }
 
     pub async fn subscribe(&mut self) -> MultiplexedInputProviderClient<Val> {
@@ -108,8 +105,10 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
             .collect();
         let subscribers_req_rx =
             mem::take(&mut self.subscribers_req).expect("Subscribers req channel is gone");
+        info!("MultiplexedInputProvider run future created");
 
         Box::pin(async move {
+            info!("MultiplexedInputProvider started");
             let mut next_subscribers_req_stream = Box::pin(StreamExt::fuse(stream! {
                 let mut subscribers_req_rx = subscribers_req_rx;
                 while let Some(res) = subscribers_req_rx.recv().await {
@@ -240,7 +239,6 @@ mod tests {
     use crate::{InputProvider, OutputStream, Value, async_test};
 
     #[apply(async_test)]
-    // #[ignore = "currently hangs"]
     async fn single_multiplexed_input_provider(ex: Rc<LocalExecutor<'static>>) {
         info!("In test");
         let mut in1 = BTreeMap::new();
@@ -288,6 +286,139 @@ mod tests {
         while let (Some(x), Some(x_exp)) = (xs.next().await, xs_expected.next()) {
             info!(?x, ?x_exp, "received output");
             assert_eq!(x, x_exp)
+        }
+    }
+
+    #[apply(async_test)]
+    async fn dual_multiplexed_input_provider(ex: Rc<LocalExecutor<'static>>) {
+        info!("In test");
+        let mut in1 = BTreeMap::new();
+        in1.insert(
+            "x".into(),
+            Box::pin(stream::iter(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+            ])) as OutputStream<Value>,
+        );
+        let in1: Box<dyn InputProvider<Val = Value>> = Box::new(in1);
+
+        let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
+
+        let mut mux_in: MultiplexedInputProvider<Value> =
+            MultiplexedInputProvider::new(ex.clone(), in1, clock_rx);
+
+        info!("Detaching monitor");
+        ex.spawn(mux_in.run()).detach();
+
+        info!("Subscribing");
+        let mut mux_in_client1 = mux_in.subscribe().await;
+        let mut mux_in_client2 = mux_in.subscribe().await;
+
+        // Tick the clock 3 times
+        info!("Tick 0");
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 1");
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 2");
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 3");
+        // TODO: we need a fourth tick to detect that the stream has ended
+        // is this correct
+        clock_tx.send(()).await.unwrap();
+        info!("Tick 4");
+
+        let mut xs1 = mux_in_client1
+            .input_stream(&"x".into())
+            .expect("Input stream should exist");
+        let mut xs2 = mux_in_client2
+            .input_stream(&"x".into())
+            .expect("Input stream should exist");
+        // let xs: Vec<_> = xs.collect().await;
+        let mut xs_expected = vec![Value::Int(1), Value::Int(2), Value::Int(3)].into_iter();
+
+        // while let (Some(x), e_expected) =
+        while let (Some(x1), Some(x2), Some(x_exp)) =
+            (xs1.next().await, xs2.next().await, xs_expected.next())
+        {
+            info!(?x1, ?x2, ?x_exp, "received output");
+            assert_eq!(x1, x_exp);
+            assert_eq!(x2, x_exp);
+        }
+    }
+
+    #[apply(async_test)]
+    async fn switching_multiplexed_input_provider(ex: Rc<LocalExecutor<'static>>) {
+        info!("In test");
+        let mut in1 = BTreeMap::new();
+        in1.insert(
+            "x".into(),
+            Box::pin(stream::iter(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4),
+            ])) as OutputStream<Value>,
+        );
+        let in1: Box<dyn InputProvider<Val = Value>> = Box::new(in1);
+
+        let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
+
+        let mut mux_in: MultiplexedInputProvider<Value> =
+            MultiplexedInputProvider::new(ex.clone(), in1, clock_rx);
+
+        info!("Detaching monitor");
+        ex.spawn(mux_in.run()).detach();
+
+        {
+            info!("Subscribing");
+            let mut mux_in_client1 = mux_in.subscribe().await;
+            // let mut mux_in_client2 = mux_in.subscribe().await;
+
+            // Tick the clock 3 times
+            info!("Tick 0");
+            clock_tx.send(()).await.unwrap();
+            info!("Tick 1");
+            clock_tx.send(()).await.unwrap();
+            info!("Tick 2");
+            // clock_tx.send(()).await.unwrap();
+            // info!("Tick 3");
+            // TODO: we need a fourth tick to detect that the stream has ended
+            // is this correct
+            // clock_tx.send(()).await.unwrap();
+            // info!("Tick 4");
+
+            let mut xs1 = mux_in_client1
+                .input_stream(&"x".into())
+                .expect("Input stream should exist")
+                .take(2);
+            // let xs: Vec<_> = xs.collect().await;
+            let mut xs_expected = vec![Value::Int(1), Value::Int(2)].into_iter();
+
+            // while let (Some(x), e_expected) =
+            while let (Some(x), Some(x_exp)) = (xs1.next().await, xs_expected.next()) {
+                info!(?x, ?x_exp, "received output");
+                assert_eq!(x, x_exp);
+            }
+        }
+
+        {
+            let mut mux_in_client2 = mux_in.subscribe().await;
+            let mut xs2 = mux_in_client2
+                .input_stream(&"x".into())
+                .expect("Input stream should exist");
+
+            clock_tx.send(()).await.unwrap();
+            info!("Tick 3");
+            clock_tx.send(()).await.unwrap();
+            info!("Tick 4");
+            clock_tx.send(()).await.unwrap();
+
+            let mut xs_expected = vec![Value::Int(3), Value::Int(4)].into_iter();
+            while let (Some(x), Some(x_exp)) = (xs2.next().await, xs_expected.next()) {
+                info!(?x, ?x_exp, "received output");
+                assert_eq!(x, x_exp);
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use smol::LocalExecutor;
-use tracing::info_span;
+use tracing::{debug, debug_span, info_span};
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::{self as tc, Value};
@@ -92,6 +92,7 @@ impl InputProviderBuilder {
     }
 
     pub async fn async_build(self) -> Box<dyn InputProvider<Val = Value>> {
+        let _async_build = debug_span!("async_build for input provider").entered();
         match self.spec {
             InputProviderSpec::File(path) => {
                 let input_file_parser = match self.lang.unwrap_or(Language::DynSRV) {
@@ -145,13 +146,23 @@ impl InputProviderBuilder {
                 )
                 .expect("MQTT input provider could not be created");
                 let started = mqtt_input_provider.started.clone();
+                debug!("Waiting for input provider started");
                 info_span!("Waited for input provider started")
                     .in_scope(|| async {
-                        while !started.get().await {
-                            smol::future::yield_now().await;
+                        loop {
+                            debug!("Checking if input provider started");
+                            let is_started = started.try_get();
+                            match is_started {
+                                Some(true) => return,
+                                Some(false) | None => {
+                                    debug!("Yielding in input provider builder");
+                                    smol::future::yield_now().await;
+                                }
+                            }
                         }
                     })
                     .await;
+                debug!("Waited for input provider started");
                 Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::Redis(topics) => {

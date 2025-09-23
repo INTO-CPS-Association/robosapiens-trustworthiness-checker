@@ -1,10 +1,12 @@
+use std::time::Duration;
 use std::{marker::PhantomData, rc::Rc};
 
 use async_trait::async_trait;
 use futures::{FutureExt, future::LocalBoxFuture, select};
 use smol::LocalExecutor;
-use tracing::{Level, info, instrument};
+use tracing::{Level, debug, debug_span, info, instrument};
 
+use crate::io::reconfiguration::multiplexed_input_provider::MultiplexedInputProvider;
 use crate::{
     InputProvider, Monitor, Specification, Value,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
@@ -211,7 +213,6 @@ impl<
             input_provider,
             output_provider,
             reconf_provider,
-            local_node,
             ctx_t: PhantomData,
             expr_t: PhantomData,
             semantics_t: PhantomData,
@@ -248,7 +249,6 @@ where
     /// Direct output provider - not currently supported in reconfigurable mode
     output_provider: Option<Box<dyn OutputHandler<Val = Value>>>,
     reconf_provider: MQTTLocalityReceiver,
-    local_node: String,
     ctx_t: PhantomData<Ctx>,
 
     expr_t: PhantomData<Expr>,
@@ -281,26 +281,59 @@ where
         // Get the initial work assignment
         info!("Waiting for initial work assignment");
         let mut work_assignment = self.reconf_provider.receive().await?;
+        info!("Got work assignment");
+
+        // Set up clock
+        let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
+
+        // Clock ticker
+        // TODO: figure out the proper way to progress the clock
+        self.executor
+            .spawn(async move {
+                let _clock = debug_span!("Clock").entered();
+                loop {
+                    debug!("Clock ticking");
+                    clock_tx.send(()).await.unwrap();
+                    debug!("Yielding from clock by waiting");
+                    smol::Timer::after(Duration::new(2, 0)).await;
+                    // smol::future::yield_now().await;
+                }
+            })
+            .detach();
+
+        // Create root input provider
+        debug!("Building input provider");
+        let input = if let Some(ref input_builder) = self.input_builder {
+            debug!("Running async_build");
+            let ip = input_builder.clone().async_build().await;
+            debug!("Ran async_build");
+            ip
+        } else if let Some(ref _input_provider) = self.input_provider {
+            // This is a bit tricky since we can't clone trait objects
+            // For now, this path should not be used with reconfigurable runtime
+            return Err(anyhow::anyhow!(
+                "Direct input providers not supported in reconfigurable runtime"
+            ));
+        } else {
+            return Err(anyhow::anyhow!("No input provider available"));
+        };
+        info!("Built input provider");
+
+        // Multiplex the input provider
+        let mut input_mux = MultiplexedInputProvider::new(self.executor.clone(), input, clock_rx);
+
+        // Run the input multiplexer
+        self.executor.spawn(input_mux.run()).detach();
 
         info!("Received initial work assignment");
 
         loop {
-            // Create fresh input and output providers for this configuration
-            // This is the core fix: instead of trying to reuse providers via partial_clone()
-            // (which sets input/output to None), we create completely fresh providers
-            // for each reconfiguration from the stored builders
-            let input = if let Some(ref input_builder) = self.input_builder {
-                input_builder.clone().async_build().await
-            } else if let Some(ref _input_provider) = self.input_provider {
-                // This is a bit tricky since we can't clone trait objects
-                // For now, this path should not be used with reconfigurable runtime
-                return Err(anyhow::anyhow!(
-                    "Direct input providers not supported in reconfigurable runtime"
-                ));
-            } else {
-                return Err(anyhow::anyhow!("No input provider available"));
-            };
+            // Create new client to the multiplexed input provider
+            let input = Box::new(input_mux.subscribe().await);
 
+            debug!("Subscribed to input mux");
+
+            // Create fresh output providers for this configuration
             let output = if let Some(ref output_builder) = self.output_builder {
                 output_builder.clone().async_build().await
             } else if let Some(ref _output_provider) = self.output_provider {
