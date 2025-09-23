@@ -17,6 +17,7 @@ use super::provide_mqtt_client_with_subscription;
 
 const MQTT_QOS: i32 = 1;
 
+#[derive(Clone)]
 pub struct MQTTLocalityReceiver {
     mqtt_host: String,
     local_node: String,
@@ -26,21 +27,8 @@ pub struct MQTTLocalityReceiver {
     mqtt_client: Rc<AsyncCell<Option<paho_mqtt::AsyncClient>>>,
 }
 
-impl Clone for MQTTLocalityReceiver {
-    fn clone(&self) -> Self {
-        Self {
-            mqtt_host: self.mqtt_host.clone(),
-            local_node: self.local_node.clone(),
-            mqtt_port: self.mqtt_port,
-            ready: self.ready.clone(),
-            message_receiver: self.message_receiver.clone(),
-            mqtt_client: self.mqtt_client.clone(),
-        }
-    }
-}
-
 impl MQTTLocalityReceiver {
-    pub fn new(mqtt_host: String, local_node: String) -> Self {
+    fn new_base(mqtt_host: String, local_node: String, mqtt_port: Option<u16>) -> Self {
         let ready = AsyncCell::new_with(false).into_shared();
         let message_receiver = AsyncCell::new_with(None).into_shared();
         let mqtt_client = AsyncCell::new_with(None).into_shared();
@@ -48,26 +36,19 @@ impl MQTTLocalityReceiver {
         Self {
             mqtt_host,
             local_node,
-            mqtt_port: None,
+            mqtt_port,
             ready,
             message_receiver,
             mqtt_client,
         }
+    }
+
+    pub fn new(mqtt_host: String, local_node: String) -> Self {
+        Self::new_base(mqtt_host, local_node, None)
     }
 
     pub fn new_with_port(mqtt_host: String, local_node: String, port: u16) -> Self {
-        let ready = AsyncCell::new_with(false).into_shared();
-        let message_receiver = AsyncCell::new_with(None).into_shared();
-        let mqtt_client = AsyncCell::new_with(None).into_shared();
-
-        Self {
-            mqtt_host,
-            local_node,
-            mqtt_port: Some(port),
-            ready,
-            message_receiver,
-            mqtt_client,
-        }
+        Self::new_base(mqtt_host, local_node, Some(port))
     }
 
     fn topic(&self) -> String {

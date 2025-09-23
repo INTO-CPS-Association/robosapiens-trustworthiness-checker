@@ -20,6 +20,13 @@ macro_rules! is_enum_variant {
 /// async fn my_async_test(executor: Rc<LocalExecutor<'static>>) {
 ///     // test body
 /// }
+/// ```
+///
+/// or with a Result:
+///
+/// ```rust
+/// use macro_rules_attribute::apply;
+/// use trustworthiness_checker::async_test;
 ///
 /// #[apply(async_test)]
 /// async fn my_async_test(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {

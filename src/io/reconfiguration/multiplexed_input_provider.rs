@@ -16,6 +16,7 @@ use unsync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender
 use unsync::spsc::Sender as SpscSender;
 use unsync::spsc::{self, Receiver as SpscReceiver};
 
+/// An input provider that multiplexes a single inner input provider to multiple clients.
 struct MultiplexedInputProvider<Val: Clone> {
     executor: Rc<LocalExecutor<'static>>,
     inner_input_provider: Box<dyn InputProvider<Val = Val>>,
