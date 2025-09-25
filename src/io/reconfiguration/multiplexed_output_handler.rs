@@ -157,7 +157,7 @@ impl OutputHandler for MultiplexedOutputHandler {
         Box::pin(async move {
             loop {
                 select_biased! {
-                    // Ordering is quite (unfortunately) quite important here:
+                    // Ordering is (unfortunately) quite important here:
                     // 1. We prioritize new receivers such that they can get served ASAP
                     // 2. We then forward new data from the output stream to all receivers
                     // 3. We then potentially end if the handler_task is finished
