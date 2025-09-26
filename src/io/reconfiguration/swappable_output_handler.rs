@@ -62,15 +62,9 @@ impl SwappableOutputHandler {
             }
         }
         rx.await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to receive old handler back from swap caller: {:?}",
-                e
-            )
+            anyhow::anyhow!("Failed to receive old handler back from swap caller: {:?}",)
         })
     }
-}
-
-impl OutputHandler for SwappableOutputHandler {
     type Val = Value;
 
     fn var_names(&self) -> Vec<VarName> {
