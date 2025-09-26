@@ -48,6 +48,7 @@ impl<T> InternalComm<T> {
     }
 
     /// Split from Setup state into two objects: (Sender, Receiver)
+    #[allow(dead_code)]
     pub fn split(self) -> anyhow::Result<(Self, Self)> {
         match self {
             InternalComm::Setup(setup) => {

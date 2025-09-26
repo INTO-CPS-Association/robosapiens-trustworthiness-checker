@@ -63,7 +63,7 @@ impl MultiplexedOutputHandler {
             oneshot::Receiver<Vec<OutputStream<Value>>>,
         ) = oneshot::channel().into_split();
 
-        // Requests are served immediately if Handler is not running (indicated by senders != None)
+        // Requests are served immediately if Handler is not running (indicated by State == Setup)
         if self.requesters.state() == comm::InternalCommState::Setup {
             let senders = self
                 .senders
@@ -109,12 +109,10 @@ impl OutputHandler for MultiplexedOutputHandler {
         let mut handler_task = FutureExt::fuse(executor.spawn(self.manual_output_handler.run()));
         let mut output_stream = StreamExt::fuse(output_stream);
         let mut senders = mem::take(&mut self.senders).expect("Senders already_taken");
-        let receiver = self
+        let mut receiver = self
             .requesters
             .split_receiver()
-            .expect("Failed to split requesters for internal communication");
-
-        let mut consumer = receiver
+            .expect("Failed to split requesters for internal communication")
             .take_receiver()
             // Should never fail as split was successful
             .expect("Failed to take receiver for internal communication");
@@ -134,7 +132,7 @@ impl OutputHandler for MultiplexedOutputHandler {
                     // been polled, the data is still available in the stream.
 
                     // Handle new requesters
-                    maybe_tx = consumer.recv().fuse() => {
+                    maybe_tx = receiver.recv().fuse() => {
                         match maybe_tx {
                             Some(tx) => {
                                 let subscription = Self::create_streams(&mut senders);
@@ -143,7 +141,7 @@ impl OutputHandler for MultiplexedOutputHandler {
                                 }
                             }
                             None => {
-                                unreachable!("Producer/Consumer channel closed before output_stream finished. Should not happen.")
+                                unreachable!("InternalComm channel closed before output_stream finished. Should not happen.")
                             }
                         }
                     }
