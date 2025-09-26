@@ -45,7 +45,7 @@ impl MQTTInputProvider {
         var_topics: InputChannelMap,
         max_reconnect_attempts: u32,
     ) -> Result<Self, mqtt::Error> {
-        info!("Start of new for input provider");
+        debug!("Start of new for input provider");
         let host: String = host.to_string();
 
         let (senders, receivers): (

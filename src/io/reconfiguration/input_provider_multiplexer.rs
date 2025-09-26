@@ -15,8 +15,11 @@ use unsync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender
 use unsync::spsc::Sender as SpscSender;
 use unsync::spsc::{self, Receiver as SpscReceiver};
 
-/// An input provider that multiplexes a single inner input provider to multiple clients.
-pub struct MultiplexedInputProvider<Val: Clone> {
+/// A multiplexer for a single inner input provider allowing multiple
+/// MultiplexerClientInputProviders to be attached to receive independent copies
+/// of the input streams. This supports dynamic attachment and removal of clients,
+/// allowing for reconfigurable and overlapping access to a shared InputProvider.
+pub struct InputProviderMultiplexer<Val: Clone> {
     executor: Rc<LocalExecutor<'static>>,
     inner_input_provider: Box<dyn InputProvider<Val = Val>>,
     ready: Rc<AsyncCell<anyhow::Result<()>>>,
@@ -29,19 +32,19 @@ pub struct MultiplexedInputProvider<Val: Clone> {
     clock_rx: Option<SpscReceiver<()>>,
 }
 
-pub struct MultiplexedInputProviderClient<Val: Clone> {
+pub struct MultiplexerClientInputProvider<Val: Clone> {
     receivers: BTreeMap<VarName, BroadcastReceiver<Val>>,
     ready: Rc<AsyncCell<anyhow::Result<()>>>,
     run_result: Rc<AsyncCell<anyhow::Result<()>>>,
     should_run: Rc<AsyncCell<()>>,
 }
 
-impl<Val: StreamData> MultiplexedInputProvider<Val> {
+impl<Val: StreamData> InputProviderMultiplexer<Val> {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         inner_input_provider: Box<dyn InputProvider<Val = Val>>,
         clock_rx: SpscReceiver<()>,
-    ) -> MultiplexedInputProvider<Val> {
+    ) -> InputProviderMultiplexer<Val> {
         let ready = AsyncCell::shared();
         let run_result = AsyncCell::shared();
         let should_run = AsyncCell::shared();
@@ -57,7 +60,7 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
         let subscribers_req = Some(subscribers_req_rx);
         let clock_rx = Some(clock_rx);
 
-        MultiplexedInputProvider {
+        InputProviderMultiplexer {
             executor,
             ready,
             run_result,
@@ -70,7 +73,7 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
         }
     }
 
-    pub async fn subscribe(&mut self) -> MultiplexedInputProviderClient<Val> {
+    pub async fn subscribe(&mut self) -> MultiplexerClientInputProvider<Val> {
         let (receivers_tx, receivers_rx) = oneshot::channel().into_split();
         let _ = self.subscribers_req_tx.send(receivers_tx).await;
         info!("Waiting for receivers");
@@ -82,7 +85,7 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
         let run_result = self.run_result.clone();
         let should_run = self.should_run.clone();
 
-        MultiplexedInputProviderClient {
+        MultiplexerClientInputProvider {
             receivers,
             ready,
             run_result,
@@ -192,7 +195,7 @@ impl<Val: StreamData> MultiplexedInputProvider<Val> {
     }
 }
 
-impl<Val: Clone + 'static> InputProvider for MultiplexedInputProviderClient<Val> {
+impl<Val: Clone + 'static> InputProvider for MultiplexerClientInputProvider<Val> {
     type Val = Val;
 
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
@@ -235,7 +238,7 @@ mod tests {
     use smol::{LocalExecutor, stream::StreamExt};
     use tracing::info;
 
-    use super::MultiplexedInputProvider;
+    use super::InputProviderMultiplexer;
     use crate::{InputProvider, OutputStream, Value, async_test};
 
     #[apply(async_test)]
@@ -254,8 +257,8 @@ mod tests {
 
         let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
 
-        let mut mux_in: MultiplexedInputProvider<Value> =
-            MultiplexedInputProvider::new(ex.clone(), in1, clock_rx);
+        let mut mux_in: InputProviderMultiplexer<Value> =
+            InputProviderMultiplexer::new(ex.clone(), in1, clock_rx);
 
         info!("Detaching monitor");
         ex.spawn(mux_in.run()).detach();
@@ -305,8 +308,8 @@ mod tests {
 
         let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
 
-        let mut mux_in: MultiplexedInputProvider<Value> =
-            MultiplexedInputProvider::new(ex.clone(), in1, clock_rx);
+        let mut mux_in: InputProviderMultiplexer<Value> =
+            InputProviderMultiplexer::new(ex.clone(), in1, clock_rx);
 
         info!("Detaching monitor");
         ex.spawn(mux_in.run()).detach();
@@ -364,8 +367,8 @@ mod tests {
 
         let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
 
-        let mut mux_in: MultiplexedInputProvider<Value> =
-            MultiplexedInputProvider::new(ex.clone(), in1, clock_rx);
+        let mut mux_in: InputProviderMultiplexer<Value> =
+            InputProviderMultiplexer::new(ex.clone(), in1, clock_rx);
 
         info!("Detaching monitor");
         ex.spawn(mux_in.run()).detach();
@@ -373,7 +376,6 @@ mod tests {
         {
             info!("Subscribing");
             let mut mux_in_client1 = mux_in.subscribe().await;
-            // let mut mux_in_client2 = mux_in.subscribe().await;
 
             // Tick the clock 3 times
             info!("Tick 0");
@@ -381,21 +383,13 @@ mod tests {
             info!("Tick 1");
             clock_tx.send(()).await.unwrap();
             info!("Tick 2");
-            // clock_tx.send(()).await.unwrap();
-            // info!("Tick 3");
-            // TODO: we need a fourth tick to detect that the stream has ended
-            // is this correct
-            // clock_tx.send(()).await.unwrap();
-            // info!("Tick 4");
 
             let mut xs1 = mux_in_client1
                 .input_stream(&"x".into())
                 .expect("Input stream should exist")
                 .take(2);
-            // let xs: Vec<_> = xs.collect().await;
             let mut xs_expected = vec![Value::Int(1), Value::Int(2)].into_iter();
 
-            // while let (Some(x), e_expected) =
             while let (Some(x), Some(x_exp)) = (xs1.next().await, xs_expected.next()) {
                 info!(?x, ?x_exp, "received output");
                 assert_eq!(x, x_exp);

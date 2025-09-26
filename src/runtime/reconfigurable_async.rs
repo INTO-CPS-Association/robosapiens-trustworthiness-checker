@@ -6,7 +6,7 @@ use futures::{FutureExt, future::LocalBoxFuture, select};
 use smol::LocalExecutor;
 use tracing::{Level, debug, debug_span, info, instrument};
 
-use crate::io::reconfiguration::multiplexed_input_provider::MultiplexedInputProvider;
+use crate::io::reconfiguration::input_provider_multiplexer::InputProviderMultiplexer;
 use crate::{
     InputProvider, Monitor, Specification, Value,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
@@ -320,7 +320,7 @@ where
         info!("Built input provider");
 
         // Multiplex the input provider
-        let mut input_mux = MultiplexedInputProvider::new(self.executor.clone(), input, clock_rx);
+        let mut input_mux = InputProviderMultiplexer::new(self.executor.clone(), input, clock_rx);
 
         // Run the input multiplexer
         self.executor.spawn(input_mux.run()).detach();
