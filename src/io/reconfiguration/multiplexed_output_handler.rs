@@ -57,7 +57,7 @@ impl MultiplexedOutputHandler {
 
     /// Subscribe to the multiplexed output handler.
     /// Can be called after `run` has been called.
-    pub async fn subscribe(&mut self) -> oneshot::Receiver<Vec<OutputStream<Value>>> {
+    pub async fn subscribe(&mut self) -> anyhow::Result<Vec<OutputStream<Value>>> {
         let (tx, rx): (
             oneshot::Sender<Vec<OutputStream<Value>>>,
             oneshot::Receiver<Vec<OutputStream<Value>>>,
@@ -87,7 +87,8 @@ impl MultiplexedOutputHandler {
                 }
             }
         }
-        rx
+        rx.await
+            .map_err(|e| anyhow::anyhow!("Failed to receive streams for the subscriber: {:?}", e))
     }
 }
 
@@ -223,7 +224,7 @@ mod tests {
         let mut handler = MultiplexedOutputHandler::new(ex.clone(), stream_names.clone());
         handler.provide_streams(streams);
         // Create subscriber to the main handler
-        let sub_streams = handler.subscribe().await.await.unwrap();
+        let sub_streams = handler.subscribe().await.unwrap();
         let mut sub_handler = Box::new(ManualOutputHandler::new(ex.clone(), stream_names));
         sub_handler.provide_streams(sub_streams);
         // Get manual output:
@@ -254,7 +255,7 @@ mod tests {
         // We run it before subscribing
         ex.spawn(handler.run()).detach();
         // Create subscriber to the main handler
-        let sub_streams = handler.subscribe().await.await.unwrap();
+        let sub_streams = handler.subscribe().await.unwrap();
         let mut sub_handler = Box::new(ManualOutputHandler::new(ex.clone(), stream_names));
         sub_handler.provide_streams(sub_streams);
         // Get manual output:
@@ -281,8 +282,8 @@ mod tests {
         handler.provide_streams(streams);
         // Create subscriber to the main handler
         let (sub_streams1, sub_streams2) = (
-            handler.subscribe().await.await.unwrap(),
-            handler.subscribe().await.await.unwrap(),
+            handler.subscribe().await.unwrap(),
+            handler.subscribe().await.unwrap(),
         );
         let (mut sub_handler1, mut sub_handler2) = (
             Box::new(ManualOutputHandler::new(ex.clone(), stream_names.clone())),
@@ -325,7 +326,6 @@ mod tests {
             let sub_streams1 = handler
                 .subscribe()
                 .await
-                .await
                 .expect("Failed to receive new streams");
             let mut sub_handler1 =
                 Box::new(ManualOutputHandler::new(ex.clone(), stream_names.clone()));
@@ -340,7 +340,6 @@ mod tests {
                 // Create a lazy subscribed handler:
                 let sub_streams2 = handler
                     .subscribe()
-                    .await
                     .await
                     .expect("Failed to receive new streams");
                 let mut sub_handler2 =
