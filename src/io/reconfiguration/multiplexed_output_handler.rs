@@ -9,63 +9,9 @@ use smol::LocalExecutor;
 use std::{mem, rc::Rc};
 use tracing::info;
 use unsync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender, channel};
-use unsync::spsc::{Receiver as SpscReceiver, Sender as SpscSender};
 
+use crate::io::reconfiguration::comm;
 use crate::{OutputStream, Value, VarName, core::OutputHandler, io::testing::ManualOutputHandler};
-
-/// Communication module
-mod comm {
-    // Note: mod is needed to disallow constructing Consumers directly
-    use super::*;
-
-    /// Internal Communication for structs that spawn tasks and need to communicate with them
-    /// The idea is that the receiver is taken by the spawned task, and the sender is kept.
-    /// This is an abstraction for a pattern that is used in multiple places.
-    pub struct InternalComm<T> {
-        sender: SpscSender<T>,
-        receiver: Option<SpscReceiver<T>>, // None when taken by a separate task
-    }
-    pub struct InternalCommReceiver<T> {
-        consumer: SpscReceiver<T>,
-    }
-
-    impl<T> InternalComm<T> {
-        pub fn new(buffer: usize) -> Self {
-            let (tx, rx) = unsync::spsc::channel::<T>(buffer);
-            Self {
-                sender: tx,
-                receiver: Some(rx),
-            }
-        }
-
-        #[allow(dead_code)]
-        pub fn consumer_taken(self) -> bool {
-            self.receiver.is_none()
-        }
-
-        pub async fn produce(&mut self, value: T) -> Result<(), unsync::spsc::SendError<T>> {
-            self.sender.send(value).await
-        }
-
-        pub fn take_consumer(&mut self) -> InternalCommReceiver<T> {
-            if let Some(c) = mem::take(&mut self.receiver) {
-                InternalCommReceiver::new(c)
-            } else {
-                panic!("Consumer already taken");
-            }
-        }
-    }
-
-    impl<T> InternalCommReceiver<T> {
-        fn new(consumer: SpscReceiver<T>) -> Self {
-            Self { consumer }
-        }
-
-        pub async fn consume(&mut self) -> Option<T> {
-            self.consumer.recv().await
-        }
-    }
-}
 
 /// An OutputHandler that multiplexes a single inner output handler to multiple clients.
 pub struct MultiplexedOutputHandler {
@@ -118,16 +64,27 @@ impl MultiplexedOutputHandler {
         ) = oneshot::channel().into_split();
 
         // Requests are served immediately if Handler is not running (indicated by senders != None)
-        if let Some(senders) = &mut self.senders {
-            // let streams = Self::subscribe_inner(&mut senders);
+        if self.requesters.state() == comm::InternalCommState::Setup {
+            let senders = self
+                .senders
+                .as_mut()
+                .expect("Senders should be available handler is not running");
             let streams = Self::create_streams(senders);
             tx.send(streams)
                 .expect("Failed to send streams to the subscriber");
-        }
-        // Requests are queued if the handler is running
-        else {
-            if let Err(e) = self.requesters.produce(tx).await {
-                panic!("Failed to send subscription request: {}", e);
+        } else {
+            // Requests are queued if the handler is running
+            match &mut self.requesters {
+                comm::InternalComm::Sender(sender) => {
+                    if let Err(e) = sender.send(tx).await {
+                        panic!("Failed to send subscription request: {}", e);
+                    }
+                }
+                _ => {
+                    // Internal logical error - should not happen
+                    // (Means that self.requesters == Receiver)
+                    panic!("Failed to take sender for subscription request");
+                }
             }
         }
         rx
@@ -152,7 +109,15 @@ impl OutputHandler for MultiplexedOutputHandler {
         let mut handler_task = FutureExt::fuse(executor.spawn(self.manual_output_handler.run()));
         let mut output_stream = StreamExt::fuse(output_stream);
         let mut senders = mem::take(&mut self.senders).expect("Senders already_taken");
-        let mut consumer = self.requesters.take_consumer();
+        let receiver = self
+            .requesters
+            .split_receiver()
+            .expect("Failed to split requesters for internal communication");
+
+        let mut consumer = receiver
+            .take_receiver()
+            // Should never fail as split was successful
+            .expect("Failed to take receiver for internal communication");
 
         Box::pin(async move {
             loop {
@@ -169,7 +134,7 @@ impl OutputHandler for MultiplexedOutputHandler {
                     // been polled, the data is still available in the stream.
 
                     // Handle new requesters
-                    maybe_tx = consumer.consume().fuse() => {
+                    maybe_tx = consumer.recv().fuse() => {
                         match maybe_tx {
                             Some(tx) => {
                                 let subscription = Self::create_streams(&mut senders);
@@ -212,6 +177,7 @@ impl OutputHandler for MultiplexedOutputHandler {
 
 #[cfg(test)]
 mod tests {
+    use unsync::spsc::Sender as SpscSender;
     type TickSender = SpscSender<()>;
     use crate::async_test;
     use futures::stream;
@@ -251,7 +217,7 @@ mod tests {
         // Actual single sync stream:
         let synced_stream = Box::pin(stream! {
             while let Some(_) = leader_receiver.recv().await {
-                let futs = follower_senders.iter_mut().map(|s| s.send(()));
+                let futs = follower_senders.iter_mut().map(|s: &mut TickSender | s.send(()));
                 join_all(futs).await;
         }});
         // Make synced_stream run indefinitely - just waiting and forwarding ticks:
