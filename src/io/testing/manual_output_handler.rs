@@ -8,7 +8,7 @@ use futures::StreamExt;
 use futures::future::{LocalBoxFuture, join_all};
 use smol::LocalExecutor;
 use tracing::warn;
-use tracing::{Level, debug, instrument};
+use tracing::{Level, debug, enabled, instrument};
 
 use crate::{
     core::{OutputHandler, OutputStream, StreamData, VarName},
@@ -43,13 +43,15 @@ impl<V: StreamData> ManualOutputHandler<V> {
         let cancellation = CancellationToken::new();
 
         // Add debug task to monitor when cancellation is triggered
-        let cancellation_debug = cancellation.clone();
-        executor
-            .spawn(async move {
-                cancellation_debug.cancelled().await;
-                debug!("ManualOutputHandler: Cancellation token was triggered!");
-            })
-            .detach();
+        if enabled!(Level::DEBUG) {
+            let cancellation_debug = cancellation.clone();
+            executor
+                .spawn(async move {
+                    cancellation_debug.cancelled().await;
+                    debug!("ManualOutputHandler: Cancellation token was triggered!");
+                })
+                .detach();
+        }
 
         Self {
             var_names,
