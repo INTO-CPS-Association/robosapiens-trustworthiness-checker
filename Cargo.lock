@@ -3071,16 +3071,19 @@ dependencies = [
  "async-stream",
  "async-unsync",
  "futures",
+ "macro_rules_attribute",
  "paho-mqtt",
  "redis",
  "redis-macros",
  "serde_json",
  "smol",
+ "smol-macros",
  "test-log",
  "testcontainers-modules",
  "tracing",
  "tracing-subscriber",
  "trustworthiness_checker",
+ "unsync",
 ]
 
 [[package]]

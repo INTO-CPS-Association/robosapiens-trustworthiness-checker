@@ -180,52 +180,9 @@ mod tests {
     use crate::async_test;
     use futures::stream;
     use macro_rules_attribute::apply;
-    use smol::Timer;
-    use std::time::Duration;
+    use tc_testutils::streams::tick_streams;
 
     use super::*;
-
-    // Helper stream that synchronizes other streams by only progressing when a tick is received
-    // We need these to control the flow of the OutputStream tests - essentially we are making them
-    // dependent on in InputStream (but without the dependencies)
-    fn tick_stream(mut stream: OutputStream<Value>) -> (TickSender, OutputStream<Value>) {
-        let (tick_sender, mut tick_receiver) = unsync::spsc::channel::<()>(10);
-        let synced_stream = Box::pin(stream! {
-            while let Some(_) = tick_receiver.recv().await {
-                if let Some(vals) = stream.next().await {
-                 yield vals;
-             } else {
-                 return;
-             }
-        }});
-        (tick_sender, synced_stream)
-    }
-
-    // Helper function that creates synchronizes multiple streams by only letting them progress
-    // when a master tick is received.
-    fn tick_streams(
-        ex: Rc<LocalExecutor<'static>>,
-        streams: Vec<OutputStream<Value>>,
-    ) -> (TickSender, Vec<OutputStream<Value>>) {
-        // Create individually synched streams
-        let (mut follower_senders, synced_streams): (Vec<_>, Vec<_>) =
-            streams.into_iter().map(|s| tick_stream(s)).unzip();
-        // Create basis for single sync stream
-        let (leader_sender, mut leader_receiver) = unsync::spsc::channel::<()>(10);
-        // Actual single sync stream:
-        let synced_stream = Box::pin(stream! {
-            while let Some(_) = leader_receiver.recv().await {
-                let futs = follower_senders.iter_mut().map(|s: &mut TickSender | s.send(()));
-                join_all(futs).await;
-        }});
-        // Make synced_stream run indefinitely - just waiting and forwarding ticks:
-        ex.spawn(async move {
-            let mut synced_stream = synced_stream;
-            while let Some(_) = synced_stream.next().await {}
-        })
-        .detach();
-        (leader_sender, synced_streams)
-    }
 
     fn gen_data_streams(n: i64) -> (Vec<VarName>, Vec<OutputStream<Value>>, Vec<Vec<Value>>) {
         let x_stream: OutputStream<Value> =
@@ -255,94 +212,6 @@ mod tests {
         let (names, streams, expected) = gen_default_streams();
         let (tick_sender, streams) = tick_streams(ex, streams);
         (tick_sender, names, streams, expected)
-    }
-
-    // Meta-test, checks that tick_stream behaves as expected
-    #[apply(async_test)]
-    async fn tick_stream_test(_ex: Rc<LocalExecutor<'static>>) {
-        let (_, mut streams, expected) = gen_default_streams();
-        let stream = streams.pop().unwrap();
-        let expected = expected.into_iter().map(|x| x.last().cloned().unwrap());
-        // Converts them to a single tick-synchronized stream
-        let (mut tick_sender, mut stream) = tick_stream(stream);
-        let mut expected = expected.into_iter();
-
-        // Wait 5 ms - to make sure that stream has progressed if it was capable of doing so
-        // before sending a tick:
-        Timer::after(Duration::from_millis(5)).await;
-        assert_eq!(stream.next().now_or_never(), None);
-
-        // Send ticks and check that the stream progresses
-        tick_sender.send(()).await.expect("Failed to send tick");
-        assert_eq!(stream.next().await, expected.next());
-
-        // Wait 5 ms - to make sure that stream has progressed if it was capable of doing so
-        // before sending a tick:
-        Timer::after(Duration::from_millis(5)).await;
-        assert_eq!(stream.next().now_or_never(), None);
-
-        // Send ticks and check that the stream progresses
-        tick_sender.send(()).await.expect("Failed to send tick");
-        assert_eq!(stream.next().await, expected.next());
-
-        // Let it finish:
-        while let Some(d) = expected.next() {
-            tick_sender.send(()).await.expect("Failed to send tick");
-            assert_eq!(stream.next().await, Some(d));
-        }
-
-        // Check that the stream is done
-        tick_sender.send(()).await.expect("Failed to send tick");
-        assert_eq!(stream.next().await, None);
-    }
-
-    // Meta-test, checks that tick_streams behaves as expected
-    #[apply(async_test)]
-    async fn tick_streams_test(ex: Rc<LocalExecutor<'static>>) {
-        let (_, streams, expected) = gen_default_streams();
-        // Converts them to multiple streams synchronized by a single tick stream
-        let (mut tick_sender, mut streams) = tick_streams(ex, streams);
-        let mut expected = expected.into_iter();
-
-        // Wait 5 ms - to make sure that streams have progressed if they were capable of doing so
-        // before sending a tick:
-        Timer::after(Duration::from_millis(5)).await;
-        streams.iter_mut().for_each(|s| {
-            assert_eq!(s.next().now_or_never(), None);
-        });
-
-        // Send tick and check that the streams progress
-        tick_sender.send(()).await.expect("Failed to send tick");
-        for (s, d) in streams.iter_mut().zip(expected.next().unwrap()) {
-            assert_eq!(s.next().await, Some(d));
-        }
-
-        // Wait 5 ms - to make sure that streams have progressed if they were capable of doing so
-        // before sending a tick:
-        Timer::after(Duration::from_millis(5)).await;
-        streams.iter_mut().for_each(|s| {
-            assert_eq!(s.next().now_or_never(), None);
-        });
-
-        // Send tick and check that the streams progress
-        tick_sender.send(()).await.expect("Failed to send tick");
-        for (s, d) in streams.iter_mut().zip(expected.next().unwrap()) {
-            assert_eq!(s.next().await, Some(d));
-        }
-
-        // Let them finish:
-        while let Some(ds) = expected.next() {
-            tick_sender.send(()).await.expect("Failed to send tick");
-            for (s, d) in streams.iter_mut().zip(ds) {
-                assert_eq!(s.next().await, Some(d));
-            }
-        }
-
-        // Check that the streams are done
-        tick_sender.send(()).await.expect("Failed to send tick");
-        streams.iter_mut().for_each(|s| {
-            assert_eq!(s.next().now_or_never(), None);
-        });
     }
 
     #[apply(async_test)]

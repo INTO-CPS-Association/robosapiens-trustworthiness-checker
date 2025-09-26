@@ -39,3 +39,6 @@ anyhow = { version = "1.0.99", features = ["backtrace"] }
 smol = "2.0.2"
 async-unsync = "0.3.0"
 async-stream = "0.3.6"
+unsync = "0.1.2"
+macro_rules_attribute = "0.2.2"
+smol-macros = "0.1.1"
