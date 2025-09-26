@@ -235,6 +235,10 @@ mod tests {
             let res = output.next().await;
             assert_eq!(res, Some(exp));
         }
+        // All data sent, output should end now
+        tick_sender.send(()).await.expect("Failed to send tick");
+        let res = output.next().await;
+        assert_eq!(res, None);
     }
 
     #[apply(async_test)]
@@ -261,6 +265,10 @@ mod tests {
             let res = output.next().await;
             assert_eq!(res, Some(exp));
         }
+        // All data sent, output should end now
+        tick_sender.send(()).await.expect("Failed to send tick");
+        let res = output.next().await;
+        assert_eq!(res, None);
     }
 
     #[apply(async_test)]
@@ -295,6 +303,12 @@ mod tests {
             let res = output2.next().await;
             assert_eq!(res, Some(exp));
         }
+        // All data sent, output should end now
+        tick_sender.send(()).await.expect("Failed to send tick");
+        let res = output1.next().await;
+        assert_eq!(res, None);
+        let res = output2.next().await;
+        assert_eq!(res, None);
     }
 
     #[apply(async_test)]
@@ -348,6 +362,7 @@ mod tests {
                 let res = output1.next().await;
                 assert_eq!(res, Some(exp));
             }
+            // All data sent, output1 should end now
             tick_sender.send(()).await.expect("Failed to send tick");
             let res = output1.next().await;
             assert_eq!(res, None);
