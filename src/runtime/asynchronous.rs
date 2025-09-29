@@ -252,7 +252,7 @@ impl<V: StreamData> VarManager<V> {
         // Return a future which will actually do the distribution
         Box::pin(async move {
             // Check if cancellation was requested
-            if cancellation_token.is_cancelled() {
+            if cancellation_token.is_cancelled().await {
                 debug!("VarManager {id}: Cancellation requested, stopping tick");
                 return false;
             }
@@ -374,7 +374,7 @@ impl<V: StreamData> VarManager<V> {
             }
             debug!(
                 "VarManager {id}: Run loop ended, cancellation: {}",
-                cancellation_token.is_cancelled()
+                cancellation_token.is_cancelled().await
             );
         })
     }

@@ -15,8 +15,8 @@ impl CancellationToken {
         }
     }
 
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.try_get().unwrap_or(false)
+    pub async fn is_cancelled(&self) -> bool {
+        self.cancelled.get().await
     }
 
     pub fn cancel(&self) {
