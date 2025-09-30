@@ -126,18 +126,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
                 });
 
         let (result_tx, result_rx) = oneshot::channel().into_split();
-        let (cancel_tx, cancel_rx) = oneshot::channel().into_split();
         let output_cancellation = self.output_cancellation.clone();
-
-        // Spawn a task to monitor cancellation and send completion signal
-        self.executor.spawn({
-            let output_cancellation = output_cancellation.clone();
-            async move {
-                output_cancellation.cancelled().await;
-                debug!("ManualOutputHandler: Cancellation monitor detected cancellation, sending completion signal");
-                let _ = cancel_tx.send(());
-            }
-        }).detach();
 
         let res: anyhow::Result<()> = match streams {
             Ok(mut streams) => {
@@ -204,7 +193,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
                         }
                     }
                 }
-                _ = cancel_rx.fuse() => {
+                _ = output_cancellation.cancelled().fuse() => {
                     debug!("ManualOutputHandler: Received cancellation signal, completing handler");
                     Ok(())
                 }
