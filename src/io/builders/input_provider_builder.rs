@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use smol::LocalExecutor;
-use tracing::{debug, debug_span, info_span};
+use tracing::debug_span;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::{self as tc, Value};
@@ -137,32 +137,18 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
+                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
                     self.executor.unwrap().clone(),
                     MQTT_HOSTNAME,
                     self.mqtt_port,
                     var_topics,
                     u32::MAX,
-                )
-                .expect("MQTT input provider could not be created");
-                let started = mqtt_input_provider.started.clone();
-                debug!("Waiting for input provider started");
-                info_span!("Waited for input provider started")
-                    .in_scope(|| async {
-                        loop {
-                            debug!("Checking if input provider started");
-                            let is_started = started.try_get();
-                            match is_started {
-                                Some(true) => return,
-                                Some(false) | None => {
-                                    debug!("Yielding in input provider builder");
-                                    smol::future::yield_now().await;
-                                }
-                            }
-                        }
-                    })
-                    .await;
-                debug!("Waited for input provider started");
+                );
+                mqtt_input_provider
+                    .connect()
+                    .await
+                    .expect("MQTT input provider failed to connect");
+
                 Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::Redis(topics) => {

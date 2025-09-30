@@ -212,14 +212,17 @@ mod tests {
         .collect::<BTreeMap<VarName, _>>();
 
         // Create the MQTT input provider
-        let input_provider = MQTTInputProvider::new(
+        let mut input_provider = MQTTInputProvider::new(
             executor.clone(),
             "localhost",
             Some(mqtt_port),
             var_topics,
             0,
-        )
-        .unwrap();
+        );
+        input_provider
+            .connect()
+            .await
+            .expect("Failed to connect to MQTT");
         input_provider.ready().await?;
 
         // Run the monitor
@@ -310,14 +313,17 @@ mod tests {
         .collect::<BTreeMap<VarName, _>>();
 
         // Create the MQTT input provider
-        let input_provider = MQTTInputProvider::new(
+        let mut input_provider = MQTTInputProvider::new(
             executor.clone(),
             "localhost",
             Some(mqtt_port),
             var_topics,
             0,
-        )
-        .unwrap();
+        );
+        input_provider
+            .connect()
+            .await
+            .expect("Failed to connect to MQTT");
         input_provider.ready().await?;
 
         // Run the monitor

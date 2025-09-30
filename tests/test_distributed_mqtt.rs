@@ -54,14 +54,17 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         .await
         .expect("Failed to get host port for MQTT server");
     let mqtt_host = "localhost";
-    let input_provider_1 = MQTTInputProvider::new(
+    let mut input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
         Some(mqtt_port),
         var_in_topics_1.iter().cloned().collect(),
         0,
-    )
-    .expect("Failed to create input provider 1");
+    );
+    input_provider_1
+        .connect()
+        .await
+        .expect("Failed to connect to MQTT with input provider 1");
 
     let output_handler_1 = MQTTOutputHandler::new(
         executor.clone(),
@@ -73,14 +76,17 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
     )
     .expect("Failed to create output handler 1");
 
-    let input_provider_2 = MQTTInputProvider::new(
+    let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
         Some(mqtt_port),
         var_in_topics_2.iter().cloned().collect(),
         0,
-    )
-    .expect("Failed to create input provider 2");
+    );
+    input_provider_2
+        .connect()
+        .await
+        .expect("Failed to connect to MQTT with input provider 2");
 
     let output_handler_2 = MQTTOutputHandler::new(
         executor.clone(),
@@ -183,7 +189,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .expect("Failed to get host port for MQTT server");
     let mqtt_host = "localhost";
 
-    let input_provider_1 = MQTTInputProvider::new(
+    let mut input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
         Some(mqtt_port),
@@ -193,13 +199,16 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
             .map(|v| (v.clone(), format!("{}", v)))
             .collect(),
         0,
-    )
-    .expect("Failed to create input provider 1");
+    );
+    input_provider_1
+        .connect()
+        .await
+        .expect("Failed to connect to MQTT with input provider 1");
     input_provider_1
         .ready()
         .await
         .expect("Input provider 1 should be ready");
-    let input_provider_2 = MQTTInputProvider::new(
+    let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
         Some(mqtt_port),
@@ -209,8 +218,11 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
             .map(|v| (v.clone(), format!("{}", v)))
             .collect(),
         0,
-    )
-    .expect("Failed to create input provider 2");
+    );
+    input_provider_2
+        .connect()
+        .await
+        .expect("Failed to connect to MQTT with input provider 2");
     input_provider_2
         .ready()
         .await
@@ -329,7 +341,7 @@ async fn localisation_distribution_graphs_test(
         .expect("Failed to get host port for MQTT server");
     let mqtt_host = "localhost";
 
-    let input_provider_1 = MQTTInputProvider::new(
+    let mut input_provider_1 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
         Some(mqtt_port),
@@ -339,13 +351,16 @@ async fn localisation_distribution_graphs_test(
             .map(|v| (v.clone(), v.into()))
             .collect(),
         0,
-    )
-    .expect("Failed to create input provider 1");
+    );
+    input_provider_1
+        .connect()
+        .await
+        .expect("Failed to connect to MQTT with input provider 1");
     input_provider_1
         .ready()
         .await
         .expect("Input provider 1 should be ready");
-    let input_provider_2 = MQTTInputProvider::new(
+    let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
         Some(mqtt_port),
@@ -355,8 +370,11 @@ async fn localisation_distribution_graphs_test(
             .map(|v| (v.clone(), v.into()))
             .collect(),
         0,
-    )
-    .expect("Failed to create input provider 2");
+    );
+    input_provider_2
+        .connect()
+        .await
+        .expect("Failed to connect to MQTT with input provider 2");
     input_provider_2
         .ready()
         .await

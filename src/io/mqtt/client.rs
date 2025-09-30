@@ -6,9 +6,9 @@ use paho_mqtt::{self as mqtt, Message};
 use tracing::{Level, debug, info, instrument, warn};
 use uuid::Uuid;
 
-/* An interface for creating the MQTT client lazily and sharing a single
- * instance of the client across all whole application (i.e. sharing
- * it between the input provider and the output handler). */
+/* An interface for creating the MQTT client that can be used
+ * across all whole application (i.e. sharing it between the input
+ * provider and the output handler). */
 
 #[instrument(level=Level::INFO, skip(client))]
 fn message_stream(
