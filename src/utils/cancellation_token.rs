@@ -43,6 +43,16 @@ pub struct DropGuard {
     cancelled: Rc<AsyncCell<bool>>,
 }
 
+impl DropGuard {
+    /// Conceptually, a weak reference to the DropGuard.
+    /// Allows using the token but does not extend its lifetime.
+    pub fn clone_tok(&self) -> CancellationToken {
+        CancellationToken {
+            cancelled: self.cancelled.clone(),
+        }
+    }
+}
+
 impl Drop for DropGuard {
     fn drop(&mut self) {
         self.cancelled.set(true);

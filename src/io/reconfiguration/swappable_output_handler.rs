@@ -5,6 +5,7 @@ use std::{mem, rc::Rc};
 use tracing::{debug, info};
 
 use crate::io::reconfiguration::comm;
+use crate::utils::cancellation_token::{CancellationToken, DropGuard};
 use crate::{OutputStream, Value, VarName, core::OutputHandler};
 
 type BoxOutputHandler = Box<dyn OutputHandler<Val = Value>>;
@@ -17,15 +18,20 @@ pub struct SwappableOutputHandler {
     /// the requester and the new BoxOutputHandler to use
     swap_requests: comm::InternalComm<(oneshot::Sender<BoxOutputHandler>, BoxOutputHandler)>,
     pub executor: Rc<LocalExecutor<'static>>,
+    // Cancellation in this case means that the detached task ends if the struct is dropped
+    drop_guard: DropGuard,
 }
 
 impl SwappableOutputHandler {
     pub fn new(executor: Rc<LocalExecutor<'static>>, output_handler: BoxOutputHandler) -> Self {
         let swap_requests = comm::InternalComm::new(16);
         let output_handler = Some(output_handler);
+        let cancel_tok = CancellationToken::new();
+        let drop_guard = cancel_tok.drop_guard();
         Self {
             output_handler,
             swap_requests,
+            drop_guard,
             executor,
         }
     }
@@ -104,10 +110,16 @@ impl OutputHandler for SwappableOutputHandler {
             .take_receiver()
             // Should never fail as split was successful
             .expect("Failed to take receiver for internal communication");
+        let cancel = self.drop_guard.clone_tok();
 
         Box::pin(async move {
             loop {
                 select_biased! {
+                    // Listen if main handler was manually cancelled
+                    _ = cancel.cancelled().fuse() => {
+                        debug!("SwappableOutputHandler dropped. Ending detached task.");
+                        return Ok(());
+                    }
                     // Handle new requesters
                     maybe_tx = receiver.recv().fuse() => {
                         match maybe_tx {
