@@ -5,7 +5,7 @@ use crate::core::VarName;
 use std::fmt::{Debug, Display};
 
 // Numerical Binary Operations
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum NumericalBinOp {
     Add,
     Sub,
@@ -15,7 +15,7 @@ pub enum NumericalBinOp {
 }
 
 // Integer Binary Operations
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum IntBinOp {
     Add,
     Sub,
@@ -39,7 +39,7 @@ impl TryFrom<NumericalBinOp> for IntBinOp {
 }
 
 // Floating point binary operations
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum FloatBinOp {
     Add,
     Sub,
@@ -63,20 +63,20 @@ impl TryFrom<NumericalBinOp> for FloatBinOp {
 }
 
 // Bool Binary Operations
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum BoolBinOp {
     Or,
     And,
 }
 
 // Str Binary Operations
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum StrBinOp {
     Concat,
 }
 
 // Comparison Binary Operations
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum CompBinOp {
     Eq,
     Le,
@@ -86,7 +86,7 @@ pub enum CompBinOp {
 }
 
 // Stream BinOp
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum SBinOp {
     NOp(NumericalBinOp),
     BOp(BoolBinOp),
@@ -112,14 +112,14 @@ impl From<&str> for SBinOp {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
 pub enum DistConstraintType {
     CanRun,
     LocalityScore,
     Redundancy,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize)]
 pub enum DistConstraintBody {
     // if-then-else
     If(Box<Self>, Box<Self>, Box<Self>),

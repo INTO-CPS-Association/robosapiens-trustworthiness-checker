@@ -264,7 +264,7 @@ impl StreamData for String {}
 impl StreamData for bool {}
 impl StreamData for () {}
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum StreamType {
     Int,
     Float,

@@ -80,7 +80,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             .await
             .context("Model file could not be parsed")?,
     };
-    info!(?model, "Parsed model");
+    info!(
+        "Parsed model: {}",
+        serde_json::to_string_pretty(&model).expect("Failed to pretty-print model")
+    );
 
     // Localise the model to contain only the local variables (if needed)
     let model = match &builder.distribution_mode {
