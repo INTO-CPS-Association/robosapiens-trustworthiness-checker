@@ -424,6 +424,43 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn test_manual_output_handler_completion(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        use futures::stream;
+
+        info!("Creating ManualOutputHandler with infinite input stream");
+        let mut handler = ManualOutputHandler::new(executor.clone(), vec!["test".into()]);
+
+        // Create an infinite stream
+        let infinite_stream: OutputStream<Value> =
+            Box::pin(stream::iter((0..).map(|x| Value::Int(x))));
+        handler.provide_streams(vec![infinite_stream]);
+
+        let output_stream = handler.get_output();
+        let handler_task = executor.spawn(handler.run());
+
+        info!("Taking only 2 items from infinite stream");
+        let outputs = output_stream.take(2).collect::<Vec<_>>().await;
+        info!("Collected outputs: {:?}", outputs);
+
+        info!("Output stream dropped, waiting for handler to complete");
+        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
+
+        futures::select! {
+            result = handler_task.fuse() => {
+                info!("Handler completed: {:?}", result);
+                result?;
+            }
+            _ = futures::FutureExt::fuse(timeout_future) => {
+                return Err(anyhow::anyhow!("ManualOutputHandler did not complete after output stream was dropped"));
+            }
+        }
+
+        Ok(())
+    }
+
+    #[apply(async_test)]
     async fn test_manual_output_handler_hang(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {

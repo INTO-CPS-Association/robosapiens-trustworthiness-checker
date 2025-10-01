@@ -6,10 +6,10 @@ use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use tracing::info;
+use trustworthiness_checker::InputProvider;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::mqtt::client::provide_mqtt_client;
 use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
-use trustworthiness_checker::{InputProvider, OutputStream};
 use winnow::Parser;
 
 #[cfg(test)]
@@ -25,7 +25,7 @@ mod tests {
     use trustworthiness_checker::lola_fixtures::{TestMonitorRunner, input_streams1};
     use trustworthiness_checker::{
         Value, VarName,
-        core::{OutputHandler, Runnable},
+        core::Runnable,
         dep_manage::interface::{DependencyKind, create_dependency_manager},
         io::{
             mqtt::{MQTTInputProvider, MQTTOutputHandler},
@@ -146,43 +146,6 @@ mod tests {
             Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
             _ => panic!("Expected float"),
         }
-    }
-
-    #[apply(async_test)]
-    async fn test_manual_output_handler_completion(
-        executor: Rc<LocalExecutor<'static>>,
-    ) -> anyhow::Result<()> {
-        use futures::stream;
-
-        info!("Creating ManualOutputHandler with infinite input stream");
-        let mut handler = ManualOutputHandler::new(executor.clone(), vec!["test".into()]);
-
-        // Create an infinite stream
-        let infinite_stream: OutputStream<Value> =
-            Box::pin(stream::iter((0..).map(|x| Value::Int(x))));
-        handler.provide_streams(vec![infinite_stream]);
-
-        let output_stream = handler.get_output();
-        let handler_task = executor.spawn(handler.run());
-
-        info!("Taking only 2 items from infinite stream");
-        let outputs = output_stream.take(2).collect::<Vec<_>>().await;
-        info!("Collected outputs: {:?}", outputs);
-
-        info!("Output stream dropped, waiting for handler to complete");
-        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
-
-        futures::select! {
-            result = handler_task.fuse() => {
-                info!("Handler completed: {:?}", result);
-                result?;
-            }
-            _ = futures::FutureExt::fuse(timeout_future) => {
-                return Err(anyhow::anyhow!("ManualOutputHandler did not complete after output stream was dropped"));
-            }
-        }
-
-        Ok(())
     }
 
     #[cfg_attr(not(feature = "testcontainers"), ignore)]
