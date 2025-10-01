@@ -1,7 +1,10 @@
 use std::rc::Rc;
+use std::time::Duration;
 use std::vec;
 
+use anyhow::anyhow;
 use futures::StreamExt;
+use futures_timeout::TimeoutExt;
 use smol::LocalExecutor;
 use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
 use tracing::info;
@@ -22,6 +25,18 @@ use trustworthiness_checker::{
     lola_specification,
     semantics::distributed::localisation::Localisable,
 };
+
+async fn with_timeout<F, T, E>(fut: F, dur: Duration, name: &str) -> anyhow::Result<T>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+    E: Into<anyhow::Error>,
+{
+    let fut = fut.timeout(dur).await;
+    match fut {
+        Ok(inner_res) => inner_res.map_err(|e| anyhow!("{} failed: {}", name, e.into())),
+        Err(_) => Err(anyhow!("{} timed out after {:?}", name, dur)),
+    }
+}
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(async_test)]
@@ -97,7 +112,6 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         vec![],
     )
     .expect("Failed to create output handler 2");
-
     let input_provider_1_ready = input_provider_1.ready();
     let input_provider_2_ready = input_provider_2.ready();
 
@@ -109,9 +123,13 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         create_dependency_manager(DependencyKind::Empty, model1),
     );
     executor.spawn(runner_1.run()).detach();
-    input_provider_1_ready
-        .await
-        .expect("Input provider 1 should be ready");
+    with_timeout(
+        input_provider_1_ready,
+        Duration::from_secs(10),
+        "input_provider_1.ready",
+    )
+    .await
+    .expect("Input provider 1 should be ready");
 
     let runner_2 = TestMonitorRunner::new(
         executor.clone(),
@@ -121,9 +139,13 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
         create_dependency_manager(DependencyKind::Empty, model2),
     );
     executor.spawn(runner_2.run()).detach();
-    input_provider_2_ready
-        .await
-        .expect("Input provider 2 should be ready");
+    with_timeout(
+        input_provider_2_ready,
+        Duration::from_secs(10),
+        "input_provider_2.ready",
+    )
+    .await
+    .expect("Input provider 2 should be ready");
 
     // Get the output stream before starting publishers to ensure subscription is ready
     let outputs_z = get_mqtt_outputs(
@@ -204,10 +226,14 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .connect()
         .await
         .expect("Failed to connect to MQTT with input provider 1");
-    input_provider_1
-        .ready()
-        .await
-        .expect("Input provider 1 should be ready");
+    with_timeout(
+        input_provider_1.ready(),
+        Duration::from_secs(10),
+        "input_provider_1.ready",
+    )
+    .await
+    .expect("Input provider 1 should be ready");
+
     let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
@@ -223,10 +249,13 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
         .connect()
         .await
         .expect("Failed to connect to MQTT with input provider 2");
-    input_provider_2
-        .ready()
-        .await
-        .expect("Input provider 2 should be ready");
+    with_timeout(
+        input_provider_2.ready(),
+        Duration::from_secs(10),
+        "input_provider_2.ready",
+    )
+    .await
+    .expect("Input provider 2 should be ready");
 
     let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
         .output_vars()
@@ -356,10 +385,13 @@ async fn localisation_distribution_graphs_test(
         .connect()
         .await
         .expect("Failed to connect to MQTT with input provider 1");
-    input_provider_1
-        .ready()
-        .await
-        .expect("Input provider 1 should be ready");
+    with_timeout(
+        input_provider_1.ready(),
+        Duration::from_secs(10),
+        "input_provider_1.ready",
+    )
+    .await
+    .expect("Input provider 1 should be ready");
     let mut input_provider_2 = MQTTInputProvider::new(
         executor.clone(),
         mqtt_host,
