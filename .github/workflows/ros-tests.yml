@@ -30,4 +30,4 @@ jobs:
             --network host \
             --privileged \
             robosapiens-test \
-            bash -c "sudo chmod 666 /var/run/docker.sock && source ~/.cargo/env && cargo test --all-features"
+            bash -c "sudo chmod 666 /var/run/docker.sock && export RUST_LOG=debug && source ~/.cargo/env && cargo test --all-features"
