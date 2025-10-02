@@ -74,12 +74,15 @@ impl MQTTLocalityReceiver {
             // Format the MQTT host into a proper URI if needed
             let mqtt_uri = if mqtt_host.starts_with("tcp://") || mqtt_host.starts_with("ssl://") {
                 // Already a proper URI
+                debug!(?mqtt_host, ?mqtt_port, "mqtt_host is proper uri");
                 mqtt_host
             } else if mqtt_host.contains(':') {
                 // Has port but no protocol, add tcp://
+                debug!(?mqtt_host, ?mqtt_port, "mqtt_host already has port");
                 format!("tcp://{}", mqtt_host)
             } else {
                 // Just hostname, add protocol and port (use configured port or default to 1883)
+                debug!(?mqtt_host, ?mqtt_port, "mqtt_host is plain hostname");
                 let port = mqtt_port.unwrap_or(1883);
                 format!("tcp://{}:{}", mqtt_host, port)
             };

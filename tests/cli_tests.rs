@@ -116,8 +116,8 @@ use async_unsync::oneshot;
 use futures::{FutureExt, StreamExt};
 use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
-use smol::LocalExecutor;
 use smol::process::Command;
+use smol::{LocalExecutor, Timer};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
@@ -148,7 +148,7 @@ async fn run_cli(args: &[&str]) -> Result<std::process::Output, std::io::Error> 
 
     // Add timeout to prevent hanging
     let command_future = Command::new(binary_path).args(args).output();
-    let timeout_future = smol::Timer::after(Duration::from_secs(5));
+    let timeout_future = Timer::after(Duration::from_secs(5));
 
     futures::select! {
         result = command_future.fuse() => result,
@@ -199,7 +199,7 @@ async fn run_cli_streaming(
             break; // Timeout reached
         }
 
-        let timeout_future = smol::Timer::after(timeout);
+        let timeout_future = Timer::after(timeout);
         futures::select! {
             result = stdout_reader.read_line(&mut stdout_line).fuse() => {
                 match result {
@@ -895,7 +895,7 @@ async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
     });
 
     // Wait for CLI to start and subscribe to MQTT topics
-    smol::Timer::after(Duration::from_millis(150)).await;
+    Timer::after(Duration::from_millis(150)).await;
 
     // Now start publishers to send data to the waiting CLI
     let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
@@ -917,7 +917,7 @@ async fn test_add_monitor_mqtt_input_cli(executor: Rc<LocalExecutor>) {
     y_publisher_task.await;
 
     // Give CLI additional time to process the messages
-    smol::Timer::after(Duration::from_millis(150)).await;
+    Timer::after(Duration::from_millis(150)).await;
 
     // Wait for CLI to capture output or timeout
     let (stdout, stderr, exit_status) = cli_task.await.expect("Failed to run CLI streaming");
@@ -975,11 +975,11 @@ async fn test_add_monitor_redis_input_cli(executor: Rc<LocalExecutor>) {
 
     // Now start publishers to send data to the waiting CLI
     let ready_rx1 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(200)),
+        Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
     let ready_rx2 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(200)),
+        Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
     let x_publisher_task = executor.spawn(dummy_redis_sender(
@@ -1094,7 +1094,7 @@ async fn test_file_input_redis_output(executor: Rc<LocalExecutor>) {
         // Collect messages with timeout
         for _ in 0..3 {
             // Expect 3 timesteps from simple_add_typed.input
-            let timeout = smol::Timer::after(Duration::from_millis(1000));
+            let timeout = Timer::after(Duration::from_millis(1000));
             futures::select! {
                 value = stream.next().fuse() => {
                     if let Some(val) = value {
@@ -1156,11 +1156,11 @@ async fn test_redis_input_output_specific_topics(executor: Rc<LocalExecutor>) {
 
     // Now start publishers to send data to the waiting CLI
     let ready_rx1 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(200)),
+        Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
     let ready_rx2 = Box::pin(futures::FutureExt::map(
-        smol::Timer::after(Duration::from_millis(200)),
+        Timer::after(Duration::from_millis(200)),
         |_| (),
     ));
 
@@ -1185,7 +1185,7 @@ async fn test_redis_input_output_specific_topics(executor: Rc<LocalExecutor>) {
     y_publisher_task.await.unwrap();
 
     // Give CLI additional time to process the messages
-    smol::Timer::after(Duration::from_millis(150)).await;
+    Timer::after(Duration::from_millis(150)).await;
 
     // Wait for CLI to capture output or timeout
     let (_stdout, stderr, exit_status) = cli_task.await.expect("Failed to run CLI streaming");
@@ -1231,7 +1231,7 @@ async fn test_mqtt_input_output_specific_topics(executor: Rc<LocalExecutor>) {
     });
 
     // Wait for CLI to start and subscribe to MQTT topics
-    smol::Timer::after(Duration::from_millis(150)).await;
+    Timer::after(Duration::from_millis(150)).await;
 
     // Now start publishers to send data to the waiting CLI
     let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
@@ -1253,7 +1253,7 @@ async fn test_mqtt_input_output_specific_topics(executor: Rc<LocalExecutor>) {
     y_publisher_task.await;
 
     // Give CLI additional time to process the messages
-    smol::Timer::after(Duration::from_millis(150)).await;
+    Timer::after(Duration::from_millis(150)).await;
 
     // Wait for CLI to capture output or timeout
     let (_stdout, stderr, exit_status) = cli_task.await.expect("Failed to run CLI streaming");
@@ -1300,7 +1300,7 @@ async fn test_file_input_mqtt_output(executor: Rc<LocalExecutor>) {
     client.subscribe("z", 1).await.unwrap();
 
     // Give MQTT subscriber time to fully connect and subscribe
-    smol::Timer::after(Duration::from_millis(1000)).await;
+    Timer::after(Duration::from_millis(1000)).await;
 
     // Start CLI process with file input and MQTT output
     let args = vec![
@@ -1335,7 +1335,7 @@ async fn test_file_input_mqtt_output(executor: Rc<LocalExecutor>) {
 
     // Collect messages with individual timeouts
     for i in 0..3 {
-        let timeout = smol::Timer::after(Duration::from_millis(5000)); // Longer timeout
+        let timeout = Timer::after(Duration::from_millis(5000)); // Longer timeout
         futures::select! {
             msg_opt = stream.next().fuse() => {
                 if let Some(msg_result) = msg_opt {

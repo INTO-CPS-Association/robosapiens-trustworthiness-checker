@@ -68,6 +68,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     debug!("Choosing distribution mode");
     let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode)
+        .maybe_mqtt_port(mqtt_port)
         .maybe_local_node(cli.local_node)
         .maybe_dist_constraints(cli.distribution_constraints);
     let builder = builder.distribution_mode_builder(distribution_mode_builder);

@@ -168,7 +168,7 @@ async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) 
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(async_test)]
-async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
+async fn test_localisation_distribution(executor: Rc<LocalExecutor<'static>>) {
     let model1 = lola_specification
         .parse(spec_simple_add_decomposed_1())
         .expect("Model could not be parsed");
@@ -317,7 +317,7 @@ async fn localisation_distribution_test(executor: Rc<LocalExecutor<'static>>) {
 
 #[cfg_attr(not(feature = "testcontainers"), ignore)]
 #[apply(async_test)]
-async fn localisation_distribution_graphs_test(
+async fn test_localisation_distribution_graphs(
     executor: Rc<LocalExecutor<'static>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let model1 = lola_specification

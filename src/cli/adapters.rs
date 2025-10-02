@@ -57,6 +57,7 @@ pub struct DistributionModeBuilder {
     distribution_mode: CliDistributionMode,
     local_node: Option<NodeName>,
     dist_constraints: Option<Vec<VarName>>,
+    mqtt_port: Option<u16>,
 }
 
 impl DistributionModeBuilder {
@@ -65,6 +66,7 @@ impl DistributionModeBuilder {
             distribution_mode,
             local_node: None,
             dist_constraints: None,
+            mqtt_port: None,
         }
     }
 
@@ -85,6 +87,16 @@ impl DistributionModeBuilder {
 
     pub fn maybe_dist_constraints(mut self, constraints: Option<Vec<String>>) -> Self {
         self.dist_constraints = constraints.map(|x| x.into_iter().map(|x| x.into()).collect());
+        self
+    }
+
+    pub fn mqtt_port(mut self, mqtt_port: u16) -> Self {
+        self.mqtt_port = Some(mqtt_port);
+        self
+    }
+
+    pub fn maybe_mqtt_port(mut self, mqtt_port: Option<u16>) -> Self {
+        self.mqtt_port = mqtt_port;
         self
     }
 
@@ -119,10 +131,17 @@ impl DistributionModeBuilder {
             } => {
                 let local_node = self.local_node.context("Local node not specified")?;
                 info!("Waiting for work assignment on node {}", local_node);
-                let receiver = crate::io::mqtt::MQTTLocalityReceiver::new(
-                    MQTT_HOSTNAME.to_string(),
-                    local_node.into(),
-                );
+                let receiver = match self.mqtt_port {
+                    Some(port) => crate::io::mqtt::MQTTLocalityReceiver::new_with_port(
+                        MQTT_HOSTNAME.to_string(),
+                        local_node.into(),
+                        port,
+                    ),
+                    None => crate::io::mqtt::MQTTLocalityReceiver::new(
+                        MQTT_HOSTNAME.to_string(),
+                        local_node.into(),
+                    ),
+                };
                 receiver
                     .ready()
                     .await
