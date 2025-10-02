@@ -147,8 +147,11 @@ async fn run_cli(args: &[&str]) -> Result<std::process::Output, std::io::Error> 
     let binary_path = get_binary_path();
 
     // Add timeout to prevent hanging
-    let command_future = Command::new(binary_path).args(args).output();
-    let timeout_future = Timer::after(Duration::from_secs(5));
+    let command_future = Command::new(binary_path)
+        .args(args)
+        .env("RUST_LOG", "error")
+        .output();
+    let timeout_future = smol::Timer::after(Duration::from_secs(5));
 
     futures::select! {
         result = command_future.fuse() => result,
@@ -173,6 +176,7 @@ async fn run_cli_streaming(
 
     let mut child = Command::new(binary_path)
         .args(args)
+        .env("RUST_LOG", "error")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
