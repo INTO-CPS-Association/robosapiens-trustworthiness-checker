@@ -2,11 +2,15 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
-use async_unsync::{bounded, oneshot};
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, info_span, instrument, warn};
+
+use unsync::oneshot::Receiver as OSReceiver;
+use unsync::oneshot::Sender as OSSender;
+use unsync::spsc::Receiver as SpscReceiver;
+use unsync::spsc::Sender as SpscSender;
 
 use super::client::provide_mqtt_client_with_subscription;
 use crate::{
@@ -32,11 +36,11 @@ pub struct MQTTInputProvider {
     // Streams that can be taken ownership of by calling `input_stream`
     available_streams: BTreeMap<VarName, OutputStream<Value>>,
     // Channels used to send to the `available_streams`
-    senders: Option<BTreeMap<VarName, bounded::Sender<Value>>>,
+    senders: Option<BTreeMap<VarName, SpscSender<Value>>>,
 
     // Oneshot used to pass the MQTT client and stream from connect() to run()
-    client_streams_rx: Option<oneshot::Receiver<(AsyncClient, OutputStream<mqtt::Message>)>>,
-    client_streams_tx: Option<oneshot::Sender<(AsyncClient, OutputStream<mqtt::Message>)>>,
+    client_streams_rx: Option<OSReceiver<(AsyncClient, OutputStream<mqtt::Message>)>>,
+    client_streams_tx: Option<OSSender<(AsyncClient, OutputStream<mqtt::Message>)>>,
 
     drop_guard: DropGuard,
     // Mainly used for debugging purposes
@@ -55,12 +59,12 @@ impl MQTTInputProvider {
         let host: String = host.to_string();
 
         let (senders, receivers): (
-            BTreeMap<_, bounded::Sender<Value>>,
-            BTreeMap<_, bounded::Receiver<Value>>,
+            BTreeMap<_, SpscSender<Value>>,
+            BTreeMap<_, SpscReceiver<Value>>,
         ) = var_topics
             .iter()
             .map(|(v, _)| {
-                let (tx, rx) = bounded::channel(10).into_split();
+                let (tx, rx) = unsync::spsc::channel(10);
                 ((v.clone(), tx), (v.clone(), rx))
             })
             .unzip();
@@ -74,7 +78,7 @@ impl MQTTInputProvider {
             None => format!("tcp://{}", host),
         };
 
-        let (client_streams_tx, client_streams_rx) = oneshot::channel().into_split();
+        let (client_streams_tx, client_streams_rx) = unsync::oneshot::channel();
         let client_streams_tx = Some(client_streams_tx);
         let client_streams_rx = Some(client_streams_rx);
 
@@ -134,16 +138,17 @@ impl MQTTInputProvider {
             .send((client, mqtt_stream))
             .map_err(|_| anyhow::anyhow!("Failed to send client streams"))?;
 
+        info!("Sent client and mqtt_stream to external task");
         Ok(())
     }
 
     async fn run_logic(
         var_topics: BTreeMap<VarName, String>,
         uri: String,
-        senders: BTreeMap<VarName, bounded::Sender<Value>>,
+        mut senders: BTreeMap<VarName, SpscSender<Value>>,
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
-        client_streams_rx: oneshot::Receiver<(AsyncClient, OutputStream<paho_mqtt::Message>)>,
+        client_streams_rx: OSReceiver<(AsyncClient, OutputStream<paho_mqtt::Message>)>,
     ) -> anyhow::Result<()> {
         info!("MQTTInputProvider run_logic started");
         let mqtt_input_span = info_span!("MQTTInputProvider run_logic", ?uri, ?var_topics);
@@ -156,7 +161,7 @@ impl MQTTInputProvider {
 
         let (client, mut mqtt_stream) = client_streams_rx
             .await
-            .map_err(|_| anyhow::anyhow!("Failed to receive MQTT client and stream"))?;
+            .ok_or_else(|| anyhow::anyhow!("Failed to receive MQTT client and stream"))?;
 
         debug!("Set started");
         started.set(true);
@@ -187,7 +192,7 @@ impl MQTTInputProvider {
                                     "No variable found for topic {}",
                                     msg.topic()
                                 ))?;
-                                let sender = senders.get(var).ok_or_else(|| anyhow::anyhow!(
+                                let sender = senders.get_mut(var).ok_or_else(|| anyhow::anyhow!(
                                     "No sender found for variable {}",
                                     var
                                 ))?;
@@ -246,7 +251,7 @@ impl InputProvider for MQTTInputProvider {
             debug!("In ready");
             while !started.get().await {
                 debug!("Checking if ready");
-                smol::future::yield_now().await;
+                smol::Timer::after(std::time::Duration::from_millis(100)).await;
             }
             Ok(())
         })

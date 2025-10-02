@@ -5,6 +5,7 @@ use futures::{FutureExt, StreamExt};
 use macro_rules_attribute::apply;
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
+use tc_testutils::streams::with_timeout_res;
 use tracing::info;
 use trustworthiness_checker::InputProvider;
 use trustworthiness_checker::async_test;
@@ -15,6 +16,7 @@ use winnow::Parser;
 #[cfg(test)]
 mod tests {
     use approx::assert_abs_diff_eq;
+    use tc_testutils::streams::with_timeout;
 
     use std::{collections::BTreeMap, rc::Rc};
     use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
@@ -59,12 +61,17 @@ mod tests {
             .map(|v| (v.clone(), format!("mqtt_output_{}", v)))
             .collect::<BTreeMap<_, _>>();
 
-        let outputs = get_mqtt_outputs(
-            "mqtt_output_z".to_string(),
-            "z_subscriber".to_string(),
-            mqtt_port,
+        let outputs = with_timeout(
+            get_mqtt_outputs(
+                "mqtt_output_z".to_string(),
+                "z_subscriber".to_string(),
+                mqtt_port,
+            ),
+            10,
+            "get_mqtt_outputs",
         )
-        .await;
+        .await
+        .unwrap();
 
         let output_handler = Box::new(
             MQTTOutputHandler::new(
@@ -86,7 +93,9 @@ mod tests {
         );
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
-        let outputs = outputs.take(2).collect::<Vec<_>>().await;
+        let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
+            .await
+            .unwrap();
         assert_eq!(outputs, expected_outputs);
     }
 
@@ -110,12 +119,17 @@ mod tests {
             .map(|v| (v.clone(), format!("mqtt_output_float_{}", v)))
             .collect::<BTreeMap<_, _>>();
 
-        let outputs = get_mqtt_outputs(
-            "mqtt_output_float_z".to_string(),
-            "z_float_subscriber".to_string(),
-            mqtt_port,
+        let outputs = with_timeout(
+            get_mqtt_outputs(
+                "mqtt_output_float_z".to_string(),
+                "z_float_subscriber".to_string(),
+                mqtt_port,
+            ),
+            10,
+            "get_mqtt_outputs",
         )
-        .await;
+        .await
+        .unwrap();
 
         let output_handler = Box::new(
             MQTTOutputHandler::new(
@@ -137,7 +151,9 @@ mod tests {
         );
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
-        let outputs = outputs.take(2).collect::<Vec<_>>().await;
+        let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
+            .await
+            .unwrap();
         match outputs[0] {
             Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
             _ => panic!("Expected float"),
@@ -182,11 +198,9 @@ mod tests {
             var_topics,
             0,
         );
-        input_provider
-            .connect()
-            .await
-            .expect("Failed to connect to MQTT");
-        input_provider.ready().await?;
+        with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
+
+        let input_provider_ready = input_provider.ready();
 
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
@@ -200,6 +214,7 @@ mod tests {
         );
 
         let res = executor.spawn(runner.run());
+        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
         let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
@@ -220,7 +235,12 @@ mod tests {
         // We have to specify how many outputs we want to take as the MQTT
         // topic is not assumed to tell us when it is done
         info!("Waiting for {:?} outputs", zs.len());
-        let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;
+        let outputs = with_timeout(
+            outputs.take(zs.len()).collect::<Vec<_>>(),
+            10,
+            "outputs.take",
+        )
+        .await?;
         info!("Outputs: {:?}", outputs);
         let expected_outputs = zs.into_iter().map(|val| vec![val]).collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
@@ -229,8 +249,8 @@ mod tests {
 
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        x_publisher_task.await;
-        y_publisher_task.await;
+        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
+        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
         info!("All publishers completed, shutting down MQTT server");
 
         info!("Waiting for monitor to complete after output stream drop...");
@@ -283,12 +303,9 @@ mod tests {
             var_topics,
             0,
         );
-        input_provider
-            .connect()
-            .await
-            .expect("Failed to connect to MQTT");
-        input_provider.ready().await?;
+        with_timeout_res(input_provider.connect(), 10, "input_provider_connect").await?;
 
+        let input_provider_ready = input_provider.ready();
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
@@ -301,6 +318,7 @@ mod tests {
         );
 
         let res = executor.spawn(runner.run());
+        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
         let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
@@ -321,7 +339,12 @@ mod tests {
         // We have to specify how many outputs we want to take as the MQTT
         // topic is not assumed to tell us when it is done
         info!("Waiting for {:?} outputs", zs.len());
-        let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;
+        let outputs = with_timeout(
+            outputs.take(zs.len()).collect::<Vec<_>>(),
+            10,
+            "outputs.take",
+        )
+        .await?;
         info!("Outputs: {:?}", outputs);
         // Test the outputs
         assert_eq!(outputs.len(), zs.len());
@@ -338,8 +361,8 @@ mod tests {
 
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        x_publisher_task.await;
-        y_publisher_task.await;
+        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
+        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
         info!("All publishers completed, shutting down MQTT server");
 
         info!("Waiting for monitor to complete after output stream drop...");
@@ -374,7 +397,7 @@ mod tests {
 
         // Create locality receiver and wait for it to be ready
         let locality_receiver = MQTTLocalityReceiver::new(mqtt_uri.clone(), node_name);
-        locality_receiver.ready().await?;
+        let _ = with_timeout(locality_receiver.ready(), 5, "locality_receiver.ready()").await?;
 
         executor
             .spawn(async move {
@@ -393,7 +416,12 @@ mod tests {
             .detach();
 
         // Wait for the result
-        let locality_spec = locality_receiver.receive().await.unwrap();
+        let locality_spec = with_timeout_res(
+            locality_receiver.receive(),
+            5,
+            "locality_receiver.receive()",
+        )
+        .await?;
         println!("Received locality spec");
 
         assert_eq!(locality_spec.local_vars(), vec!["x".into(), "y".into()]);

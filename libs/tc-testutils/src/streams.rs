@@ -1,7 +1,9 @@
+use anyhow::anyhow;
 use async_stream::stream;
 use futures::{StreamExt, future::join_all};
+use futures_timeout::TimeoutExt;
 use smol::LocalExecutor;
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 use unsync::spsc::Sender as SpscSender;
 
 use trustworthiness_checker::OutputStream;
@@ -49,6 +51,31 @@ pub fn tick_streams<T: 'static>(
     })
     .detach();
     (leader_sender, synced_streams)
+}
+
+/// Wrapper to run a future with a timeout and provide a meaningful error message
+pub async fn with_timeout<F, T>(fut: F, dur_sec: u64, name: &str) -> anyhow::Result<T>
+where
+    F: std::future::Future<Output = T>,
+{
+    let fut = fut.timeout(Duration::from_secs(dur_sec)).await;
+    match fut {
+        Ok(inner) => Ok(inner),
+        Err(_) => Err(anyhow!("{} timed out after {} seconds", name, dur_sec)),
+    }
+}
+
+/// Wrapper to run a future that returns a result with a timeout and provide a meaningful error message
+pub async fn with_timeout_res<F, T, E>(fut: F, dur_sec: u64, name: &str) -> anyhow::Result<T>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+    E: Into<anyhow::Error>,
+{
+    let fut = fut.timeout(Duration::from_secs(dur_sec)).await;
+    match fut {
+        Ok(inner_res) => inner_res.map_err(|e| anyhow!("{} failed: {}", name, e.into())),
+        Err(_) => Err(anyhow!("{} timed out after {} seconds", name, dur_sec)),
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use crate::testcontainers::ContainerAsync;
 use async_compat::Compat as TokioCompat;
 use futures::StreamExt;
+use futures_timeout::TimeoutExt;
 use paho_mqtt as mqtt;
 use testcontainers_modules::{
     mosquitto::{self, Mosquitto},
@@ -18,7 +19,9 @@ pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
 
     ContainerAsync::new(
         TokioCompat::new(image.start())
+            .timeout(std::time::Duration::from_secs(10))
             .await
+            .expect("Timed out starting EMQX test container")
             .expect("Failed to start EMQX test container"),
     )
 }
