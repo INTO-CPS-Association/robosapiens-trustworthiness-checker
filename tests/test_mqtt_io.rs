@@ -1,20 +1,21 @@
-use std::vec;
-
-use async_compat::Compat as TokioCompat;
-use futures::{FutureExt, StreamExt};
-use macro_rules_attribute::apply;
-use paho_mqtt as mqtt;
-use smol::LocalExecutor;
-use tc_testutils::streams::with_timeout_res;
-use tracing::info;
-use trustworthiness_checker::InputProvider;
-use trustworthiness_checker::async_test;
-use trustworthiness_checker::io::mqtt::client::provide_mqtt_client;
-use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
-use winnow::Parser;
-
 #[cfg(test)]
-mod tests {
+#[cfg(feature = "testcontainers")]
+mod integration_tests {
+    use std::vec;
+
+    use async_compat::Compat as TokioCompat;
+    use futures::{FutureExt, StreamExt};
+    use macro_rules_attribute::apply;
+    use paho_mqtt as mqtt;
+    use smol::LocalExecutor;
+    use tc_testutils::streams::with_timeout_res;
+    use tracing::info;
+    use trustworthiness_checker::InputProvider;
+    use trustworthiness_checker::async_test;
+    use trustworthiness_checker::io::mqtt::client::provide_mqtt_client;
+    use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
+    use winnow::Parser;
+
     use approx::assert_abs_diff_eq;
     use tc_testutils::streams::with_timeout;
 
@@ -37,9 +38,6 @@ mod tests {
         lola_specification,
     };
 
-    use super::*;
-
-    #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
@@ -99,7 +97,6 @@ mod tests {
         assert_eq!(outputs, expected_outputs);
     }
 
-    #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_output_float(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
@@ -164,7 +161,6 @@ mod tests {
         }
     }
 
-    #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_input(
         executor: Rc<LocalExecutor<'static>>,
@@ -269,7 +265,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_input_float(
         executor: Rc<LocalExecutor<'static>>,
@@ -381,7 +376,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(not(feature = "testcontainers"), ignore)]
     #[apply(async_test)]
     async fn test_mqtt_locality_receiver(
         executor: Rc<LocalExecutor<'static>>,

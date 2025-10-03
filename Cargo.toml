@@ -82,7 +82,7 @@ panic = "abort"
 
 [features]
 ros = ["dep:r2r"]
-testcontainers = []
+testcontainers = ["tc-testutils/testcontainers"]
 span-tracing = []
 bench-full = []
 

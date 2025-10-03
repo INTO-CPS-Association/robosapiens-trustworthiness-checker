@@ -1,6 +1,5 @@
-use std::mem;
-
 use async_compat::Compat as TokioCompat;
+use std::mem;
 use testcontainers_modules::testcontainers::{ContainerAsync as ContainerAsyncTokio, Image};
 
 pub struct ContainerAsync<T: Image> {
