@@ -3497,7 +3497,6 @@ dependencies = [
  "r2r",
  "rand 0.9.2",
  "redis",
- "redis-macros",
  "serde",
  "serde_json",
  "serde_json5",

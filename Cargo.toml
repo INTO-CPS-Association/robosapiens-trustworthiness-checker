@@ -56,7 +56,7 @@ smol = "2.0.2"
 async-unsync = "0.3.0"
 smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.2"
-async-compat = "0.2.4"
+async-compat = {version = "0.2.4", optional = true}
 jemallocator = "0.5.4"
 ecow = { version = "0.2.6", features = ["serde"] }
 async_cell = "0.2.3"
@@ -70,9 +70,8 @@ thiserror = "2.0.14"
 rand = "0.9.2"
 unsync = "0.1.2"
 itertools = "0.14.0"
-redis = { version = "0.32.5", features = ["smol-comp"] }
+redis = { version = "0.32.5", default-features = false, features = ["smol-comp"] }
 anyhow = { version = "1.0.99", features = ["backtrace"] }
-redis-macros = "0.5.6"
 
 [profile.release]
 lto = "fat"
@@ -82,7 +81,7 @@ panic = "abort"
 
 [features]
 ros = ["dep:r2r"]
-testcontainers = ["tc-testutils/testcontainers"]
+testcontainers = ["tc-testutils/testcontainers", "async-compat"]
 span-tracing = []
 bench-full = []
 
