@@ -40,7 +40,7 @@ pub async fn dummy_redis_sender(
     let _ = ready_rx.await;
 
     for message in messages.into_iter() {
-        debug!(name: "Publishing message", ?message, ?channel);
+        debug!(?message, ?channel, "Publishing message");
         con.publish(&channel, message).await?;
     }
 

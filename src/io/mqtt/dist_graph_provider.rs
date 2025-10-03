@@ -131,7 +131,7 @@ impl MQTTDistGraphProvider {
                     match client.subscribe_many_same_qos(&topics, QOS).await {
                         Ok(_) => break,
                         Err(e) => {
-                            warn!(name: "Failed to subscribe to topics", ?topics, err=?e);
+                            warn!(?topics, err=?e, "Failed to subscribe to topics");
                             info!("Retrying in 100ms");
                             let _e = client.reconnect().await;
                         }

@@ -53,7 +53,7 @@ pub async fn get_mqtt_outputs(
         let binding = msg;
         let payload = binding.payload_str();
         let res: Value = serde_json::from_str(&payload).unwrap();
-        debug!(name:"Received message", ?res, topic=?binding.topic());
+        debug!(?res, topic=?binding.topic(), "Received message");
 
         // Handle wrapped format {"value": actual_value} from output handler
         match &res {

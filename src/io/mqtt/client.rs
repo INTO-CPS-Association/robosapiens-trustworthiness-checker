@@ -27,12 +27,12 @@ fn message_stream(
                     Some(msg) => {
                         match msg {
                             Some(message) => {
-                                debug!(name: "Received MQTT message", ?message, topic = message.topic());
+                                debug!(?message, topic = message.topic(), "Received MQTT message");
                                 yield message;
                                 reconnect_attempts = 0; // Reset counter on successful message
                             }
                             None => {
-                                debug!(name = "MQTT connection lost, will attempt reconnect");
+                                debug!("MQTT connection lost, will attempt reconnect");
                                 break; // Break inner loop, try reconnect
                             }
                         }
@@ -69,7 +69,7 @@ fn message_stream(
                             continue; // Continue outer loop with new connection
                         }
                         Err(err) => {
-                            warn!(name: "MQTT client reconnection failed", ?err, attempt = reconnect_attempts);
+                            warn!(?err, attempt = reconnect_attempts, "MQTT client reconnection failed");
                             // Add small delay before next attempt or termination
                             smol::Timer::after(Duration::from_millis(100)).await;
                             break; // Break outer loop, terminate stream
@@ -112,16 +112,16 @@ pub async fn provide_mqtt_client_with_subscription(
     };
 
     debug!(
-        name = "Created MQTT client",
         ?uri,
-        client_id = mqtt_client.client_id()
+        client_id = mqtt_client.client_id(),
+        "Created MQTT client"
     );
 
     let stream = message_stream(mqtt_client.clone(), max_reconnect_attempts);
     debug!(
-        name = "Started consuming MQTT messages",
         ?uri,
-        client_id = mqtt_client.client_id()
+        client_id = mqtt_client.client_id(),
+        "Started consuming MQTT messages",
     );
 
     // Try to connect to the broker

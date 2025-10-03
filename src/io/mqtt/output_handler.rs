@@ -50,15 +50,14 @@ async fn publish_stream(
         let message = mqtt::Message::new(topic_name.clone(), data, 1);
         loop {
             debug!(
-                name="OutputHandler publishing MQTT message",
                 ?message,
-                topic=?message.topic()
+                topic=?message.topic(),
+                "OutputHandler publishing MQTT message"
             );
             match client.publish(message.clone()).await {
                 Ok(_) => break,
                 Err(_e) => {
-                    warn!(name: "Lost connection. Attempting reconnect...",
-                        topic=?message.topic());
+                    warn!(topic=?message.topic(), "Lost connection. Attempting reconnect...");
                     client.reconnect().await.unwrap();
                 }
             }
@@ -102,8 +101,7 @@ impl OutputHandler for MQTTOutputHandler {
             .collect::<Vec<_>>();
         let hostname = self.hostname.clone();
         let port = self.port.clone();
-        info!(name: "OutputProvider MQTT startup task launched",
-            ?hostname, num_streams = ?streams.len());
+        info!(?hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
 
         Box::pin(MQTTOutputHandler::inner_handler(
             hostname,

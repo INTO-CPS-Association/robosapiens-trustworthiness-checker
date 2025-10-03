@@ -120,7 +120,7 @@ impl ReconfMQTTInputProvider {
             match client.subscribe_many(&topics, &qos).await {
                 Ok(_) => break,
                 Err(e) => {
-                    warn!(name: "Failed to subscribe to topics", ?topics, err=?e);
+                    warn!(?topics, err=?e, "Failed to subscribe to topics");
                     smol::Timer::after(std::time::Duration::from_millis(100)).await;
                     info!("Retrying subscribing to MQTT topics");
                     let _e = client.reconnect().await;
@@ -184,11 +184,11 @@ impl ReconfMQTTInputProvider {
             loop {
                 match client.unsubscribe_many(&to_unsubscribe).await {
                     Ok(_) => {
-                        info!(name = "Unsubscribed from old topics", ?to_unsubscribe);
+                        info!(?to_unsubscribe, "Unsubscribed from old topics");
                         break;
                     }
                     Err(e) => {
-                        warn!(name="Failed to unsubscribe from old topics", ?to_unsubscribe, err=?e);
+                        warn!(?to_unsubscribe, err=?e, "Failed to unsubscribe from old topics");
                         smol::Timer::after(std::time::Duration::from_millis(100)).await;
                         info!("Retrying unsubscribing to MQTT topics");
                         let _e = client.reconnect().await;
@@ -201,11 +201,11 @@ impl ReconfMQTTInputProvider {
         loop {
             match client.subscribe_many(&to_subscribe, &qos).await {
                 Ok(_) => {
-                    info!(name = "Subscribed to new topics", ?to_subscribe);
+                    info!(?to_subscribe, "Subscribed to new topics");
                     break;
                 }
                 Err(e) => {
-                    warn!(name: "Failed to subscribe to new topics", ?to_subscribe, err=?e);
+                    warn!(?to_subscribe, err=?e, "Failed to subscribe to new topics");
                     smol::Timer::after(std::time::Duration::from_millis(100)).await;
                     info!("Retrying subscribing to MQTT topics");
                     let _e = client.reconnect().await;
@@ -228,10 +228,7 @@ impl ReconfMQTTInputProvider {
         senders: &mut BTreeMap<VarName, SpscSender<Value>>,
     ) -> anyhow::Result<()> {
         // Process the message
-        debug!(
-            name = "Received MQTT message on topic:",
-            topic = msg.topic()
-        );
+        debug!(topic = msg.topic(), "Received MQTT message on topic:");
         let mut value: Value = serde_json5::from_str(&msg.payload_str()).map_err(|e| {
             anyhow!(e).context(format!(
                 "Failed to parse value {:?} sent from MQTT",
@@ -245,7 +242,7 @@ impl ReconfMQTTInputProvider {
                 value = inner.clone();
             }
         }
-        debug!(name = "MQTT message value:", ?value);
+        debug!(?value, "MQTT message value:");
 
         // Resolve the variable name from the topic
         let var = if let Some(var) = var_topics_inverse.get(msg.topic()) {
@@ -255,8 +252,8 @@ impl ReconfMQTTInputProvider {
             // (Needed because there is a (theoretical?) race condition where messages
             // are pending while we reconfigure)
             info!(
-                name = "Received message during topic reconfiguration for topic which was unsubscribed",
-                topic = msg.topic()
+                topic = msg.topic(),
+                "Received message during topic reconfiguration for topic which was unsubscribed"
             );
             return Ok(());
         } else {
@@ -314,7 +311,7 @@ impl ReconfMQTTInputProvider {
                     new_config = reconfig.next().fuse() => {
                         match new_config {
                             Some(new_var_topics) => {
-                                info!(name="Reconfiguring MQTTInputProvider", ?new_var_topics, "Reconfiguring MQTTInputProvider with new variable-topic mapping");
+                                info!(?new_var_topics, "Reconfiguring MQTTInputProvider with new variable-topic mapping");
                                 prev_var_topics_inverse = var_topics_inverse.clone();
                                 (var_topics_inverse, senders) = Self::handle_reconfiguration(
                                     &client, new_var_topics, var_topics_inverse,

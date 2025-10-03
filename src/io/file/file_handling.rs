@@ -16,8 +16,7 @@ pub async fn parse_file<O: Clone + Debug>(
     file: &str,
 ) -> anyhow::Result<O> {
     let contents = smol::fs::read_to_string(file).await?;
-    debug!(name: "Parsing file",
-        contents=?parser.parse_next(&mut contents.as_str()).unwrap());
+    debug!(contents=?parser.parse_next(&mut contents.as_str()).unwrap(), "Parsing file");
     parser.parse(contents.as_str()).map_err(|e| {
         anyhow::anyhow!(e.to_string()).context(format!("Failed to parse file {}", file))
     })

@@ -84,8 +84,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
 
     #[instrument(skip(self, streams))]
     fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
-        debug!(name: "Providing streams",
-            num_streams = self.var_names.len());
+        debug!(num_streams = self.var_names.len(), "Providing streams",);
         for (stream, sender) in streams.into_iter().zip(
             self.stream_senders
                 .take()
@@ -100,10 +99,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
         let receivers: Vec<oneshot::Receiver<OutputStream<V>>> =
             mem::take(&mut self.stream_receivers).expect("Stream receivers already taken");
 
-        debug!(
-            name = "Running ManualOutputHandler",
-            num_streams = receivers.len()
-        );
+        debug!(num_streams = receivers.len(), "Running ManualOutputHandler");
         // Create a list of streams for each of the receivers or an error
         // if this is not possible
         // (Should always be possible if `provide_streams` was called)
@@ -156,7 +152,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
                         // Collect the values into a Vec<V>
                         let output = vals;
                         // Output the combined data
-                        debug!(name = "Outputting data", ?output);
+                        debug!(?output, "Outputting data");
                         yield output;
                     } else {
                         // One of the streams ended, so we should stop

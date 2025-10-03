@@ -91,7 +91,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         DistributionMode::LocalMonitor(locality_mode)
         | DistributionMode::LocalMonitorWithReceiver(locality_mode, _) => {
             let model = model.localise(locality_mode);
-            info!(name: "Localised model", ?model, output_vars=?model.output_vars, input_vars=?model.input_vars);
+            info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Localised model");
             model
         }
         _ => model,

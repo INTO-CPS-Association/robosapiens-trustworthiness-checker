@@ -113,7 +113,7 @@ impl MQTTInputProvider {
             match client.subscribe_many(&topics, &qos).await {
                 Ok(_) => break,
                 Err(e) => {
-                    warn!(name: "Failed to subscribe to topics", ?topics, err=?e);
+                    warn!(?topics, err=?e, "Failed to subscribe to topics");
                     smol::Timer::after(std::time::Duration::from_millis(100)).await;
                     info!("Retrying subscribing to MQTT topics");
                     let _e = client.reconnect().await;
@@ -160,7 +160,7 @@ impl MQTTInputProvider {
                         match msg {
                             Some(msg) => {
                                 // Process the message
-                                debug!(name = "Received MQTT message on topic:", topic = msg.topic());
+                                debug!(topic = msg.topic(), "Received MQTT message on topic:");
                                 let mut value = serde_json5::from_str(&msg.payload_str()).map_err(|e| {
                                     anyhow!(e).context(format!(
                                         "Failed to parse value {:?} sent from MQTT",
@@ -174,7 +174,7 @@ impl MQTTInputProvider {
                                         value = inner.clone();
                                     }
                                 }
-                                debug!(name = "MQTT message value:", ?value);
+                                debug!(?value, "MQTT message value:");
 
                                 let var = var_topics_inverse.get(msg.topic()).ok_or_else(|| anyhow::anyhow!(
                                     "No variable found for topic {}",

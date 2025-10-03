@@ -70,8 +70,7 @@ impl OutputHandler for RedisOutputHandler {
             .collect::<Vec<_>>();
         let hostname = self.hostname.clone();
         let port = self.port;
-        info!(name: "OutputProvider MQTT startup task launched",
-            ?hostname, num_streams = ?streams.len());
+        info!(?hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
 
         Box::pin(RedisOutputHandler::inner_handler(hostname, port, streams))
     }
