@@ -6,7 +6,7 @@ use futures::{
     stream::{self, LocalBoxStream},
 };
 // use tokio::sync::oneshot;
-use crate::utils::cancellation_token::DropGuard;
+use crate::{OutputStream, utils::cancellation_token::DropGuard};
 use async_unsync::oneshot;
 
 /* Converts a `oneshot::Receiver` of an `OutputStream` into an `OutputStream`.
@@ -50,5 +50,17 @@ pub fn drop_guard_stream<T: 'static>(
         // Explicit drop to show when it happens
         drop(_drop_guard);
         debug!("drop_guard_stream: Drop guard explicitly dropped");
+    })
+}
+
+/// Convert a Receiver to an OutputStream
+/// Similar to tokio::ReceiverStream
+pub fn channel_to_output_stream<T: 'static>(
+    mut receiver: unsync::spsc::Receiver<T>,
+) -> OutputStream<T> {
+    Box::pin(stream! {
+        while let Some(val) = receiver.recv().await {
+            yield val;
+        }
     })
 }

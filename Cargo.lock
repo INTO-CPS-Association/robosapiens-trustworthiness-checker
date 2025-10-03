@@ -3129,6 +3129,7 @@ dependencies = [
  "paho-mqtt",
  "redis",
  "redis-macros",
+ "serde",
  "serde_json",
  "smol",
  "smol-macros",

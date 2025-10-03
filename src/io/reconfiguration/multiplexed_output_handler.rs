@@ -176,12 +176,10 @@ impl OutputHandler for MultiplexedOutputHandler {
 
 #[cfg(test)]
 mod tests {
-    use unsync::spsc::Sender as SpscSender;
-    type TickSender = SpscSender<()>;
     use crate::async_test;
     use futures::stream;
     use macro_rules_attribute::apply;
-    use tc_testutils::streams::tick_streams;
+    use tc_testutils::streams::{TickSender, tick_streams};
 
     use super::*;
 

@@ -1,5 +1,7 @@
 pub mod input_provider;
 pub use input_provider::MQTTInputProvider;
+pub mod reconfigurable_input_provider;
+pub use reconfigurable_input_provider::ReconfMQTTInputProvider;
 pub mod client;
 pub use client::{provide_mqtt_client, provide_mqtt_client_with_subscription};
 pub mod output_handler;

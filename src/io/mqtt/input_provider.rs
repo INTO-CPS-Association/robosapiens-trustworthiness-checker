@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use async_cell::unsync::AsyncCell;
-use async_stream::stream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use paho_mqtt as mqtt;
 use smol::LocalExecutor;
@@ -9,10 +8,10 @@ use tracing::{Level, debug, info, info_span, instrument, warn};
 
 use unsync::oneshot::Receiver as OSReceiver;
 use unsync::oneshot::Sender as OSSender;
-use unsync::spsc::Receiver as SpscReceiver;
 use unsync::spsc::Sender as SpscSender;
 
 use super::client::provide_mqtt_client_with_subscription;
+use crate::stream_utils::channel_to_output_stream;
 use crate::{
     InputProvider, OutputStream, Value,
     core::VarName,
@@ -22,6 +21,7 @@ use crate::{
 use anyhow::anyhow;
 
 const QOS: i32 = 1;
+const CHANNEL_SIZE: usize = 10;
 
 type Topic = String;
 // A map between channel names and the MQTT channels they
@@ -58,13 +58,14 @@ impl MQTTInputProvider {
     ) -> Self {
         let host: String = host.to_string();
 
-        let (senders, receivers): (
+        let (senders, available_streams): (
             BTreeMap<_, SpscSender<Value>>,
-            BTreeMap<_, SpscReceiver<Value>>,
+            BTreeMap<_, OutputStream<Value>>,
         ) = var_topics
             .iter()
             .map(|(v, _)| {
-                let (tx, rx) = unsync::spsc::channel(10);
+                let (tx, rx) = unsync::spsc::channel(CHANNEL_SIZE);
+                let rx = channel_to_output_stream(rx);
                 ((v.clone(), tx), (v.clone(), rx))
             })
             .unzip();
@@ -81,19 +82,6 @@ impl MQTTInputProvider {
         let (client_streams_tx, client_streams_rx) = unsync::oneshot::channel();
         let client_streams_tx = Some(client_streams_tx);
         let client_streams_rx = Some(client_streams_rx);
-
-        let available_streams = var_topics
-            .keys()
-            .zip(receivers.into_values())
-            .map(|(v, mut rx)| {
-                let stream: OutputStream<Value> = Box::pin(stream! {
-                    while let Some(value) =  rx.recv().await {
-                        yield value;
-                    }
-                });
-                (v.clone(), stream)
-            })
-            .collect();
 
         MQTTInputProvider {
             var_topics,
@@ -144,15 +132,14 @@ impl MQTTInputProvider {
 
     async fn run_logic(
         var_topics: BTreeMap<VarName, String>,
-        uri: String,
         mut senders: BTreeMap<VarName, SpscSender<Value>>,
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(AsyncClient, OutputStream<paho_mqtt::Message>)>,
     ) -> anyhow::Result<()> {
-        info!("MQTTInputProvider run_logic started");
-        let mqtt_input_span = info_span!("MQTTInputProvider run_logic", ?uri, ?var_topics);
+        let mqtt_input_span = info_span!("MQTTInputProvider run_logic");
         let _enter = mqtt_input_span.enter();
+        info!("MQTTInputProvider run_logic started");
 
         let var_topics_inverse = var_topics
             .iter()
@@ -173,20 +160,21 @@ impl MQTTInputProvider {
                         match msg {
                             Some(msg) => {
                                 // Process the message
-                                debug!(name: "Received MQTT message", ?msg, topic = msg.topic());
-                                let value = serde_json5::from_str(&msg.payload_str()).map_err(|e| {
+                                debug!(name = "Received MQTT message on topic:", topic = msg.topic());
+                                let mut value = serde_json5::from_str(&msg.payload_str()).map_err(|e| {
                                     anyhow!(e).context(format!(
                                         "Failed to parse value {:?} sent from MQTT",
                                         msg.payload_str(),
                                     ))
                                 })?;
 
-                                // Unwrap maps wrapped in "value" (done by MQTTOutputHandler to make MQTT clients happy):
-                                let value = if let Value::Map(map) = &value {
-                                    map.get("value").cloned().unwrap_or(value)
-                                } else {
-                                    value
-                                };
+                                // Unwrap maps wrapped in "value" (done by MQTTOutputHandler to make MQTT clients happy)
+                                if let Value::Map(map) = &value {
+                                    if let Some(inner) = map.get("value") {
+                                        value = inner.clone();
+                                    }
+                                }
+                                debug!(name = "MQTT message value:", ?value);
 
                                 let var = var_topics_inverse.get(msg.topic()).ok_or_else(|| anyhow::anyhow!(
                                     "No variable found for topic {}",
@@ -237,7 +225,6 @@ impl InputProvider for MQTTInputProvider {
 
         Box::pin(Self::run_logic(
             self.var_topics.clone(),
-            self.uri.clone(),
             senders,
             self.started.clone(),
             self.drop_guard.clone_tok(),

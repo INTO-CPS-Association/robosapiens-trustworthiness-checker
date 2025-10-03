@@ -1,8 +1,11 @@
+use std::fmt::Debug;
+
 use crate::testcontainers::ContainerAsync;
 use async_compat::Compat as TokioCompat;
 use futures::StreamExt;
 use futures_timeout::TimeoutExt;
 use paho_mqtt as mqtt;
+use serde::ser::Serialize;
 use testcontainers_modules::{
     mosquitto::{self, Mosquitto},
     testcontainers::runners::AsyncRunner,
@@ -66,49 +69,75 @@ pub async fn get_mqtt_outputs(
     }));
 }
 
+/// Publishes all values from a Vec<Value>.
 #[instrument(level = tracing::Level::INFO)]
-pub async fn dummy_mqtt_publisher(
+pub async fn dummy_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>(
     client_name: String,
     topic: String,
-    values: Vec<Value>,
+    values: Vec<T>,
+    port: u16,
+) {
+    let len = values.len();
+    publish_values(
+        &client_name,
+        &topic,
+        futures::stream::iter(values).boxed(),
+        len,
+        port,
+    )
+    .await;
+}
+
+/// Publishes all values from an OutputStream<Value>.
+#[instrument(level = tracing::Level::INFO, skip(values))]
+pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>(
+    client_name: String,
+    topic: String,
+    values: OutputStream<T>,
+    values_len: usize,
+    port: u16,
+) {
+    publish_values(&client_name, &topic, values, values_len, port).await;
+}
+
+/// Generic logic for the dummy publishers
+async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
+    client_name: &str,
+    topic: &str,
+    mut values: OutputStream<T>,
+    values_len: usize,
     port: u16,
 ) {
     info!(
         "Starting publisher {} for topic {} with {} values",
-        client_name,
-        topic,
-        values.len()
+        client_name, topic, values_len
     );
 
-    // Create a new client
     let mqtt_client = provide_mqtt_client(format!("tcp://localhost:{}", port))
         .await
         .expect("Failed to create MQTT client");
 
-    // Try to send the messages
-    for (index, value) in values.iter().enumerate() {
-        let output_str = match serde_json::to_string(value) {
-            Ok(s) => s,
-            Err(e) => {
-                panic!("Failed to serialize value {:?}: {:?}", value, e);
-            }
-        };
+    let mut index = 0;
+    while let Some(value) = values.next().await {
+        let output_str = serde_json::to_string(&value)
+            .unwrap_or_else(|e| panic!("Failed to serialize value {:?}: {:?}", value, e));
 
-        let message = mqtt::Message::new(topic.clone(), output_str.clone(), 1);
+        let message = mqtt::Message::new(topic.to_string(), output_str.clone(), 1);
+
         info!(
             "Publishing message {}/{} on topic {}: {}",
             index + 1,
-            values.len(),
+            values_len,
             topic,
             output_str
         );
 
-        match mqtt_client.publish(message.clone()).await {
+        match mqtt_client.publish(message).await {
             Ok(_) => {
                 info!(
                     "Successfully published message {}/{} on topic {}",
                     index + 1,
-                    values.len(),
+                    values_len,
                     topic
                 );
             }
@@ -119,15 +148,14 @@ pub async fn dummy_mqtt_publisher(
                 );
             }
         }
+        index += 1;
     }
 
     info!(
         "Finished publishing all {} messages for topic {}",
-        values.len(),
-        topic
+        values_len, topic
     );
 
-    // Clean up the MQTT client to prevent resource contention
     if let Err(e) = mqtt_client.disconnect(None).await {
         debug!("Failed to disconnect MQTT client {}: {:?}", client_name, e);
     } else {
