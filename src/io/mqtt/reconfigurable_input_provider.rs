@@ -6,152 +6,58 @@ use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, info_span, instrument, warn};
 use unsync::oneshot::Receiver as OSReceiver;
-use unsync::oneshot::Sender as OSSender;
 use unsync::spsc::Sender as SpscSender;
 
-use super::client::provide_mqtt_client_with_subscription;
 use crate::{
-    InputProvider, OutputStream, Value,
-    core::VarName,
-    stream_utils::channel_to_output_stream,
-    utils::cancellation_token::{CancellationToken, DropGuard},
+    InputProvider, OutputStream, Value, core::VarName, utils::cancellation_token::CancellationToken,
 };
-use anyhow::anyhow;
 
-const QOS: i32 = 1;
-const CHANNEL_SIZE: usize = 10;
-
-type Topic = String;
-// A map between channel names and the MQTT channels they
-// correspond to
-pub type VarTopicMap = BTreeMap<VarName, Topic>;
-pub type InverseVarTopicMap = BTreeMap<Topic, VarName>;
+use super::common_input_provider::common;
 
 pub struct ReconfMQTTInputProvider {
-    var_topics: VarTopicMap,
-    uri: String,
-    max_reconnect_attempts: u32,
+    base: common::Base,
 
     // Streams that can be taken ownership of by calling `input_stream`
     // (Note: Can't use AsyncCell because it is also used outside async context)
     available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
-    // Channels used to send to the `available_streams`
-    senders: Option<BTreeMap<VarName, SpscSender<Value>>>,
 
-    // Oneshot used to pass the MQTT client and stream from connect() to run()
-    client_streams_rx: Option<OSReceiver<(mqtt::AsyncClient, OutputStream<mqtt::Message>)>>,
-    client_streams_tx: Option<OSSender<(mqtt::AsyncClient, OutputStream<mqtt::Message>)>>,
-
-    reconfig: Option<OutputStream<VarTopicMap>>,
-
-    drop_guard: DropGuard,
-    // Mainly used for debugging purposes
-    pub started: Rc<AsyncCell<bool>>,
+    reconfig: Option<OutputStream<common::VarTopicMap>>,
 }
 
 impl ReconfMQTTInputProvider {
     #[instrument(level = Level::INFO, skip(var_topics, reconfig))]
     pub fn new(
-        executor: Rc<LocalExecutor<'static>>,
+        _executor: Rc<LocalExecutor<'static>>,
         host: &str,
         port: Option<u16>,
-        var_topics: VarTopicMap,
+        var_topics: common::VarTopicMap,
         max_reconnect_attempts: u32,
-        reconfig: OutputStream<VarTopicMap>,
+        reconfig: OutputStream<common::VarTopicMap>,
     ) -> Self {
-        let host: String = host.to_string();
+        let (available_streams, base) =
+            common::Base::new(host, port, var_topics, max_reconnect_attempts);
 
-        let (senders, receivers): (
-            BTreeMap<_, SpscSender<Value>>,
-            BTreeMap<_, OutputStream<Value>>,
-        ) = var_topics
-            .iter()
-            .map(|(v, _)| {
-                let (tx, rx) = unsync::spsc::channel(CHANNEL_SIZE);
-                let rx = channel_to_output_stream(rx);
-                ((v.clone(), tx), (v.clone(), rx))
-            })
-            .unzip();
-        let senders = Some(senders);
-        let available_streams = Rc::new(RefCell::new(receivers));
-
-        let started = AsyncCell::new_with(false).into_shared();
-        let drop_guard = CancellationToken::new().drop_guard();
-
-        let uri = match port {
-            Some(port) => format!("tcp://{}:{}", host, port),
-            None => format!("tcp://{}", host),
-        };
-
-        let (client_streams_tx, client_streams_rx) = unsync::oneshot::channel();
-        let client_streams_tx = Some(client_streams_tx);
-        let client_streams_rx = Some(client_streams_rx);
-
+        let available_streams = Rc::new(RefCell::new(available_streams));
         let reconfig = Some(reconfig);
 
-        ReconfMQTTInputProvider {
-            var_topics,
-            started,
-            uri,
-            max_reconnect_attempts,
+        Self {
+            base,
             available_streams,
-            senders,
-            client_streams_tx,
-            client_streams_rx,
             reconfig,
-            drop_guard,
         }
     }
 
     pub async fn connect(&mut self) -> anyhow::Result<()> {
-        let client_streams_tx =
-            std::mem::take(&mut self.client_streams_tx).expect("Client stream tx already taken");
-
-        // Create and connect to the MQTT client
-        info!("Getting client with subscription");
-        let (client, mqtt_stream) =
-            provide_mqtt_client_with_subscription(self.uri.clone(), self.max_reconnect_attempts)
-                .await?;
-        info!(?self.uri, "InputProvider MQTT client connected to broker");
-
-        let topics = self.var_topics.values().collect::<Vec<_>>();
-        let qos = vec![QOS; topics.len()];
-        loop {
-            match client.subscribe_many(&topics, &qos).await {
-                Ok(_) => break,
-                Err(e) => {
-                    warn!(?topics, err=?e, "Failed to subscribe to topics");
-                    smol::Timer::after(std::time::Duration::from_millis(100)).await;
-                    info!("Retrying subscribing to MQTT topics");
-                    let _e = client.reconnect().await;
-                }
-            }
-        }
-        info!(?self.uri, ?topics, "Connected and subscribed to MQTT broker");
-
-        client_streams_tx
-            .send((client, mqtt_stream))
-            .map_err(|_| anyhow::anyhow!("Failed to send client streams"))?;
-
-        Ok(())
+        self.base.connect().await
     }
 
     /// Update the `available_streams` based on the new variable-topic mapping and return the new senders.
     fn update_available_streams(
-        var_topics_inverse: &InverseVarTopicMap,
+        var_topics_inverse: &common::InverseVarTopicMap,
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
     ) -> BTreeMap<VarName, SpscSender<Value>> {
-        let (senders, receivers): (
-            BTreeMap<_, SpscSender<Value>>,
-            BTreeMap<_, OutputStream<Value>>,
-        ) = var_topics_inverse
-            .into_iter()
-            .map(|(_, v)| {
-                let (tx, rx) = unsync::spsc::channel(CHANNEL_SIZE);
-                let rx = channel_to_output_stream(rx);
-                ((v.clone(), tx), (v.clone(), rx))
-            })
-            .unzip();
+        let (senders, receivers) =
+            common::Base::create_senders_receiver(var_topics_inverse.iter().map(|(t, v)| (v, t)));
 
         *available_streams.borrow_mut() = receivers;
         senders
@@ -161,10 +67,13 @@ impl ReconfMQTTInputProvider {
     /// new senders.
     async fn handle_reconfiguration(
         client: &mqtt::AsyncClient,
-        new_var_topics: VarTopicMap,
-        var_topics_inverse: InverseVarTopicMap,
+        new_var_topics: common::VarTopicMap,
+        var_topics_inverse: common::InverseVarTopicMap,
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
-    ) -> (InverseVarTopicMap, BTreeMap<VarName, SpscSender<Value>>) {
+    ) -> (
+        common::InverseVarTopicMap,
+        BTreeMap<VarName, SpscSender<Value>>,
+    ) {
         // Unsubscribe to those not in new_var_topics
         let to_unsubscribe: Vec<_> = var_topics_inverse
             .keys()
@@ -197,7 +106,7 @@ impl ReconfMQTTInputProvider {
             }
         }
         // Subscribe to new topics
-        let qos = vec![QOS; to_subscribe.len()];
+        let qos = vec![common::QOS; to_subscribe.len()];
         loop {
             match client.subscribe_many(&to_subscribe, &qos).await {
                 Ok(_) => {
@@ -215,66 +124,9 @@ impl ReconfMQTTInputProvider {
         let var_topics_inverse = new_var_topics
             .into_iter()
             .map(|(var, top)| (top, var))
-            .collect::<InverseVarTopicMap>();
+            .collect::<common::InverseVarTopicMap>();
         let senders = Self::update_available_streams(&var_topics_inverse, available_streams);
         (var_topics_inverse, senders)
-    }
-
-    /// Handle a single MQTT message: parse, unwrap, map to variable, and send downstream.
-    async fn handle_mqtt_message(
-        msg: paho_mqtt::Message,
-        var_topics_inverse: &InverseVarTopicMap,
-        prev_var_topics_inverse: &InverseVarTopicMap,
-        senders: &mut BTreeMap<VarName, SpscSender<Value>>,
-    ) -> anyhow::Result<()> {
-        // Process the message
-        debug!(topic = msg.topic(), "Received MQTT message on topic:");
-        let mut value: Value = serde_json5::from_str(&msg.payload_str()).map_err(|e| {
-            anyhow!(e).context(format!(
-                "Failed to parse value {:?} sent from MQTT",
-                msg.payload_str(),
-            ))
-        })?;
-
-        // Unwrap maps wrapped in "value" (done by MQTTOutputHandler to make MQTT clients happy)
-        if let Value::Map(map) = &value {
-            if let Some(inner) = map.get("value") {
-                value = inner.clone();
-            }
-        }
-        debug!(?value, "MQTT message value:");
-
-        // Resolve the variable name from the topic
-        let var = if let Some(var) = var_topics_inverse.get(msg.topic()) {
-            var
-        } else if prev_var_topics_inverse.contains_key(msg.topic()) {
-            // Drop messages from topics that were unsubscribed during reconfiguration
-            // (Needed because there is a (theoretical?) race condition where messages
-            // are pending while we reconfigure)
-            info!(
-                topic = msg.topic(),
-                "Received message during topic reconfiguration for topic which was unsubscribed"
-            );
-            return Ok(());
-        } else {
-            return Err(anyhow::anyhow!(
-                "Received message for unknown topic {}",
-                msg.topic()
-            ));
-        };
-
-        // Get the sender for this variable
-        let sender = senders
-            .get_mut(var)
-            .ok_or_else(|| anyhow::anyhow!("No sender found for variable {}", var))?;
-
-        // Forward the value downstream
-        sender
-            .send(value)
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to send value"))?;
-
-        Ok(())
     }
 
     async fn run_logic(
@@ -284,25 +136,16 @@ impl ReconfMQTTInputProvider {
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(mqtt::AsyncClient, OutputStream<paho_mqtt::Message>)>,
-        mut reconfig: OutputStream<VarTopicMap>,
+        mut reconfig: OutputStream<common::VarTopicMap>,
     ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("ReconfMQTTInputProvider run_logic");
         let _enter = mqtt_input_span.enter();
         info!("run_logic started");
 
-        // Intentionally consumed - don't want to maintain two maps
-        let mut var_topics_inverse: InverseVarTopicMap = var_topics
-            .into_iter()
-            .map(|(var, top)| (top, var))
-            .collect();
-        let mut prev_var_topics_inverse = InverseVarTopicMap::new();
-
-        let (client, mut mqtt_stream) = client_streams_rx
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Failed to receive MQTT client and stream"))?;
-
-        debug!("Set started");
-        started.set(true);
+        let mut prev_var_topics_inverse = common::InverseVarTopicMap::new();
+        let (client, mut mqtt_stream, mut var_topics_inverse) =
+            common::Base::initial_run_logic(var_topics.clone(), started.clone(), client_streams_rx)
+                .await?;
 
         let result = async {
             loop {
@@ -326,7 +169,7 @@ impl ReconfMQTTInputProvider {
                     msg = mqtt_stream.next().fuse() => {
                         match msg {
                             Some(msg) => {
-                                Self::handle_mqtt_message(msg, &var_topics_inverse, &prev_var_topics_inverse, &mut senders).await?;
+                                common::Base::handle_mqtt_message(msg, &var_topics_inverse, &mut senders, Some(&prev_var_topics_inverse)).await?;
                             }
                             None => {
                                 debug!("MQTT stream ended");
@@ -359,38 +202,25 @@ impl InputProvider for ReconfMQTTInputProvider {
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let senders = std::mem::take(&mut self.senders).expect("Senders already taken");
-        let client_streams_rx = self
-            .client_streams_rx
-            .take()
-            .expect("Client streams rx already taken");
         let reconfig = self.reconfig.take().expect("Reconfig stream already taken");
 
         Box::pin(Self::run_logic(
-            self.var_topics.clone(),
-            senders,
+            self.base.var_topics.clone(),
+            self.base.take_senders(),
             self.available_streams.clone(),
-            self.started.clone(),
-            self.drop_guard.clone_tok(),
-            client_streams_rx,
+            self.base.started.clone(),
+            self.base.drop_guard.clone_tok(),
+            self.base.take_client_streams_rx(),
             reconfig,
         ))
     }
 
     fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        let started = self.started.clone();
-        Box::pin(async move {
-            debug!("In ready");
-            while !started.get().await {
-                debug!("Checking if ready");
-                smol::Timer::after(std::time::Duration::from_millis(100)).await;
-            }
-            Ok(())
-        })
+        self.base.ready()
     }
 
     fn vars(&self) -> Vec<VarName> {
-        self.var_topics.keys().cloned().collect()
+        self.base.vars()
     }
 }
 
@@ -407,11 +237,11 @@ mod container_tests {
     use std::{collections::BTreeMap, rc::Rc};
     use tracing::info;
 
+    use super::super::common_input_provider::common;
     use crate::InputProvider;
     use crate::OutputStream;
     use crate::async_test;
     use crate::io::mqtt::ReconfMQTTInputProvider;
-    use crate::io::mqtt::reconfigurable_input_provider::VarTopicMap;
     use crate::{Value, VarName};
     use tc_testutils::mqtt::{dummy_mqtt_publisher, dummy_stream_mqtt_publisher, start_mqtt};
     use tc_testutils::streams::with_timeout_res;
@@ -439,7 +269,8 @@ mod container_tests {
         .collect::<BTreeMap<VarName, _>>();
 
         // Empty reconfiguration stream that never ends:
-        let reconf_stream: OutputStream<VarTopicMap> = futures::stream::pending().boxed_local();
+        let reconf_stream: OutputStream<common::VarTopicMap> =
+            futures::stream::pending().boxed_local();
 
         // Create the MQTT input provider
         let mut input_provider = ReconfMQTTInputProvider::new(
@@ -522,13 +353,13 @@ mod container_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        let wrong_var_topics: VarTopicMap = [
+        let wrong_var_topics: common::VarTopicMap = [
             ("xx".into(), "mqtt_input_xx".to_string()),
             ("yy".into(), "mqtt_input_yy".to_string()),
         ]
         .into_iter()
         .collect();
-        let var_topics: VarTopicMap = [
+        let var_topics: common::VarTopicMap = [
             ("x".into(), "mqtt_input_x".to_string()),
             ("y".into(), "mqtt_input_y".to_string()),
         ]
@@ -536,7 +367,7 @@ mod container_tests {
         .collect();
 
         // Reconfiguration stream that first yields topics, then waits forever
-        let reconf_stream: OutputStream<VarTopicMap> =
+        let reconf_stream: OutputStream<common::VarTopicMap> =
             stream! {yield var_topics; futures::future::pending::<()>().await; }.boxed_local();
 
         // Create the MQTT input provider
@@ -632,15 +463,15 @@ mod container_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        let initial_var_topics: VarTopicMap = [("x".into(), "mqtt_input_x".to_string())]
+        let initial_var_topics: common::VarTopicMap = [("x".into(), "mqtt_input_x".to_string())]
             .into_iter()
             .collect();
-        let final_var_topics: VarTopicMap = [("y".into(), "mqtt_input_y".to_string())]
+        let final_var_topics: common::VarTopicMap = [("y".into(), "mqtt_input_y".to_string())]
             .into_iter()
             .collect();
 
         // Reconfiguration stream that first waits for a tick, then yields topics, then waits forever
-        let reconf_stream: OutputStream<VarTopicMap> =
+        let reconf_stream: OutputStream<common::VarTopicMap> =
             stream! {yield final_var_topics; futures::future::pending::<()>().await; }
                 .boxed_local();
         let (mut r_tick, reconf_stream) = tick_stream(reconf_stream);

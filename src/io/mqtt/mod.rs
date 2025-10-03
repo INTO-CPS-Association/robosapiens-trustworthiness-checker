@@ -11,3 +11,5 @@ pub use locality_receiver::MQTTLocalityReceiver;
 pub mod dist_graph_provider;
 pub mod scheduler_communicator;
 pub use scheduler_communicator::MQTTSchedulerCommunicator;
+
+pub(crate) mod common_input_provider;
