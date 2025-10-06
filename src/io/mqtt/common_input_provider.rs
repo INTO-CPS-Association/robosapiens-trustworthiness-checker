@@ -10,7 +10,8 @@ pub(crate) mod common {
     use unsync::oneshot::Sender as OSSender;
     use unsync::spsc::Sender as SpscSender;
 
-    use crate::io::mqtt::client::provide_mqtt_client_with_subscription;
+    use crate::io::mqtt::MqttClient;
+    use crate::io::mqtt::MqttFactory;
     use crate::stream_utils::channel_to_output_stream;
     use crate::{
         OutputStream, Value,
@@ -29,13 +30,15 @@ pub(crate) mod common {
     pub const CHANNEL_SIZE: usize = 10;
 
     pub struct Base {
+        pub factory: MqttFactory,
         pub var_topics: VarTopicMap,
         pub uri: String,
         pub max_reconnect_attempts: u32,
 
         // Oneshot used to pass the MQTT client and stream from connect() to run()
-        pub client_streams_rx: Option<OSReceiver<(mqtt::AsyncClient, OutputStream<mqtt::Message>)>>,
-        pub client_streams_tx: Option<OSSender<(mqtt::AsyncClient, OutputStream<mqtt::Message>)>>,
+        pub client_streams_rx:
+            Option<OSReceiver<(Box<dyn MqttClient>, OutputStream<mqtt::Message>)>>,
+        pub client_streams_tx: Option<OSSender<(Box<dyn MqttClient>, OutputStream<mqtt::Message>)>>,
 
         pub drop_guard: DropGuard,
         // Mainly used for debugging purposes
@@ -47,6 +50,7 @@ pub(crate) mod common {
 
     impl Base {
         pub fn new(
+            factory: MqttFactory,
             host: &str,
             port: Option<u16>,
             var_topics: VarTopicMap,
@@ -72,6 +76,7 @@ pub(crate) mod common {
             (
                 available_streams,
                 Base {
+                    factory,
                     var_topics,
                     max_reconnect_attempts,
                     started,
@@ -113,12 +118,13 @@ pub(crate) mod common {
 
             // Create and connect to the MQTT client
             info!("Getting client with subscription");
-            let (client, mqtt_stream) =
-                provide_mqtt_client_with_subscription(&self.uri, self.max_reconnect_attempts)
-                    .await?;
+            let (client, mqtt_stream) = self
+                .factory
+                .connect_and_receive(&self.uri, self.max_reconnect_attempts)
+                .await?;
             info!(?self.uri, "InputProvider MQTT client connected to broker");
 
-            let topics = self.var_topics.values().collect::<Vec<_>>();
+            let topics: Vec<String> = self.var_topics.values().cloned().collect();
             let qos = vec![QOS; topics.len()];
             loop {
                 match client.subscribe_many(&topics, &qos).await {
@@ -143,9 +149,9 @@ pub(crate) mod common {
         pub async fn initial_run_logic(
             var_topics: BTreeMap<VarName, String>,
             started: Rc<AsyncCell<bool>>,
-            client_streams_rx: OSReceiver<(mqtt::AsyncClient, OutputStream<paho_mqtt::Message>)>,
+            client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<paho_mqtt::Message>)>,
         ) -> anyhow::Result<(
-            mqtt::AsyncClient,
+            Box<dyn MqttClient>,
             OutputStream<paho_mqtt::Message>,
             InverseVarTopicMap,
         )> {
@@ -251,7 +257,7 @@ pub(crate) mod common {
 
         pub fn take_client_streams_rx(
             &mut self,
-        ) -> OSReceiver<(mqtt::AsyncClient, OutputStream<mqtt::Message>)> {
+        ) -> OSReceiver<(Box<dyn MqttClient>, OutputStream<mqtt::Message>)> {
             std::mem::take(&mut self.client_streams_rx).expect("Client streams rx already taken")
         }
     }

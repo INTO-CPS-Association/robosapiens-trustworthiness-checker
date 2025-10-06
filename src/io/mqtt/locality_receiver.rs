@@ -9,11 +9,11 @@ use paho_mqtt::Message;
 use tracing::{debug, info, warn};
 
 use crate::{
-    VarName, distributed::locality_receiver::LocalityReceiver,
+    VarName,
+    distributed::locality_receiver::LocalityReceiver,
+    io::mqtt::{MqttClient, MqttFactory},
     semantics::distributed::localisation::LocalitySpec,
 };
-
-use super::provide_mqtt_client_with_subscription;
 
 const MQTT_QOS: i32 = 1;
 
@@ -24,7 +24,7 @@ pub struct MQTTLocalityReceiver {
     mqtt_port: Option<u16>,
     ready: Rc<AsyncCell<bool>>,
     message_receiver: Rc<AsyncCell<Option<Receiver<Message>>>>,
-    mqtt_client: Rc<AsyncCell<Option<paho_mqtt::AsyncClient>>>,
+    mqtt_client: Rc<AsyncCell<Option<Box<dyn MqttClient>>>>,
 }
 
 impl MQTTLocalityReceiver {
@@ -93,7 +93,8 @@ impl MQTTLocalityReceiver {
             let (sender, receiver) = async_channel::bounded::<Message>(10);
 
             // Create MQTT connection and establish subscription
-            match provide_mqtt_client_with_subscription(&mqtt_uri, u32::MAX).await {
+            let factory = MqttFactory::Paho; // TODO: make configurable
+            match factory.connect_and_receive(&mqtt_uri, u32::MAX).await {
                 Ok((client, mut stream)) => {
                     debug!("Subscribing to topic: {}", topic);
 
@@ -118,7 +119,7 @@ impl MQTTLocalityReceiver {
                                     }
                                 }
                                 // Clean up connection when done
-                                if let Err(e) = client.disconnect(None).await {
+                                if let Err(e) = client.disconnect().await {
                                     debug!("Failed to disconnect MQTT client: {}", e);
                                 }
                             })
@@ -155,7 +156,7 @@ impl MQTTLocalityReceiver {
         // Disconnect MQTT client if it exists
         if let Some(client) = self.mqtt_client.get().await {
             debug!("Disconnecting MQTT client");
-            if let Err(e) = client.disconnect(None).await {
+            if let Err(e) = client.disconnect().await {
                 debug!("Failed to disconnect MQTT client during cleanup: {}", e);
             }
         }

@@ -6,13 +6,13 @@ mod integration_tests {
     use async_compat::Compat as TokioCompat;
     use futures::{FutureExt, StreamExt};
     use macro_rules_attribute::apply;
-    use paho_mqtt as mqtt;
     use smol::LocalExecutor;
     use tc_testutils::streams::with_timeout_res;
     use tracing::info;
     use trustworthiness_checker::InputProvider;
     use trustworthiness_checker::async_test;
-    use trustworthiness_checker::io::mqtt::client::provide_mqtt_client;
+    use trustworthiness_checker::io::mqtt::MqttFactory;
+    use trustworthiness_checker::io::mqtt::MqttMessage;
     use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
     use winnow::Parser;
 
@@ -37,6 +37,8 @@ mod integration_tests {
         lola_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         lola_specification,
     };
+
+    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
@@ -74,6 +76,7 @@ mod integration_tests {
         let output_handler = Box::new(
             MQTTOutputHandler::new(
                 executor.clone(),
+                MQTT_FACTORY,
                 vec!["z".into()],
                 mqtt_host,
                 Some(mqtt_port),
@@ -131,6 +134,7 @@ mod integration_tests {
         let output_handler = Box::new(
             MQTTOutputHandler::new(
                 executor.clone(),
+                MQTT_FACTORY,
                 vec!["z".into()],
                 mqtt_host,
                 Some(mqtt_port),
@@ -189,6 +193,7 @@ mod integration_tests {
         // Create the MQTT input provider
         let mut input_provider = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             "localhost",
             Some(mqtt_port),
             var_topics,
@@ -293,6 +298,7 @@ mod integration_tests {
         // Create the MQTT input provider
         let mut input_provider = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             "localhost",
             Some(mqtt_port),
             var_topics,
@@ -398,12 +404,13 @@ mod integration_tests {
                 // Receiver is already ready, publish immediately
                 println!("Receiver is ready, publishing message");
 
-                let mqtt_client = provide_mqtt_client(&mqtt_uri)
+                let mqtt_client = MQTT_FACTORY
+                    .connect(&mqtt_uri)
                     .await
                     .expect("Failed to create MQTT client");
                 let topic = "start_monitors_at_test_node".to_string();
                 let message = serde_json::to_string(&vec!["x", "y"]).unwrap();
-                let message = mqtt::Message::new(topic, message, 1);
+                let message = MqttMessage::new(topic, message, 1);
                 mqtt_client.publish(message).await.unwrap();
                 println!("Published message");
             })

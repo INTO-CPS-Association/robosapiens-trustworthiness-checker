@@ -4,15 +4,14 @@ use std::rc::Rc;
 
 use futures::StreamExt;
 use futures::future::{Either, LocalBoxFuture};
-use paho_mqtt::{self as mqtt};
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, instrument, warn};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use crate::utils::cancellation_token::CancellationToken;
 
-use super::client::provide_mqtt_client;
 use crate::core::OutputHandler;
+use crate::io::mqtt::{MqttClient, MqttFactory, MqttMessage};
 // use crate::stream_utils::drop_guard_stream;
 use crate::{OutputStream, Value, core::VarName};
 
@@ -29,6 +28,7 @@ pub struct VarData {
 pub type OutputChannelMap = BTreeMap<VarName, String>;
 
 pub struct MQTTOutputHandler {
+    factory: MqttFactory,
     pub var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     pub hostname: String,
@@ -40,24 +40,24 @@ pub struct MQTTOutputHandler {
 async fn publish_stream(
     topic_name: String,
     mut stream: OutputStream<Value>,
-    client: mqtt::AsyncClient,
+    client: Box<dyn MqttClient>,
 ) {
     while let Some(data) = stream.next().await {
         let json_str = serde_json5::to_string(&data).unwrap();
         // Wrap it in e.g., "{value: 42}" because some MQTT clients don't like to receive the
         // raw JSON primitives such as "42"...
         let data = format!(r#"{{"value": {}}}"#, json_str);
-        let message = mqtt::Message::new(topic_name.clone(), data, 1);
+        let message = MqttMessage::new(topic_name.clone(), data, 1);
         loop {
             debug!(
                 ?message,
-                topic=?message.topic(),
+                topic=?message.topic,
                 "OutputHandler publishing MQTT message"
             );
             match client.publish(message.clone()).await {
                 Ok(_) => break,
                 Err(_e) => {
-                    warn!(topic=?message.topic(), "Lost connection. Attempting reconnect...");
+                    warn!(topic=?message.topic, "Lost connection. Attempting reconnect...");
                     client.reconnect().await.unwrap();
                 }
             }
@@ -104,6 +104,7 @@ impl OutputHandler for MQTTOutputHandler {
         info!(?hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
 
         Box::pin(MQTTOutputHandler::inner_handler(
+            self.factory.clone(),
             hostname,
             port,
             streams,
@@ -113,16 +114,16 @@ impl OutputHandler for MQTTOutputHandler {
 }
 
 impl MQTTOutputHandler {
-    // TODO: should we have dependency injection for the MQTT client?
     #[instrument(level = Level::INFO)]
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
+        factory: MqttFactory,
         var_names: Vec<VarName>,
         host: &str,
         port: Option<u16>,
         var_topics: OutputChannelMap,
         aux_info: Vec<VarName>,
-    ) -> Result<Self, mqtt::Error> {
+    ) -> anyhow::Result<Self> {
         let hostname = host.to_string();
 
         let var_map = var_topics
@@ -140,6 +141,7 @@ impl MQTTOutputHandler {
             .collect();
 
         Ok(MQTTOutputHandler {
+            factory,
             var_names,
             var_map,
             hostname,
@@ -149,6 +151,7 @@ impl MQTTOutputHandler {
     }
 
     async fn inner_handler(
+        factory: MqttFactory,
         host: String,
         port: Option<u16>,
         streams: Vec<(VarName, String, OutputStream<Value>)>,
@@ -159,7 +162,7 @@ impl MQTTOutputHandler {
             Some(port) => format!("tcp://{}:{}", host, port),
             None => format!("tcp://{}", host),
         };
-        let client = provide_mqtt_client(&uri).await?;
+        let client = factory.connect(&uri).await?;
         debug!("Client created");
 
         futures::future::join_all(

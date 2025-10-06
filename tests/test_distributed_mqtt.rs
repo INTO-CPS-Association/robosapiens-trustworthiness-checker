@@ -12,6 +12,7 @@ mod integration_tests {
     use tracing::info;
     use trustworthiness_checker::core::Runnable;
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
+    use trustworthiness_checker::io::mqtt::MqttFactory;
     use trustworthiness_checker::lola_fixtures::*;
     use trustworthiness_checker::{Specification, Value};
     use winnow::Parser;
@@ -27,6 +28,8 @@ mod integration_tests {
         lola_specification,
         semantics::distributed::localisation::Localisable,
     };
+
+    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
     #[apply(async_test)]
     async fn manually_decomposed_monitor_test(executor: Rc<LocalExecutor<'static>>) {
@@ -60,6 +63,7 @@ mod integration_tests {
         let mqtt_host = "localhost";
         let mut input_provider_1 = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
             var_in_topics_1.iter().cloned().collect(),
@@ -71,6 +75,7 @@ mod integration_tests {
 
         let output_handler_1 = MQTTOutputHandler::new(
             executor.clone(),
+            MQTT_FACTORY,
             vec!["w".into()],
             mqtt_host,
             Some(mqtt_port),
@@ -81,6 +86,7 @@ mod integration_tests {
 
         let mut input_provider_2 = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
             var_in_topics_2.iter().cloned().collect(),
@@ -92,6 +98,7 @@ mod integration_tests {
 
         let output_handler_2 = MQTTOutputHandler::new(
             executor.clone(),
+            MQTT_FACTORY,
             vec!["v".into()],
             mqtt_host,
             Some(mqtt_port),
@@ -194,6 +201,7 @@ mod integration_tests {
 
         let mut input_provider_1 = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
             local_spec1
@@ -210,6 +218,7 @@ mod integration_tests {
 
         let mut input_provider_2 = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
             local_spec2
@@ -236,6 +245,7 @@ mod integration_tests {
             .collect();
         let output_handler_1 = MQTTOutputHandler::new(
             executor.clone(),
+            MQTT_FACTORY,
             vec!["w".into()],
             mqtt_host,
             Some(mqtt_port),
@@ -250,6 +260,7 @@ mod integration_tests {
             .collect();
         let output_handler_2 = MQTTOutputHandler::new(
             executor.clone(),
+            MQTT_FACTORY,
             vec!["v".into()],
             mqtt_host,
             Some(mqtt_port),
@@ -351,6 +362,7 @@ mod integration_tests {
 
         let mut input_provider_1 = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
             local_spec1
@@ -367,6 +379,7 @@ mod integration_tests {
 
         let mut input_provider_2 = MQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
             local_spec2
@@ -393,6 +406,7 @@ mod integration_tests {
             .collect();
         let output_handler_1 = MQTTOutputHandler::new(
             executor.clone(),
+            MQTT_FACTORY,
             vec!["w".into()],
             mqtt_host,
             Some(mqtt_port),
@@ -407,6 +421,7 @@ mod integration_tests {
             .collect();
         let output_handler_2 = MQTTOutputHandler::new(
             executor.clone(),
+            MQTT_FACTORY,
             vec!["v".into()],
             mqtt_host,
             Some(mqtt_port),

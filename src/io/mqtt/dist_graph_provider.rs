@@ -13,9 +13,9 @@ use crate::{
     distributed::distribution_graphs::{
         DistributionGraph, NodeName, Pos, dist_graph_from_positions,
     },
+    io::mqtt::MqttFactory,
 };
 
-use super::client::provide_mqtt_client_with_subscription;
 use async_stream::stream;
 use async_unsync::bounded;
 use futures::future::join_all;
@@ -122,8 +122,9 @@ impl MQTTDistGraphProvider {
                 let _ = span.enter();
                 debug!("MQTTDistGraphProvider with ID {}", provider_id);
 
+                let factory = MqttFactory::Paho; // TODO: make configurable
                 let (client, mut output) =
-                    provide_mqtt_client_with_subscription(&"localhost", u32::MAX)
+                factory.connect_and_receive(&"localhost", u32::MAX)
                         .await
                         .unwrap();
 

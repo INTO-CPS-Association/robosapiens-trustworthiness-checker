@@ -2,7 +2,6 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use async_cell::unsync::AsyncCell;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
-use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use tracing::{Level, debug, info_span, instrument, warn};
 
@@ -10,7 +9,10 @@ use unsync::oneshot::Receiver as OSReceiver;
 use unsync::spsc::Sender as SpscSender;
 
 use crate::{
-    InputProvider, OutputStream, Value, core::VarName, utils::cancellation_token::CancellationToken,
+    InputProvider, OutputStream, Value,
+    core::VarName,
+    io::mqtt::{MqttClient, MqttFactory},
+    utils::cancellation_token::CancellationToken,
 };
 
 use super::common_input_provider::common;
@@ -26,13 +28,14 @@ impl MQTTInputProvider {
     #[instrument(level = Level::INFO, skip(var_topics))]
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
+        factory: MqttFactory,
         host: &str,
         port: Option<u16>,
         var_topics: common::VarTopicMap,
         max_reconnect_attempts: u32,
     ) -> Self {
         let (available_streams, base) =
-            common::Base::new(host, port, var_topics, max_reconnect_attempts);
+            common::Base::new(factory, host, port, var_topics, max_reconnect_attempts);
 
         Self {
             base,
@@ -49,7 +52,7 @@ impl MQTTInputProvider {
         mut senders: BTreeMap<VarName, SpscSender<Value>>,
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
-        client_streams_rx: OSReceiver<(mqtt::AsyncClient, OutputStream<paho_mqtt::Message>)>,
+        client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<paho_mqtt::Message>)>,
     ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("MQTTInputProvider run_logic");
         let _enter = mqtt_input_span.enter();
@@ -81,7 +84,7 @@ impl MQTTInputProvider {
 
         // Always disconnect the client when we're done, regardless of success or error
         debug!("Disconnecting MQTT client");
-        let _ = client.disconnect(None).await;
+        let _ = client.disconnect().await;
 
         result
     }

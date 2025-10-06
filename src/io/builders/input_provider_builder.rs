@@ -4,6 +4,7 @@ use smol::LocalExecutor;
 use tracing::debug_span;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
+use crate::io::mqtt::MqttFactory;
 use crate::{self as tc, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
 
@@ -18,7 +19,7 @@ pub enum InputProviderSpec {
     ),
     /// MQTT topics input provider
     MQTT(
-        /// Topics
+        /// Topics and whether
         Option<Vec<String>>,
     ),
     /// Redis topics input provider
@@ -137,8 +138,10 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
+                let factory = MqttFactory::Paho; // TODO: make configurable
                 let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
                     self.executor.unwrap().clone(),
+                    factory,
                     MQTT_HOSTNAME,
                     self.mqtt_port,
                     var_topics,

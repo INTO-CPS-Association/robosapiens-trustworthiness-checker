@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use paho_mqtt::{self as mqtt};
 use tracing::debug;
 
 use crate::{
@@ -7,9 +6,10 @@ use crate::{
     distributed::{
         distribution_graphs::NodeName, scheduling::communication::SchedulerCommunicator,
     },
+    io::mqtt::{MqttFactory, MqttMessage},
 };
 
-use super::provide_mqtt_client;
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
 
 pub struct MQTTSchedulerCommunicator {
     mqtt_uri: String,
@@ -28,11 +28,11 @@ impl SchedulerCommunicator for MQTTSchedulerCommunicator {
         node: NodeName,
         work: Vec<VarName>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mqtt_client = provide_mqtt_client(&self.mqtt_uri).await?;
+        let mqtt_client = MQTT_FACTORY.connect(&self.mqtt_uri).await?;
         let work_msg = serde_json::to_string(&work)?;
         let work_topic = format!("start_monitors_at_{}", node);
         debug!("Scheduler sending work on topic {:?}", work_topic);
-        let work_msg = mqtt::Message::new(work_topic, work_msg, 2);
+        let work_msg = MqttMessage::new(work_topic.clone(), work_msg, 2);
         mqtt_client.publish(work_msg).await?;
 
         Ok(())

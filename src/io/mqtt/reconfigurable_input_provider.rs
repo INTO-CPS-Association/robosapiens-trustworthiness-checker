@@ -2,14 +2,16 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use async_cell::unsync::AsyncCell;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
-use paho_mqtt as mqtt;
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, info_span, instrument, warn};
 use unsync::oneshot::Receiver as OSReceiver;
 use unsync::spsc::Sender as SpscSender;
 
 use crate::{
-    InputProvider, OutputStream, Value, core::VarName, utils::cancellation_token::CancellationToken,
+    InputProvider, OutputStream, Value,
+    core::VarName,
+    io::mqtt::{MqttClient, MqttFactory},
+    utils::cancellation_token::CancellationToken,
 };
 
 use super::common_input_provider::common;
@@ -28,6 +30,7 @@ impl ReconfMQTTInputProvider {
     #[instrument(level = Level::INFO, skip(var_topics, reconfig))]
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
+        factory: MqttFactory,
         host: &str,
         port: Option<u16>,
         var_topics: common::VarTopicMap,
@@ -35,7 +38,7 @@ impl ReconfMQTTInputProvider {
         reconfig: OutputStream<common::VarTopicMap>,
     ) -> Self {
         let (available_streams, base) =
-            common::Base::new(host, port, var_topics, max_reconnect_attempts);
+            common::Base::new(factory, host, port, var_topics, max_reconnect_attempts);
 
         let available_streams = Rc::new(RefCell::new(available_streams));
         let reconfig = Some(reconfig);
@@ -66,7 +69,7 @@ impl ReconfMQTTInputProvider {
     /// Handle reconfiguration by updating MQTT subscriptions, `available_streams`, and returning
     /// new senders.
     async fn handle_reconfiguration(
-        client: &mqtt::AsyncClient,
+        client: &Box<dyn MqttClient>,
         new_var_topics: common::VarTopicMap,
         var_topics_inverse: common::InverseVarTopicMap,
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
@@ -135,7 +138,7 @@ impl ReconfMQTTInputProvider {
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
-        client_streams_rx: OSReceiver<(mqtt::AsyncClient, OutputStream<paho_mqtt::Message>)>,
+        client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<paho_mqtt::Message>)>,
         mut reconfig: OutputStream<common::VarTopicMap>,
     ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("ReconfMQTTInputProvider run_logic");
@@ -187,7 +190,7 @@ impl ReconfMQTTInputProvider {
 
         // Always disconnect the client when we're done, regardless of success or error
         debug!("Disconnecting MQTT client");
-        let _ = client.disconnect(None).await;
+        let _ = client.disconnect().await;
 
         result
     }
@@ -227,7 +230,6 @@ impl InputProvider for ReconfMQTTInputProvider {
 #[cfg(test)]
 #[cfg(feature = "testcontainers")]
 mod container_tests {
-
     use async_compat::Compat as TokioCompat;
     use async_stream::stream;
     use futures::StreamExt;
@@ -241,11 +243,13 @@ mod container_tests {
     use crate::InputProvider;
     use crate::OutputStream;
     use crate::async_test;
-    use crate::io::mqtt::ReconfMQTTInputProvider;
+    use crate::io::mqtt::{MqttFactory, ReconfMQTTInputProvider};
     use crate::{Value, VarName};
     use tc_testutils::mqtt::{dummy_mqtt_publisher, dummy_stream_mqtt_publisher, start_mqtt};
     use tc_testutils::streams::with_timeout_res;
     use tc_testutils::streams::{tick_stream, with_timeout};
+
+    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
     #[apply(async_test)]
     async fn test_reconf_mqtt_no_reconf(
@@ -275,6 +279,7 @@ mod container_tests {
         // Create the MQTT input provider
         let mut input_provider = ReconfMQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             "localhost",
             Some(mqtt_port),
             var_topics,
@@ -373,6 +378,7 @@ mod container_tests {
         // Create the MQTT input provider
         let mut input_provider = ReconfMQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             "localhost",
             Some(mqtt_port),
             wrong_var_topics,
@@ -479,6 +485,7 @@ mod container_tests {
         // Create the MQTT input provider
         let mut input_provider = ReconfMQTTInputProvider::new(
             executor.clone(),
+            MQTT_FACTORY,
             "localhost",
             Some(mqtt_port),
             initial_var_topics,

@@ -5,7 +5,7 @@ use smol::LocalExecutor;
 use crate::cli::args::OutputMode;
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::cli::StdoutOutputHandler;
-use crate::io::mqtt::MQTTOutputHandler;
+use crate::io::mqtt::{MQTTOutputHandler, MqttFactory};
 use crate::io::redis::RedisOutputHandler;
 use crate::{self as tc, Value};
 use crate::{VarName, core::OutputHandler};
@@ -19,6 +19,8 @@ pub struct OutputHandlerBuilder {
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
 }
+
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
 
 impl OutputHandlerBuilder {
     pub fn new(output_mode: OutputMode) -> Self {
@@ -89,6 +91,7 @@ impl OutputHandlerBuilder {
                 Box::new(
                     MQTTOutputHandler::new(
                         executor.clone(),
+                        MQTT_FACTORY,
                         output_var_names,
                         MQTT_HOSTNAME,
                         self.mqtt_port,
@@ -150,6 +153,7 @@ impl OutputHandlerBuilder {
                 Box::new(
                     MQTTOutputHandler::new(
                         executor,
+                        MQTT_FACTORY,
                         output_var_names,
                         MQTT_HOSTNAME,
                         self.mqtt_port,

@@ -4,7 +4,6 @@ mod integration_tests {
 
     use async_compat::Compat as TokioCompat;
     use macro_rules_attribute::apply;
-    use paho_mqtt as mqtt;
     use smol::{LocalExecutor, Timer};
     use std::rc::Rc;
     use std::time::Duration;
@@ -14,7 +13,7 @@ mod integration_tests {
         LOLASpecification, Value, async_test,
         core::{AbstractMonitorBuilder, Runnable, Runtime, Semantics},
         distributed::locality_receiver::LocalityReceiver,
-        io::mqtt::{MQTTLocalityReceiver, provide_mqtt_client},
+        io::mqtt::{MQTTLocalityReceiver, MqttFactory, MqttMessage},
         lang::dynamic_lola::parser::CombExprParser,
         runtime::{
             RuntimeBuilder, asynchronous::Context, builder::DistributionMode,
@@ -22,6 +21,8 @@ mod integration_tests {
         },
         semantics::{UntimedLolaSemantics, distributed::localisation::LocalitySpec},
     };
+
+    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
 
     /// Test that verifies the fix for reconfigurable runtime with distributed work.
     ///
@@ -64,7 +65,8 @@ mod integration_tests {
         info!("Receiver is ready");
 
         // Step 3: Send a work assignment message
-        let mqtt_client = provide_mqtt_client(&mqtt_uri)
+        let mqtt_client = MQTT_FACTORY
+            .connect(&mqtt_uri)
             .await
             .expect("Failed to create MQTT client");
 
@@ -74,7 +76,7 @@ mod integration_tests {
         let topic = format!("start_monitors_at_{}", local_node);
 
         info!("Publishing work assignment to topic: {}", topic);
-        let message = mqtt::Message::new(topic.clone(), work_msg, 2);
+        let message = MqttMessage::new(topic.clone(), work_msg, 2);
 
         // Spawn the publish task
         let executor_clone = ex.clone();
@@ -139,13 +141,14 @@ mod integration_tests {
         info!("Testing second receive to verify receiver is still functional");
 
         // Send another work assignment
-        let mqtt_client2 = provide_mqtt_client(&mqtt_uri)
+        let mqtt_client2 = MQTT_FACTORY
+            .connect(&mqtt_uri)
             .await
             .expect("Failed to create second MQTT client");
 
         let work_assignment2 = vec!["a".to_string(), "b".to_string()];
         let work_msg2 = serde_json::to_string(&work_assignment2).unwrap();
-        let message2 = mqtt::Message::new(topic, work_msg2, 2);
+        let message2 = MqttMessage::new(topic, work_msg2, 2);
 
         let executor_clone2 = ex.clone();
         executor_clone2
@@ -209,14 +212,15 @@ mod integration_tests {
         receiver.ready().await.expect("ready() failed");
 
         // Send work assignment
-        let mqtt_client = provide_mqtt_client(&mqtt_uri)
+        let mqtt_client = MQTT_FACTORY
+            .connect(&mqtt_uri)
             .await
             .expect("Failed to create MQTT client");
 
         let work = vec!["input_x".to_string(), "output_y".to_string()];
         let msg = serde_json::to_string(&work).unwrap();
         let topic = format!("start_monitors_at_{}", local_node);
-        let message = mqtt::Message::new(topic, msg, 2);
+        let message = MqttMessage::new(topic, msg, 2);
 
         ex.spawn(async move {
             Timer::after(Duration::from_millis(100)).await;

@@ -4,7 +4,6 @@ use crate::testcontainers::ContainerAsync;
 use async_compat::Compat as TokioCompat;
 use futures::StreamExt;
 use futures_timeout::TimeoutExt;
-use paho_mqtt as mqtt;
 use serde::ser::Serialize;
 use testcontainers_modules::{
     mosquitto::{self, Mosquitto},
@@ -13,8 +12,10 @@ use testcontainers_modules::{
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::{
     OutputStream, Value,
-    io::mqtt::{provide_mqtt_client, provide_mqtt_client_with_subscription},
+    io::mqtt::{MqttFactory, MqttMessage},
 };
+
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
 
 #[instrument(level = tracing::Level::INFO)]
 pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
@@ -36,18 +37,15 @@ pub async fn get_mqtt_outputs(
     port: u16,
 ) -> OutputStream<Value> {
     // Create a new client
-    let (mqtt_client, stream) =
-        provide_mqtt_client_with_subscription(&format!("tcp://localhost:{}", port), 0)
-            .await
-            .expect("Failed to create MQTT client");
-    info!(
-        "Received client for Z with client_id: {:?}",
-        mqtt_client.client_id()
-    );
+    let (mqtt_client, stream) = MQTT_FACTORY
+        .connect_and_receive(&format!("tcp://localhost:{}", port), 0)
+        .await
+        .expect("Failed to create MQTT client");
+    info!("Received client for Z",);
 
     // Try to get the messages
     //let mut stream = mqtt_client.clone().get_stream(10);
-    mqtt_client.subscribe(topic, 1).await.unwrap();
+    mqtt_client.subscribe(&topic, 1).await.unwrap();
     info!("Subscribed to Z outputs");
     return Box::pin(stream.map(|msg| {
         let binding = msg;
@@ -113,7 +111,8 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
         client_name, topic, values_len
     );
 
-    let mqtt_client = provide_mqtt_client(&format!("tcp://localhost:{}", port))
+    let mqtt_client = MQTT_FACTORY
+        .connect(&format!("tcp://localhost:{}", port))
         .await
         .expect("Failed to create MQTT client");
 
@@ -122,7 +121,7 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
         let output_str = serde_json::to_string(&value)
             .unwrap_or_else(|e| panic!("Failed to serialize value {:?}: {:?}", value, e));
 
-        let message = mqtt::Message::new(topic.to_string(), output_str.clone(), 1);
+        let message = MqttMessage::new(topic.to_string(), output_str.clone(), 1);
 
         info!(
             "Publishing message {}/{} on topic {}: {}",
@@ -156,7 +155,7 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
         values_len, topic
     );
 
-    if let Err(e) = mqtt_client.disconnect(None).await {
+    if let Err(e) = mqtt_client.disconnect().await {
         debug!("Failed to disconnect MQTT client {}: {:?}", client_name, e);
     } else {
         debug!("Successfully disconnected MQTT client {}", client_name);
