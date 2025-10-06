@@ -91,79 +91,81 @@ pub async fn provide_mqtt_client_with_subscription(
     uri: String,
     max_reconnect_attempts: u32,
 ) -> Result<(mqtt::AsyncClient, BoxStream<'static, Message>), mqtt::Error> {
-    let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-        .server_uri(uri.clone())
-        .client_id(format!(
-            "robosapiens_trustworthiness_checker_{}",
-            Uuid::new_v4()
-        ))
-        .finalize();
-
-    let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
-        .keep_alive_interval(Duration::from_secs(30))
-        .clean_session(true)
-        .finalize();
-
-    let mqtt_client = match mqtt::AsyncClient::new(create_opts) {
-        Ok(client) => client,
-        Err(e) => {
-            return Err(e);
-        }
-    };
-
-    debug!(
-        ?uri,
-        client_id = mqtt_client.client_id(),
-        "Created MQTT client"
-    );
-
+    let (mqtt_client, opts) = new_client(&uri)?;
     let stream = message_stream(mqtt_client.clone(), max_reconnect_attempts);
     debug!(
         ?uri,
         client_id = mqtt_client.client_id(),
         "Started consuming MQTT messages",
     );
-
-    // Try to connect to the broker
-    mqtt_client
-        .clone()
-        .connect(connect_opts)
-        .await
-        .map(|_| (mqtt_client, stream))
+    let client = connect_impl(mqtt_client, opts).await?;
+    Ok((client, stream))
 }
 
 pub async fn provide_mqtt_client(uri: String) -> Result<mqtt::AsyncClient, mqtt::Error> {
+    let (mqtt_client, opts) = new_client(&uri)?;
+    connect_impl(mqtt_client, opts).await
+}
+
+fn new_client(uri: &String) -> Result<(mqtt::AsyncClient, mqtt::ConnectOptions), mqtt::Error> {
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-        .server_uri(uri.clone())
+        .server_uri(uri)
         .client_id(format!(
             "robosapiens_trustworthiness_checker_{}",
             Uuid::new_v4()
         ))
         .finalize();
 
-    let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
+    let opts = mqtt::ConnectOptionsBuilder::new_v3()
         .keep_alive_interval(Duration::from_secs(30))
         .clean_session(true)
         .finalize();
 
-    let mqtt_client = match mqtt::AsyncClient::new(create_opts) {
-        Ok(client) => client,
-        Err(e) => {
-            // (we don't care if the requester has gone away)
-            return Err(e);
-        }
-    };
+    // Error means requester has gone away - we don't care in that case
+    let (client, opts) = mqtt::AsyncClient::new(create_opts).map(|client| (client, opts))?;
+    debug!(?uri, client_id = client.client_id(), "Created MQTT client",);
 
-    debug!(
-        ?uri,
-        client_id = mqtt_client.client_id(),
-        "Created MQTT client",
-    );
-
-    // Try to connect to the broker
-    mqtt_client
-        .clone()
-        .connect(connect_opts)
-        .await
-        .map(|_| mqtt_client)
+    Ok((client, opts))
 }
+
+async fn connect_impl(
+    mqtt_client: mqtt::AsyncClient,
+    opts: mqtt::ConnectOptions,
+) -> Result<mqtt::AsyncClient, mqtt::Error> {
+    // Try to connect to the broker
+    mqtt_client.connect(opts).await.map(|_| mqtt_client)
+}
+
+// FnMut(mqtt::AsyncClient, u32) -> BoxStream<'static, Message>>
+
+// use async_trait::async_trait;
+// use futures::stream::BoxStream;
+//
+// #[async_trait]
+// pub trait MqttClient: Send + Sync + Clone + 'static {
+//     async fn connect(&self) -> Result<(), mqtt::Error>;
+//     async fn reconnect(&self) -> Result<(), mqtt::Error>;
+//     fn get_stream(&self, capacity: usize) -> BoxStream<'static, Option<mqtt::Message>>;
+// }
+//
+// use futures::StreamExt;
+// use paho_mqtt as mqtt;
+//
+// #[async_trait::async_trait]
+// impl MqttClient for mqtt::AsyncClient {
+//     async fn connect(&self) -> Result<(), mqtt::Error> {
+//         let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
+//             .keep_alive_interval(std::time::Duration::from_secs(30))
+//             .clean_session(true)
+//             .finalize();
+//         self.connect(connect_opts).await.map(|_| ())
+//     }
+//
+//     async fn reconnect(&self) -> Result<(), mqtt::Error> {
+//         self.reconnect().await.map(|_| ())
+//     }
+//
+//     fn get_stream(&self, capacity: usize) -> BoxStream<'static, Option<mqtt::Message>> {
+//         Box::pin(self.get_stream(capacity))
+//     }
+// }
