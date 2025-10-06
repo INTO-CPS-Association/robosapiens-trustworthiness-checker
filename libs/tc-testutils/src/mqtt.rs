@@ -37,7 +37,7 @@ pub async fn get_mqtt_outputs(
 ) -> OutputStream<Value> {
     // Create a new client
     let (mqtt_client, stream) =
-        provide_mqtt_client_with_subscription(format!("tcp://localhost:{}", port), 0)
+        provide_mqtt_client_with_subscription(&format!("tcp://localhost:{}", port), 0)
             .await
             .expect("Failed to create MQTT client");
     info!(
@@ -113,7 +113,7 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
         client_name, topic, values_len
     );
 
-    let mqtt_client = provide_mqtt_client(format!("tcp://localhost:{}", port))
+    let mqtt_client = provide_mqtt_client(&format!("tcp://localhost:{}", port))
         .await
         .expect("Failed to create MQTT client");
 

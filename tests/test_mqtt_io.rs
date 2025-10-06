@@ -398,7 +398,7 @@ mod integration_tests {
                 // Receiver is already ready, publish immediately
                 println!("Receiver is ready, publishing message");
 
-                let mqtt_client = provide_mqtt_client(mqtt_uri)
+                let mqtt_client = provide_mqtt_client(&mqtt_uri)
                     .await
                     .expect("Failed to create MQTT client");
                 let topic = "start_monitors_at_test_node".to_string();

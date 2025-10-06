@@ -123,7 +123,7 @@ impl MQTTDistGraphProvider {
                 debug!("MQTTDistGraphProvider with ID {}", provider_id);
 
                 let (client, mut output) =
-                    provide_mqtt_client_with_subscription("localhost".to_string(), u32::MAX)
+                    provide_mqtt_client_with_subscription(&"localhost", u32::MAX)
                         .await
                         .unwrap();
 

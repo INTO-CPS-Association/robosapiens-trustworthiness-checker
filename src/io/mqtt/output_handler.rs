@@ -159,7 +159,7 @@ impl MQTTOutputHandler {
             Some(port) => format!("tcp://{}:{}", host, port),
             None => format!("tcp://{}", host),
         };
-        let client = provide_mqtt_client(uri).await?;
+        let client = provide_mqtt_client(&uri).await?;
         debug!("Client created");
 
         futures::future::join_all(

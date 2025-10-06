@@ -28,7 +28,7 @@ impl SchedulerCommunicator for MQTTSchedulerCommunicator {
         node: NodeName,
         work: Vec<VarName>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mqtt_client = provide_mqtt_client(self.mqtt_uri.clone()).await?;
+        let mqtt_client = provide_mqtt_client(&self.mqtt_uri).await?;
         let work_msg = serde_json::to_string(&work)?;
         let work_topic = format!("start_monitors_at_{}", node);
         debug!("Scheduler sending work on topic {:?}", work_topic);

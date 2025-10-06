@@ -88,10 +88,10 @@ fn message_stream(
 }
 
 pub async fn provide_mqtt_client_with_subscription(
-    uri: String,
+    uri: &str,
     max_reconnect_attempts: u32,
 ) -> Result<(mqtt::AsyncClient, BoxStream<'static, Message>), mqtt::Error> {
-    let (mqtt_client, opts) = new_client(&uri)?;
+    let (mqtt_client, opts) = new_client(uri)?;
     let stream = message_stream(mqtt_client.clone(), max_reconnect_attempts);
     debug!(
         ?uri,
@@ -102,12 +102,12 @@ pub async fn provide_mqtt_client_with_subscription(
     Ok((client, stream))
 }
 
-pub async fn provide_mqtt_client(uri: String) -> Result<mqtt::AsyncClient, mqtt::Error> {
-    let (mqtt_client, opts) = new_client(&uri)?;
+pub async fn provide_mqtt_client(uri: &str) -> Result<mqtt::AsyncClient, mqtt::Error> {
+    let (mqtt_client, opts) = new_client(uri)?;
     connect_impl(mqtt_client, opts).await
 }
 
-fn new_client(uri: &String) -> Result<(mqtt::AsyncClient, mqtt::ConnectOptions), mqtt::Error> {
+fn new_client(uri: &str) -> Result<(mqtt::AsyncClient, mqtt::ConnectOptions), mqtt::Error> {
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
         .server_uri(uri)
         .client_id(format!(

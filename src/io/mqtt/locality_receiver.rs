@@ -93,7 +93,7 @@ impl MQTTLocalityReceiver {
             let (sender, receiver) = async_channel::bounded::<Message>(10);
 
             // Create MQTT connection and establish subscription
-            match provide_mqtt_client_with_subscription(mqtt_uri, u32::MAX).await {
+            match provide_mqtt_client_with_subscription(&mqtt_uri, u32::MAX).await {
                 Ok((client, mut stream)) => {
                     debug!("Subscribing to topic: {}", topic);
 

@@ -64,7 +64,7 @@ mod integration_tests {
         info!("Receiver is ready");
 
         // Step 3: Send a work assignment message
-        let mqtt_client = provide_mqtt_client(mqtt_uri.clone())
+        let mqtt_client = provide_mqtt_client(&mqtt_uri)
             .await
             .expect("Failed to create MQTT client");
 
@@ -139,7 +139,7 @@ mod integration_tests {
         info!("Testing second receive to verify receiver is still functional");
 
         // Send another work assignment
-        let mqtt_client2 = provide_mqtt_client(mqtt_uri.clone())
+        let mqtt_client2 = provide_mqtt_client(&mqtt_uri)
             .await
             .expect("Failed to create second MQTT client");
 
@@ -209,7 +209,7 @@ mod integration_tests {
         receiver.ready().await.expect("ready() failed");
 
         // Send work assignment
-        let mqtt_client = provide_mqtt_client(mqtt_uri.clone())
+        let mqtt_client = provide_mqtt_client(&mqtt_uri)
             .await
             .expect("Failed to create MQTT client");
 

@@ -113,11 +113,9 @@ pub(crate) mod common {
 
             // Create and connect to the MQTT client
             info!("Getting client with subscription");
-            let (client, mqtt_stream) = provide_mqtt_client_with_subscription(
-                self.uri.clone(),
-                self.max_reconnect_attempts,
-            )
-            .await?;
+            let (client, mqtt_stream) =
+                provide_mqtt_client_with_subscription(&self.uri, self.max_reconnect_attempts)
+                    .await?;
             info!(?self.uri, "InputProvider MQTT client connected to broker");
 
             let topics = self.var_topics.values().collect::<Vec<_>>();
