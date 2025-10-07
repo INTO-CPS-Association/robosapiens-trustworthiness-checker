@@ -15,6 +15,7 @@ use crate::{
 };
 
 const MQTT_QOS: i32 = 1;
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 #[derive(Clone)]
 pub struct MQTTLocalityReceiver {
@@ -92,8 +93,7 @@ impl MQTTLocalityReceiver {
             let (sender, receiver) = async_channel::bounded::<MqttMessage>(10);
 
             // Create MQTT connection and establish subscription
-            let factory = MqttFactory::Paho; // TODO: make configurable
-            match factory.connect_and_receive(&mqtt_uri, u32::MAX).await {
+            match MQTT_FACTORY.connect_and_receive(&mqtt_uri, u32::MAX).await {
                 Ok((client, mut stream)) => {
                     debug!("Subscribing to topic: {}", topic);
 

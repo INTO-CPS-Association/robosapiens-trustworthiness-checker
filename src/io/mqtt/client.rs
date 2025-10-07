@@ -1,11 +1,10 @@
-use std::time::Duration;
-
 use anyhow::anyhow;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, stream::BoxStream};
 use paho_mqtt::{self as mqtt};
 use std::fmt::Debug;
+use std::time::Duration;
 use tracing::{Level, debug, info, instrument, warn};
 use uuid::Uuid;
 
@@ -16,7 +15,6 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub enum MqttFactory {
     Paho,
-    // TODO: Impl Mock
     Mock,
 }
 
@@ -25,8 +23,7 @@ impl MqttFactory {
     pub async fn connect(&self, uri: &str) -> anyhow::Result<Box<dyn MqttClient>> {
         match self {
             MqttFactory::Paho => paho::connect(uri).await,
-            // TODO: Impl Mock
-            MqttFactory::Mock => paho::connect(uri).await,
+            MqttFactory::Mock => mock::connect(uri).await,
         }
     }
 
@@ -39,8 +36,7 @@ impl MqttFactory {
     ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
         match self {
             MqttFactory::Paho => paho::connect_and_receive(uri, max_reconnect_attempts).await,
-            // TODO: Impl Mock
-            MqttFactory::Mock => paho::connect_and_receive(uri, max_reconnect_attempts).await,
+            MqttFactory::Mock => mock::connect_and_receive(uri, max_reconnect_attempts).await,
         }
     }
 }
@@ -90,6 +86,60 @@ impl MqttMessage {
 
 pub struct PahoClient {
     client: mqtt::AsyncClient,
+}
+
+#[async_trait]
+impl MqttClient for PahoClient {
+    async fn publish(&self, message: MqttMessage) -> anyhow::Result<()> {
+        self.client
+            .publish(mqtt::Message::new(
+                message.topic,
+                message.payload,
+                message.qos,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    async fn reconnect(&self) -> anyhow::Result<()> {
+        match self.client.reconnect().await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("{}", e)),
+        }
+    }
+
+    async fn disconnect(&self) -> anyhow::Result<()> {
+        match self.client.disconnect(None).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("{}", e)),
+        }
+    }
+
+    async fn subscribe(&self, topic: &String, qos: i32) -> anyhow::Result<()> {
+        match self.client.subscribe(topic, qos).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("{}", e)),
+        }
+    }
+    async fn subscribe_many(&self, topics: &Vec<String>, qos: &[i32]) -> anyhow::Result<()> {
+        match self.client.subscribe_many(topics, qos).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("{}", e)),
+        }
+    }
+
+    async fn unsubscribe_many(&self, topics: &Vec<String>) -> anyhow::Result<()> {
+        match self.client.unsubscribe_many(topics).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("{}", e)),
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn MqttClient> {
+        Box::new(PahoClient {
+            client: self.client.clone(),
+        })
+    }
 }
 
 mod paho {
@@ -225,56 +275,220 @@ mod paho {
     }
 }
 
+mod mock {
+    use super::*;
+    use async_stream::stream;
+    use futures::{SinkExt, channel::mpsc, lock::Mutex};
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, OnceLock},
+    };
+
+    use crate::io::mqtt::{MqttClient, MqttMessage, client::MockClient};
+
+    /// Mock broker instance
+    #[derive(Default)]
+    pub struct MockBroker {
+        /// Map of uri -> client_id -> map of senders that forward (data, subscribed topics, unsubscribed topics)
+        clients: BTreeMap<
+            String,
+            BTreeMap<
+                u32,
+                (
+                    mpsc::Sender<MqttMessage>,
+                    mpsc::Sender<String>,
+                    mpsc::Sender<String>,
+                ),
+            >,
+        >,
+        client_id_counter: u32,
+    }
+
+    pub type SharedBroker = Arc<Mutex<MockBroker>>;
+
+    impl MockBroker {
+        pub async fn insert(&mut self, uri: String, msg: MqttMessage) -> anyhow::Result<()> {
+            let data_map = self.clients.entry(uri).or_insert(BTreeMap::new());
+
+            // Drain the map to take ownership of the senders
+            let old_data = std::mem::take(data_map);
+            let mut new_data = BTreeMap::new();
+
+            for (id, (mut data_tx, sub_tx, unsub_tx)) in old_data {
+                if data_tx.send(msg.clone()).await.is_ok() {
+                    // Keep only alive channels
+                    new_data.insert(id, (data_tx, sub_tx, unsub_tx));
+                } else {
+                    debug!("Dropping closed client in MockBroker with id {}", id);
+                }
+            }
+            *data_map = new_data;
+
+            Ok(())
+        }
+
+        pub(crate) async fn connect(&mut self, uri: &str) -> anyhow::Result<Box<dyn MqttClient>> {
+            let id = self.client_id_counter;
+            self.client_id_counter += 1;
+            Ok(Box::new(MockClient {
+                uri: uri.to_string(),
+                id,
+            }) as Box<dyn MqttClient>)
+        }
+
+        pub(crate) async fn connect_and_receive(
+            &mut self,
+            uri: &str,
+            _max_reconnect_attempts: u32,
+        ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
+            let id = self.client_id_counter;
+            self.client_id_counter += 1;
+            let client = Box::new(MockClient {
+                uri: uri.to_string(),
+                id,
+            }) as Box<dyn MqttClient>;
+            let (sub_tx, sub_rx) = mpsc::channel(512);
+            let (unsub_tx, unsub_rx) = mpsc::channel(512);
+            let (data_tx, data_rx) = mpsc::channel::<MqttMessage>(512);
+            let res = self
+                .clients
+                .entry(uri.to_string())
+                .or_insert(BTreeMap::new())
+                .insert(id, (data_tx, sub_tx, unsub_tx));
+
+            assert!(res.is_none(), "Client ID collision in mock broker");
+
+            let stream = Box::pin(stream! {
+                let mut data_rx = data_rx;
+                let mut sub_rx = sub_rx;
+                let mut unsub_rx = unsub_rx;
+                let mut subscriptions = Vec::new();
+                loop {
+                    futures::select! {
+                        msg = data_rx.next().fuse() => {
+                            if let Some(msg) = msg {
+                                let topic = msg.topic.clone();
+                                if subscriptions.iter().any(|t| t == &topic) {
+                                    yield msg;
+                                }
+                            }
+                            else {
+                                break; // Channel closed, exit loop
+                            }
+                        }
+                        topic = sub_rx.next().fuse() => {
+                            if let Some(topic) = topic {
+                                subscriptions.push(topic);
+                            }
+                        }
+                        topic = unsub_rx.next().fuse() => {
+                            if let Some(topic) = topic {
+                                subscriptions.retain(|t| t != &topic);
+                            }
+                        }
+                    }
+                }
+            }) as BoxStream<'static, MqttMessage>;
+
+            Ok((client, stream))
+        }
+
+        pub async fn subscribe(
+            &mut self,
+            uri: &String,
+            topic: &String,
+            id: u32,
+        ) -> anyhow::Result<()> {
+            let (_, sub_tx, _) = self
+                .clients
+                .get_mut(uri)
+                .and_then(|m| m.get_mut(&id))
+                .expect("Client not found in mock broker");
+            sub_tx
+                .send(topic.clone())
+                .await
+                .map_err(|e| anyhow!("{}", e))
+        }
+
+        pub async fn unsubscribe(
+            &mut self,
+            uri: &String,
+            topic: &String,
+            id: u32,
+        ) -> anyhow::Result<()> {
+            let (_, _, unsub_tx) = self
+                .clients
+                .get_mut(uri)
+                .and_then(|m| m.get_mut(&id))
+                .expect("Client not found in mock broker");
+            unsub_tx
+                .send(topic.clone())
+                .await
+                .map_err(|e| anyhow!("{}", e))
+        }
+    }
+
+    pub fn global_broker() -> &'static SharedBroker {
+        static BROKER: OnceLock<SharedBroker> = OnceLock::new();
+        BROKER.get_or_init(|| Arc::new(Mutex::new(MockBroker::default())))
+    }
+
+    pub async fn connect(uri: &str) -> anyhow::Result<Box<dyn MqttClient>> {
+        let mut broker = global_broker().lock().await;
+        broker.connect(uri).await
+    }
+
+    pub async fn connect_and_receive(
+        uri: &str,
+        max_reconnect_attempts: u32,
+    ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
+        let mut broker = global_broker().lock().await;
+        broker
+            .connect_and_receive(uri, max_reconnect_attempts)
+            .await
+    }
+}
+
+pub struct MockClient {
+    uri: String,
+    id: u32,
+}
+
 #[async_trait]
-impl MqttClient for PahoClient {
+impl MqttClient for MockClient {
     async fn publish(&self, message: MqttMessage) -> anyhow::Result<()> {
-        self.client
-            .publish(mqtt::Message::new(
-                message.topic,
-                message.payload,
-                message.qos,
-            ))
-            .await?;
+        let mut broker = mock::global_broker().lock().await;
+        broker.insert(self.uri.clone(), message).await
+    }
+    async fn reconnect(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn disconnect(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn subscribe(&self, topic: &String, _qos: i32) -> anyhow::Result<()> {
+        let mut broker = mock::global_broker().lock().await;
+        broker.subscribe(&self.uri, &topic, self.id).await
+    }
+    async fn subscribe_many(&self, topics: &Vec<String>, _qos: &[i32]) -> anyhow::Result<()> {
+        let mut broker = mock::global_broker().lock().await;
+        for topic in topics {
+            broker.subscribe(&self.uri, topic, self.id).await?;
+        }
+        Ok(())
+    }
+    async fn unsubscribe_many(&self, topics: &Vec<String>) -> anyhow::Result<()> {
+        let mut broker = mock::global_broker().lock().await;
+        for topic in topics {
+            broker.unsubscribe(&self.uri, topic, self.id).await?;
+        }
         Ok(())
     }
 
-    async fn reconnect(&self) -> anyhow::Result<()> {
-        match self.client.reconnect().await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-
-    async fn disconnect(&self) -> anyhow::Result<()> {
-        match self.client.disconnect(None).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-
-    async fn subscribe(&self, topic: &String, qos: i32) -> anyhow::Result<()> {
-        match self.client.subscribe(topic, qos).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-    async fn subscribe_many(&self, topics: &Vec<String>, qos: &[i32]) -> anyhow::Result<()> {
-        match self.client.subscribe_many(topics, qos).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-
-    async fn unsubscribe_many(&self, topics: &Vec<String>) -> anyhow::Result<()> {
-        match self.client.unsubscribe_many(topics).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-
     fn clone_box(&self) -> Box<dyn MqttClient> {
-        Box::new(PahoClient {
-            client: self.client.clone(),
+        Box::new(MockClient {
+            uri: self.uri.clone(),
+            id: self.id,
         })
     }
 }

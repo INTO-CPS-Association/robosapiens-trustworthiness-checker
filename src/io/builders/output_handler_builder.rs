@@ -20,7 +20,7 @@ pub struct OutputHandlerBuilder {
     redis_port: Option<u16>,
 }
 
-const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 impl OutputHandlerBuilder {
     pub fn new(output_mode: OutputMode) -> Self {

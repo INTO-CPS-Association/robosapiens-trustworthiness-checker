@@ -22,7 +22,7 @@ mod integration_tests {
         semantics::{UntimedLolaSemantics, distributed::localisation::LocalitySpec},
     };
 
-    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
+    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
     /// Test that verifies the fix for reconfigurable runtime with distributed work.
     ///

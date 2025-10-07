@@ -15,8 +15,6 @@ use crate::io::mqtt::{MqttClient, MqttFactory, MqttMessage};
 // use crate::stream_utils::drop_guard_stream;
 use crate::{OutputStream, Value, core::VarName};
 
-// const QOS: &[i32] = &[1, 1];
-
 pub struct VarData {
     pub variable: VarName,
     pub topic_name: String,

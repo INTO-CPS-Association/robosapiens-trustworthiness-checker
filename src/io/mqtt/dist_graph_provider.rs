@@ -25,6 +25,7 @@ use smol::{LocalExecutor, stream::StreamExt};
 use tracing::{debug, info, info_span, warn};
 
 const QOS: i32 = 1;
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 pub trait DistGraphProvider {
     fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>>;
@@ -122,9 +123,8 @@ impl MQTTDistGraphProvider {
                 let _ = span.enter();
                 debug!("MQTTDistGraphProvider with ID {}", provider_id);
 
-                let factory = MqttFactory::Paho; // TODO: make configurable
                 let (client, mut output) =
-                factory.connect_and_receive(&"localhost", u32::MAX)
+                MQTT_FACTORY.connect_and_receive(&"localhost", u32::MAX)
                         .await
                         .unwrap();
 

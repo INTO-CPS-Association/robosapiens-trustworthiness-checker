@@ -9,7 +9,7 @@ use crate::{
     io::mqtt::{MqttFactory, MqttMessage},
 };
 
-const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 pub struct MQTTSchedulerCommunicator {
     mqtt_uri: String,

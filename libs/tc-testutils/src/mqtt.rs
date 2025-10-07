@@ -15,7 +15,7 @@ use trustworthiness_checker::{
     io::mqtt::{MqttFactory, MqttMessage},
 };
 
-const MQTT_FACTORY: MqttFactory = MqttFactory::Paho; // TODO: Make configurable
+const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 #[instrument(level = tracing::Level::INFO)]
 pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
