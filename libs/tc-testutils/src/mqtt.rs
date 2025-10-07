@@ -49,9 +49,9 @@ pub async fn get_mqtt_outputs(
     info!("Subscribed to Z outputs");
     return Box::pin(stream.map(|msg| {
         let binding = msg;
-        let payload = binding.payload_str();
+        let payload = binding.payload;
         let res: Value = serde_json::from_str(&payload).unwrap();
-        debug!(?res, topic=?binding.topic(), "Received message");
+        debug!(?res, topic=?binding.topic, "Received message");
 
         // Handle wrapped format {"value": actual_value} from output handler
         match &res {

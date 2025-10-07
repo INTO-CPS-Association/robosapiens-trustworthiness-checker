@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, stream::BoxStream};
-use paho_mqtt::{self as mqtt, Message};
+use paho_mqtt::{self as mqtt};
 use std::fmt::Debug;
 use tracing::{Level, debug, info, instrument, warn};
 use uuid::Uuid;
@@ -36,7 +36,7 @@ impl MqttFactory {
         &self,
         uri: &str,
         max_reconnect_attempts: u32,
-    ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, Message>)> {
+    ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
         match self {
             MqttFactory::Paho => paho::connect_and_receive(uri, max_reconnect_attempts).await,
             // TODO: Impl Mock
@@ -130,7 +130,7 @@ mod paho {
     fn message_stream(
         mut client: mqtt::AsyncClient,
         max_reconnect_attempts: u32,
-    ) -> BoxStream<'static, Message> {
+    ) -> BoxStream<'static, MqttMessage> {
         Box::pin(stream! {
             let mut reconnect_attempts = 0;
 
@@ -144,6 +144,11 @@ mod paho {
                             match msg {
                                 Some(message) => {
                                     debug!(?message, topic = message.topic(), "Received MQTT message");
+                                    let message = MqttMessage::new(
+                                        message.topic().to_string(),
+                                        message.payload_str().to_string(),
+                                        message.qos() as i32,
+                                    );
                                     yield message;
                                     reconnect_attempts = 0; // Reset counter on successful message
                                 }
@@ -212,7 +217,7 @@ mod paho {
     pub(crate) async fn connect_and_receive(
         uri: &str,
         max_reconnect_attempts: u32,
-    ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, Message>)> {
+    ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
         let (client, opts) = new_client_impl(uri)?;
         let stream = message_stream(client.clone(), max_reconnect_attempts);
         let client = connect_impl(client, opts).await?;

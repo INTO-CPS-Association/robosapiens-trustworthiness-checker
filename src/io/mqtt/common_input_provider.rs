@@ -3,15 +3,13 @@ pub(crate) mod common {
 
     use async_cell::unsync::AsyncCell;
     use futures::future::LocalBoxFuture;
-    use paho_mqtt as mqtt;
     use tracing::{debug, info, warn};
 
     use unsync::oneshot::Receiver as OSReceiver;
     use unsync::oneshot::Sender as OSSender;
     use unsync::spsc::Sender as SpscSender;
 
-    use crate::io::mqtt::MqttClient;
-    use crate::io::mqtt::MqttFactory;
+    use crate::io::mqtt::{MqttClient, MqttFactory, MqttMessage};
     use crate::stream_utils::channel_to_output_stream;
     use crate::{
         OutputStream, Value,
@@ -36,9 +34,8 @@ pub(crate) mod common {
         pub max_reconnect_attempts: u32,
 
         // Oneshot used to pass the MQTT client and stream from connect() to run()
-        pub client_streams_rx:
-            Option<OSReceiver<(Box<dyn MqttClient>, OutputStream<mqtt::Message>)>>,
-        pub client_streams_tx: Option<OSSender<(Box<dyn MqttClient>, OutputStream<mqtt::Message>)>>,
+        pub client_streams_rx: Option<OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>>,
+        pub client_streams_tx: Option<OSSender<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>>,
 
         pub drop_guard: DropGuard,
         // Mainly used for debugging purposes
@@ -149,10 +146,10 @@ pub(crate) mod common {
         pub async fn initial_run_logic(
             var_topics: BTreeMap<VarName, String>,
             started: Rc<AsyncCell<bool>>,
-            client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<paho_mqtt::Message>)>,
+            client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
         ) -> anyhow::Result<(
             Box<dyn MqttClient>,
-            OutputStream<paho_mqtt::Message>,
+            OutputStream<MqttMessage>,
             InverseVarTopicMap,
         )> {
             info!("run_logic started");
@@ -174,18 +171,18 @@ pub(crate) mod common {
 
         /// Handle a single MQTT message: parse, unwrap, map to variable, and send downstream.
         pub async fn handle_mqtt_message(
-            msg: paho_mqtt::Message,
+            msg: MqttMessage,
             var_topics_inverse: &InverseVarTopicMap,
             senders: &mut BTreeMap<VarName, SpscSender<Value>>,
             // Only for reconfig edge case
             prev_var_topics_inverse: Option<&InverseVarTopicMap>,
         ) -> anyhow::Result<()> {
             // Process the message
-            debug!(topic = msg.topic(), "Received MQTT message on topic:");
-            let mut value: Value = serde_json5::from_str(&msg.payload_str()).map_err(|e| {
+            debug!(topic = msg.topic, "Received MQTT message on topic:");
+            let mut value: Value = serde_json5::from_str(&msg.payload).map_err(|e| {
                 anyhow!(e).context(format!(
                     "Failed to parse value {:?} sent from MQTT",
-                    msg.payload_str(),
+                    msg.payload,
                 ))
             })?;
 
@@ -198,17 +195,15 @@ pub(crate) mod common {
             debug!(?value, "MQTT message value:");
 
             // Resolve the variable name from the topic
-            let var = match var_topics_inverse.get(msg.topic()) {
+            let var = match var_topics_inverse.get(&msg.topic) {
                 Some(var) => var,
                 // Only relevant if reconfigure:
-                None if prev_var_topics_inverse
-                    .is_some_and(|map| map.contains_key(msg.topic())) =>
-                {
+                None if prev_var_topics_inverse.is_some_and(|map| map.contains_key(&msg.topic)) => {
                     // Drop messages from topics that were unsubscribed during reconfiguration
                     // (Needed because there is a (theoretical?) race condition where messages
                     // are pending while we reconfigure)
                     info!(
-                        topic = msg.topic(),
+                        topic = msg.topic,
                         "Received message during topic reconfiguration for topic which was unsubscribed"
                     );
                     return Ok(());
@@ -216,7 +211,7 @@ pub(crate) mod common {
                 None => {
                     return Err(anyhow::anyhow!(
                         "Received message for unknown topic {}",
-                        msg.topic()
+                        msg.topic
                     ));
                 }
             };
@@ -257,7 +252,7 @@ pub(crate) mod common {
 
         pub fn take_client_streams_rx(
             &mut self,
-        ) -> OSReceiver<(Box<dyn MqttClient>, OutputStream<mqtt::Message>)> {
+        ) -> OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)> {
             std::mem::take(&mut self.client_streams_rx).expect("Client streams rx already taken")
         }
     }

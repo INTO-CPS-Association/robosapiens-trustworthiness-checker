@@ -140,10 +140,10 @@ impl MQTTDistGraphProvider {
                 }
 
                 while let Some(msg) = output.next().await {
-                    let topic = msg.topic();
-                    if let Some(index) = topics.iter().position(|t| t == topic) {
+                    let topic = msg.topic;
+                    if let Some(index) = topics.iter().position(|t| t == &topic) {
                         if let Ok(Some(Some(pos))) =
-                            serde_json::from_str::<JValue>(&msg.payload_str()).map(|x| {
+                            serde_json::from_str::<JValue>(&msg.payload).map(|x| {
                                 x.get("source_robot_pose")
                                     .cloned()
                                     .map(|y| y.get("position").cloned())
@@ -173,14 +173,14 @@ impl MQTTDistGraphProvider {
                                 None => warn!(
                                     "Failed to parse inner position from topic {}: {}",
                                     topic,
-                                    msg.payload_str()
+                                    msg.payload
                                 ),
                             }
                         } else {
                             warn!(
                                 "Failed to parse position from topic {}: {}",
                                 topic,
-                                msg.payload_str()
+                                msg.payload
                             );
                         }
                     }

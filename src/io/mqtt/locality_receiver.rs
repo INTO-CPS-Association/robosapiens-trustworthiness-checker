@@ -5,13 +5,12 @@ use async_channel::Receiver;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::future::LocalBoxFuture;
-use paho_mqtt::Message;
 use tracing::{debug, info, warn};
 
 use crate::{
     VarName,
     distributed::locality_receiver::LocalityReceiver,
-    io::mqtt::{MqttClient, MqttFactory},
+    io::mqtt::{MqttClient, MqttFactory, MqttMessage},
     semantics::distributed::localisation::LocalitySpec,
 };
 
@@ -23,7 +22,7 @@ pub struct MQTTLocalityReceiver {
     local_node: String,
     mqtt_port: Option<u16>,
     ready: Rc<AsyncCell<bool>>,
-    message_receiver: Rc<AsyncCell<Option<Receiver<Message>>>>,
+    message_receiver: Rc<AsyncCell<Option<Receiver<MqttMessage>>>>,
     mqtt_client: Rc<AsyncCell<Option<Box<dyn MqttClient>>>>,
 }
 
@@ -90,7 +89,7 @@ impl MQTTLocalityReceiver {
             debug!("Connecting to MQTT broker at: {}", mqtt_uri);
 
             // Create channel for message passing
-            let (sender, receiver) = async_channel::bounded::<Message>(10);
+            let (sender, receiver) = async_channel::bounded::<MqttMessage>(10);
 
             // Create MQTT connection and establish subscription
             let factory = MqttFactory::Paho; // TODO: make configurable
@@ -195,8 +194,8 @@ impl LocalityReceiver for MQTTLocalityReceiver {
         // Wait for the next message via channel - subscription is already established
         let result = match receiver.recv().await {
             Ok(msg) => {
-                debug!("Received message: {}", msg.payload_str());
-                let msg_content = msg.payload_str().to_string();
+                debug!("Received message: {}", msg.payload);
+                let msg_content = msg.payload;
 
                 let local_topics: Vec<String> = serde_json::from_str(&msg_content)
                     .map_err(|e| anyhow::anyhow!("Failed to parse work assignment JSON: {}", e))?;

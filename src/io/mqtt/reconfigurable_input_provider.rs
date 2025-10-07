@@ -10,7 +10,7 @@ use unsync::spsc::Sender as SpscSender;
 use crate::{
     InputProvider, OutputStream, Value,
     core::VarName,
-    io::mqtt::{MqttClient, MqttFactory},
+    io::mqtt::{MqttClient, MqttFactory, MqttMessage},
     utils::cancellation_token::CancellationToken,
 };
 
@@ -138,7 +138,7 @@ impl ReconfMQTTInputProvider {
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
-        client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<paho_mqtt::Message>)>,
+        client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
         mut reconfig: OutputStream<common::VarTopicMap>,
     ) -> anyhow::Result<()> {
         let mqtt_input_span = info_span!("ReconfMQTTInputProvider run_logic");
