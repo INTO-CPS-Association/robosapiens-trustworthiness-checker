@@ -54,3 +54,12 @@ ros2 topic pub /x std_msgs/msg/Int32 "{data: 1}"
 ```
 The output in the first terminal should now be counting forever.
 
+# Distribution - local node:
+In terminal 1:
+`cargo run -- examples/simple_add_distributable.lola --mqtt-input --mqtt-output --distribution-graph examples/simple_add_distribution_graph.json --local-node A`
+
+In terminal 2:
+`cargo run -- examples/simple_add_distributable.lola --mqtt-input --mqtt-output --distribution-graph examples/simple_add_distribution_graph.json --local-node B`
+
+Use an MQTT client: Publish `1` to topic `x`, publish `2` to topic `y`. Observe that `w` is calculated.
+Publish `3` to topic `z`. Observe that `v` is calculated.
