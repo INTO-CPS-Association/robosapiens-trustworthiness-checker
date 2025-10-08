@@ -228,9 +228,7 @@ impl InputProvider for ReconfMQTTInputProvider {
 }
 
 #[cfg(test)]
-#[cfg(feature = "testcontainers")]
 mod container_tests {
-    use async_compat::Compat as TokioCompat;
     use async_stream::stream;
     use futures::StreamExt;
     use macro_rules_attribute::apply;
@@ -245,11 +243,45 @@ mod container_tests {
     use crate::async_test;
     use crate::io::mqtt::{MqttFactory, ReconfMQTTInputProvider};
     use crate::{Value, VarName};
-    use tc_testutils::mqtt::{dummy_mqtt_publisher, dummy_stream_mqtt_publisher, start_mqtt};
+    use std::any::Any;
+    use tc_testutils::mqtt::{dummy_mqtt_publisher, dummy_stream_mqtt_publisher};
     use tc_testutils::streams::with_timeout_res;
     use tc_testutils::streams::{tick_stream, with_timeout};
 
-    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
+    #[cfg(feature = "testcontainers")]
+    use async_compat::Compat as TokioCompat;
+    #[cfg(feature = "testcontainers")]
+    use tc_testutils::mqtt::start_mqtt;
+
+    #[cfg(not(feature = "testcontainers"))]
+    use rand::Rng;
+
+    const MQTT_FACTORY: MqttFactory = if cfg!(feature = "testcontainers") {
+        MqttFactory::Paho
+    } else {
+        MqttFactory::Mock
+    };
+
+    async fn start_mqtt_get_port() -> (Box<dyn Any>, u16) {
+        #[cfg(feature = "testcontainers")]
+        {
+            let mqtt_server = start_mqtt().await;
+            let port = with_timeout_res(
+                TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
+                5,
+                "get_host_port",
+            )
+            .await
+            .expect("Failed to get host port for MQTT server");
+
+            (Box::new(mqtt_server), port)
+        }
+        #[cfg(not(feature = "testcontainers"))]
+        {
+            let port = rand::thread_rng().r#gen();
+            (Box::new(()), port)
+        }
+    }
 
     #[apply(async_test)]
     async fn test_reconf_mqtt_no_reconf(
@@ -259,11 +291,7 @@ mod container_tests {
         let ys = vec![Value::Int(3), Value::Int(4)];
         let expected: Vec<_> = xs.iter().cloned().zip(ys.iter().cloned()).collect();
 
-        let mqtt_server = start_mqtt().await;
-
-        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
-            .await
-            .expect("Failed to get host port for MQTT server");
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let var_topics = [
             ("x".into(), "mqtt_input_x".to_string()),
@@ -317,7 +345,7 @@ mod container_tests {
 
         let xs_fut = with_timeout(
             x_stream.take(expected.len()).collect::<Vec<_>>(),
-            10,
+            3,
             "x_stream.take",
         );
         let ys_fut = with_timeout(
@@ -348,15 +376,7 @@ mod container_tests {
         let ys = vec![Value::Int(3), Value::Int(4)];
         let expected: Vec<_> = xs.iter().cloned().zip(ys.iter().cloned()).collect();
 
-        let mqtt_server = start_mqtt().await;
-
-        let mqtt_port = with_timeout_res(
-            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
-            5,
-            "get_host_port",
-        )
-        .await
-        .expect("Failed to get host port for MQTT server");
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let wrong_var_topics: common::VarTopicMap = [
             ("xx".into(), "mqtt_input_xx".to_string()),
@@ -459,15 +479,7 @@ mod container_tests {
         let (mut y_tick, ys): (_, OutputStream<Value>) =
             tick_stream(futures::stream::iter(ys_expected.clone()).boxed());
 
-        let mqtt_server = start_mqtt().await;
-
-        let mqtt_port = with_timeout_res(
-            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
-            5,
-            "get_host_port",
-        )
-        .await
-        .expect("Failed to get host port for MQTT server");
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let initial_var_topics: common::VarTopicMap = [("x".into(), "mqtt_input_x".to_string())]
             .into_iter()

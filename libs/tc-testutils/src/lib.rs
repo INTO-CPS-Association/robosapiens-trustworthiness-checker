@@ -1,4 +1,3 @@
-#[cfg(feature = "testcontainers")]
 pub mod mqtt;
 #[cfg(feature = "testcontainers")]
 pub mod redis;

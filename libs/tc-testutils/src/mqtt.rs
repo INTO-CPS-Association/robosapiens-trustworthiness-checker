@@ -1,22 +1,30 @@
-use std::fmt::Debug;
-
-use crate::testcontainers::ContainerAsync;
-use async_compat::Compat as TokioCompat;
 use futures::StreamExt;
 use futures_timeout::TimeoutExt;
 use serde::ser::Serialize;
-use testcontainers_modules::{
-    mosquitto::{self, Mosquitto},
-    testcontainers::runners::AsyncRunner,
-};
+use std::fmt::Debug;
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::{
     OutputStream, Value,
     io::mqtt::{MqttFactory, MqttMessage},
 };
 
-const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
+#[cfg(feature = "testcontainers")]
+use crate::testcontainers::ContainerAsync;
+#[cfg(feature = "testcontainers")]
+use async_compat::Compat as TokioCompat;
+#[cfg(feature = "testcontainers")]
+use testcontainers_modules::{
+    mosquitto::{self, Mosquitto},
+    testcontainers::runners::AsyncRunner,
+};
 
+const MQTT_FACTORY: MqttFactory = if cfg!(feature = "testcontainers") {
+    MqttFactory::Paho
+} else {
+    MqttFactory::Mock
+};
+
+#[cfg(feature = "testcontainers")]
 #[instrument(level = tracing::Level::INFO)]
 pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
     let image = mosquitto::Mosquitto::default();
