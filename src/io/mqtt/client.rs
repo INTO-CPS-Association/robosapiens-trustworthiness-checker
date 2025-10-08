@@ -21,6 +21,7 @@ pub enum MqttFactory {
 impl MqttFactory {
     /// Connect to the MQTT broker at the given URI and return the connected client
     pub async fn connect(&self, uri: &str) -> anyhow::Result<Box<dyn MqttClient>> {
+        info!(?uri, "Connecting to MQTT broker with factory {:?}", self);
         match self {
             MqttFactory::Paho => paho::connect(uri).await,
             MqttFactory::Mock => mock::connect(uri).await,
@@ -34,6 +35,10 @@ impl MqttFactory {
         uri: &str,
         max_reconnect_attempts: u32,
     ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
+        info!(
+            ?uri,
+            "Connecting and receiving to MQTT broker with factory {:?}", self
+        );
         match self {
             MqttFactory::Paho => paho::connect_and_receive(uri, max_reconnect_attempts).await,
             MqttFactory::Mock => mock::connect_and_receive(uri, max_reconnect_attempts).await,
@@ -307,12 +312,14 @@ mod mock {
     pub type SharedBroker = Arc<Mutex<MockBroker>>;
 
     impl MockBroker {
-        pub async fn insert(&mut self, uri: String, msg: MqttMessage) -> anyhow::Result<()> {
-            let data_map = self.clients.entry(uri).or_insert(BTreeMap::new());
+        pub async fn publish(&mut self, uri: String, msg: MqttMessage) -> anyhow::Result<()> {
+            let data_map = self.clients.entry(uri.clone()).or_default();
 
             // Drain the map to take ownership of the senders
             let old_data = std::mem::take(data_map);
             let mut new_data = BTreeMap::new();
+            let x = old_data.keys().cloned().collect::<Vec<u32>>();
+            info!(?x, ?msg, ?uri, "Sending to ids");
 
             for (id, (mut data_tx, sub_tx, unsub_tx)) in old_data {
                 if data_tx.send(msg.clone()).await.is_ok() {
@@ -353,8 +360,9 @@ mod mock {
             let res = self
                 .clients
                 .entry(uri.to_string())
-                .or_insert(BTreeMap::new())
+                .or_default()
                 .insert(id, (data_tx, sub_tx, unsub_tx));
+            info!(?self.clients, "Clients after insertion");
 
             assert!(res.is_none(), "Client ID collision in mock broker");
 
@@ -363,26 +371,31 @@ mod mock {
                 let mut sub_rx = sub_rx;
                 let mut unsub_rx = unsub_rx;
                 let mut subscriptions = Vec::new();
+                let id = id.clone();
                 loop {
                     futures::select! {
                         msg = data_rx.next().fuse() => {
                             if let Some(msg) = msg {
+                                info!(?id, ?msg, "MockBroker received message");
                                 let topic = msg.topic.clone();
                                 if subscriptions.iter().any(|t| t == &topic) {
                                     yield msg;
                                 }
                             }
                             else {
+                                info!(?id, "Closing channel in MockBrocker");
                                 break; // Channel closed, exit loop
                             }
                         }
                         topic = sub_rx.next().fuse() => {
                             if let Some(topic) = topic {
+                                info!(?id, ?topic, "MockBroker subscribing to topic");
                                 subscriptions.push(topic);
                             }
                         }
                         topic = unsub_rx.next().fuse() => {
                             if let Some(topic) = topic {
+                                info!(?id, ?topic, "MockBroker unsubscribing to topic");
                                 subscriptions.retain(|t| t != &topic);
                             }
                         }
@@ -458,7 +471,7 @@ pub struct MockClient {
 impl MqttClient for MockClient {
     async fn publish(&self, message: MqttMessage) -> anyhow::Result<()> {
         let mut broker = mock::global_broker().lock().await;
-        broker.insert(self.uri.clone(), message).await
+        broker.publish(self.uri.clone(), message).await
     }
     async fn reconnect(&self) -> anyhow::Result<()> {
         Ok(())
