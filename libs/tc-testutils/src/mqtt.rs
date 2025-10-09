@@ -1,6 +1,4 @@
 use futures::StreamExt;
-#[cfg(feature = "testcontainers")]
-use futures_timeout::TimeoutExt;
 use serde::ser::Serialize;
 use std::fmt::Debug;
 use tracing::{debug, info, instrument};
@@ -13,6 +11,8 @@ use trustworthiness_checker::{
 use crate::testcontainers::ContainerAsync;
 #[cfg(feature = "testcontainers")]
 use async_compat::Compat as TokioCompat;
+#[cfg(feature = "testcontainers")]
+use futures_timeout::TimeoutExt;
 #[cfg(feature = "testcontainers")]
 use testcontainers_modules::{
     mosquitto::{self, Mosquitto},
