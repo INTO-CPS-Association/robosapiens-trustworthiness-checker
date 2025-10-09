@@ -278,7 +278,7 @@ mod container_tests {
         }
         #[cfg(not(feature = "testcontainers"))]
         {
-            let port = rand::thread_rng().r#gen();
+            let port = rand::rng().random();
             (Box::new(()), port)
         }
     }

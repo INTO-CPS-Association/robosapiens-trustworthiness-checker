@@ -17,6 +17,7 @@ use crate::{
 
 use super::common_input_provider::common;
 
+// TODO: Add support for changing the channels being monitored over time
 pub struct MQTTInputProvider {
     base: common::Base,
 

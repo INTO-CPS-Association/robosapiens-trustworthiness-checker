@@ -136,6 +136,9 @@ pub(crate) mod common {
             }
             info!(?self.uri, ?topics, "Connected and subscribed to MQTT broker");
 
+            // Mark as ready as soon as we're connected and subscribed
+            self.started.set(true);
+
             client_streams_tx
                 .send((client, mqtt_stream))
                 .map_err(|_| anyhow::anyhow!("Failed to send client streams"))?;
@@ -145,7 +148,7 @@ pub(crate) mod common {
 
         pub async fn initial_run_logic(
             var_topics: BTreeMap<VarName, String>,
-            started: Rc<AsyncCell<bool>>,
+            _started: Rc<AsyncCell<bool>>,
             client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
         ) -> anyhow::Result<(
             Box<dyn MqttClient>,
@@ -164,8 +167,7 @@ pub(crate) mod common {
                 .await
                 .ok_or_else(|| anyhow::anyhow!("Failed to receive MQTT client and stream"))?;
 
-            debug!("Set started");
-            started.set(true);
+            // Started flag is set in connect(), not here
             Ok((client, mqtt_stream, var_topics_inverse))
         }
 

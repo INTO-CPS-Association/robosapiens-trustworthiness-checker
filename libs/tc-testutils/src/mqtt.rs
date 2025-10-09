@@ -1,4 +1,5 @@
 use futures::StreamExt;
+#[cfg(feature = "testcontainers")]
 use futures_timeout::TimeoutExt;
 use serde::ser::Serialize;
 use std::fmt::Debug;
@@ -33,8 +34,8 @@ pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
         TokioCompat::new(image.start())
             .timeout(std::time::Duration::from_secs(10))
             .await
-            .expect("Timed out starting EMQX test container")
-            .expect("Failed to start EMQX test container"),
+            .expect("Timed out starting Mosquitto test container")
+            .expect("Failed to start Mosquitto test container"),
     )
 }
 

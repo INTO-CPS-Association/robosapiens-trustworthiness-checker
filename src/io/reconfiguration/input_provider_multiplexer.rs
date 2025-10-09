@@ -6,11 +6,11 @@ use crate::{InputProvider, OutputStream, VarName};
 
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
-use async_unsync::oneshot;
+use async_unsync::oneshot::{self, Sender as OneshotSender};
 use futures::future::{LocalBoxFuture, join_all};
 use futures::{FutureExt, StreamExt, select};
 use smol::LocalExecutor;
-use tracing::info;
+use tracing::{debug, info};
 use unsync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender};
 use unsync::spsc::Sender as SpscSender;
 use unsync::spsc::{self, Receiver as SpscReceiver};
@@ -29,7 +29,7 @@ pub struct InputProviderMultiplexer<Val: Clone> {
         Option<SpscReceiver<oneshot::Sender<BTreeMap<VarName, BroadcastReceiver<Val>>>>>,
     subscribers_req_tx: SpscSender<oneshot::Sender<BTreeMap<VarName, BroadcastReceiver<Val>>>>,
     senders: Option<BTreeMap<VarName, BroadcastSender<Val>>>,
-    clock_rx: Option<SpscReceiver<()>>,
+    clock_rx: Option<SpscReceiver<OneshotSender<()>>>,
 }
 
 pub struct MultiplexerClientInputProvider<Val: Clone> {
@@ -43,7 +43,7 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         inner_input_provider: Box<dyn InputProvider<Val = Val>>,
-        clock_rx: SpscReceiver<()>,
+        clock_rx: SpscReceiver<OneshotSender<()>>,
     ) -> InputProviderMultiplexer<Val> {
         let ready = AsyncCell::shared();
         let run_result = AsyncCell::shared();
@@ -136,7 +136,8 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
                                 let receivers = senders.iter_mut()
                                     .map(|(k, tx)| (k.clone(), tx.subscribe()))
                                     .collect();
-                                receiver_req_tx.send(receivers).expect("Tried to send ");
+                                receiver_req_tx.send(receivers)
+                                    .unwrap_or_else(|_| panic!("Tried to send"));
                             }
                             None => {
                                 return
@@ -146,14 +147,14 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
                     results = all_inputs_stream.next() => {
                         match results {
                             Some(mut results) => {
-                                info!("Inputs returned, waiting for clock tick");
+                                debug!("Inputs returned, waiting for clock tick");
                                 // Wait for clock tick before distributing any results
                                 // (so new receivers have time to subscribe)
-                                let mut clock_ticked = false;
                                 let mut clock_tick = Box::pin(clock_rx.recv().fuse());
-                                while !clock_ticked {
+                                let mut clock_tocker = None;
+                                while clock_tocker.is_none() {
                                     select!{
-                                        _ = clock_tick => {clock_ticked = true}
+                                        new_clock_tocker = clock_tick => {clock_tocker = Some(new_clock_tocker)}
                                         // Also allow new requests whilst waiting to distribute the
                                         // input
                                         receiver_req_tx = next_subscribers_req_stream.next() => {
@@ -162,7 +163,9 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
                                                     let receivers = senders.iter_mut()
                                                         .map(|(k, tx)| (k.clone(), tx.subscribe()))
                                                         .collect();
-                                                    receiver_req_tx.send(receivers).expect("Tried to send ");
+                                                    receiver_req_tx.send(receivers)
+                                                        .unwrap_or_else(|_| panic!(
+                                                            "Tried to send "));
                                                 }
                                                 None => {
                                                     return
@@ -172,7 +175,7 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
                                     }
                                 }
 
-                                info!("Clocks ticked");
+                                debug!("Clocks ticked");
 
                                 if results.iter().all(|x| x.is_none()) {
                                     return
@@ -183,6 +186,12 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
                                         sender.send(res.clone()).await;
                                     }
                                 }
+
+                                debug!("Clock tocking");
+                                let tocker = mem::take(&mut clock_tocker)
+                                    .expect("Expected tocker to be set")
+                                    .expect("Expected tocker to be Some");
+                                tocker.send(()).expect("Failed to send tock");
                             }
                             None => {
                                 return
@@ -233,6 +242,7 @@ impl<Val: Clone + 'static> InputProvider for MultiplexerClientInputProvider<Val>
 mod tests {
     use std::{collections::BTreeMap, rc::Rc};
 
+    use async_unsync::oneshot;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::{LocalExecutor, stream::StreamExt};
@@ -266,30 +276,33 @@ mod tests {
         info!("Subscribing");
         let mut mux_in_client = mux_in.subscribe().await;
 
-        // Tick the clock 3 times
-        info!("Tick 0");
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 1");
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 2");
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 3");
-        // TODO: we need a fourth tick to detect that the stream has ended
-        // is this correct
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 4");
-
         let mut xs = mux_in_client
             .input_stream(&"x".into())
             .expect("Input stream should exist");
-        // let xs: Vec<_> = xs.collect().await;
-        let mut xs_expected = vec![Value::Int(1), Value::Int(2), Value::Int(3)].into_iter();
 
-        // while let (Some(x), e_expected) =
-        while let (Some(x), Some(x_exp)) = (xs.next().await, xs_expected.next()) {
-            info!(?x, ?x_exp, "received output");
-            assert_eq!(x, x_exp)
-        }
+        info!("Tick 1");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs.next().await, Some(Value::Int(1)));
+        tocker_rx.await.unwrap();
+
+        info!("Tick 2");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs.next().await, Some(Value::Int(2)));
+        tocker_rx.await.unwrap();
+
+        info!("Tick 3");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs.next().await, Some(Value::Int(3)));
+        tocker_rx.await.unwrap();
+
+        info!("Tick to close");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs.next().await, None);
+        assert!(tocker_rx.await.is_err());
     }
 
     #[apply(async_test)]
@@ -318,36 +331,40 @@ mod tests {
         let mut mux_in_client1 = mux_in.subscribe().await;
         let mut mux_in_client2 = mux_in.subscribe().await;
 
-        // Tick the clock 3 times
-        info!("Tick 0");
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 1");
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 2");
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 3");
-        // TODO: we need a fourth tick to detect that the stream has ended
-        // is this correct
-        clock_tx.send(()).await.unwrap();
-        info!("Tick 4");
-
         let mut xs1 = mux_in_client1
             .input_stream(&"x".into())
             .expect("Input stream should exist");
         let mut xs2 = mux_in_client2
             .input_stream(&"x".into())
             .expect("Input stream should exist");
-        // let xs: Vec<_> = xs.collect().await;
-        let mut xs_expected = vec![Value::Int(1), Value::Int(2), Value::Int(3)].into_iter();
 
-        // while let (Some(x), e_expected) =
-        while let (Some(x1), Some(x2), Some(x_exp)) =
-            (xs1.next().await, xs2.next().await, xs_expected.next())
-        {
-            info!(?x1, ?x2, ?x_exp, "received output");
-            assert_eq!(x1, x_exp);
-            assert_eq!(x2, x_exp);
-        }
+        info!("Tick 1");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs1.next().await, Some(Value::Int(1)));
+        assert_eq!(xs2.next().await, Some(Value::Int(1)));
+        tocker_rx.await.unwrap();
+
+        info!("Tick 2");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs1.next().await, Some(Value::Int(2)));
+        assert_eq!(xs2.next().await, Some(Value::Int(2)));
+        tocker_rx.await.unwrap();
+
+        info!("Tick 3");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs1.next().await, Some(Value::Int(3)));
+        assert_eq!(xs2.next().await, Some(Value::Int(3)));
+        tocker_rx.await.unwrap();
+
+        info!("Tick to close");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        clock_tx.send(tocker_tx).await.unwrap();
+        assert_eq!(xs1.next().await, None);
+        assert_eq!(xs2.next().await, None);
+        assert!(tocker_rx.await.is_err());
     }
 
     #[apply(async_test)]
@@ -376,43 +393,46 @@ mod tests {
         {
             info!("Subscribing");
             let mut mux_in_client1 = mux_in.subscribe().await;
-
-            // Tick the clock 3 times
-            info!("Tick 0");
-            clock_tx.send(()).await.unwrap();
-            info!("Tick 1");
-            clock_tx.send(()).await.unwrap();
-            info!("Tick 2");
-
-            let mut xs1 = mux_in_client1
+            let mut xs = mux_in_client1
                 .input_stream(&"x".into())
-                .expect("Input stream should exist")
-                .take(2);
-            let mut xs_expected = vec![Value::Int(1), Value::Int(2)].into_iter();
+                .expect("Input stream should exist");
 
-            while let (Some(x), Some(x_exp)) = (xs1.next().await, xs_expected.next()) {
-                info!(?x, ?x_exp, "received output");
-                assert_eq!(x, x_exp);
-            }
+            info!("Tick 1");
+            let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+            clock_tx.send(tocker_tx).await.unwrap();
+            assert_eq!(xs.next().await, Some(Value::Int(1)));
+            tocker_rx.await.unwrap();
+
+            info!("Tick 2");
+            let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+            clock_tx.send(tocker_tx).await.unwrap();
+            assert_eq!(xs.next().await, Some(Value::Int(2)));
+            tocker_rx.await.unwrap();
         }
 
         {
             let mut mux_in_client2 = mux_in.subscribe().await;
-            let mut xs2 = mux_in_client2
+            let mut xs = mux_in_client2
                 .input_stream(&"x".into())
                 .expect("Input stream should exist");
 
-            clock_tx.send(()).await.unwrap();
             info!("Tick 3");
-            clock_tx.send(()).await.unwrap();
-            info!("Tick 4");
-            clock_tx.send(()).await.unwrap();
+            let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+            clock_tx.send(tocker_tx).await.unwrap();
+            assert_eq!(xs.next().await, Some(Value::Int(3)));
+            tocker_rx.await.unwrap();
 
-            let mut xs_expected = vec![Value::Int(3), Value::Int(4)].into_iter();
-            while let (Some(x), Some(x_exp)) = (xs2.next().await, xs_expected.next()) {
-                info!(?x, ?x_exp, "received output");
-                assert_eq!(x, x_exp);
-            }
+            info!("Tick 4");
+            let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+            clock_tx.send(tocker_tx).await.unwrap();
+            assert_eq!(xs.next().await, Some(Value::Int(4)));
+            tocker_rx.await.unwrap();
+
+            info!("Tick to close");
+            let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+            clock_tx.send(tocker_tx).await.unwrap();
+            assert_eq!(xs.next().await, None);
+            assert!(tocker_rx.await.is_err());
         }
     }
 }

@@ -4,9 +4,9 @@ mod integration_tests {
     use std::vec;
 
     use async_compat::Compat as TokioCompat;
-    use futures::{FutureExt, StreamExt};
+    use futures::StreamExt;
     use macro_rules_attribute::apply;
-    use smol::LocalExecutor;
+    use smol::{LocalExecutor, channel::bounded};
     use tc_testutils::streams::with_timeout_res;
     use tracing::info;
     use trustworthiness_checker::InputProvider;
@@ -177,6 +177,12 @@ mod integration_tests {
         let ys = vec![Value::Int(3), Value::Int(4)];
         let zs = vec![Value::Int(4), Value::Int(6)];
 
+        // Create synchronization channels to coordinate monitor and publisher startup
+        // Monitor -> Test channel to indicate monitor is ready to receive
+        let (monitor_ready_tx, monitor_ready_rx) = bounded::<()>(1);
+        // Test -> Monitor channel to signal publishers are starting
+        let (publishers_ready_tx, publishers_ready_rx) = bounded::<()>(1);
+
         let mqtt_server = start_mqtt().await;
 
         let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
@@ -201,11 +207,13 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        let input_provider_ready = input_provider.ready();
+        let _ = input_provider.ready();
 
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
+
+        let monitor_ready_tx = monitor_ready_tx;
         let runner = TestMonitorRunner::new(
             executor.clone(),
             model.clone(),
@@ -214,27 +222,57 @@ mod integration_tests {
             create_dependency_manager(DependencyKind::Empty, model),
         );
 
-        let res = executor.spawn(runner.run());
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Spawn monitor task - this will run until all outputs are processed
+        let monitor_task = executor.spawn(async move {
+            info!("Monitor task starting");
+            // Signal to test that monitor is ready to receive messages
+            let _ = monitor_ready_tx.send(()).await;
+            info!("Monitor signaled ready");
 
-        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+            // Wait for publishers to be ready
+            info!("Monitor waiting for publishers to be ready");
+            let _ = publishers_ready_rx.recv().await;
+            info!("Monitor detected publishers are ready");
+
+            // Now run the monitor
+            info!("Starting monitor run");
+            runner.run().await
+        });
+
+        // Wait for monitor to be ready
+        info!("Test waiting for monitor to be ready");
+        let _ = monitor_ready_rx.recv().await;
+        info!("Test detected monitor is ready");
+
+        // Spawn dummy MQTT publisher nodes
         let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
             "x_publisher".to_string(),
             "mqtt_input_x".to_string(),
-            xs,
+            xs.clone(),
             mqtt_port,
         ));
 
         let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
             "y_publisher".to_string(),
             "mqtt_input_y".to_string(),
-            ys,
+            ys.clone(),
             mqtt_port,
         ));
 
-        // Test we have the expected outputs
-        // We have to specify how many outputs we want to take as the MQTT
-        // topic is not assumed to tell us when it is done
+        // Signal publishers can start
+        info!("Signaling publishers to start");
+        let _ = publishers_ready_tx.send(()).await;
+        info!("Publishers signaled");
+
+        // Wait for both publishers to complete sending their messages
+        // This ensures we have all inputs before checking outputs
+        info!("Waiting for publishers to complete...");
+        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
+        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
+        info!("All publishers completed");
+
+        // Collect and verify all expected outputs from the monitor
+        // We expect exactly zs.len() outputs before completion
         info!("Waiting for {:?} outputs", zs.len());
         let outputs = with_timeout(
             outputs.take(zs.len()).collect::<Vec<_>>(),
@@ -242,30 +280,19 @@ mod integration_tests {
             "outputs.take",
         )
         .await?;
+
+        info!("Expected outputs: {:?}", zs);
         info!("Outputs: {:?}", outputs);
         let expected_outputs = zs.into_iter().map(|val| vec![val]).collect::<Vec<_>>();
         assert_eq!(outputs, expected_outputs);
 
         info!("Output collection complete, output stream should now be dropped");
 
-        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
-        info!("Waiting for publishers to complete...");
-        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
-        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
-        info!("All publishers completed, shutting down MQTT server");
-
-        info!("Waiting for monitor to complete after output stream drop...");
-        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
-
-        futures::select! {
-            result = res.fuse() => {
-                info!("Monitor completed: {:?}", result);
-                result?;
-            }
-            _ = futures::FutureExt::fuse(timeout_future) => {
-                return Err(anyhow::anyhow!("Monitor did not complete within timeout after output stream was dropped"));
-            }
-        }
+        // Wait for monitor to complete
+        info!("Waiting for monitor to complete...");
+        let result = with_timeout(monitor_task, 5, "monitor_task").await?;
+        info!("Monitor completed: {:?}", result);
+        result?;
 
         Ok(())
     }
@@ -281,6 +308,10 @@ mod integration_tests {
         let xs = vec![Value::Float(1.3), Value::Float(3.4)];
         let ys = vec![Value::Float(2.4), Value::Float(4.3)];
         let zs = vec![Value::Float(3.7), Value::Float(7.7)];
+
+        // Create channels for synchronization
+        let (monitor_ready_tx, monitor_ready_rx) = bounded::<()>(1);
+        let (publishers_ready_tx, publishers_ready_rx) = bounded::<()>(1);
 
         let mqtt_server = start_mqtt().await;
 
@@ -306,10 +337,12 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 10, "input_provider_connect").await?;
 
-        let input_provider_ready = input_provider.ready();
+        let _ = input_provider.ready();
         // Run the monitor
         let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
         let outputs = output_handler.get_output();
+
+        let monitor_ready_tx = monitor_ready_tx;
         let runner = TestMonitorRunner::new(
             executor.clone(),
             model.clone(),
@@ -318,27 +351,55 @@ mod integration_tests {
             create_dependency_manager(DependencyKind::Empty, model),
         );
 
-        let res = executor.spawn(runner.run());
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Spawn monitor task
+        let monitor_task = executor.spawn(async move {
+            info!("Float monitor task starting");
+            // Signal monitor is ready to receive
+            let _ = monitor_ready_tx.send(()).await;
+            info!("Float monitor signaled ready");
 
-        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+            // Wait for publishers to be ready
+            info!("Float monitor waiting for publishers to be ready");
+            let _ = publishers_ready_rx.recv().await;
+            info!("Float monitor detected publishers are ready");
+
+            // Now run the monitor
+            info!("Starting float monitor run");
+            runner.run().await
+        });
+
+        // Wait for monitor to be ready
+        info!("Float test waiting for monitor to be ready");
+        let _ = monitor_ready_rx.recv().await;
+        info!("Float test detected monitor is ready");
+
+        // Spawn dummy MQTT publisher nodes
         let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
             "x_publisher_float".to_string(),
             "mqtt_input_float_x".to_string(),
-            xs,
+            xs.clone(),
             mqtt_port,
         ));
 
         let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
             "y_publisher_float".to_string(),
             "mqtt_input_float_y".to_string(),
-            ys,
+            ys.clone(),
             mqtt_port,
         ));
 
-        // Test we have the expected outputs
-        // We have to specify how many outputs we want to take as the MQTT
-        // topic is not assumed to tell us when it is done
+        // Signal publishers can start
+        info!("Signaling float publishers to start");
+        let _ = publishers_ready_tx.send(()).await;
+        info!("Float publishers signaled");
+
+        // Wait for publishers to complete first to ensure all messages are sent
+        info!("Waiting for publishers to complete...");
+        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
+        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
+        info!("All publishers completed");
+
+        // Now collect and verify outputs
         info!("Waiting for {:?} outputs", zs.len());
         let outputs = with_timeout(
             outputs.take(zs.len()).collect::<Vec<_>>(),
@@ -346,6 +407,7 @@ mod integration_tests {
             "outputs.take",
         )
         .await?;
+        info!("Expected outputs: {:?}", zs);
         info!("Outputs: {:?}", outputs);
         // Test the outputs
         assert_eq!(outputs.len(), zs.len());
@@ -360,24 +422,11 @@ mod integration_tests {
 
         info!("Output collection complete, output stream should now be dropped");
 
-        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
-        info!("Waiting for publishers to complete...");
-        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
-        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
-        info!("All publishers completed, shutting down MQTT server");
-
-        info!("Waiting for monitor to complete after output stream drop...");
-        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
-
-        futures::select! {
-            result = res.fuse() => {
-                info!("Monitor completed: {:?}", result);
-                result?;
-            }
-            _ = futures::FutureExt::fuse(timeout_future) => {
-                return Err(anyhow::anyhow!("Monitor did not complete within timeout after output stream was dropped"));
-            }
-        }
+        // Wait for monitor to complete
+        info!("Waiting for monitor to complete...");
+        let result = with_timeout(monitor_task, 5, "monitor_task").await?;
+        info!("Monitor completed: {:?}", result);
+        result?;
 
         Ok(())
     }

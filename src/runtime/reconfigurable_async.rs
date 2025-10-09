@@ -1,10 +1,11 @@
-use std::time::Duration;
+use std::mem;
 use std::{marker::PhantomData, rc::Rc};
 
 use async_trait::async_trait;
+use async_unsync::oneshot;
 use futures::{FutureExt, future::LocalBoxFuture, select};
 use smol::LocalExecutor;
-use tracing::{Level, debug, debug_span, info, instrument};
+use tracing::{Level, debug, info, instrument};
 
 use crate::io::reconfiguration::input_provider_multiplexer::InputProviderMultiplexer;
 use crate::{
@@ -31,7 +32,6 @@ pub struct ReconfAsyncMonitorBuilder<
     pub(super) input_provider: Option<Box<dyn InputProvider<Val = Value>>>,
     pub(super) output_builder: Option<OutputHandlerBuilder>,
     pub(super) output_provider: Option<Box<dyn OutputHandler<Val = Value>>>,
-    #[allow(dead_code)]
     reconf_provider: Option<MQTTLocalityReceiver>,
     #[allow(dead_code)]
     local_node: String,
@@ -284,22 +284,27 @@ where
         info!("Got work assignment");
 
         // Set up clock
-        let (mut clock_tx, clock_rx) = unsync::spsc::channel(10);
+        let (mut clock_tx, clock_rx) = unsync::spsc::channel(1);
+
+        debug!("Clock ticking");
+        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+        let mut tocker_rx = Some(tocker_rx);
+        clock_tx.send(tocker_tx).await.unwrap();
 
         // Clock ticker
         // TODO: figure out the proper way to progress the clock
-        self.executor
-            .spawn(async move {
-                let _clock = debug_span!("Clock").entered();
-                loop {
-                    debug!("Clock ticking");
-                    clock_tx.send(()).await.unwrap();
-                    debug!("Yielding from clock by waiting");
-                    smol::Timer::after(Duration::new(2, 0)).await;
-                    // smol::future::yield_now().await;
-                }
-            })
-            .detach();
+        // self.executor
+        //     .spawn(async move {
+        //         let _clock = debug_span!("Clock").entered();
+        //         loop {
+        //             debug!("Clock ticking");
+        //             clock_tx.send(()).await.unwrap();
+        //             debug!("Yielding from clock by waiting");
+        //             smol::Timer::after(Duration::new(2, 0)).await;
+        //             // smol::future::yield_now().await;
+        //         }
+        //     })
+        //     .detach();
 
         // Create root input provider
         debug!("Building input provider");
@@ -317,7 +322,7 @@ where
         } else {
             return Err(anyhow::anyhow!("No input provider available"));
         };
-        info!("Built input provider");
+        debug!("Built input provider");
 
         // Multiplex the input provider
         let mut input_mux = InputProviderMultiplexer::new(self.executor.clone(), input, clock_rx);
@@ -357,11 +362,24 @@ where
                 .output(output);
             let monitor = builder.build();
 
+            mem::take(&mut tocker_rx)
+                .expect("Tocker is missing")
+                .await
+                .unwrap();
+
             select! {
                 // Update the work assignment
                 new_work_assignment = FutureExt::fuse(self.reconf_provider.receive()) => {
                     info!("Received new work assignment");
                     work_assignment = new_work_assignment?;
+
+                    debug!("Clock ticking");
+
+                    let (new_tocker_tx, new_tocker_rx) = oneshot::channel().into_split();
+                    tocker_rx = Some(new_tocker_rx);
+                    debug!("Clock tocking");
+                    clock_tx.send(new_tocker_tx).await.unwrap();
+                    debug!("Accepted new assignment");
                     // Loop will continue and create a new monitor with the new assignment
                 }
 
