@@ -361,8 +361,12 @@ mod container_tests {
 
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
-        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
+        with_timeout(x_publisher_task, 5, "x_publisher_task")
+            .await?
+            .expect("x_publisher_task failed");
+        with_timeout(y_publisher_task, 5, "y_publisher_task")
+            .await?
+            .expect("y_publisher_task failed");
         info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
@@ -456,8 +460,12 @@ mod container_tests {
 
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
-        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
+        with_timeout(x_publisher_task, 5, "x_publisher_task")
+            .await?
+            .expect("x_publisher_task timeout error");
+        with_timeout(y_publisher_task, 5, "y_publisher_task")
+            .await?
+            .expect("y_publisher_task timeout error");
         info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
@@ -515,23 +523,34 @@ mod container_tests {
             .input_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
 
+        let xs_expected_len = xs_expected.len();
+        let ys_expected_len = ys_expected.len();
+
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
-        let x_publisher_task = executor.spawn(dummy_stream_mqtt_publisher(
-            "x_publisher".to_string(),
-            "mqtt_input_x".to_string(),
-            xs,
-            xs_expected.len(),
-            mqtt_port,
-        ));
+        let x_publisher_task = executor.spawn(async move {
+            dummy_stream_mqtt_publisher(
+                "x_publisher".to_string(),
+                "mqtt_input_x".to_string(),
+                xs,
+                xs_expected_len,
+                mqtt_port,
+            )
+            .await
+            .expect("x_publisher failed")
+        });
 
         // Not publishing until ticks arrive
-        let y_publisher_task = executor.spawn(dummy_stream_mqtt_publisher(
-            "y_publisher".to_string(),
-            "mqtt_input_y".to_string(),
-            ys,
-            ys_expected.len(),
-            mqtt_port,
-        ));
+        let y_publisher_task = executor.spawn(async move {
+            dummy_stream_mqtt_publisher(
+                "y_publisher".to_string(),
+                "mqtt_input_y".to_string(),
+                ys,
+                ys_expected_len,
+                mqtt_port,
+            )
+            .await
+            .expect("y_publisher failed")
+        });
         let x_vals = with_timeout(
             x_stream.take(xs_expected.len()).collect::<Vec<_>>(),
             5,

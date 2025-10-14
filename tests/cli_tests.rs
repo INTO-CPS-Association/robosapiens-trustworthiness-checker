@@ -1496,8 +1496,8 @@ mod integration_tests {
             ));
 
             // Wait for publishers to complete
-            x_publisher_task.await;
-            y_publisher_task.await;
+            x_publisher_task.await.expect("Failed to run x_publisher");
+            y_publisher_task.await.expect("Failed to run y_publisher");
 
             // Give CLI additional time to process the messages
             Timer::after(Duration::from_millis(150)).await;
@@ -1614,11 +1614,8 @@ mod integration_tests {
             );
         }
 
-        /// Test file input with Redis output
-        // TODO: TWright: fix this test -- it often fails (but not always) with error:
-        // assertion `left == right` failed: Expected 3 output values, got 0. left: 0 right: 3
+        /// Test file input with MQTT output
         #[cfg(feature = "testcontainers")]
-        #[ignore]
         #[apply(async_test)]
         async fn test_file_input_redis_output(executor: Rc<LocalExecutor>) {
             let redis_server = start_redis().await;
@@ -1836,8 +1833,8 @@ mod integration_tests {
             ));
 
             // Wait for publishers to complete
-            x_publisher_task.await;
-            y_publisher_task.await;
+            x_publisher_task.await.expect("Failed to run x_publisher");
+            y_publisher_task.await.expect("Failed to run y_publisher");
 
             // Give CLI additional time to process the messages
             Timer::after(Duration::from_millis(150)).await;
@@ -1858,10 +1855,7 @@ mod integration_tests {
         }
 
         /// Test file input with MQTT output
-        // TODO: TWright: fix this test -- it often fails (but not always) with error:
-        // assertion `left == right` failed: Expected 3 output values, got 0. left: 0 right: 3
         #[cfg(feature = "testcontainers")]
-        #[ignore]
         #[apply(async_test)]
         async fn test_file_input_mqtt_output(executor: Rc<LocalExecutor>) {
             let mqtt_server = start_mqtt().await;
@@ -1876,19 +1870,68 @@ mod integration_tests {
                 .client_id("test_receiver".to_string())
                 .finalize();
 
-            let connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
+            let subscriber_opts = mqtt::ConnectOptionsBuilder::new_v3()
+                .keep_alive_interval(Duration::from_secs(30))
+                .clean_session(true)
+                .automatic_reconnect(Duration::from_millis(100), Duration::from_secs(5))
+                .finalize();
+
+            // Create separate client for publisher (will be used to verify connectivity)
+            // Create subscriber client options
+            // Create subscriber client options with reconnect capability
+
+            // Create separate client for publisher (will be used to verify connectivity)
+            let pub_create_opts = mqtt::CreateOptionsBuilder::new_v3()
+                .server_uri(format!("tcp://{}:{}", MQTT_HOSTNAME, mqtt_port))
+                .client_id("test_publisher".to_string())
+                .finalize();
+
+            let pub_connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
                 .keep_alive_interval(Duration::from_secs(30))
                 .clean_session(true)
                 .finalize();
 
+            let pub_client = mqtt::AsyncClient::new(pub_create_opts).unwrap();
+            pub_client.connect(pub_connect_opts).await.unwrap();
+
+            // Create and connect the subscriber client
             let mut client = mqtt::AsyncClient::new(create_opts).unwrap();
             let mut stream = client.get_stream(10);
 
-            client.connect(connect_opts).await.unwrap();
+            client.connect(subscriber_opts).await.unwrap();
             client.subscribe("z", 1).await.unwrap();
 
             // Give MQTT subscriber time to fully connect and subscribe
-            Timer::after(Duration::from_millis(1000)).await;
+            // Timer::after(Duration::from_millis(2000)).await;
+
+            // Verify connection by publishing and receiving a test message
+            let conn_test_topic = "z_connection_test";
+            client.subscribe(conn_test_topic, 1).await.unwrap();
+
+            let test_msg = mqtt::Message::new(conn_test_topic, "test_connection", 1);
+            pub_client.publish(test_msg).await.unwrap();
+
+            // Wait for the test message to confirm connection is working
+            let timeout = Timer::after(Duration::from_millis(50));
+            let mut connection_verified = false;
+
+            futures::select! {
+                msg_opt = stream.next().fuse() => {
+                    if let Some(opt_msg) = msg_opt {
+                        if let Some(msg) = opt_msg {
+                            if msg.topic() == conn_test_topic {
+                                connection_verified = true;
+                            }
+                        }
+                    }
+                }
+                _ = futures::FutureExt::fuse(timeout) => {}
+            }
+
+            assert!(
+                connection_verified,
+                "MQTT connection verification failed - subscriber didn't receive test message"
+            );
 
             // Start CLI process with file input and MQTT output
             let args = vec![
@@ -1921,35 +1964,51 @@ mod integration_tests {
 
             // Capture output from MQTT with timeout
             let mut results = Vec::new();
+            let mut retry_count = 0;
+            const MAX_RETRIES: usize = 3;
 
-            // Collect messages with individual timeouts
-            for i in 0..3 {
-                let timeout = Timer::after(Duration::from_millis(5000)); // Longer timeout
+            // Collect all expected messages with retries if needed
+            let mut collection_done = false;
+
+            while !collection_done && retry_count < MAX_RETRIES {
+                let timeout = Timer::after(Duration::from_secs(15));
                 futures::select! {
                     msg_opt = stream.next().fuse() => {
-                        if let Some(msg_result) = msg_opt {
-                            if let Some(msg) = msg_result {
-                                let payload = msg.payload_str();
+                        if let Some(opt_msg) = msg_opt {
+                            if let Some(msg) = opt_msg {
+                                if msg.topic() == "z" {  // Only process messages from our expected topic
+                                    let payload = msg.payload_str();
 
-                                // Try to deserialize the JSON
-                                match serde_json::from_str::<Value>(&payload) {
-                                    Ok(val) => {
-                                        results.push(val);
-                                    }
-                                    Err(_) => {
-                                        // Skip malformed messages
+                                    // Try to deserialize the JSON
+                                    match serde_json::from_str::<Value>(&payload) {
+                                        Ok(val) => {
+                                            println!("Received MQTT message: {}", payload);
+                                            results.push(val);
+
+                                            // Check if we've received all expected messages
+                                            if results.len() >= 3 {
+                                                collection_done = true;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            println!("Error parsing MQTT message: {}, payload: {}", e, payload);
+                                            // Skip malformed messages
+                                        }
                                     }
                                 }
                             } else {
-                                break;
+                                println!("Received None from MQTT message");
+                                retry_count += 1;
+                                Timer::after(Duration::from_millis(500)).await; // Brief delay before retry
                             }
                         } else {
-                            break;
+                            println!("MQTT stream ended");
+                            collection_done = true;
                         }
                     }
                     _ = futures::FutureExt::fuse(timeout) => {
-                        println!("Timeout waiting for MQTT message {}", i + 1);
-                        break;
+                        println!("Timeout waiting for MQTT messages. Received {} so far", results.len());
+                        retry_count += 1;
                     }
                 }
             }

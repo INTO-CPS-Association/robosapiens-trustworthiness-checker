@@ -171,9 +171,15 @@ mod integration_tests {
         assert_eq!(outputs, vec![Value::Int(8), Value::Int(12)]);
 
         // Wait for publishers to complete
-        x_publisher_task.await;
-        y_publisher_task.await;
-        z_publisher_task.await;
+        x_publisher_task
+            .await
+            .expect("X publisher task failed to complete");
+        y_publisher_task
+            .await
+            .expect("Y publisher task failed to complete");
+        z_publisher_task
+            .await
+            .expect("Z publisher task failed to complete");
     }
 
     #[apply(async_test)]
@@ -324,9 +330,15 @@ mod integration_tests {
         assert_eq!(outputs, vec![Value::Int(8), Value::Int(12)]);
 
         // Wait for publishers to complete
-        x_publisher_task.await;
-        y_publisher_task.await;
-        z_publisher_task.await;
+        x_publisher_task
+            .await
+            .expect("X publisher task failed to complete");
+        y_publisher_task
+            .await
+            .expect("Y publisher task failed to complete");
+        z_publisher_task
+            .await
+            .expect("Z publisher task failed to complete");
     }
 
     #[apply(async_test)]
@@ -485,9 +497,15 @@ mod integration_tests {
         assert_eq!(outputs, vec![Value::Int(8), Value::Int(12)]);
 
         // Wait for publishers to complete
-        x_publisher_task.await;
-        y_publisher_task.await;
-        z_publisher_task.await;
+        x_publisher_task
+            .await
+            .expect("X publisher task failed to complete");
+        y_publisher_task
+            .await
+            .expect("Y publisher task failed to complete");
+        z_publisher_task
+            .await
+            .expect("Z publisher task failed to complete");
 
         Ok(())
     }

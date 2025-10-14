@@ -83,7 +83,7 @@ pub async fn dummy_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>
     topic: String,
     values: Vec<T>,
     port: u16,
-) {
+) -> Result<(), anyhow::Error> {
     let len = values.len();
     publish_values(
         &client_name,
@@ -92,7 +92,7 @@ pub async fn dummy_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>
         len,
         port,
     )
-    .await;
+    .await
 }
 
 /// Publishes all values from an OutputStream<Value>.
@@ -103,8 +103,8 @@ pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Send + Serialize + '
     values: OutputStream<T>,
     values_len: usize,
     port: u16,
-) {
-    publish_values(&client_name, &topic, values, values_len, port).await;
+) -> Result<(), anyhow::Error> {
+    publish_values(&client_name, &topic, values, values_len, port).await
 }
 
 /// Generic logic for the dummy publishers
@@ -114,7 +114,7 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
     mut values: OutputStream<T>,
     values_len: usize,
     port: u16,
-) {
+) -> Result<(), anyhow::Error> {
     info!(
         "Starting publisher {} for topic {} with {} values",
         client_name, topic, values_len
@@ -123,12 +123,12 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
     let mqtt_client = MQTT_FACTORY
         .connect(&format!("tcp://localhost:{}", port))
         .await
-        .expect("Failed to create MQTT client");
+        .map_err(|e| anyhow::anyhow!("Failed to create MQTT client: {}", e))?;
 
     let mut index = 0;
     while let Some(value) = values.next().await {
         let output_str = serde_json::to_string(&value)
-            .unwrap_or_else(|e| panic!("Failed to serialize value {:?}: {:?}", value, e));
+            .map_err(|e| anyhow::anyhow!("Failed to serialize value {:?}: {:?}", value, e))?;
 
         let message = MqttMessage::new(topic.to_string(), output_str.clone(), 1);
 
@@ -150,12 +150,17 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
                 );
             }
             Err(e) => {
-                panic!(
+                return Err(anyhow::anyhow!(
                     "Lost MQTT connection with error {:?} on topic {}.",
-                    e, topic
-                );
+                    e,
+                    topic
+                ));
             }
         }
+
+        // Add a small delay between publishing messages to avoid overwhelming the broker
+        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+
         index += 1;
     }
 
@@ -164,9 +169,15 @@ async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
         values_len, topic
     );
 
+    // Ensure we wait a moment before disconnecting to allow for message delivery
+    smol::Timer::after(std::time::Duration::from_millis(100)).await;
+
     if let Err(e) = mqtt_client.disconnect().await {
         debug!("Failed to disconnect MQTT client {}: {:?}", client_name, e);
+        // Don't fail the test just because disconnection failed
     } else {
         debug!("Successfully disconnected MQTT client {}", client_name);
     }
+
+    Ok(())
 }
