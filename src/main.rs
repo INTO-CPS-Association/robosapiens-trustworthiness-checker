@@ -80,8 +80,13 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode)
         .maybe_mqtt_port(mqtt_port)
         .maybe_local_node(cli.local_node)
+        .maybe_runtime(cli.runtime)
         .maybe_dist_constraints(cli.distribution_constraints);
-    let builder = builder.distribution_mode_builder(distribution_mode_builder);
+    debug!("Building distribution mode");
+    let distribution_mode = distribution_mode_builder.build().await?;
+    debug!("Distribution mode built");
+    let builder = builder.distribution_mode(distribution_mode);
+    // let builder = builder.distribution_mode_builder(distribution_mode_builder);
 
     let model = match parser {
         ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
@@ -97,9 +102,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     );
 
     // Localise the model to contain only the local variables (if needed)
+    // Skip for the reconfigurable async runtime, since this is handled by the runtime
     let model = match &builder.distribution_mode {
         DistributionMode::LocalMonitor(locality_mode)
-        | DistributionMode::LocalMonitorWithReceiver(locality_mode, _) => {
+        | DistributionMode::LocalMonitorWithReceiverAndLocality(locality_mode, _) => {
+            debug!("Localising model");
             let model = model.localise(locality_mode);
             info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Localised model");
             model

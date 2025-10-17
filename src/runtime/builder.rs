@@ -10,7 +10,7 @@ use crate::{
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     dep_manage::interface::DependencyManager,
-    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
+    io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
     lang::dynamic_lola::{
         lalr_parser::LALRExprParser,
         parser::CombExprParser,
@@ -53,6 +53,11 @@ pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     fn output(
         self: Box<Self>,
         output: Box<dyn OutputHandler<Val = V>>,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+
+    fn mqtt_reconfig_provider(
+        self: Box<Self>,
+        provider: MQTTLocalityReceiver,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
     fn dependencies(
@@ -113,6 +118,13 @@ impl<
         Box::new(MonBuilder::dependencies(*self, dependencies))
     }
 
+    fn mqtt_reconfig_provider(
+        self: Box<Self>,
+        provider: MQTTLocalityReceiver,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+        Box::new(MonBuilder::mqtt_reconfig_provider(*self, provider))
+    }
+
     fn build(self: Box<Self>) -> Box<dyn Runnable> {
         Box::new(MonBuilder::build(*self))
     }
@@ -157,6 +169,10 @@ impl<
         Self(self.0.dependencies(dependencies))
     }
 
+    fn mqtt_reconfig_provider(self, provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
+        Self(self.0.mqtt_reconfig_provider(provider))
+    }
+
     fn build(self) -> Self::Mon {
         let builder = self.0.build();
         // Perform type checking here
@@ -171,7 +187,13 @@ impl<
 pub enum DistributionMode {
     CentralMonitor,
     LocalMonitor(Box<dyn LocalitySpec>), // Local topics
-    LocalMonitorWithReceiver(Box<dyn LocalitySpec>, crate::io::mqtt::MQTTLocalityReceiver), // Local topics with receiver for reconfiguration
+    LocalMonitorWithReceiverAndLocality(
+        Box<dyn LocalitySpec>,
+        crate::io::mqtt::MQTTLocalityReceiver,
+    ), // Local topics with receiver for reconfiguration
+    /// Receiver for reconfiguration but no current local monitor; this is for dynamic
+    /// reconfiguration each timestep
+    ReconfigurableLocalMonitor(crate::io::mqtt::MQTTLocalityReceiver),
     DistributedCentralised(
         /// Location names
         Vec<String>,
@@ -199,7 +221,10 @@ impl Debug for DistributionMode {
         match self {
             DistributionMode::CentralMonitor => write!(f, "CentralMonitor"),
             DistributionMode::LocalMonitor(_) => write!(f, "LocalMonitor"),
-            DistributionMode::LocalMonitorWithReceiver(_, _) => {
+            DistributionMode::LocalMonitorWithReceiverAndLocality(_, _) => {
+                write!(f, "LocalMonitorWithReceiverAndLocality")
+            }
+            DistributionMode::ReconfigurableLocalMonitor(_) => {
                 write!(f, "LocalMonitorWithReceiver")
             }
             DistributionMode::DistributedCentralised(locations) => {
@@ -238,6 +263,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
+    pub mqtt_reconfig_provider: Option<MQTTLocalityReceiver>,
     pub scheduler_mode: SchedulerCommunication,
     pub parser: ParserMode,
 }
@@ -333,6 +359,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             distribution_mode_builder: None,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
+            mqtt_reconfig_provider: None,
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
         }
@@ -373,6 +400,14 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
         }
     }
 
+    fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self {
+        // Generic builder doesn't directly use the MQTT reconfiguration provider
+        Self {
+            mqtt_reconfig_provider: Some(provider),
+            ..self
+        }
+    }
+
     fn build(self) -> Self::Mon {
         if self.distribution_mode_builder.is_some()
             || self.input_provider_builder.is_some()
@@ -389,6 +424,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                 self.executor,
                 self.dependencies,
                 self.model,
+                self.mqtt_reconfig_provider,
                 self.distribution_mode,
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
@@ -423,11 +459,16 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         executor: Option<Rc<LocalExecutor<'static>>>,
         dependencies: Option<DependencyManager>,
         model: Option<LOLASpecification>,
+        mqtt_reconfig_provider: Option<MQTTLocalityReceiver>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
     ) -> Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> {
+        debug!(
+            "Creating common builder with distribution mode: {:?}",
+            distribution_mode
+        );
         let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> = match (
             runtime, semantics, parser,
         ) {
@@ -473,9 +514,27 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     UntimedLolaSemantics<LALRExprParser>,
                 >::new();
 
-                // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
-                if let DistributionMode::LocalMonitorWithReceiver(_, receiver) = distribution_mode {
+                debug!(
+                    "Checking runtime distribution mode: {:?}",
+                    distribution_mode
+                );
+                if let DistributionMode::LocalMonitorWithReceiverAndLocality(_, receiver) =
+                    &distribution_mode
+                {
+                    debug!("Building runtime with LocalMonitorWithReceiverAndLocality");
+                    // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
                     builder = builder.reconf_provider(receiver.clone());
+                } else if let DistributionMode::ReconfigurableLocalMonitor(receiver) =
+                    &distribution_mode
+                {
+                    debug!("Building runtime with ReconfigurableLocalMonitor");
+                    // If we have a ReconfigurableLocalMonitor, pass the receiver to the builder
+                    builder = builder.reconf_provider(receiver.clone());
+                } else {
+                    debug!(
+                        "No matching distribution mode found for MQTT receiver, mode was: {:?}",
+                        distribution_mode
+                    );
                 }
 
                 // For reconfigurable runtime, pass builders instead of built providers
@@ -500,9 +559,28 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 >::new();
 
                 // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
-                if let DistributionMode::LocalMonitorWithReceiver(_, receiver) = distribution_mode {
+                debug!(
+                    "Checking Combinator runtime distribution mode: {:?}",
+                    distribution_mode
+                );
+                if let DistributionMode::LocalMonitorWithReceiverAndLocality(_, receiver) =
+                    &distribution_mode
+                {
+                    debug!("Combinator: Building runtime with LocalMonitorWithReceiverAndLocality");
                     builder = builder.reconf_provider(receiver.clone());
+                } else if let DistributionMode::ReconfigurableLocalMonitor(receiver) =
+                    &distribution_mode
+                {
+                    debug!("Combinator: Building runtime with ReconfigurableLocalMonitor");
+                    builder = builder.reconf_provider(receiver.clone());
+                } else {
+                    debug!(
+                        "Combinator: No matching distribution mode for MQTT receiver, mode was: {:?}",
+                        distribution_mode
+                    );
                 }
+
+                builder = builder.maybe_mqtt_reconfig_provider(mqtt_reconfig_provider);
 
                 // For reconfigurable runtime, pass builders instead of built providers
                 if let Some(input_provider_builder) = input_provider_builder {
@@ -535,12 +613,14 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     DistributedSemantics<LALRExprParser>,
                 >::new();
 
-                let builder = builder.scheduler_mode(scheduler_mode);
+                let builder = builder.maybe_mqtt_reconfig_provider(mqtt_reconfig_provider);
 
+                let builder = builder.scheduler_mode(scheduler_mode);
                 let builder = match distribution_mode {
                     DistributionMode::CentralMonitor => builder,
                     DistributionMode::LocalMonitor(_)
-                    | DistributionMode::LocalMonitorWithReceiver(_, _) => {
+                    | DistributionMode::LocalMonitorWithReceiverAndLocality(_, _)
+                    | DistributionMode::ReconfigurableLocalMonitor(_) => {
                         todo!("Local monitor not implemented here yet")
                     }
                     DistributionMode::DistributedCentralised(locations) => {
@@ -598,11 +678,20 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
     pub async fn async_build(self) -> Box<dyn Runnable> {
         let distribution_mode = match self.distribution_mode_builder {
             // TODO: add error handling to this method
-            Some(distribution_mode_builder) => distribution_mode_builder
-                .build()
-                .await
-                .expect("Failed to build distribution mode"),
-            None => self.distribution_mode,
+            Some(distribution_mode_builder) => {
+                debug!("Building with distribution_mode_builder");
+                distribution_mode_builder
+                    .build()
+                    .await
+                    .expect("Failed to build distribution mode")
+            }
+            None => {
+                debug!(
+                    "Directly using distribution mode: {:?}",
+                    self.distribution_mode
+                );
+                self.distribution_mode
+            }
         };
 
         let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> =
@@ -613,6 +702,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 self.executor,
                 self.dependencies,
                 self.model,
+                self.mqtt_reconfig_provider,
                 distribution_mode,
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
@@ -660,6 +750,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             distribution_mode_builder: self.distribution_mode_builder.clone(),
             runtime: self.runtime.clone(),
             semantics: self.semantics.clone(),
+            mqtt_reconfig_provider: None,
             scheduler_mode: self.scheduler_mode.clone(),
             parser: self.parser.clone(),
         }

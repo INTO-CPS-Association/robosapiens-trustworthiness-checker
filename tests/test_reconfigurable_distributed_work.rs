@@ -233,7 +233,8 @@ mod integration_tests {
         info!("Received work: {:?}", locality.local_vars());
 
         // Create distribution mode with receiver
-        let dist_mode = DistributionMode::LocalMonitorWithReceiver(Box::new(locality), receiver);
+        let dist_mode =
+            DistributionMode::LocalMonitorWithReceiverAndLocality(Box::new(locality), receiver);
 
         // Create a simple spec
         let mut spec_str = "input input_x: Int32\noutput output_y: Int32 := input_x + 1";

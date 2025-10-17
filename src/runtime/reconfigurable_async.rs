@@ -100,6 +100,10 @@ impl<
         self
     }
 
+    fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self {
+        self.reconf_provider(provider)
+    }
+
     fn build(self) -> ReconfAsyncRunner<Expr, S, M, Ctx> {
         panic!("One does not simply build a ReconfAsyncRunner - use async_build instead!");
     }
@@ -138,6 +142,13 @@ impl<
         }
     }
 
+    pub fn maybe_reconf_provider(self, reconf_provider: Option<MQTTLocalityReceiver>) -> Self {
+        Self {
+            reconf_provider: reconf_provider,
+            ..self
+        }
+    }
+
     pub fn local_node(self, local_node: String) -> Self {
         Self { local_node, ..self }
     }
@@ -167,6 +178,7 @@ impl<
     pub async fn async_build(self) -> ReconfAsyncRunner<Expr, S, M, Ctx> {
         let local_node = self.local_node.clone();
         let reconf_provider = self.reconf_provider.unwrap_or_else(|| {
+            debug!("Creating new LocalityReceiver in async runtime");
             MQTTLocalityReceiver::new("localhost".into(), local_node.clone().into())
         });
 
@@ -278,6 +290,8 @@ where
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
+        info!("Start of reconfigurable runtime");
+
         // Get the initial work assignment
         info!("Waiting for initial work assignment");
         let mut work_assignment = self.reconf_provider.receive().await?;
@@ -362,10 +376,12 @@ where
                 .output(output);
             let monitor = builder.build();
 
+            debug!("Waiting for clock tock");
             mem::take(&mut tocker_rx)
                 .expect("Tocker is missing")
                 .await
                 .unwrap();
+            debug!("Clock tocked");
 
             select! {
                 // Update the work assignment
@@ -377,8 +393,8 @@ where
 
                     let (new_tocker_tx, new_tocker_rx) = oneshot::channel().into_split();
                     tocker_rx = Some(new_tocker_rx);
-                    debug!("Clock tocking");
                     clock_tx.send(new_tocker_tx).await.unwrap();
+
                     debug!("Accepted new assignment");
                     // Loop will continue and create a new monitor with the new assignment
                 }

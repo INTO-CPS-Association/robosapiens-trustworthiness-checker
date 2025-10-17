@@ -231,6 +231,11 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for ConstraintBasedMonitor
         self
     }
 
+    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
+        // Ignoring unsupported reconfiguration provider
+        self
+    }
+
     fn build(self) -> ConstraintBasedMonitor {
         let executor = self.executor.unwrap();
         let model = self.model.unwrap();

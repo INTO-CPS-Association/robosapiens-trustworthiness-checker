@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 
-use crate::dep_manage::interface::DependencyManager;
+use crate::{dep_manage::interface::DependencyManager, io::mqtt::MQTTLocalityReceiver};
 
 use super::{StreamData, VarName};
 
@@ -229,6 +229,19 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
     {
         if let Some(dependencies) = dependencies {
             self.dependencies(dependencies)
+        } else {
+            self
+        }
+    }
+
+    fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self;
+
+    fn maybe_mqtt_reconfig_provider(self, provider: Option<MQTTLocalityReceiver>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(provider) = provider {
+            self.mqtt_reconfig_provider(provider)
         } else {
             self
         }
