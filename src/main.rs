@@ -30,13 +30,23 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     if cfg!(feature = "span-tracing") {
         tracing_subscriber::registry()
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .with(fmt::layer().with_span_events(FmtSpan::FULL))
+            .with(
+                fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .with_span_events(FmtSpan::FULL)
+                    .with_file(true)
+                    .with_line_number(true),
+            )
             .with(EnvFilter::from_default_env())
             .init();
     } else {
         tracing_subscriber::registry()
-            .with(fmt::layer().with_writer(std::io::stderr))
+            .with(
+                fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .with_file(true)
+                    .with_line_number(true),
+            )
             .with(EnvFilter::from_default_env())
             .init();
     }
