@@ -471,6 +471,14 @@ pub fn spec_defer() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_dynamic() -> &'static str {
+    "in x
+     in e
+     out z
+     z = dynamic(e)"
+}
+
+#[allow(dead_code)]
 pub fn spec_future_indexing() -> &'static str {
     "in x
      in y

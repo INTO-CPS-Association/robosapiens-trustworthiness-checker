@@ -430,6 +430,10 @@ impl LOLASpecification {
             .collect()
     }
 
+    pub fn exprs(&self) -> BTreeMap<VarName, SExpr> {
+        self.exprs.clone()
+    }
+
     pub fn new(
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
