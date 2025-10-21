@@ -1,11 +1,11 @@
-use std::mem;
+use std::time::Duration;
 use std::{marker::PhantomData, rc::Rc};
 
 use async_trait::async_trait;
 use async_unsync::oneshot;
 use futures::{FutureExt, future::LocalBoxFuture, select};
 use smol::LocalExecutor;
-use tracing::{Level, debug, info, instrument};
+use tracing::{Level, debug, debug_span, info, instrument, warn};
 
 use crate::io::reconfiguration::input_provider_multiplexer::InputProviderMultiplexer;
 use crate::{
@@ -295,30 +295,43 @@ where
         // Get the initial work assignment
         info!("Waiting for initial work assignment");
         let mut work_assignment = self.reconf_provider.receive().await?;
-        info!("Got work assignment");
+        info!("Got work assignment with local variables",);
 
         // Set up clock
+        info!("Setting up clock channel for input coordination");
         let (mut clock_tx, clock_rx) = unsync::spsc::channel(1);
 
-        debug!("Clock ticking");
-        let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
-        let mut tocker_rx = Some(tocker_rx);
-        clock_tx.send(tocker_tx).await.unwrap();
+        info!("Creating initial tocker for clock tick mechanism");
+        let (tocker_tx, _tocker_rx) = oneshot::channel().into_split();
+        // TODO: fix synchronisation
+        // let tocker_rx = Some(tocker_rx);
+        match clock_tx.send(tocker_tx).await {
+            Ok(_) => info!("Successfully sent initial clock tick signal"),
+            Err(e) => warn!("Failed to send initial clock tick: {:?}", e),
+        };
+        info!("Clock tick mechanism initialized");
 
         // Clock ticker
+        // NOTE: This is intentionally commented out - clock ticking is managed manually
+        // through the oneshot channel mechanism instead of an automatic timer.
+        // The reconfigurable async runtime uses a different approach to clock ticking
+        // where ticks are triggered after each input message set is processed.
         // TODO: figure out the proper way to progress the clock
-        // self.executor
-        //     .spawn(async move {
-        //         let _clock = debug_span!("Clock").entered();
-        //         loop {
-        //             debug!("Clock ticking");
-        //             clock_tx.send(()).await.unwrap();
-        //             debug!("Yielding from clock by waiting");
-        //             smol::Timer::after(Duration::new(2, 0)).await;
-        //             // smol::future::yield_now().await;
-        //         }
-        //     })
-        //     .detach();
+        self.executor
+            .spawn(async move {
+                let _clock = debug_span!("Clock").entered();
+                loop {
+                    debug!("Clock ticking");
+                    let (tocker_tx, tocker_rx) = oneshot::channel().into_split();
+                    clock_tx.send(tocker_tx).await.unwrap();
+                    debug!("Yielding from clock by waiting");
+                    smol::Timer::after(Duration::new(2, 0)).await;
+                    tocker_rx.await.unwrap();
+                    // smol::future::yield_now().await;
+                }
+            })
+            .detach();
+        info!("Note: Using manual clock tick mechanism instead of automatic timer");
 
         // Create root input provider
         debug!("Building input provider");
@@ -339,18 +352,24 @@ where
         debug!("Built input provider");
 
         // Multiplex the input provider
+        info!("Creating input multiplexer to manage input streams");
         let mut input_mux = InputProviderMultiplexer::new(self.executor.clone(), input, clock_rx);
 
         // Run the input multiplexer
+        info!("Spawning input multiplexer task to manage input streams");
         self.executor.spawn(input_mux.run()).detach();
+        info!("Input multiplexer is now running in background");
 
-        info!("Received initial work assignment");
+        info!("Runtime initialization complete, entering main processing loop");
 
         loop {
+            info!("Starting new monitoring cycle with work assignment");
+
             // Create new client to the multiplexed input provider
+            info!("Creating input subscription to multiplexer");
             let input = Box::new(input_mux.subscribe().await);
 
-            debug!("Subscribed to input mux");
+            info!("Successfully subscribed to input multiplexer");
 
             // Create fresh output providers for this configuration
             let output = if let Some(ref output_builder) = self.output_builder {
@@ -376,12 +395,14 @@ where
                 .output(output);
             let monitor = builder.build();
 
-            debug!("Waiting for clock tock");
-            mem::take(&mut tocker_rx)
-                .expect("Tocker is missing")
-                .await
-                .unwrap();
-            debug!("Clock tocked");
+            // debug!("Waiting for clock tock");
+            // mem::take(&mut tocker_rx)
+            //     .expect("Tocker is missing")
+            //     .await
+            //     .unwrap();
+            // debug!("Clock tocked");
+
+            let mut monitor_fut = FutureExt::fuse(monitor.run());
 
             select! {
                 // Update the work assignment
@@ -391,15 +412,18 @@ where
 
                     debug!("Clock ticking");
 
-                    let (new_tocker_tx, new_tocker_rx) = oneshot::channel().into_split();
-                    tocker_rx = Some(new_tocker_rx);
-                    clock_tx.send(new_tocker_tx).await.unwrap();
+                    // let (new_tocker_tx, new_tocker_rx) = oneshot::channel().into_split();
+                    // tocker_rx = Some(new_tocker_rx);
+                    // select!{
+                    //     res = FutureExt::fuse(clock_tx.send(new_tocker_tx)) => {res.unwrap()}
+                    //     res = monitor_fut => {res?}
+                    // }
 
                     debug!("Accepted new assignment");
                     // Loop will continue and create a new monitor with the new assignment
                 }
 
-                result = FutureExt::fuse(monitor.run()) => {
+                result = monitor_fut => {
                     // Monitor finished, handle result
                     result?;
                 }

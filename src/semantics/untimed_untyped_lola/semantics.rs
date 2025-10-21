@@ -9,6 +9,7 @@ use crate::lang::dynamic_lola::ast::{
 };
 use crate::semantics::MonitoringSemantics;
 use crate::semantics::StreamContext;
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct UntimedLolaSemantics<Parser>
@@ -24,32 +25,80 @@ where
     Parser: ExprParser<SExpr> + 'static,
 {
     fn to_async_stream(expr: SExpr, ctx: &Ctx) -> OutputStream<Value> {
+        debug!("Creating async stream for expression: {:?}", expr);
         match expr {
-            SExpr::Val(v) => mc::val(v),
+            SExpr::Val(v) => {
+                debug!("Constant value: {:?}", v);
+                mc::val(v)
+            }
             SExpr::BinOp(e1, e2, op) => {
+                debug!("Binary operation: {:?} {:?} {:?}", e1, op, e2);
                 let e1 = Self::to_async_stream(*e1, ctx);
                 let e2 = Self::to_async_stream(*e2, ctx);
                 match op {
-                    SBinOp::NOp(NumericalBinOp::Add) => mc::plus(e1, e2),
-                    SBinOp::NOp(NumericalBinOp::Sub) => mc::minus(e1, e2),
-                    SBinOp::NOp(NumericalBinOp::Mul) => mc::mult(e1, e2),
-                    SBinOp::NOp(NumericalBinOp::Div) => mc::div(e1, e2),
-                    SBinOp::NOp(NumericalBinOp::Mod) => mc::modulo(e1, e2),
-                    SBinOp::BOp(BoolBinOp::Or) => mc::or(e1, e2),
-                    SBinOp::BOp(BoolBinOp::And) => mc::and(e1, e2),
-                    SBinOp::SOp(StrBinOp::Concat) => mc::concat(e1, e2),
-                    SBinOp::COp(CompBinOp::Eq) => mc::eq(e1, e2),
-                    SBinOp::COp(CompBinOp::Le) => mc::le(e1, e2),
-                    SBinOp::COp(CompBinOp::Lt) => mc::lt(e1, e2),
-                    SBinOp::COp(CompBinOp::Ge) => mc::ge(e1, e2),
-                    SBinOp::COp(CompBinOp::Gt) => mc::gt(e1, e2),
+                    SBinOp::NOp(NumericalBinOp::Add) => {
+                        debug!("Performing addition operation");
+                        mc::plus(e1, e2)
+                    }
+                    SBinOp::NOp(NumericalBinOp::Sub) => {
+                        debug!("Performing subtraction operation");
+                        mc::minus(e1, e2)
+                    }
+                    SBinOp::NOp(NumericalBinOp::Mul) => {
+                        debug!("Performing multiplication operation");
+                        mc::mult(e1, e2)
+                    }
+                    SBinOp::NOp(NumericalBinOp::Div) => {
+                        debug!("Performing division operation");
+                        mc::div(e1, e2)
+                    }
+                    SBinOp::NOp(NumericalBinOp::Mod) => {
+                        debug!("Performing modulo operation");
+                        mc::modulo(e1, e2)
+                    }
+                    SBinOp::BOp(BoolBinOp::Or) => {
+                        debug!("Performing logical OR operation");
+                        mc::or(e1, e2)
+                    }
+                    SBinOp::BOp(BoolBinOp::And) => {
+                        debug!("Performing logical AND operation");
+                        mc::and(e1, e2)
+                    }
+                    SBinOp::SOp(StrBinOp::Concat) => {
+                        debug!("Performing string concatenation");
+                        mc::concat(e1, e2)
+                    }
+                    SBinOp::COp(CompBinOp::Eq) => {
+                        debug!("Performing equality comparison");
+                        mc::eq(e1, e2)
+                    }
+                    SBinOp::COp(CompBinOp::Le) => {
+                        debug!("Performing less than or equal comparison");
+                        mc::le(e1, e2)
+                    }
+                    SBinOp::COp(CompBinOp::Lt) => {
+                        debug!("Performing less than comparison");
+                        mc::lt(e1, e2)
+                    }
+                    SBinOp::COp(CompBinOp::Ge) => {
+                        debug!("Performing greater than or equal comparison");
+                        mc::ge(e1, e2)
+                    }
+                    SBinOp::COp(CompBinOp::Gt) => {
+                        debug!("Performing greater than comparison");
+                        mc::gt(e1, e2)
+                    }
                 }
             }
             SExpr::Not(x) => {
+                debug!("Performing logical NOT operation");
                 let x = Self::to_async_stream(*x, ctx);
                 mc::not(x)
             }
-            SExpr::Var(v) => mc::var(ctx, v),
+            SExpr::Var(v) => {
+                debug!("Accessing variable: {:?}", v);
+                mc::var(ctx, v)
+            }
             SExpr::Dynamic(e) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::dynamic::<Ctx, Parser>(ctx, e, None, 1)

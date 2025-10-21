@@ -10,7 +10,7 @@ use async_unsync::oneshot::{self, Sender as OneshotSender};
 use futures::future::{LocalBoxFuture, join_all};
 use futures::{FutureExt, StreamExt, select};
 use smol::LocalExecutor;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use unsync::broadcast::{Receiver as BroadcastReceiver, Sender as BroadcastSender};
 use unsync::spsc::Sender as SpscSender;
 use unsync::spsc::{self, Receiver as SpscReceiver};
@@ -94,21 +94,33 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
     }
 
     pub fn run(&mut self) -> LocalBoxFuture<'static, ()> {
+        info!("Starting InputProviderMultiplexer.run()");
         let run_result = self.run_result.clone();
+        debug!("Spawning inner input provider run");
         let mut inner_run = self.executor.spawn(self.inner_input_provider.run()).fuse();
+
+        debug!("Taking clock receiver and senders");
         let mut clock_rx = mem::take(&mut self.clock_rx).expect("Clock receiver not available");
         let mut senders = mem::take(&mut self.senders).expect("Senders not available");
+
+        debug!("Creating input streams for {} variables", senders.len());
         let mut input_streams: Vec<_> = senders
             .keys()
             .map(|k| {
+                debug!("Getting input stream for variable: {}", k);
                 self.inner_input_provider
                     .input_stream(k)
-                    .expect("Expected input steam")
+                    .unwrap_or_else(|| panic!("Expected input stream for variable {}", k))
             })
             .collect();
+        info!("Created {} input streams", input_streams.len());
+
         let subscribers_req_rx =
             mem::take(&mut self.subscribers_req).expect("Subscribers req channel is gone");
-        info!("MultiplexedInputProvider run future created");
+        info!(
+            "MultiplexedInputProvider run future created with {} input streams",
+            input_streams.len()
+        );
 
         Box::pin(async move {
             info!("MultiplexedInputProvider started");
@@ -147,14 +159,21 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
                     results = all_inputs_stream.next() => {
                         match results {
                             Some(mut results) => {
-                                debug!("Inputs returned, waiting for clock tick");
+                                info!("Received input values: {} values, need to wait for clock tick",
+                                      results.iter().filter(|r| r.is_some()).count());
                                 // Wait for clock tick before distributing any results
                                 // (so new receivers have time to subscribe)
+                                debug!("Preparing to receive clock tick");
                                 let mut clock_tick = Box::pin(clock_rx.recv().fuse());
                                 let mut clock_tocker = None;
+
+                                debug!("Entering wait loop for clock tick");
                                 while clock_tocker.is_none() {
                                     select!{
-                                        new_clock_tocker = clock_tick => {clock_tocker = Some(new_clock_tocker)}
+                                        new_clock_tocker = clock_tick => {
+                                            info!("Received clock tick signal: {:?}", new_clock_tocker.is_some());
+                                            clock_tocker = Some(new_clock_tocker)
+                                        }
                                         // Also allow new requests whilst waiting to distribute the
                                         // input
                                         receiver_req_tx = next_subscribers_req_stream.next() => {
@@ -175,23 +194,35 @@ impl<Val: StreamData> InputProviderMultiplexer<Val> {
                                     }
                                 }
 
-                                debug!("Clocks ticked");
+                                info!("Clocks ticked, ready to distribute input values");
 
                                 if results.iter().all(|x| x.is_none()) {
+                                    info!("All inputs returned None, ending multiplexer");
                                     return
                                 }
 
-                                for (res, sender) in results.iter_mut().zip(senders.values_mut()) {
+                                let present_count = results.iter().filter(|r| r.is_some()).count();
+                                debug!("Distributing {} input values to subscribers", present_count);
+
+                                let mut distributed_count = 0;
+                                for (i, (res, sender)) in results.iter_mut().zip(senders.values_mut()).enumerate() {
                                     if let Some(res) = res {
+                                        debug!("Distributing input value #{}: {:?}", i, res);
                                         sender.send(res.clone()).await;
+                                        distributed_count += 1;
                                     }
                                 }
+                                info!("Distributed {} input values to subscribers", distributed_count);
 
-                                debug!("Clock tocking");
+                                info!("Sending clock tock to signal processing can continue");
                                 let tocker = mem::take(&mut clock_tocker)
                                     .expect("Expected tocker to be set")
                                     .expect("Expected tocker to be Some");
-                                tocker.send(()).expect("Failed to send tock");
+                                match tocker.send(()) {
+                                    Ok(_) => debug!("Successfully sent clock tock signal"),
+                                    Err(e) => warn!("Failed to send clock tock: {:?}", e),
+                                }
+                                info!("Clock tock sent, input cycle complete");
                             }
                             None => {
                                 return

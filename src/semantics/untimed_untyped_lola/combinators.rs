@@ -47,8 +47,14 @@ pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
     x_mon: OutputStream<S>,
     y_mon: OutputStream<R>,
 ) -> OutputStream<U> {
+    debug!("lift2: Creating combined stream");
     let f = f.clone();
-    Box::pin(x_mon.zip(y_mon).map(move |(x, y)| f(x, y)))
+    Box::pin(x_mon.zip(y_mon).map(move |(x, y)| {
+        debug!("lift2: Processing input values");
+        let result = f(x, y);
+        debug!("lift2: Produced result");
+        result
+    }))
 }
 
 pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
@@ -242,18 +248,29 @@ pub fn sindex(x: OutputStream<Value>, i: isize) -> OutputStream<Value> {
 }
 
 pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    debug!("Creating plus operation stream");
     lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 + y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
-            (x, y) => panic!("Invalid addition with types: {:?}, {:?}", x, y),
+        |x, y| {
+            debug!("Executing plus operation");
+            let result = match (x, y) {
+                (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
+                (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 + y),
+                (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f64),
+                (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
+                (Value::Int(_), Value::Unknown)
+                | (Value::Float(_), Value::Unknown)
+                | (Value::Unknown, Value::Int(_))
+                | (Value::Unknown, Value::Float(_))
+                | (Value::Unknown, Value::Unknown) => {
+                    debug!("Addition with Unknown value, resulting in Unknown");
+                    Value::Unknown
+                }
+                _ => {
+                    panic!("Cannot add incompatible types")
+                }
+            };
+            debug!("Plus operation completed");
+            result
         },
         x,
         y,
@@ -428,9 +445,14 @@ where
 }
 
 pub fn var(ctx: &impl StreamContext<Value>, x: VarName) -> OutputStream<Value> {
+    debug!("Accessing variable");
     match ctx.var(&x) {
-        Some(x) => x,
+        Some(stream) => {
+            debug!("Found variable");
+            stream
+        }
         None => {
+            debug!("Variable not found - this will panic");
             panic!("Variable \"{}\" not found", x)
         }
     }

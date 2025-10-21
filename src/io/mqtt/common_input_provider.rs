@@ -110,39 +110,76 @@ pub(crate) mod common {
         }
 
         pub async fn connect(&mut self) -> anyhow::Result<()> {
+            info!("Starting MQTT input provider connection to {}", self.uri);
             let client_streams_tx = std::mem::take(&mut self.client_streams_tx)
                 .expect("Client stream tx already taken");
 
             // Create and connect to the MQTT client
-            info!("Getting client with subscription");
+            info!(
+                "Getting client with subscription for {} topics",
+                self.var_topics.len()
+            );
             let (client, mqtt_stream) = self
                 .factory
                 .connect_and_receive(&self.uri, self.max_reconnect_attempts)
                 .await?;
-            info!(?self.uri, "InputProvider MQTT client connected to broker");
+            info!(?self.uri, "InputProvider MQTT client connected to broker successfully");
 
             let topics: Vec<String> = self.var_topics.values().cloned().collect();
             let qos = vec![QOS; topics.len()];
+
+            info!(
+                "Attempting to subscribe to {} topics: {:?}",
+                topics.len(),
+                topics
+            );
+
+            // Log the full var_topics mapping
+            for (var, topic) in &self.var_topics {
+                info!("Variable mapping: '{}' <- '{}'", var, topic);
+            }
+
+            let mut attempt = 0;
             loop {
+                attempt += 1;
+                info!("Subscription attempt #{}", attempt);
                 match client.subscribe_many(&topics, &qos).await {
-                    Ok(_) => break,
+                    Ok(_) => {
+                        info!("Successfully subscribed to all topics");
+                        break;
+                    }
                     Err(e) => {
-                        warn!(?topics, err=?e, "Failed to subscribe to topics");
+                        warn!(?topics, err=?e, attempt=?attempt, "Failed to subscribe to topics");
                         smol::Timer::after(std::time::Duration::from_millis(100)).await;
                         info!("Retrying subscribing to MQTT topics");
-                        let _e = client.reconnect().await;
+                        match client.reconnect().await {
+                            Ok(_) => info!("Reconnected to MQTT broker successfully"),
+                            Err(re) => warn!("Failed to reconnect to MQTT broker: {:?}", re),
+                        }
                     }
+                }
+
+                if attempt > 10 {
+                    warn!("Exceeded maximum subscription attempts, continuing anyway");
+                    break;
                 }
             }
             info!(?self.uri, ?topics, "Connected and subscribed to MQTT broker");
 
             // Mark as ready as soon as we're connected and subscribed
             self.started.set(true);
+            info!("Set MQTT input provider to ready state");
 
+            info!("Sending client and stream to run logic");
             client_streams_tx
                 .send((client, mqtt_stream))
                 .map_err(|_| anyhow::anyhow!("Failed to send client streams"))?;
 
+            info!("Input provider is fully ready and waiting for messages");
+            debug!(
+                "Input provider has these topics available: {:?}",
+                self.var_topics.values().collect::<Vec<_>>()
+            );
             Ok(())
         }
 
@@ -155,19 +192,41 @@ pub(crate) mod common {
             OutputStream<MqttMessage>,
             InverseVarTopicMap,
         )> {
-            info!("run_logic started");
+            info!(
+                "MQTT input provider run_logic starting with {} variables",
+                var_topics.len()
+            );
+
+            // Log all input variables and their topics
+            for (var, topic) in &var_topics {
+                info!("Input variable '{}' mapped to topic '{}'", var, topic);
+            }
 
             // Intentionally consumed - don't want to maintain two maps
             let var_topics_inverse: InverseVarTopicMap = var_topics
                 .into_iter()
-                .map(|(var, top)| (top, var))
+                .map(|(var, top)| {
+                    info!(
+                        "Creating reverse mapping: topic '{}' -> variable '{}'",
+                        top, var
+                    );
+                    (top, var)
+                })
                 .collect();
 
+            info!(
+                "Created inverse topic mapping with {} entries",
+                var_topics_inverse.len()
+            );
+
+            info!("Waiting to receive MQTT client and stream from connect()");
             let (client, mqtt_stream) = client_streams_rx
                 .await
                 .ok_or_else(|| anyhow::anyhow!("Failed to receive MQTT client and stream"))?;
+            info!("Successfully received MQTT client and stream");
 
             // Started flag is set in connect(), not here
+            info!("MQTT input provider run_logic initialization complete");
             Ok((client, mqtt_stream, var_topics_inverse))
         }
 
@@ -180,7 +239,7 @@ pub(crate) mod common {
             prev_var_topics_inverse: Option<&InverseVarTopicMap>,
         ) -> anyhow::Result<()> {
             // Process the message
-            debug!(topic = msg.topic, "Received MQTT message on topic:");
+            info!(topic = msg.topic, payload = ?msg.payload, "Handling MQTT message");
             let mut value: Value = serde_json5::from_str(&msg.payload).map_err(|e| {
                 anyhow!(e).context(format!(
                     "Failed to parse value {:?} sent from MQTT",
@@ -235,11 +294,24 @@ pub(crate) mod common {
         pub fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
             let started = self.started.clone();
             Box::pin(async move {
-                debug!("In ready");
+                info!("Checking if MQTT input provider is ready");
+                let mut attempts = 0;
                 while !started.get().await {
-                    debug!("Checking if ready");
+                    attempts += 1;
+                    info!(
+                        "MQTT input provider not ready yet, checking again (attempt #{})",
+                        attempts
+                    );
                     smol::Timer::after(std::time::Duration::from_millis(100)).await;
+
+                    if attempts > 50 {
+                        warn!(
+                            "MQTT input provider still not ready after 5 seconds, continuing to wait"
+                        );
+                        attempts = 0;
+                    }
                 }
+                info!("MQTT input provider is ready");
                 Ok(())
             })
         }

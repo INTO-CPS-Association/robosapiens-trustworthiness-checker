@@ -249,6 +249,8 @@ impl<V: StreamData> VarManager<V> {
         let cancellation_token = self.cancellation_token.clone();
         let id = self.id;
 
+        debug!("VarManager {}: Starting tick for variable '{}'", id, var);
+
         // Return a future which will actually do the distribution
         Box::pin(async move {
             // Check if cancellation was requested
@@ -291,8 +293,15 @@ impl<V: StreamData> VarManager<V> {
             }
 
             // Use select! to race input_stream.next() against cancellation
+            debug!(
+                "VarManager {id}: Waiting for next value for variable '{}'",
+                var
+            );
             let next_result = select! {
-                next_item = input_stream.next().fuse() => next_item,
+                next_item = input_stream.next().fuse() => {
+                    debug!("VarManager {id}: Received next item for '{}': {:?}", var, next_item);
+                    next_item
+                },
                 _ = cancellation_token.cancelled().fuse() => {
                     debug!("VarManager {id}: Cancellation requested during input stream read");
                     return false;
@@ -658,17 +667,54 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
     type Builder = ContextBuilder<Val>;
 
     fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
+        debug!(
+            "Context[id={}]: Requesting stream for variable '{}'",
+            self.id, var
+        );
+
         if self.is_clock_started() {
+            debug!(
+                "Context[id={}]: Clock already started, can't request stream for '{}'",
+                self.id, var
+            );
             panic!(
                 "Context {}: Cannot request a stream after the clock has started",
                 self.id
             );
         }
 
+        debug!(
+            "Context[id={}]: Looking for var manager for '{}'",
+            self.id, var
+        );
         let mut var_managers = self.var_managers.borrow_mut();
-        let var_manager = var_managers.get_mut(var)?;
+        let var_manager = match var_managers.get_mut(var) {
+            Some(vm) => {
+                debug!("Context[id={}]: Found var manager for '{}'", self.id, var);
+                vm
+            }
+            None => {
+                debug!(
+                    "Context[id={}]: No var manager found for '{}'. Available: {:?}",
+                    self.id,
+                    var,
+                    var_managers.keys().collect::<Vec<_>>()
+                );
+                return None;
+            }
+        };
 
-        Some(var_manager.subscribe())
+        debug!(
+            "Context[id={}]: Subscribing to stream for '{}'",
+            self.id, var
+        );
+        let stream = var_manager.subscribe();
+        debug!(
+            "Context[id={}]: Successfully subscribed to stream for '{}'",
+            self.id, var
+        );
+
+        Some(stream)
     }
 
     fn subcontext(&self, history_length: usize) -> Self {
@@ -714,21 +760,47 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
     }
 
     async fn tick(&mut self) {
+        debug!(
+            "Context[id={}]: Ticking context with {} var managers",
+            self.id,
+            self.var_managers.borrow().len()
+        );
+
         let nested_tick = match self.nested.as_mut() {
             Some(nested) => nested.tick(),
             None => Box::pin(ready(())),
         };
+
+        let var_names = self
+            .var_managers
+            .borrow()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        debug!(
+            "Context[id={}]: Ticking variables: {:?}",
+            self.id, var_names
+        );
+
         join_all(
             once(nested_tick).chain(self.var_managers.borrow_mut().iter_mut().map(
-                |(_, var_manager)| {
+                |(var_name, var_manager)| {
+                    let var_name = var_name.clone();
                     Box::pin(async move {
+                        debug!("Context: Ticking var_manager for '{}'", var_name);
                         var_manager.tick().await;
+                        debug!("Context: Ticked var_manager for '{}'", var_name);
                     }) as Pin<Box<dyn Future<Output = ()>>>
                 },
             )),
         )
         .await;
+
         self.clock += 1;
+        debug!(
+            "Context[id={}]: Tick complete, clock now {}",
+            self.id, self.clock
+        );
     }
 
     fn clock(&self) -> usize {
@@ -737,15 +809,45 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
 
     async fn run(&mut self) {
         if !self.is_clock_started() {
-            debug!("Run for Context[id={}]", self.id);
+            debug!(
+                "Run for Context[id={}] with {} var managers",
+                self.id,
+                self.var_managers.borrow().len()
+            );
+
             if let Some(nested) = self.nested.as_mut() {
+                debug!("Context[id={}]: Running nested context", self.id);
                 nested.run().await;
+                debug!("Context[id={}]: Nested context run complete", self.id);
             }
+
+            let var_names = self
+                .var_managers
+                .borrow()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            debug!(
+                "Context[id={}]: Running var managers for: {:?}",
+                self.id, var_names
+            );
+
             let mut var_managers = self.var_managers.borrow_mut();
-            for (_, var_manager) in mem::take(&mut *var_managers).into_iter() {
+            for (var_name, var_manager) in mem::take(&mut *var_managers).into_iter() {
+                debug!(
+                    "Context[id={}]: Spawning run for var_manager '{}'",
+                    self.id, var_name
+                );
                 self.executor.spawn(var_manager.run()).detach();
             }
+
             self.clock = usize::MAX;
+            debug!("Context[id={}]: Run complete, clock set to MAX", self.id);
+        } else {
+            debug!(
+                "Context[id={}]: Run called but clock already started",
+                self.id
+            );
         }
     }
 
@@ -921,11 +1023,30 @@ impl<
     }
 
     fn build(self) -> AsyncMonitorRunner<Expr, Val, S, M, Ctx> {
+        debug!("AsyncMonitorBuilder: Starting build process");
         let executor = self.executor.expect("Executor not supplied");
         let model = self.model.expect("Model not supplied");
+
+        debug!(
+            "AsyncMonitorBuilder: Model variables: input={:?}, output={:?}",
+            model.input_vars(),
+            model.output_vars()
+        );
+
         let mut input_provider = self.input.expect("Input streams not supplied");
+        debug!(
+            "AsyncMonitorBuilder: Input provider variables: {:?}",
+            input_provider.vars()
+        );
+
         let output_handler = self.output.expect("Output handler not supplied");
+        debug!(
+            "AsyncMonitorBuilder: Output handler variables: {:?}",
+            output_handler.var_names()
+        );
+
         let context_builder = self.context_builder.unwrap_or_else(Ctx::Builder::new);
+        debug!("AsyncMonitorBuilder: Context builder initialized");
 
         let input_vars = model.input_vars().clone();
         let output_vars = model.output_vars().clone();
@@ -1003,17 +1124,20 @@ impl<
             })
             .detach();
 
-        AsyncMonitorRunner {
+        debug!("AsyncMonitorBuilder: Returning runner with cancellation token");
+        let runner = AsyncMonitorRunner {
             executor,
             model,
-            output_handler,
             input_provider,
+            output_handler,
             output_streams,
             cancellation_token,
             expr_t: PhantomData,
             semantics_t: PhantomData,
             context_t: PhantomData,
-        }
+        };
+        debug!("AsyncMonitorBuilder: Build process complete, runner created");
+        runner
     }
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
