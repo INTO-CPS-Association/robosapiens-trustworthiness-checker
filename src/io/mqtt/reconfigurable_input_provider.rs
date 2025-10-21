@@ -361,12 +361,8 @@ mod container_tests {
 
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        with_timeout(x_publisher_task, 5, "x_publisher_task")
-            .await?
-            .expect("x_publisher_task failed");
-        with_timeout(y_publisher_task, 5, "y_publisher_task")
-            .await?
-            .expect("y_publisher_task failed");
+        with_timeout_res(x_publisher_task, 5, "x_publisher_task").await?;
+        with_timeout_res(y_publisher_task, 5, "y_publisher_task").await?;
         info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
@@ -460,12 +456,8 @@ mod container_tests {
 
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        with_timeout(x_publisher_task, 5, "x_publisher_task")
-            .await?
-            .expect("x_publisher_task timeout error");
-        with_timeout(y_publisher_task, 5, "y_publisher_task")
-            .await?
-            .expect("y_publisher_task timeout error");
+        with_timeout_res(x_publisher_task, 5, "x_publisher_task").await?;
+        with_timeout_res(y_publisher_task, 5, "y_publisher_task").await?;
         info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
