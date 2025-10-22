@@ -108,7 +108,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
         Box::pin(async move { (*self).build() })
     }
 
-    fn mqtt_reconfig_provider(self, provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
+    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
         todo!()
     }
 }
