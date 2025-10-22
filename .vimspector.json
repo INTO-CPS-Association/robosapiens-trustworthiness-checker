@@ -1,0 +1,15 @@
+{
+  "configurations": {
+    "Run main program": {
+      "adapter": "CodeLLDB",
+      "configuration": {
+        "request": "launch",
+        "program": "${workspaceRoot}/target/debug/trustworthiness_checker",
+        "args": [],
+        "cwd": "${workspaceRoot}",
+        "stopOnEntry": false
+      }
+    }
+  }
+}
+
