@@ -92,7 +92,6 @@ panic = "abort"
 ros = ["dep:r2r"]
 testcontainers = ["tc-testutils/testcontainers", "async-compat"]
 span-tracing = []
-bench-full = []
 
 [dev-dependencies]
 criterion = { version = "0.7.0", features = ["async_smol", "html_reports"] }
