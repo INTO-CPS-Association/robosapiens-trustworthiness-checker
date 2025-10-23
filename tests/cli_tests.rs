@@ -1413,26 +1413,6 @@ mod integration_tests {
         );
     }
 
-    #[apply(async_test)]
-    async fn test_runtime_constraints() {
-        let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
-            "--input-file",
-            &fixture_path("simple_add_typed.input"),
-            "--output-stdout",
-            "--runtime",
-            "constraints",
-        ])
-        .await
-        .expect("Failed to run CLI");
-
-        assert!(
-            output.status.success(),
-            "CLI command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
     #[cfg(feature = "testcontainers")]
     mod testcontainers {
 

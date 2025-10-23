@@ -25,7 +25,6 @@ use crate::{
 
 use super::{
     asynchronous::{AsyncMonitorBuilder, Context},
-    constraints::runtime::ConstraintBasedMonitorBuilder,
     distributed::{DistAsyncMonitorBuilder, SchedulerCommunication},
 };
 
@@ -498,9 +497,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     _,
                     TypedUntimedLolaSemantics,
                 >::new()))
-            }
-            (Runtime::Constraints, Semantics::Untimed, _) => {
-                Box::new(ConstraintBasedMonitorBuilder::new())
             }
             (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfAsyncMonitorBuilder::<

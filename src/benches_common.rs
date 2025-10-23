@@ -19,7 +19,6 @@ use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
 use crate::runtime::asynchronous::Context;
-use crate::runtime::constraints::runtime::ConstraintBasedRuntime;
 
 use smol::LocalExecutor;
 
@@ -54,24 +53,6 @@ pub async fn monitor_runtime_outputs(
         .dependencies(dep_manager)
         .build();
     monitor.run().await.expect("Error running monitor");
-}
-
-pub async fn monitor_outputs_untyped_constraints(
-    executor: Rc<LocalExecutor<'static>>,
-    spec: LOLASpecification,
-    input_streams: BTreeMap<VarName, OutputStream<Value>>,
-    dep_manager: DependencyManager,
-) {
-    monitor_runtime_outputs(
-        Runtime::Constraints,
-        Semantics::Untimed,
-        executor,
-        spec,
-        input_streams,
-        dep_manager,
-        None,
-    )
-    .await;
 }
 
 pub async fn monitor_outputs_untyped_async_limited(
@@ -137,25 +118,4 @@ pub async fn monitor_outputs_typed_async(
     .dependencies(dep_manager)
     .build();
     async_monitor.run().await.expect("Error running monitor");
-}
-
-pub fn monitor_outputs_untyped_constraints_no_overhead(
-    spec: LOLASpecification,
-    num_outputs: i64,
-    dep_manager: DependencyManager,
-) {
-    let size = num_outputs;
-    let mut xs = (0..size).map(|i| Value::Int(i * 2));
-    let mut ys = (0..size).map(|i| Value::Int(i * 2 + 1));
-    let mut runtime = ConstraintBasedRuntime::new(dep_manager);
-    runtime.store_from_spec(spec);
-
-    for _ in 0..size {
-        let inputs = BTreeMap::from([
-            ("x".into(), xs.next().unwrap()),
-            ("y".into(), ys.next().unwrap()),
-        ]);
-        runtime.step(inputs.iter());
-        runtime.cleanup();
-    }
 }

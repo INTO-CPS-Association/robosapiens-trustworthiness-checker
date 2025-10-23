@@ -18,7 +18,6 @@ pub enum Semantics {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Runtime {
     Async,
-    Constraints,
     Distributed,
     ReconfigurableAsync,
 }

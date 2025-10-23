@@ -4,9 +4,8 @@ use macro_rules_attribute::apply;
 use smol::LocalExecutor;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use strum::IntoEnumIterator;
 use trustworthiness_checker::async_test;
-use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Runtime, Semantics};
+use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Semantics};
 use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
@@ -18,7 +17,6 @@ use trustworthiness_checker::{Value, VarName, lola_specification, runtime::Runti
 enum TestConfiguration {
     AsyncUntimed,
     AsyncTypedUntimed,
-    Constraints,
 }
 
 impl TestConfiguration {
@@ -26,7 +24,6 @@ impl TestConfiguration {
         vec![
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
-            TestConfiguration::Constraints,
         ]
     }
 
@@ -38,15 +35,11 @@ impl TestConfiguration {
     }
 
     fn untyped_configurations() -> Vec<Self> {
-        vec![
-            TestConfiguration::AsyncUntimed,
-            TestConfiguration::Constraints,
-        ]
+        vec![TestConfiguration::AsyncUntimed]
     }
 
     fn dependency_kinds(&self) -> Vec<DependencyKind> {
         match self {
-            TestConfiguration::Constraints => DependencyKind::iter().collect::<Vec<_>>(),
             TestConfiguration::AsyncUntimed | TestConfiguration::AsyncTypedUntimed => {
                 vec![DependencyKind::Empty]
             }
@@ -61,7 +54,6 @@ fn create_builder_from_config(
     match config {
         TestConfiguration::AsyncUntimed => builder.semantics(Semantics::Untimed),
         TestConfiguration::AsyncTypedUntimed => builder.semantics(Semantics::TypedUntimed),
-        TestConfiguration::Constraints => builder.runtime(Runtime::Constraints),
     }
 }
 
@@ -544,112 +536,112 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-#[apply(async_test)]
-async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) {
-    // TODO: This test only works on the constraint-based runtime
-    for config in vec![TestConfiguration::Constraints] {
-        let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(x, z))").unwrap();
-
-        for kind in config.dependency_kinds() {
-            let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-            let input_streams = BTreeMap::from([("x".into(), x)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
-
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
-
-            let builder = create_builder_from_config(builder, config);
-
-            let monitor = builder.build();
-
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                4,
-                "Recursive update test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec!["x0".into()]),
-                    (1, vec!["x1".into()]),
-                    (2, vec!["x2".into()]),
-                    (3, vec!["x3".into()]),
-                ],
-                "Recursive update output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
-    }
-}
+// #[apply(async_test)]
+// async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) {
+//     // TODO: This test only works on the constraint-based runtime
+//     for config in vec![TestConfiguration::Constraints] {
+//         let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(x, z))").unwrap();
+//
+//         for kind in config.dependency_kinds() {
+//             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+//             let input_streams = BTreeMap::from([("x".into(), x)]);
+//             let mut output_handler = Box::new(ManualOutputHandler::new(
+//                 executor.clone(),
+//                 spec_untyped.output_vars.clone(),
+//             ));
+//             let outputs = output_handler.get_output();
+//
+//             let builder = RuntimeBuilder::new()
+//                 .executor(executor.clone())
+//                 .model(spec_untyped.clone())
+//                 .input(Box::new(input_streams))
+//                 .output(output_handler)
+//                 .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+//
+//             let builder = create_builder_from_config(builder, config);
+//
+//             let monitor = builder.build();
+//
+//             executor.spawn(monitor.run()).detach();
+//             let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+//             assert_eq!(
+//                 outputs.len(),
+//                 4,
+//                 "Recursive update test failed for config {:?} with dependency {:?}",
+//                 config,
+//                 kind
+//             );
+//             assert_eq!(
+//                 outputs,
+//                 vec![
+//                     (0, vec!["x0".into()]),
+//                     (1, vec!["x1".into()]),
+//                     (2, vec!["x2".into()]),
+//                     (3, vec!["x3".into()]),
+//                 ],
+//                 "Recursive update output mismatch for config {:?} with dependency {:?}",
+//                 config,
+//                 kind
+//             );
+//         }
+//     }
+// }
 
 // NOTE: While this test is interesting, it cannot work due to how defer is handled.
 // When defer receives a prop stream it changes state from being a defer expression into
 // the received prop stream. Thus, it cannot be used recursively.
 // This is the reason why we also need dynamic for the constraint based runtime.
-#[apply(async_test)]
-async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) {
-    // TODO: This test only runs on the constraint-based runtime due to update/defer functionality
-    // limitations
-    for config in vec![TestConfiguration::Constraints] {
-        let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(defer(x), z)").unwrap();
-
-        for kind in config.dependency_kinds() {
-            let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
-            let input_streams = BTreeMap::from([("x".into(), x)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
-
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
-
-            let builder = create_builder_from_config(builder, config);
-
-            let monitor = builder.build();
-
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                4,
-                "Recursive update defer test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![0.into()]),
-                    (1, vec![0.into()],),
-                    (2, vec![0.into()],),
-                    (3, vec![0.into()],),
-                ],
-                "Recursive update defer output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
-    }
-}
+// #[apply(async_test)]
+// async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) {
+//     // TODO: This test only runs on the constraint-based runtime due to update/defer functionality
+//     // limitations
+//     for config in vec![TestConfiguration::Constraints] {
+//         let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(defer(x), z)").unwrap();
+//
+//         for kind in config.dependency_kinds() {
+//             let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
+//             let input_streams = BTreeMap::from([("x".into(), x)]);
+//             let mut output_handler = Box::new(ManualOutputHandler::new(
+//                 executor.clone(),
+//                 spec_untyped.output_vars.clone(),
+//             ));
+//             let outputs = output_handler.get_output();
+//
+//             let builder = RuntimeBuilder::new()
+//                 .executor(executor.clone())
+//                 .model(spec_untyped.clone())
+//                 .input(Box::new(input_streams))
+//                 .output(output_handler)
+//                 .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+//
+//             let builder = create_builder_from_config(builder, config);
+//
+//             let monitor = builder.build();
+//
+//             executor.spawn(monitor.run()).detach();
+//             let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+//             assert_eq!(
+//                 outputs.len(),
+//                 4,
+//                 "Recursive update defer test failed for config {:?} with dependency {:?}",
+//                 config,
+//                 kind
+//             );
+//             assert_eq!(
+//                 outputs,
+//                 vec![
+//                     (0, vec![0.into()]),
+//                     (1, vec![0.into()],),
+//                     (2, vec![0.into()],),
+//                     (3, vec![0.into()],),
+//                 ],
+//                 "Recursive update defer output mismatch for config {:?} with dependency {:?}",
+//                 config,
+//                 kind
+//             );
+//         }
+//     }
+// }
 
 pub fn input_streams_constraint() -> BTreeMap<VarName, OutputStream<Value>> {
     let mut input_streams = BTreeMap::new();
@@ -953,7 +945,6 @@ async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>)
             // TODO: async runtime produces more data than the constraint based runtime
             let num_expected_outputs = match config {
                 TestConfiguration::AsyncTypedUntimed | TestConfiguration::AsyncUntimed => 4,
-                TestConfiguration::Constraints => 3,
             };
             assert_eq!(
                 outputs.len(),
@@ -1508,12 +1499,6 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
 
             // Assert based on configuration expectations
             match config {
-                TestConfiguration::Constraints => {
-                    // Constraint runtime may produce different results for modulo operations
-                    assert_eq!(result.len(), 2);
-                    assert_eq!(result[0].1[0], Value::Int(0));
-                    assert_eq!(result[1].1[0], Value::Int(1));
-                }
                 TestConfiguration::AsyncUntimed | TestConfiguration::AsyncTypedUntimed => {
                     assert_eq!(
                         result,
@@ -1575,8 +1560,6 @@ async fn test_count_monitor_mixed_configurations(executor: Rc<LocalExecutor<'sta
     // Test that multiple different configurations can run sequentially without hanging
     let test_cases = vec![
         (TestConfiguration::AsyncUntimed, DependencyKind::Empty),
-        (TestConfiguration::Constraints, DependencyKind::Empty),
-        (TestConfiguration::Constraints, DependencyKind::DepGraph),
         (TestConfiguration::AsyncUntimed, DependencyKind::Empty), // Run AsyncUntimed again to verify cleanup
     ];
 
@@ -2010,16 +1993,12 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
             executor.spawn(monitor.run()).detach();
             let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            let mut expected_results = vec![
+            let expected_results = vec![
                 (0, vec![Value::Unknown]), // Default value for x[-1] at time 0
                 (1, vec![Value::Int(1)]),  // x[0] = 1 at time 1
                 (2, vec![Value::Int(3)]),  // x[1] = 3 at time 2
                 (3, vec![Value::Int(5)]),  // x[2] = 3 at time 3
             ];
-            // TODO: The constraints runtime current produces too few results
-            if matches!(config, TestConfiguration::Constraints) {
-                expected_results.remove(3);
-            }
             assert_eq!(
                 result, expected_results,
                 "Temporal access failed for config {:?} with dependency {:?}",
@@ -2364,7 +2343,6 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
 #[apply(async_test)]
 async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test currently only runs AsyncUntimed due to bugs in other configurations:
-    // - Constraints configuration produces different output counts and values
     // - AsyncTypedUntimed does not implement defer
     for config in vec![TestConfiguration::AsyncUntimed] {
         // Use different specifications based on configuration to ensure type compatibility
