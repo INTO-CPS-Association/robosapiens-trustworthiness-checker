@@ -24,8 +24,9 @@ pub enum Value {
     Bool(bool),
     List(EcoVec<Value>),
     Map(BTreeMap<EcoString, Value>),
-    Deferred,
-    Unit,
+    Unit,     // Indicates the absence of a value
+    Deferred, // Indicates a value that cannot yet be computed due to lack of history
+    NoVal,    // Indicates no value for the current stream step (due to async stream inputs)
 }
 
 impl StreamData for Value {}
@@ -242,7 +243,8 @@ impl Display for Value {
                 }
                 write!(f, "}}")
             }
-            Value::Deferred => write!(f, "deferred"),
+            Value::Deferred => write!(f, "⊥"),
+            Value::NoVal => write!(f, "no_val"),
             Value::Unit => write!(f, "()"),
         }
     }
@@ -281,6 +283,9 @@ impl Serialize for Value {
         S: Serializer,
     {
         match self {
+            // Should never need to serialize a NoVal, since it indicates no value received
+            Value::NoVal => Err(serde::ser::Error::custom("Cannot serialize Value::NoVal")),
+
             Value::Unit => serializer.serialize_none(),
 
             Value::Deferred => serializer.serialize_str("⊥"),

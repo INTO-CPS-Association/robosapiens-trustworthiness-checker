@@ -347,6 +347,9 @@ impl TypeCheckableHelper<SExprTE> for Value {
                 )));
                 Err(())
             }
+            // Not sure how the type-checking should deal with a value not provided
+            // Something like skipping type-checking for this value but not the next
+            Value::NoVal => todo!(),
         }
     }
 }

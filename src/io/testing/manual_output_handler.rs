@@ -311,14 +311,15 @@ mod tests {
 
             // Define ordering of variants
             let variant_order = |value: &Value| match value {
-                Deferred => 0,
-                Unit => 1,
-                Bool(_) => 2,
-                Int(_) => 3,
-                Float(_) => 4,
-                Str(_) => 5,
-                List(_) => 6,
-                Map(_) => 7,
+                NoVal => 0,
+                Deferred => 1,
+                Unit => 2,
+                Bool(_) => 3,
+                Int(_) => 4,
+                Float(_) => 5,
+                Str(_) => 6,
+                List(_) => 7,
+                Map(_) => 8,
             };
 
             // First compare based on variant order
