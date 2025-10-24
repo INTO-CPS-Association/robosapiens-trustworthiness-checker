@@ -17,10 +17,10 @@ The following result should be visible on the "z" topic:
 ```
 
 ### Note:
-If you want to provide e.g., an Unknown value then it must be done with:
+If you want to provide e.g., a Deferred value then it must be done with:
 ```json
 {
-    "Unknown": null
+    "Deferred": null
 }
 ```
 

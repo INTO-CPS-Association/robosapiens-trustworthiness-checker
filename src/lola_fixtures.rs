@@ -378,7 +378,7 @@ pub fn input_streams_defer_1() -> impl InputProvider<Val = Value> {
             if i == 1 {
                 Value::Str("x + 1".into())
             } else {
-                Value::Unknown
+                Value::Deferred
             }
         }))) as OutputStream<Value>,
     );
@@ -403,7 +403,7 @@ pub fn input_streams_defer_2() -> impl InputProvider<Val = Value> {
             if i == 3 {
                 Value::Str("x + 1".into())
             } else {
-                Value::Unknown
+                Value::Deferred
             }
         }))) as OutputStream<Value>,
     );
@@ -428,7 +428,7 @@ pub fn input_streams_defer_3() -> impl InputProvider<Val = Value> {
             if i == 12 {
                 Value::Str("x + 1".into())
             } else {
-                Value::Unknown
+                Value::Deferred
             }
         }))) as OutputStream<Value>,
     );
@@ -454,7 +454,7 @@ pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
             if i == 2 {
                 Value::Str("x[-1]".into())
             } else {
-                Value::Unknown
+                Value::Deferred
             }
         }))) as OutputStream<Value>,
     );
@@ -562,7 +562,7 @@ pub fn input_streams_paper_benchmark(
 ) -> BTreeMap<VarName, OutputStream<Value>> {
     let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
     let y: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(false)));
-    let e1 = stream::repeat(Value::Unknown).take((size * percent / 100).saturating_sub(1));
+    let e1 = stream::repeat(Value::Deferred).take((size * percent / 100).saturating_sub(1));
     let e2 = stream::repeat(Value::Str("x && y".into()));
     let e: OutputStream<Value> = if percent == 100 {
         Box::pin(e1)
@@ -590,7 +590,7 @@ pub fn input_streams_paper_benchmark_globally(
     size: usize,
 ) -> BTreeMap<VarName, OutputStream<Value>> {
     let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
-    let e1 = stream::repeat(Value::Unknown).take(size * percent / 100 - 1);
+    let e1 = stream::repeat(Value::Deferred).take(size * percent / 100 - 1);
     let e2 = stream::repeat(Value::Str("x || default(y[-1], false)".into()));
     let e: OutputStream<Value> = if percent == 100 {
         Box::pin(e1)
@@ -621,7 +621,7 @@ pub fn input_streams_add_defer(size: usize) -> BTreeMap<VarName, OutputStream<Va
         "y".into(),
         Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))) as OutputStream<Value>,
     );
-    let e_stream = stream::repeat(Value::Unknown)
+    let e_stream = stream::repeat(Value::Deferred)
         .take((size / 2) as usize)
         .chain(stream::iter(
             (0..size / 2).map(|_| Value::Str("x + y".into())),

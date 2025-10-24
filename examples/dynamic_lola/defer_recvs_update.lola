@@ -3,5 +3,5 @@ in x
 in s
 out z
 // Receives a new property with an update inside it to ensure that
-// despite garbage collection we never receive unknown
+// despite garbage collection we never receive deferred
 z = defer(s)

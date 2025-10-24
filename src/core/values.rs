@@ -24,7 +24,7 @@ pub enum Value {
     Bool(bool),
     List(EcoVec<Value>),
     Map(BTreeMap<EcoString, Value>),
-    Unknown,
+    Deferred,
     Unit,
 }
 
@@ -242,7 +242,7 @@ impl Display for Value {
                 }
                 write!(f, "}}")
             }
-            Value::Unknown => write!(f, "unknown"),
+            Value::Deferred => write!(f, "deferred"),
             Value::Unit => write!(f, "()"),
         }
     }
@@ -283,7 +283,7 @@ impl Serialize for Value {
         match self {
             Value::Unit => serializer.serialize_none(),
 
-            Value::Unknown => serializer.serialize_str("⊥"),
+            Value::Deferred => serializer.serialize_str("⊥"),
 
             Value::Bool(b) => serializer.serialize_bool(*b),
 
@@ -312,7 +312,7 @@ impl Serialize for Value {
 }
 
 impl<'de> Deserialize<'de> for Value {
-    // Certain edge cases were not covered by derived Serialize, such as handling Unknown
+    // Certain edge cases were not covered by derived Serialize, such as handling Deferred
     // symmetrically, hence manual impl
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -353,7 +353,7 @@ impl<'de> Deserialize<'de> for Value {
 
             fn visit_str<E>(self, v: &str) -> Result<Value, E> {
                 if v == "⊥" {
-                    Ok(Value::Unknown)
+                    Ok(Value::Deferred)
                 } else {
                     Ok(Value::Str(v.into()))
                 }
@@ -361,7 +361,7 @@ impl<'de> Deserialize<'de> for Value {
 
             fn visit_string<E>(self, v: String) -> Result<Value, E> {
                 if v == "⊥" {
-                    Ok(Value::Unknown)
+                    Ok(Value::Deferred)
                 } else {
                     Ok(Value::Str(v.into()))
                 }
@@ -619,8 +619,8 @@ mod tests {
     }
 
     #[test]
-    fn test_json_serialize_unknown() {
-        let v = Value::Unknown;
+    fn test_json_serialize_deferred() {
+        let v = Value::Deferred;
         let json = to_string(&v).unwrap();
         assert_eq!(json, "\"⊥\"");
     }
@@ -720,9 +720,9 @@ mod tests {
     }
 
     #[test]
-    fn test_json_bot_maps_to_unknown() {
+    fn test_json_bot_maps_to_deferred() {
         let v = "\"⊥\"";
         let json: Value = from_str(&v).unwrap();
-        assert_eq!(json, Value::Unknown);
+        assert_eq!(json, Value::Deferred);
     }
 }

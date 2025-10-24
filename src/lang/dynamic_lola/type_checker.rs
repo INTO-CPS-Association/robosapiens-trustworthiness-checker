@@ -11,7 +11,7 @@ use std::ops::Deref;
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemanticError {
     TypeError(String),
-    UnknownError(String),
+    DeferredError(String),
     UndeclaredVariable(String),
 }
 
@@ -47,113 +47,113 @@ pub trait TypeCheckable<TypedExpr> {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum PossiblyUnknown<T> {
+pub enum PossiblyDeferred<T> {
     Known(T),
-    Unknown,
+    Deferred,
 }
 
-impl StreamData for PossiblyUnknown<bool> {}
-impl StreamData for PossiblyUnknown<i64> {}
-impl StreamData for PossiblyUnknown<f64> {}
-impl StreamData for PossiblyUnknown<String> {}
-impl StreamData for PossiblyUnknown<()> {}
+impl StreamData for PossiblyDeferred<bool> {}
+impl StreamData for PossiblyDeferred<i64> {}
+impl StreamData for PossiblyDeferred<f64> {}
+impl StreamData for PossiblyDeferred<String> {}
+impl StreamData for PossiblyDeferred<()> {}
 
-impl TryFrom<Value> for PossiblyUnknown<i64> {
+impl TryFrom<Value> for PossiblyDeferred<i64> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Int(i) => Ok(PossiblyUnknown::Known(i)),
+            Value::Int(i) => Ok(PossiblyDeferred::Known(i)),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyUnknown<f64> {
+impl TryFrom<Value> for PossiblyDeferred<f64> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Float(x) => Ok(PossiblyUnknown::Known(x)),
+            Value::Float(x) => Ok(PossiblyDeferred::Known(x)),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyUnknown<String> {
+impl TryFrom<Value> for PossiblyDeferred<String> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Str(i) => Ok(PossiblyUnknown::Known(i.to_string())),
+            Value::Str(i) => Ok(PossiblyDeferred::Known(i.to_string())),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyUnknown<bool> {
+impl TryFrom<Value> for PossiblyDeferred<bool> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Bool(i) => Ok(PossiblyUnknown::Known(i)),
+            Value::Bool(i) => Ok(PossiblyDeferred::Known(i)),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyUnknown<()> {
+impl TryFrom<Value> for PossiblyDeferred<()> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Unit => Ok(PossiblyUnknown::Known(())),
+            Value::Unit => Ok(PossiblyDeferred::Known(())),
             _ => Err(()),
         }
     }
 }
 
-impl From<PossiblyUnknown<i64>> for Value {
-    fn from(value: PossiblyUnknown<i64>) -> Self {
+impl From<PossiblyDeferred<i64>> for Value {
+    fn from(value: PossiblyDeferred<i64>) -> Self {
         match value {
-            PossiblyUnknown::Known(v) => Value::Int(v),
-            PossiblyUnknown::Unknown => Value::Unknown,
+            PossiblyDeferred::Known(v) => Value::Int(v),
+            PossiblyDeferred::Deferred => Value::Deferred,
         }
     }
 }
 
-impl From<PossiblyUnknown<f64>> for Value {
-    fn from(value: PossiblyUnknown<f64>) -> Self {
+impl From<PossiblyDeferred<f64>> for Value {
+    fn from(value: PossiblyDeferred<f64>) -> Self {
         match value {
-            PossiblyUnknown::Known(v) => Value::Float(v),
-            PossiblyUnknown::Unknown => Value::Unknown,
+            PossiblyDeferred::Known(v) => Value::Float(v),
+            PossiblyDeferred::Deferred => Value::Deferred,
         }
     }
 }
-impl From<PossiblyUnknown<String>> for Value {
-    fn from(value: PossiblyUnknown<String>) -> Self {
+impl From<PossiblyDeferred<String>> for Value {
+    fn from(value: PossiblyDeferred<String>) -> Self {
         match value {
-            PossiblyUnknown::Known(v) => Value::Str(v.into()),
-            PossiblyUnknown::Unknown => Value::Unknown,
+            PossiblyDeferred::Known(v) => Value::Str(v.into()),
+            PossiblyDeferred::Deferred => Value::Deferred,
         }
     }
 }
-impl From<PossiblyUnknown<bool>> for Value {
-    fn from(value: PossiblyUnknown<bool>) -> Self {
+impl From<PossiblyDeferred<bool>> for Value {
+    fn from(value: PossiblyDeferred<bool>) -> Self {
         match value {
-            PossiblyUnknown::Known(v) => Value::Bool(v),
-            PossiblyUnknown::Unknown => Value::Unknown,
+            PossiblyDeferred::Known(v) => Value::Bool(v),
+            PossiblyDeferred::Deferred => Value::Deferred,
         }
     }
 }
-impl From<PossiblyUnknown<()>> for Value {
-    fn from(value: PossiblyUnknown<()>) -> Self {
+impl From<PossiblyDeferred<()>> for Value {
+    fn from(value: PossiblyDeferred<()>) -> Self {
         match value {
-            PossiblyUnknown::Known(_) => Value::Unit,
-            PossiblyUnknown::Unknown => Value::Unknown,
+            PossiblyDeferred::Known(_) => Value::Unit,
+            PossiblyDeferred::Deferred => Value::Deferred,
         }
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExprBool {
-    Val(PossiblyUnknown<bool>),
+    Val(PossiblyDeferred<bool>),
     EqInt(SExprInt, SExprInt),
     EqStr(SExprStr, SExprStr),
     EqBool(Box<Self>, Box<Self>),
@@ -189,7 +189,7 @@ pub enum SExprInt {
     ),
 
     // Arithmetic Stream expression
-    Val(PossiblyUnknown<i64>),
+    Val(PossiblyDeferred<i64>),
 
     BinOp(Box<Self>, Box<Self>, IntBinOp),
 
@@ -211,7 +211,7 @@ pub enum SExprFloat {
     ),
 
     // Arithmetic Stream expression
-    Val(PossiblyUnknown<f64>),
+    Val(PossiblyDeferred<f64>),
 
     BinOp(Box<Self>, Box<Self>, FloatBinOp),
 
@@ -234,7 +234,7 @@ pub enum SExprUnit {
     ),
 
     // Arithmetic Stream expression
-    Val(PossiblyUnknown<()>),
+    Val(PossiblyDeferred<()>),
 
     Var(VarName),
 
@@ -256,7 +256,7 @@ pub enum SExprStr {
     BinOp(Box<Self>, Box<Self>, StrBinOp),
 
     // Arithmetic Stream expression
-    Val(PossiblyUnknown<String>),
+    Val(PossiblyDeferred<String>),
 
     Var(VarName),
 
@@ -331,17 +331,17 @@ impl TypeCheckableHelper<SExprTE> for Value {
         errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         match self {
-            Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(PossiblyUnknown::Known(*v)))),
-            Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(PossiblyUnknown::Known(*v)))),
-            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(PossiblyUnknown::Known(
+            Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(PossiblyDeferred::Known(*v)))),
+            Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(PossiblyDeferred::Known(*v)))),
+            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(PossiblyDeferred::Known(
                 v.into(),
             )))),
-            Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PossiblyUnknown::Known(*v)))),
+            Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PossiblyDeferred::Known(*v)))),
             Value::List(_) => todo!(),
             Value::Map(_) => todo!(),
-            Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PossiblyUnknown::Known(())))),
-            Value::Unknown => {
-                errs.push(SemanticError::UnknownError(format!(
+            Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PossiblyDeferred::Known(())))),
+            Value::Deferred => {
+                errs.push(SemanticError::DeferredError(format!(
                     "Stream expression {:?} not assigned a type before semantic analysis",
                     self
                 )));
@@ -854,23 +854,23 @@ mod tests {
         ];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
-            Ok(SExprTE::Int(SExprInt::Val(PossiblyUnknown::Known(1)))),
-            Ok(SExprTE::Str(SExprStr::Val(PossiblyUnknown::Known(
+            Ok(SExprTE::Int(SExprInt::Val(PossiblyDeferred::Known(1)))),
+            Ok(SExprTE::Str(SExprStr::Val(PossiblyDeferred::Known(
                 "".into(),
             )))),
-            Ok(SExprTE::Bool(SExprBool::Val(PossiblyUnknown::Known(true)))),
-            Ok(SExprTE::Unit(SExprUnit::Val(PossiblyUnknown::Known(())))),
+            Ok(SExprTE::Bool(SExprBool::Val(PossiblyDeferred::Known(true)))),
+            Ok(SExprTE::Unit(SExprUnit::Val(PossiblyDeferred::Known(())))),
         ];
 
         assert!(results.eq(expected.into_iter()));
     }
 
     #[test]
-    fn test_unknown_err() {
-        // Checks that if a Val is unknown during semantic analysis it produces a UnknownError
-        let val = SExprV::Val(Value::Unknown);
+    fn test_deferred_err() {
+        // Checks that if a Val is deferred during semantic analysis it produces a DeferredError
+        let val = SExprV::Val(Value::Deferred);
         let result = val.type_check_with_default();
-        let expected: SemantResultStr = Err(vec![SemanticError::UnknownError("".into())]);
+        let expected: SemantResultStr = Err(vec![SemanticError::DeferredError("".into())]);
         check_correct_error_type(&result, &expected);
     }
 
@@ -904,7 +904,7 @@ mod tests {
     fn test_binop_err_diff_types() {
         // Checks that calling a BinOp on two different types results in a TypeError
 
-        // Create a vector of all ConcreteStreamData variants (except Unknown)
+        // Create a vector of all ConcreteStreamData variants (except Deferred)
         let variants = vec![
             SExprV::Val(Value::Int(0)),
             SExprV::Val(Value::Str("".into())),
@@ -941,22 +941,22 @@ mod tests {
     }
 
     #[test]
-    fn test_plus_err_unknown() {
-        // Checks that if either value is unknown then Plus does not generate further errors
+    fn test_plus_err_deferred() {
+        // Checks that if either value is deferred then Plus does not generate further errors
         let vals = [
             SExprV::BinOp(
                 Box::new(SExprV::Val(Value::Int(0))),
-                Box::new(SExprV::Val(Value::Unknown)),
+                Box::new(SExprV::Val(Value::Deferred)),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
             SExprV::BinOp(
-                Box::new(SExprV::Val(Value::Unknown)),
+                Box::new(SExprV::Val(Value::Deferred)),
                 Box::new(SExprV::Val(Value::Int(0))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
             SExprV::BinOp(
-                Box::new(SExprV::Val(Value::Unknown)),
-                Box::new(SExprV::Val(Value::Unknown)),
+                Box::new(SExprV::Val(Value::Deferred)),
+                Box::new(SExprV::Val(Value::Deferred)),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         ];
@@ -975,7 +975,7 @@ mod tests {
                         errs.len(),
                         errs
                     );
-                    // TODO: Check that it is actually UnknownErrors
+                    // TODO: Check that it is actually DeferredErrors
                 }
                 Ok(_) => {
                     assert!(
@@ -996,7 +996,7 @@ mod tests {
         let vals: Vec<SExpr> = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
-        let int_t_val = vec![SExprInt::Val(PossiblyUnknown::Known(0))];
+        let int_t_val = vec![SExprInt::Val(PossiblyDeferred::Known(0))];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprInt> =
@@ -1013,7 +1013,7 @@ mod tests {
         let vals: Vec<SExpr> = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
-        let str_t_val = vec![SExprStr::Val(PossiblyUnknown::Known("".into()))];
+        let str_t_val = vec![SExprStr::Val(PossiblyDeferred::Known("".into()))];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprStr> = generate_concat_combinations(&str_t_val, &str_t_val);
@@ -1025,7 +1025,7 @@ mod tests {
     fn test_if_ok() {
         // Checks that typechecking if-statements with identical types for if- and else- part results in correct typed AST
 
-        // Create a vector of all ConcreteStreamData variants (except Unknown)
+        // Create a vector of all ConcreteStreamData variants (except Deferred)
         let val_variants = vec![
             SExprV::Val(Value::Int(0)),
             SExprV::Val(Value::Str("".into())),
@@ -1035,7 +1035,7 @@ mod tests {
 
         // Create a vector of all SBinOp variants
         let bexpr = Box::new(SExpr::Val(true.into()));
-        let bexpr_checked = Box::new(SExprBool::Val(PossiblyUnknown::Known(true)));
+        let bexpr_checked = Box::new(SExprBool::Val(PossiblyDeferred::Known(true)));
 
         let vals_tmp = generate_if_combinations(&val_variants, &val_variants, bexpr.clone());
 
@@ -1051,23 +1051,23 @@ mod tests {
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprInt::If(
                 bexpr_checked.clone(),
-                Box::new(SExprInt::Val(PossiblyUnknown::Known(0))),
-                Box::new(SExprInt::Val(PossiblyUnknown::Known(0))),
+                Box::new(SExprInt::Val(PossiblyDeferred::Known(0))),
+                Box::new(SExprInt::Val(PossiblyDeferred::Known(0))),
             ))),
             Ok(SExprTE::Str(SExprStr::If(
                 bexpr_checked.clone(),
-                Box::new(SExprStr::Val(PossiblyUnknown::Known("".into()))),
-                Box::new(SExprStr::Val(PossiblyUnknown::Known("".into()))),
+                Box::new(SExprStr::Val(PossiblyDeferred::Known("".into()))),
+                Box::new(SExprStr::Val(PossiblyDeferred::Known("".into()))),
             ))),
             Ok(SExprTE::Bool(SExprBool::If(
                 bexpr_checked.clone(),
-                Box::new(SExprBool::Val(PossiblyUnknown::Known(true))),
-                Box::new(SExprBool::Val(PossiblyUnknown::Known(true))),
+                Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
+                Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
             ))),
             Ok(SExprTE::Unit(SExprUnit::If(
                 bexpr_checked.clone(),
-                Box::new(SExprUnit::Val(PossiblyUnknown::Known(()))),
-                Box::new(SExprUnit::Val(PossiblyUnknown::Known(()))),
+                Box::new(SExprUnit::Val(PossiblyDeferred::Known(()))),
+                Box::new(SExprUnit::Val(PossiblyDeferred::Known(()))),
             ))),
         ];
 
@@ -1078,7 +1078,7 @@ mod tests {
     fn test_if_err() {
         // Checks that creating an if-expression with two different types results in a TypeError
 
-        // Create a vector of all ConcreteStreamData variants (except Unknown)
+        // Create a vector of all ConcreteStreamData variants (except Deferred)
         let variants = vec![
             SExprV::Val(Value::Int(0)),
             SExprV::Val(Value::Str("".into())),

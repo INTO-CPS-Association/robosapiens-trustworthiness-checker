@@ -107,7 +107,7 @@ impl From<&str> for SBinOp {
             "++" => SBinOp::SOp(StrBinOp::Concat),
             "==" => SBinOp::COp(CompBinOp::Eq),
             "<=" => SBinOp::COp(CompBinOp::Le),
-            _ => panic!("Unknown binary operation: {}", s),
+            _ => panic!("Invalid binary operation: {}", s),
         }
     }
 }
@@ -142,7 +142,7 @@ pub enum DistConstraintBody {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
-    IsDefined(Box<Self>), // True when .0 is not Unknown
+    IsDefined(Box<Self>), // True when .0 is not Deferred
 
     // Unary expressions (refactor if more are added...)
     Not(Box<Self>),

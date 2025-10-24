@@ -311,7 +311,7 @@ mod tests {
 
             // Define ordering of variants
             let variant_order = |value: &Value| match value {
-                Unknown => 0,
+                Deferred => 0,
                 Unit => 1,
                 Bool(_) => 2,
                 Int(_) => 3,
@@ -340,7 +340,7 @@ mod tests {
                 }
                 (Str(a), Str(b)) => a.cmp(b),
                 (List(a), List(b)) => a.cmp(b), // Vec<Value> implements Ord if Value does
-                _ => Ordering::Equal, // Unit and Unknown are considered equal within their kind
+                _ => Ordering::Equal, // Unit and Deferred are considered equal within their kind
             }
         }
     }

@@ -160,14 +160,14 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[apply(async_test)]
-async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
 
         for kind in config.dependency_kinds() {
             let x = vec![1.into(), 2.into(), 3.into()];
-            let e = vec![Value::Unknown, "x + 1".into(), "x + 2".into()];
+            let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
             let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -191,18 +191,18 @@ async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
             assert_eq!(
                 outputs.len(),
                 3,
-                "Defer unknown test failed for config {:?} with dependency {:?}",
+                "Defer deferred test failed for config {:?} with dependency {:?}",
                 config,
                 kind
             );
             assert_eq!(
                 outputs,
                 vec![
-                    (0, vec![Value::Unknown]),
+                    (0, vec![Value::Deferred]),
                     (1, vec![3.into()]),
                     (2, vec![4.into()]),
                 ],
-                "Defer unknown output mismatch for config {:?} with dependency {:?}",
+                "Defer deferred output mismatch for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -211,14 +211,14 @@ async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[apply(async_test)]
-async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
 
         for kind in config.dependency_kinds() {
             let x = vec![0.into(), 1.into(), 2.into()];
-            let e = vec![Value::Unknown, "x + 1".into(), Value::Unknown];
+            let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
             let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -242,18 +242,18 @@ async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
             assert_eq!(
                 outputs.len(),
                 3,
-                "Defer unknown2 test failed for config {:?} with dependency {:?}",
+                "Defer deferred2 test failed for config {:?} with dependency {:?}",
                 config,
                 kind
             );
             assert_eq!(
                 outputs,
                 vec![
-                    (0, vec![Value::Unknown]),
+                    (0, vec![Value::Deferred]),
                     (1, vec![2.into()]),
                     (2, vec![3.into()]),
                 ],
-                "Defer unknown2 output mismatch for config {:?} with dependency {:?}",
+                "Defer deferred2 output mismatch for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -273,7 +273,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
             let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
             let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
             let e = vec![
-                Value::Unknown,
+                Value::Deferred,
                 "x + y".into(),
                 "x + y".into(),
                 "x + y".into(),
@@ -308,7 +308,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, vec![Value::Unknown, 11.into()]),
+                    (0, vec![Value::Deferred, 11.into()]),
                     (1, vec![22.into(), 22.into()]),
                     (2, vec![33.into(), 33.into()]),
                     (3, vec![44.into(), 44.into()]),
@@ -380,7 +380,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
 
         for kind in config.dependency_kinds() {
             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-            let y = vec![Value::Unknown, "y1".into(), Value::Unknown, "y3".into()];
+            let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
             let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -413,7 +413,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
                 vec![
                     (0, vec!["x0".into()]),
                     (1, vec!["y1".into()]),
-                    (2, vec![Value::Unknown]),
+                    (2, vec![Value::Deferred]),
                     (3, vec!["y3".into()]),
                 ],
                 "Update first x then y output mismatch for config {:?} with dependency {:?}",
@@ -424,7 +424,6 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
     }
 }
 
-// #[ignore = "Hangs for unknown reasons"]
 #[apply(async_test)]
 async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
     // TODO: This test only works on untyped_configurations
@@ -434,7 +433,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
 
         for kind in config.dependency_kinds() {
             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-            let e = vec![Value::Unknown, "x".into(), "x".into(), "x".into()];
+            let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
             let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -486,9 +485,9 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
             lola_specification(&mut "in x\nin y\nout z\nz = defer(update(x, y))").unwrap();
 
         for kind in config.dependency_kinds() {
-            let x = vec![Value::Unknown, "x".into(), "x_lost".into(), "x_sad".into()];
+            let x = vec![Value::Deferred, "x".into(), "x_lost".into(), "x_sad".into()];
             let y = vec![
-                Value::Unknown,
+                Value::Deferred,
                 "y".into(),
                 "y_won!".into(),
                 "y_happy".into(),
@@ -523,7 +522,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
             assert_eq!(
                 outputs,
                 vec![
-                    (0, vec![Value::Unknown]),
+                    (0, vec![Value::Deferred]),
                     (1, vec!["y".into()]),
                     (2, vec!["y_won!".into()]),
                     (3, vec!["y_happy".into()]),
@@ -956,8 +955,8 @@ async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>)
             assert_eq!(
                 &outputs[0..3],
                 vec![
-                    (0, vec![Value::Unknown, Value::Unknown]),
-                    (1, vec![1.into(), Value::Unknown]),
+                    (0, vec![Value::Deferred, Value::Deferred]),
+                    (1, vec![1.into(), Value::Deferred]),
                     (2, vec![3.into(), 1.into()]),
                 ],
                 "Index past mult dependencies output mismatch for config {:?} with dependency {:?}",
@@ -1071,7 +1070,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[apply(async_test)]
-async fn test_default_no_unknown(executor: Rc<LocalExecutor<'static>>) {
+async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = default(x, 42)",
@@ -1103,7 +1102,7 @@ async fn test_default_no_unknown(executor: Rc<LocalExecutor<'static>>) {
             assert_eq!(
                 outputs.len(),
                 3,
-                "Default no unknown test failed for config {:?} with dependency {:?}",
+                "Default no deferred test failed for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -1114,7 +1113,7 @@ async fn test_default_no_unknown(executor: Rc<LocalExecutor<'static>>) {
                     (1, vec![3.into()]),
                     (2, vec![5.into()]),
                 ],
-                "Default no unknown output mismatch for config {:?} with dependency {:?}",
+                "Default no deferred output mismatch for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -1123,7 +1122,7 @@ async fn test_default_no_unknown(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[apply(async_test)]
-async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
+async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) {
     // TODO: not supported by the type checker
     for config in TestConfiguration::untyped_configurations() {
         let mut spec_str = match config {
@@ -1135,7 +1134,7 @@ async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
         for kind in config.dependency_kinds() {
             let input_streams = BTreeMap::from([(
                 "x".into(),
-                vec![Value::Unknown, Value::Unknown, Value::Unknown],
+                vec![Value::Deferred, Value::Deferred, Value::Deferred],
             )]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -1159,7 +1158,7 @@ async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
             assert_eq!(
                 outputs.len(),
                 3,
-                "Default all unknown test failed for config {:?} with dependency {:?}",
+                "Default all deferred test failed for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -1170,7 +1169,7 @@ async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
                     (1, vec![42.into()]),
                     (2, vec![42.into()]),
                 ],
-                "Default all unknown output mismatch for config {:?} with dependency {:?}",
+                "Default all deferred output mismatch for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -1179,7 +1178,7 @@ async fn test_default_all_unknown(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[apply(async_test)]
-async fn test_default_one_unknown(executor: Rc<LocalExecutor<'static>>) {
+async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) {
     // TODO: not supported by the type checker
     for config in TestConfiguration::untyped_configurations() {
         let mut spec_str = match config {
@@ -1190,7 +1189,7 @@ async fn test_default_one_unknown(executor: Rc<LocalExecutor<'static>>) {
 
         for kind in config.dependency_kinds() {
             let input_streams =
-                BTreeMap::from([("x".into(), vec![1.into(), Value::Unknown, 5.into()])]);
+                BTreeMap::from([("x".into(), vec![1.into(), Value::Deferred, 5.into()])]);
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
                 spec_untyped.output_vars.clone(),
@@ -1213,7 +1212,7 @@ async fn test_default_one_unknown(executor: Rc<LocalExecutor<'static>>) {
             assert_eq!(
                 outputs.len(),
                 3,
-                "Default one unknown test failed for config {:?} with dependency {:?}",
+                "Default one deferred test failed for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -1224,7 +1223,7 @@ async fn test_default_one_unknown(executor: Rc<LocalExecutor<'static>>) {
                     (1, vec![42.into()]),
                     (2, vec![5.into()]),
                 ],
-                "Default one unknown output mismatch for config {:?} with dependency {:?}",
+                "Default one deferred output mismatch for config {:?} with dependency {:?}",
                 config,
                 kind
             );
@@ -1994,10 +1993,10 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
             let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
             let expected_results = vec![
-                (0, vec![Value::Unknown]), // Default value for x[-1] at time 0
-                (1, vec![Value::Int(1)]),  // x[0] = 1 at time 1
-                (2, vec![Value::Int(3)]),  // x[1] = 3 at time 2
-                (3, vec![Value::Int(5)]),  // x[2] = 3 at time 3
+                (0, vec![Value::Deferred]), // Default value for x[-1] at time 0
+                (1, vec![Value::Int(1)]),   // x[0] = 1 at time 1
+                (2, vec![Value::Int(3)]),   // x[1] = 3 at time 2
+                (3, vec![Value::Int(5)]),   // x[2] = 3 at time 3
             ];
             assert_eq!(
                 result, expected_results,
@@ -2168,7 +2167,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
             );
 
             let expected_outputs = vec![
-                (0, vec![Value::Unknown]),
+                (0, vec![Value::Deferred]),
                 (1, vec![Value::Int(2)]),
                 (2, vec![Value::Int(3)]),
                 (3, vec![Value::Int(4)]),
@@ -2239,9 +2238,9 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
             );
 
             let expected_outputs = vec![
-                (0, vec![Value::Unknown]),
-                (1, vec![Value::Unknown]),
-                (2, vec![Value::Unknown]),
+                (0, vec![Value::Deferred]),
+                (1, vec![Value::Deferred]),
+                (2, vec![Value::Deferred]),
                 (3, vec![Value::Int(4)]),
                 (4, vec![Value::Int(5)]),
                 (5, vec![Value::Int(6)]),
@@ -2315,18 +2314,18 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
             );
 
             let expected_outputs = vec![
-                (0, vec![Value::Unknown]),
-                (1, vec![Value::Unknown]),
-                (2, vec![Value::Unknown]),
-                (3, vec![Value::Unknown]),
-                (4, vec![Value::Unknown]),
-                (5, vec![Value::Unknown]),
-                (6, vec![Value::Unknown]),
-                (7, vec![Value::Unknown]),
-                (8, vec![Value::Unknown]),
-                (9, vec![Value::Unknown]),
-                (10, vec![Value::Unknown]),
-                (11, vec![Value::Unknown]),
+                (0, vec![Value::Deferred]),
+                (1, vec![Value::Deferred]),
+                (2, vec![Value::Deferred]),
+                (3, vec![Value::Deferred]),
+                (4, vec![Value::Deferred]),
+                (5, vec![Value::Deferred]),
+                (6, vec![Value::Deferred]),
+                (7, vec![Value::Deferred]),
+                (8, vec![Value::Deferred]),
+                (9, vec![Value::Deferred]),
+                (10, vec![Value::Deferred]),
+                (11, vec![Value::Deferred]),
                 (12, vec![Value::Int(13)]),
                 (13, vec![Value::Int(14)]),
                 (14, vec![Value::Int(15)]),
@@ -2403,8 +2402,8 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
             // See also: Comment on sindex combinator.
 
             let expected_outputs = vec![
-                (0, vec![Value::Unknown]),
-                (1, vec![Value::Unknown]),
+                (0, vec![Value::Deferred]),
+                (1, vec![Value::Deferred]),
                 (2, vec![Value::Int(1)]),
                 (3, vec![Value::Int(2)]),
                 (4, vec![Value::Int(3)]),

@@ -18,7 +18,7 @@ fn input_file_data_iter(
         Box::new((0..=*max_key).map(move |time| {
             data.get(&time)
                 .and_then(|data_for_time| data_for_time.get(&key).cloned())
-                .unwrap_or(Value::Unknown)
+                .unwrap_or(Value::Deferred)
         }))
     } else {
         Box::new(std::iter::empty())

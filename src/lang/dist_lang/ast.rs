@@ -37,11 +37,11 @@ pub enum DistSExpr {
     Defer(Box<Self>),
     // Update between properties
     Update(Box<Self>, Box<Self>),
-    // Default value for properties (replaces Unknown with an alternative
+    // Default value for properties (replaces Deferred with an alternative
     // stream)
     Default(Box<Self>, Box<Self>),
-    IsDefined(Box<Self>), // True when .0 is not Unknown
-    When(Box<Self>),      // Becomes true after the first time .0 is not Unknown
+    IsDefined(Box<Self>), // True when .0 is not Deferred
+    When(Box<Self>),      // Becomes true after the first time .0 is not Deferred
 
     // Unary expressions (refactor if more are added...)
     Not(Box<Self>),

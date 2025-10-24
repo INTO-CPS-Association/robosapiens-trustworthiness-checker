@@ -115,15 +115,15 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Str(_), Value::Unknown)
-            | (Value::Bool(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Str(_))
-            | (Value::Unknown, Value::Bool(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Str(_), Value::Deferred)
+            | (Value::Bool(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Str(_))
+            | (Value::Deferred, Value::Bool(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -140,15 +140,15 @@ pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(!a & b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a < b),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Str(_), Value::Unknown)
-            | (Value::Bool(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Str(_))
-            | (Value::Unknown, Value::Bool(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Str(_), Value::Deferred)
+            | (Value::Bool(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Str(_))
+            | (Value::Deferred, Value::Bool(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -165,15 +165,15 @@ pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a >= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Str(_), Value::Unknown)
-            | (Value::Bool(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Str(_))
-            | (Value::Unknown, Value::Bool(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Str(_), Value::Deferred)
+            | (Value::Bool(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Str(_))
+            | (Value::Deferred, Value::Bool(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -190,15 +190,15 @@ pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a & !b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a > b),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Str(_), Value::Unknown)
-            | (Value::Bool(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Str(_))
-            | (Value::Unknown, Value::Bool(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Str(_), Value::Deferred)
+            | (Value::Bool(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Str(_))
+            | (Value::Deferred, Value::Bool(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -239,7 +239,7 @@ pub fn if_stm(
 // x.next()
 pub fn sindex(x: OutputStream<Value>, i: isize) -> OutputStream<Value> {
     let n = i.unsigned_abs();
-    let cs = stream::repeat(Value::Unknown).take(n);
+    let cs = stream::repeat(Value::Deferred).take(n);
     if i < 0 {
         Box::pin(cs.chain(x)) as LocalBoxStream<'static, Value>
     } else {
@@ -257,13 +257,13 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
                 (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 + y),
                 (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f64),
                 (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                (Value::Int(_), Value::Unknown)
-                | (Value::Float(_), Value::Unknown)
-                | (Value::Unknown, Value::Int(_))
-                | (Value::Unknown, Value::Float(_))
-                | (Value::Unknown, Value::Unknown) => {
-                    debug!("Addition with Unknown value, resulting in Unknown");
-                    Value::Unknown
+                (Value::Int(_), Value::Deferred)
+                | (Value::Float(_), Value::Deferred)
+                | (Value::Deferred, Value::Int(_))
+                | (Value::Deferred, Value::Float(_))
+                | (Value::Deferred, Value::Deferred) => {
+                    debug!("Addition with Deferred value, resulting in Deferred");
+                    Value::Deferred
                 }
                 _ => {
                     panic!("Cannot add incompatible types")
@@ -284,11 +284,11 @@ pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 % y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x % y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x % y),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid modulo with types: {:?}, {:?}", x, y),
         },
         x,
@@ -303,11 +303,11 @@ pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Val
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 - y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x - y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid subtraction with types: {:?}, {:?}", x, y),
         },
         x,
@@ -322,11 +322,11 @@ pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 * y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x * y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid multiplication with types: {:?}, {:?}", x, y),
         },
         x,
@@ -341,11 +341,11 @@ pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 / y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x / y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
-            (Value::Int(_), Value::Unknown)
-            | (Value::Float(_), Value::Unknown)
-            | (Value::Unknown, Value::Int(_))
-            | (Value::Unknown, Value::Float(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Int(_), Value::Deferred)
+            | (Value::Float(_), Value::Deferred)
+            | (Value::Deferred, Value::Int(_))
+            | (Value::Deferred, Value::Float(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid division with types: {:?}, {:?}", x, y),
         },
         x,
@@ -360,9 +360,9 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
                 // ConcreteStreamData::Str(format!("{x}{y}").into());
                 Value::Str(format!("{x}{y}").into())
             }
-            (Value::Str(_), Value::Unknown)
-            | (Value::Unknown, Value::Str(_))
-            | (Value::Unknown, Value::Unknown) => Value::Unknown,
+            (Value::Str(_), Value::Deferred)
+            | (Value::Deferred, Value::Str(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid concatenation with types: {:?}, {:?}", x, y),
         },
         x,
@@ -398,10 +398,10 @@ where
         let mut prev_data: Option<PrevData> = None;
         while let Some(current) = eval_stream.next().await {
             // If we have a previous value and it is the same as the current
-            // value or if the current value is unknown (not provided),
+            // value or if the current value is deferred (not provided),
             // continue using the existing stream as our output
             if let Some(prev_data) = &mut prev_data {
-                if prev_data.eval_val == current || current == Value::Unknown {
+                if prev_data.eval_val == current || current == Value::Deferred {
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
                     subcontext.tick().await;
@@ -415,10 +415,10 @@ where
                 }
             }
             match current {
-                Value::Unknown => {
-                    // Consume a sample from the subcontext but return Unknown (aka. Waiting)
+                Value::Deferred => {
+                    // Consume a sample from the subcontext but return Deferred
                     subcontext.tick().await;
-                    yield Value::Unknown;
+                    yield Value::Deferred;
                 }
                 Value::Str(s) => {
                     let expr = Parser::parse(&mut s.as_ref())
@@ -476,7 +476,7 @@ where
         let mut eval_output_stream: Option<OutputStream<Value>> = None;
         let mut i = 0;
 
-        // Yield Unknown until we have a value to evaluate, then evaluate it
+        // Yield Deferred until we have a value to evaluate, then evaluate it
         while let Some(current) = prop_stream.next().await {
             debug!(?i, ?current, "Defer");
             match current {
@@ -489,15 +489,15 @@ where
                     subcontext.run().await;
                     break;
                 }
-                Value::Unknown => {
-                    // Consume a sample from the subcontext but return Unknown (aka. Waiting)
-                    info!("Defer waiting on unknown");
+                Value::Deferred => {
+                    // Consume a sample from the subcontext but return Deferred
+                    info!("Defer waiting on deferred");
                     if i >= history_length {
                         info!(?i, ?history_length, "Advancing subcontext to clean history");
                         subcontext.tick().await;
                     }
                     i += 1;
-                    yield Value::Unknown;
+                    yield Value::Deferred;
                 }
                 _ => panic!("Invalid defer property type {:?}", current)
             }
@@ -520,12 +520,12 @@ where
 }
 
 // Evaluates to the l.h.s. until the r.h.s. provides a value.
-// Then continues evaluating the r.h.s. (even if it provides Unknown)
+// Then continues evaluating the r.h.s. (even if it provides Deferred)
 pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
         while let (Some(x_val), Some(y_val)) = join!(x.next(), y.next()) {
             match (x_val, y_val) {
-                (x_val, Value::Unknown) => {
+                (x_val, Value::Deferred) => {
                     yield x_val;
                 }
                 (_, y_val) => {
@@ -540,23 +540,23 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
     })
 }
 
-// Evaluates to a placeholder value whenever Unknown is received.
+// Evaluates to a placeholder stream whenever Deferred is received.
 pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<Value> {
     let xs = x
         .zip(d)
-        .map(|(x, d)| if x == Value::Unknown { d } else { x });
+        .map(|(x, d)| if x == Value::Deferred { d } else { x });
     Box::pin(xs) as LocalBoxStream<'static, Value>
 }
 
 pub fn is_defined(x: OutputStream<Value>) -> OutputStream<Value> {
-    Box::pin(x.map(|x| Value::Bool(x != Value::Unknown)))
+    Box::pin(x.map(|x| Value::Bool(x != Value::Deferred)))
 }
 
 // Could also be implemented with is_defined but I think this is more efficient
 pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
         while let Some(x_val) = x.next().await {
-            if x_val == Value::Unknown {
+            if x_val == Value::Deferred {
                 yield Value::Bool(false);
             } else {
                 yield Value::Bool(true);
@@ -772,7 +772,7 @@ pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
             Value::Float(v) => v.sin().into(),
-            Value::Unknown => Value::Unknown,
+            Value::Deferred => Value::Deferred,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -783,7 +783,7 @@ pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
             Value::Float(v) => v.cos().into(),
-            Value::Unknown => Value::Unknown,
+            Value::Deferred => Value::Deferred,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -794,7 +794,7 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
     lift1(
         |v| match v {
             Value::Float(v) => v.tan().into(),
-            Value::Unknown => Value::Unknown,
+            Value::Deferred => Value::Deferred,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -806,7 +806,7 @@ pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
         |v| match v {
             Value::Int(v) => v.abs().into(),
             Value::Float(v) => v.abs().into(),
-            Value::Unknown => Value::Unknown,
+            Value::Deferred => Value::Deferred,
             x => panic!("Invalid abs with type: {:?}", x),
         },
         v,
@@ -880,9 +880,9 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn test_dynamic_with_start_unknown(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_dynamic_with_start_deferred(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
-            Value::Unknown,
+            Value::Deferred,
             "x + 1".into(),
             "x + 2".into(),
         ]));
@@ -891,16 +891,16 @@ mod tests {
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
-        // Continues evaluating to x+1 until we get a non-unknown value
-        let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 5.into()];
+        // Continues evaluating to x+1 until we get a non-deferred value
+        let exp: Vec<Value> = vec![Value::Deferred, 3.into(), 5.into()];
         assert_eq!(res, exp)
     }
 
     #[apply(async_test)]
-    async fn test_dynamic_with_mid_unknown(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_dynamic_with_mid_deferred(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![
             "x + 1".into(),
-            Value::Unknown,
+            Value::Deferred,
             "x + 2".into(),
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
@@ -908,7 +908,7 @@ mod tests {
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
-        // Continues evaluating to x+1 until we get a non-unknown value
+        // Continues evaluating to x+1 until we get a non-deferred value
         let exp: Vec<Value> = vec![2.into(), 3.into(), 5.into()];
         assert_eq!(res, exp)
     }
@@ -940,46 +940,46 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn test_defer_unknown(executor: Rc<LocalExecutor<'static>>) {
-        // Using unknown to represent no data on the stream
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, "x + 1".into()]));
+    async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) {
+        // Using deferred to represent no data on the stream
+        let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, "x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
-        let exp: Vec<Value> = vec![Value::Unknown, 4.into()];
+        let exp: Vec<Value> = vec![Value::Deferred, 4.into()];
         assert_eq!(res, exp)
     }
 
     #[apply(async_test)]
-    async fn test_defer_unknown2(executor: Rc<LocalExecutor<'static>>) {
-        // Unknown followed by property followed by unknown returns [U; val; val].
+    async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) {
+        // Deferred followed by property followed by deferred returns [U; val; val].
         let e = Box::pin(stream::iter(vec![
-            Value::Unknown,
+            Value::Deferred,
             "x + 1".into(),
-            Value::Unknown,
-            Value::Unknown,
+            Value::Deferred,
+            Value::Deferred,
         ])) as OutputStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
-        let exp: Vec<Value> = vec![Value::Unknown, 3.into(), 4.into(), 5.into()];
+        let exp: Vec<Value> = vec![Value::Deferred, 3.into(), 4.into(), 5.into()];
         assert_eq!(res, exp)
     }
 
     #[apply(async_test)]
-    async fn test_defer_only_unknown(executor: Rc<LocalExecutor<'static>>) {
-        // Using unknown to represent no data on the stream
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Unknown, Value::Unknown]));
+    async fn test_defer_only_deferred(executor: Rc<LocalExecutor<'static>>) {
+        // Using deferred to represent no data on the stream
+        let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, Value::Deferred]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
-        let exp: Vec<Value> = vec![Value::Unknown, Value::Unknown];
+        let exp: Vec<Value> = vec![Value::Deferred, Value::Deferred];
         assert_eq!(res, exp)
     }
 
@@ -993,7 +993,7 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn test_default_no_unknown() {
+    async fn test_default_no_deferred() {
         let x: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
         let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
@@ -1003,11 +1003,11 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn test_default_all_unknown() {
+    async fn test_default_all_deferred() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
-            Value::Unknown,
-            Value::Unknown,
-            Value::Unknown,
+            Value::Deferred,
+            Value::Deferred,
+            Value::Deferred,
         ]));
         let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
         let res: Vec<Value> = default(x, d).collect().await;
@@ -1016,9 +1016,12 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn test_default_one_unknown() {
-        let x: OutputStream<Value> =
-            Box::pin(stream::iter(vec!["x0".into(), Value::Unknown, "x2".into()]));
+    async fn test_default_one_deferred() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            "x0".into(),
+            Value::Deferred,
+            "x2".into(),
+        ]));
         let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
         let res: Vec<Value> = default(x, d).collect().await;
         let exp: Vec<Value> = vec!["x0".into(), "d".into(), "x2".into()];
@@ -1034,22 +1037,22 @@ mod tests {
             "x3".into(),
         ]));
         let y: OutputStream<Value> = Box::pin(stream::iter(vec![
-            Value::Unknown,
+            Value::Deferred,
             "y1".into(),
-            Value::Unknown,
+            Value::Deferred,
             "y3".into(),
         ]));
         let res: Vec<Value> = update(x, y).collect().await;
-        let exp: Vec<Value> = vec!["x0".into(), "y1".into(), Value::Unknown, "y3".into()];
+        let exp: Vec<Value> = vec!["x0".into(), "y1".into(), Value::Deferred, "y3".into()];
         assert_eq!(res, exp)
     }
 
     #[apply(async_test)]
     async fn test_update_first_y_then_x() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
-            Value::Unknown,
+            Value::Deferred,
             "x1".into(),
-            Value::Unknown,
+            Value::Deferred,
             "x3".into(),
         ]));
         let y: OutputStream<Value> = Box::pin(stream::iter(vec![
@@ -1065,33 +1068,33 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_update_neither() {
-        use Value::Unknown;
+        use Value::Deferred;
         let x: OutputStream<Value> =
-            Box::pin(stream::iter(vec![Unknown, Unknown, Unknown, Unknown]));
+            Box::pin(stream::iter(vec![Deferred, Deferred, Deferred, Deferred]));
         let y: OutputStream<Value> =
-            Box::pin(stream::iter(vec![Unknown, Unknown, Unknown, Unknown]));
+            Box::pin(stream::iter(vec![Deferred, Deferred, Deferred, Deferred]));
         let res: Vec<Value> = update(x, y).collect().await;
-        let exp: Vec<Value> = vec![Unknown, Unknown, Unknown, Unknown];
+        let exp: Vec<Value> = vec![Deferred, Deferred, Deferred, Deferred];
         assert_eq!(res, exp)
     }
 
     #[apply(async_test)]
     async fn test_update_first_x_then_y_value_sync() {
         let x: OutputStream<Value> = Box::pin(stream::iter(vec![
-            Value::Unknown,
+            Value::Deferred,
             "x0".into(),
             "x1".into(),
             "x2".into(),
             "x3".into(),
         ]));
         let y: OutputStream<Value> = Box::pin(stream::iter(vec![
-            Value::Unknown,
+            Value::Deferred,
             "y1".into(),
-            Value::Unknown,
+            Value::Deferred,
             "y3".into(),
         ]));
         let res: Vec<Value> = update(x, y).collect().await;
-        let exp: Vec<Value> = vec![Value::Unknown, "y1".into(), Value::Unknown, "y3".into()];
+        let exp: Vec<Value> = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
         assert_eq!(res, exp)
     }
 

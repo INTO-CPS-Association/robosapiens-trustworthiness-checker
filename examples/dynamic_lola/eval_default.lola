@@ -2,4 +2,4 @@
 in x
 in e
 out z
-z = eval(default(e, "x")) // On steps where e=Unknown, evaluate to eval("x")
+z = eval(default(e, "x")) // On steps where e=Deferred, evaluate to eval("x")

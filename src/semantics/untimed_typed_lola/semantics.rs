@@ -4,7 +4,7 @@ use crate::core::OutputStream;
 use crate::core::Value;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dynamic_lola::type_checker::{
-    PossiblyUnknown, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
+    PossiblyDeferred, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
 };
 use crate::semantics::{MonitoringSemantics, StreamContext};
 
@@ -18,30 +18,30 @@ where
     fn to_async_stream(expr: SExprTE, ctx: &Ctx) -> OutputStream<Value> {
         match expr {
             SExprTE::Int(e) => {
-                from_typed_stream::<PossiblyUnknown<i64>>(Self::to_async_stream(e, ctx))
+                from_typed_stream::<PossiblyDeferred<i64>>(Self::to_async_stream(e, ctx))
             }
             SExprTE::Float(e) => {
-                from_typed_stream::<PossiblyUnknown<f64>>(Self::to_async_stream(e, ctx))
+                from_typed_stream::<PossiblyDeferred<f64>>(Self::to_async_stream(e, ctx))
             }
             SExprTE::Str(e) => {
-                from_typed_stream::<PossiblyUnknown<String>>(Self::to_async_stream(e, ctx))
+                from_typed_stream::<PossiblyDeferred<String>>(Self::to_async_stream(e, ctx))
             }
             SExprTE::Bool(e) => {
-                from_typed_stream::<PossiblyUnknown<bool>>(Self::to_async_stream(e, ctx))
+                from_typed_stream::<PossiblyDeferred<bool>>(Self::to_async_stream(e, ctx))
             }
             SExprTE::Unit(e) => {
-                from_typed_stream::<PossiblyUnknown<()>>(Self::to_async_stream(e, ctx))
+                from_typed_stream::<PossiblyDeferred<()>>(Self::to_async_stream(e, ctx))
             }
         }
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprInt, PossiblyUnknown<i64>, Ctx, Value>
+impl<Ctx> MonitoringSemantics<SExprInt, PossiblyDeferred<i64>, Ctx, Value>
     for TypedUntimedLolaSemantics
 where
     Ctx: StreamContext<Value>,
 {
-    fn to_async_stream(expr: SExprInt, ctx: &Ctx) -> OutputStream<PossiblyUnknown<i64>> {
+    fn to_async_stream(expr: SExprInt, ctx: &Ctx) -> OutputStream<PossiblyDeferred<i64>> {
         match expr {
             SExprInt::Val(v) => mc::val(v),
             SExprInt::BinOp(e1, e2, op) => {
@@ -58,7 +58,7 @@ where
             SExprInt::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprInt::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Unknown)
+                mc::sindex(e, i, PossiblyDeferred::Deferred)
             }
             SExprInt::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -74,12 +74,12 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprFloat, PossiblyUnknown<f64>, Ctx, Value>
+impl<Ctx> MonitoringSemantics<SExprFloat, PossiblyDeferred<f64>, Ctx, Value>
     for TypedUntimedLolaSemantics
 where
     Ctx: StreamContext<Value>,
 {
-    fn to_async_stream(expr: SExprFloat, ctx: &Ctx) -> OutputStream<PossiblyUnknown<f64>> {
+    fn to_async_stream(expr: SExprFloat, ctx: &Ctx) -> OutputStream<PossiblyDeferred<f64>> {
         match expr {
             SExprFloat::Val(v) => mc::val(v),
             SExprFloat::BinOp(e1, e2, op) => {
@@ -96,7 +96,7 @@ where
             SExprFloat::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprFloat::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Unknown)
+                mc::sindex(e, i, PossiblyDeferred::Deferred)
             }
             SExprFloat::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -112,18 +112,18 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprStr, PossiblyUnknown<String>, Ctx, Value>
+impl<Ctx> MonitoringSemantics<SExprStr, PossiblyDeferred<String>, Ctx, Value>
     for TypedUntimedLolaSemantics
 where
     Ctx: StreamContext<Value>,
 {
-    fn to_async_stream(expr: SExprStr, ctx: &Ctx) -> OutputStream<PossiblyUnknown<String>> {
+    fn to_async_stream(expr: SExprStr, ctx: &Ctx) -> OutputStream<PossiblyDeferred<String>> {
         match expr {
             SExprStr::Val(v) => mc::val(v),
             SExprStr::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprStr::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Unknown)
+                mc::sindex(e, i, PossiblyDeferred::Deferred)
             }
             SExprStr::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -151,18 +151,18 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprUnit, PossiblyUnknown<()>, Ctx, Value>
+impl<Ctx> MonitoringSemantics<SExprUnit, PossiblyDeferred<()>, Ctx, Value>
     for TypedUntimedLolaSemantics
 where
     Ctx: StreamContext<Value>,
 {
-    fn to_async_stream(expr: SExprUnit, ctx: &Ctx) -> OutputStream<PossiblyUnknown<()>> {
+    fn to_async_stream(expr: SExprUnit, ctx: &Ctx) -> OutputStream<PossiblyDeferred<()>> {
         match expr {
             SExprUnit::Val(v) => mc::val(v),
             SExprUnit::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprUnit::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Unknown)
+                mc::sindex(e, i, PossiblyDeferred::Deferred)
             }
             SExprUnit::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -178,16 +178,16 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprBool, PossiblyUnknown<bool>, Ctx, Value>
+impl<Ctx> MonitoringSemantics<SExprBool, PossiblyDeferred<bool>, Ctx, Value>
     for TypedUntimedLolaSemantics
 where
     Ctx: StreamContext<Value>,
 {
-    fn to_async_stream(expr: SExprBool, ctx: &Ctx) -> OutputStream<PossiblyUnknown<bool>> {
+    fn to_async_stream(expr: SExprBool, ctx: &Ctx) -> OutputStream<PossiblyDeferred<bool>> {
         match expr {
             SExprBool::Val(b) => mc::val(b),
             SExprBool::EqInt(e1, e2) => {
-                let e1: OutputStream<PossiblyUnknown<i64>> = Self::to_async_stream(e1, ctx);
+                let e1: OutputStream<PossiblyDeferred<i64>> = Self::to_async_stream(e1, ctx);
                 let e2 = Self::to_async_stream(e2, ctx);
                 mc::eq(e1, e2)
             }
@@ -228,7 +228,7 @@ where
             SExprBool::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprBool::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyUnknown::Unknown)
+                mc::sindex(e, i, PossiblyDeferred::Deferred)
             }
             SExprBool::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);

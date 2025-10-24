@@ -207,14 +207,14 @@ impl VarManager {
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<Value> {
         let (mut tx, rx) = spsc::channel::<Value>(history_length + 128);
-        // Compute how many Unknowns are needed - needed because history_length is longer than
+        // Compute how many Deferreds are needed - needed because history_length is longer than
         // retained_history.len()
         let missing = std::cmp::min(
             history_length.saturating_sub(self.retained_history.len()),
             self.samples_forwarded,
         );
         // Push them to the history
-        std::iter::repeat(Value::Unknown)
+        std::iter::repeat(Value::Deferred)
             .take(missing)
             .for_each(|v| {
                 self.retained_history.push_front(v);
@@ -787,7 +787,7 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         // TODO: Use the real test values
         // let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
-        let e = vec!["x + 1".into(), Value::Unknown, Value::Unknown];
+        let e = vec!["x + 1".into(), Value::Deferred, Value::Deferred];
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
