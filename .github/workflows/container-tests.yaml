@@ -1,4 +1,4 @@
-name: Cargo Tests
+name: Container tests
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
 
       - name: Fix workspace permissions
         run: sudo chown -R 1000:1000 ${{ github.workspace }}
