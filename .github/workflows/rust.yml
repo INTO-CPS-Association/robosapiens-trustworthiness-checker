@@ -10,29 +10,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  workflow-default-settings:
+    name: workflow default settings
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: rustup
-      run: rustup update stable
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose --features testcontainers
-  build_and_bench:
-    name: Bench
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-      - name: rustup
-        run: rustup update stable
-      - name: measure benchmarks on main
-        uses: actions-rs/cargo@v1
-        with:
-          command: bench
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install dependencies
+        run: |
+          sudo apt-get update &&
+          sudo apt-get install -y libssl-dev cmake build-essential # Used by paho-mqtt
+
+        # Do all the building first to fail early - sometimes we push without building specific settings:
+      - name: Build project
+        run: cargo build
+      - name: Build project for testing
+        run: cargo test --no-run
+      - name: Build project for benching
+        run: cargo bench --no-run
+
+        # Then run the tests and benches
+      - name: Test project
+        run: cargo test
+      - name: Bench project
+        run: cargo bench
       - name: upload benchmark report
         uses: actions/upload-artifact@v4
         with:
