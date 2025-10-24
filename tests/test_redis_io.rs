@@ -33,7 +33,6 @@ mod integration_tests {
         InputProvider, OutputStream, Value, VarName,
         core::REDIS_HOSTNAME,
         core::{OutputHandler, Runnable},
-        dep_manage::interface::{DependencyKind, create_dependency_manager},
         io::{
             redis::{input_provider::RedisInputProvider, output_handler::RedisOutputHandler},
             testing::manual_output_handler::ManualOutputHandler,
@@ -157,7 +156,6 @@ mod integration_tests {
             model.clone(),
             Box::new(input_provider),
             Box::new(output_handler),
-            create_dependency_manager(DependencyKind::Empty, model),
         );
 
         let res = executor.spawn(runner.run());
@@ -267,7 +265,6 @@ mod integration_tests {
             model.clone(),
             Box::new(input_provider),
             Box::new(output_handler),
-            create_dependency_manager(DependencyKind::Empty, model),
         );
 
         let res = executor.spawn(runner.run());

@@ -5,7 +5,6 @@ pub mod core;
 pub use crate::core::Value;
 pub use core::{InputProvider, Monitor, OutputStream, Specification, VarName};
 pub mod cli;
-pub mod dep_manage;
 pub mod io;
 pub use io::file::parse_file;
 pub mod lang;

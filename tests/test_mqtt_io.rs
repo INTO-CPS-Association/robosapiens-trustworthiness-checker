@@ -30,7 +30,6 @@ mod integration_tests {
     use trustworthiness_checker::{
         Value, VarName,
         core::Runnable,
-        dep_manage::interface::{DependencyKind, create_dependency_manager},
         io::{
             mqtt::{MQTTInputProvider, MQTTOutputHandler},
             testing::manual_output_handler::ManualOutputHandler,
@@ -91,7 +90,6 @@ mod integration_tests {
             spec.clone(),
             Box::new(input_streams),
             output_handler,
-            create_dependency_manager(DependencyKind::Empty, spec),
         );
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
@@ -149,7 +147,6 @@ mod integration_tests {
             spec.clone(),
             Box::new(input_streams),
             output_handler,
-            create_dependency_manager(DependencyKind::Empty, spec),
         );
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
@@ -221,7 +218,6 @@ mod integration_tests {
             model.clone(),
             Box::new(input_provider),
             Box::new(output_handler),
-            create_dependency_manager(DependencyKind::Empty, model),
         );
 
         // Clone the sender for the monitor task
@@ -364,7 +360,6 @@ mod integration_tests {
             model.clone(),
             Box::new(input_provider),
             Box::new(output_handler),
-            create_dependency_manager(DependencyKind::Empty, model),
         );
 
         // Clone the sender for the monitor task

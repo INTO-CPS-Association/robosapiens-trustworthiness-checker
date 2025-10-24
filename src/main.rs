@@ -10,7 +10,6 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
-use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::builders::OutputHandlerBuilder;
 use trustworthiness_checker::lang::dynamic_lola::lalr_parser::parse_file as lalr_parse_file;
@@ -113,12 +112,6 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         }
         _ => model,
     };
-
-    // Create the dependency manager
-    let builder = builder.dependencies(create_dependency_manager(
-        DependencyKind::DepGraph,
-        model.clone(),
-    ));
 
     let output_var_names = model.output_vars.clone();
     let aux_info = model.aux_info.clone();

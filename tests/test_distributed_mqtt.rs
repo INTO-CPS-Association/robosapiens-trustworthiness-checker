@@ -23,7 +23,6 @@ mod integration_tests {
 
     use trustworthiness_checker::{
         InputProvider, VarName,
-        dep_manage::interface::{DependencyKind, create_dependency_manager},
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
         lola_specification,
         semantics::distributed::localisation::Localisable,
@@ -117,7 +116,6 @@ mod integration_tests {
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
-            create_dependency_manager(DependencyKind::Empty, model1),
         );
         executor.spawn(runner_1.run()).detach();
         input_provider_1_ready
@@ -129,7 +127,6 @@ mod integration_tests {
             model2.clone(),
             Box::new(input_provider_2),
             Box::new(output_handler_2),
-            create_dependency_manager(DependencyKind::Empty, model2),
         );
         executor.spawn(runner_2.run()).detach();
         input_provider_2_ready
@@ -280,7 +277,6 @@ mod integration_tests {
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
-            create_dependency_manager(DependencyKind::Empty, model1),
         );
 
         let runner_2 = TestMonitorRunner::new(
@@ -288,7 +284,6 @@ mod integration_tests {
             model2.clone(),
             Box::new(input_provider_2),
             Box::new(output_handler_2),
-            create_dependency_manager(DependencyKind::Empty, model2),
         );
 
         executor.spawn(runner_1.run()).detach();
@@ -447,7 +442,6 @@ mod integration_tests {
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
-            create_dependency_manager(DependencyKind::Empty, model1),
         );
 
         let runner_2 = TestMonitorRunner::new(
@@ -455,7 +449,6 @@ mod integration_tests {
             model2.clone(),
             Box::new(input_provider_2),
             Box::new(output_handler_2),
-            create_dependency_manager(DependencyKind::Empty, model2),
         );
 
         executor.spawn(runner_1.run()).detach();

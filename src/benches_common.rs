@@ -13,7 +13,6 @@ use crate::core::OutputHandler;
 use crate::core::Runnable;
 use crate::core::Runtime;
 use crate::core::Semantics;
-use crate::dep_manage::interface::DependencyManager;
 use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use crate::runtime::RuntimeBuilder;
@@ -28,7 +27,6 @@ pub async fn monitor_runtime_outputs(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
-    dep_manager: DependencyManager,
     output_limit: Option<usize>,
 ) {
     let output_handler: Box<dyn OutputHandler<Val = Value>> = match output_limit {
@@ -50,7 +48,6 @@ pub async fn monitor_runtime_outputs(
         .model(spec)
         .output(output_handler)
         .input(Box::new(input_streams))
-        .dependencies(dep_manager)
         .build();
     monitor.run().await.expect("Error running monitor");
 }
@@ -59,7 +56,6 @@ pub async fn monitor_outputs_untyped_async_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
-    dep_manager: DependencyManager,
     limit: usize,
 ) {
     monitor_runtime_outputs(
@@ -68,7 +64,6 @@ pub async fn monitor_outputs_untyped_async_limited(
         executor,
         spec,
         input_streams,
-        dep_manager,
         Some(limit),
     )
     .await;
@@ -78,7 +73,6 @@ pub async fn monitor_outputs_untyped_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
-    dep_manager: DependencyManager,
 ) {
     monitor_runtime_outputs(
         Runtime::Async,
@@ -86,7 +80,6 @@ pub async fn monitor_outputs_untyped_async(
         executor,
         spec,
         input_streams,
-        dep_manager,
         None,
     )
     .await;
@@ -96,7 +89,6 @@ pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: TypedLOLASpecification,
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
-    dep_manager: DependencyManager,
 ) {
     // Currently cannot be deduplicated since it includes the type
     // checking
@@ -115,7 +107,6 @@ pub async fn monitor_outputs_typed_async(
     .model(spec.clone())
     .input(Box::new(input_streams))
     .output(output_handler)
-    .dependencies(dep_manager)
     .build();
     async_monitor.run().await.expect("Error running monitor");
 }

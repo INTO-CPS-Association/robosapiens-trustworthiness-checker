@@ -8,7 +8,6 @@ use tracing::debug;
 use crate::{
     InputProvider, Monitor, Specification, Value, VarName,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData, to_typed_stream},
-    dep_manage::interface::DependencyManager,
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         scheduling::{
@@ -202,10 +201,6 @@ where
     fn output(mut self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
         debug!("Setting output handler");
         self.async_monitor_builder = self.async_monitor_builder.output(output);
-        self
-    }
-
-    fn dependencies(self, _dependencies: DependencyManager) -> Self {
         self
     }
 

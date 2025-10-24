@@ -4,7 +4,6 @@ use crate::{
         AbstractMonitorBuilder, InputProvider, Monitor, OutputHandler, Runnable, Specification,
         Value,
     },
-    dep_manage::interface::DependencyManager,
     lang::dynamic_lola::{ast::LOLASpecification, lalr_parser},
     semantics::{
         AbstractContextBuilder, MonitoringSemantics, StreamContext, untimed_untyped_lola::semantics,
@@ -37,7 +36,6 @@ pub struct LittleMonitorBuilder {
     model: Option<LOLASpecification>,
     input: Option<Box<dyn InputProvider<Val = Value>>>,
     output: Option<Box<dyn OutputHandler<Val = Value>>>,
-    dependencies: Option<DependencyManager>,
 }
 
 impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
@@ -49,7 +47,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
             model: None,
             input: None,
             output: None,
-            dependencies: None,
         }
     }
 
@@ -73,17 +70,11 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
         self
     }
 
-    fn dependencies(mut self, dependencies: DependencyManager) -> Self {
-        self.dependencies = Some(dependencies);
-        self
-    }
-
     fn build(self) -> LittleMonitor {
         let executor = self.executor.unwrap();
         let model = self.model.unwrap();
         let mut input = self.input.unwrap();
         let output = self.output.unwrap();
-        let dependencies = self.dependencies.unwrap();
         let input_streams = model
             .input_vars()
             .iter()
@@ -100,7 +91,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
             input_provider: input,
             output_handler: output,
             _has_inputs: has_inputs,
-            _dependencies: dependencies,
         }
     }
 
@@ -301,7 +291,6 @@ pub struct LittleMonitor {
     input_provider: Box<dyn InputProvider<Val = Value>>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
     _has_inputs: bool,
-    _dependencies: DependencyManager,
 }
 
 impl LittleMonitor {
@@ -310,14 +299,12 @@ impl LittleMonitor {
         model: LOLASpecification,
         input: Box<dyn InputProvider<Val = Value>>,
         output: Box<dyn OutputHandler<Val = Value>>,
-        dependencies: DependencyManager,
     ) -> Self {
         LittleMonitorBuilder::new()
             .executor(executor)
             .model(model)
             .input(input)
             .output(output)
-            .dependencies(dependencies)
             .build()
     }
 
@@ -724,7 +711,6 @@ mod tests {
 
     use crate::async_test;
     use crate::core::Runnable;
-    use crate::dep_manage::interface::{DependencyKind, create_dependency_manager};
     use crate::io::testing::ManualOutputHandler;
     use crate::runtime::my_little_runtime::LittleMonitor;
     use futures::stream::StreamExt;
@@ -758,7 +744,6 @@ mod tests {
             input_provider: Box::new(input_streams),
             _has_inputs: true,
             output_handler,
-            _dependencies: create_dependency_manager(DependencyKind::Empty, spec_untyped.clone()),
         };
 
         executor.spawn(monitor.run()).detach();
@@ -801,7 +786,6 @@ mod tests {
             input_provider: Box::new(input_streams),
             _has_inputs: true,
             output_handler,
-            _dependencies: create_dependency_manager(DependencyKind::Empty, spec_untyped.clone()),
         };
 
         executor.spawn(monitor.run()).detach();

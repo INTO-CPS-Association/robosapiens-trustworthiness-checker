@@ -9,7 +9,6 @@ use crate::{
     LOLASpecification, Monitor, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
-    dep_manage::interface::DependencyManager,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
     lang::dynamic_lola::{
         lalr_parser::LALRExprParser,
@@ -59,11 +58,6 @@ pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
         provider: MQTTLocalityReceiver,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
-    fn dependencies(
-        self: Box<Self>,
-        dependencies: DependencyManager,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
-
     fn build(self: Box<Self>) -> Box<dyn Runnable>;
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>>;
@@ -108,13 +102,6 @@ impl<
         output: Box<dyn OutputHandler<Val = V>>,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
         Box::new(MonBuilder::output(*self, output))
-    }
-
-    fn dependencies(
-        self: Box<Self>,
-        dependencies: DependencyManager,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
-        Box::new(MonBuilder::dependencies(*self, dependencies))
     }
 
     fn mqtt_reconfig_provider(
@@ -162,10 +149,6 @@ impl<
 
     fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
         Self(self.0.output(output))
-    }
-
-    fn dependencies(self, dependencies: DependencyManager) -> Self {
-        Self(self.0.dependencies(dependencies))
     }
 
     fn mqtt_reconfig_provider(self, provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
@@ -257,7 +240,6 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub input_provider_builder: Option<InputProviderBuilder>,
     pub output: Option<Box<dyn OutputHandler<Val = V>>>,
     pub output_handler_builder: Option<OutputHandlerBuilder>,
-    pub dependencies: Option<DependencyManager>,
     pub runtime: Runtime,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
@@ -353,7 +335,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             input_provider_builder: None,
             output: None,
             output_handler_builder: None,
-            dependencies: None,
             distribution_mode: DistributionMode::CentralMonitor,
             distribution_mode_builder: None,
             runtime: Runtime::Async,
@@ -392,13 +373,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
         }
     }
 
-    fn dependencies(self, dependencies: DependencyManager) -> Self {
-        Self {
-            dependencies: Some(dependencies),
-            ..self
-        }
-    }
-
     fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self {
         // Generic builder doesn't directly use the MQTT reconfiguration provider
         Self {
@@ -421,7 +395,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                 self.semantics,
                 self.parser,
                 self.executor,
-                self.dependencies,
                 self.model,
                 self.mqtt_reconfig_provider,
                 self.distribution_mode,
@@ -456,7 +429,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         semantics: Semantics,
         parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
-        dependencies: Option<DependencyManager>,
         model: Option<LOLASpecification>,
         mqtt_reconfig_provider: Option<MQTTLocalityReceiver>,
         distribution_mode: DistributionMode,
@@ -660,10 +632,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             Some(ex) => builder.executor(ex),
             None => builder,
         };
-        let builder = match dependencies {
-            Some(dependencies) => builder.dependencies(dependencies),
-            None => builder,
-        };
         let builder = match model {
             Some(model) => builder.model(model),
             None => builder,
@@ -696,7 +664,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 self.semantics,
                 self.parser,
                 self.executor,
-                self.dependencies,
                 self.model,
                 self.mqtt_reconfig_provider,
                 distribution_mode,
@@ -741,7 +708,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             input_provider_builder: self.input_provider_builder.clone(),
             output: None, // Not clonable. TODO: We should make all builders clonable
             output_handler_builder: self.output_handler_builder.clone(),
-            dependencies: self.dependencies.clone(),
             distribution_mode: DistributionMode::CentralMonitor, // Not clonable. TODO: We should make all builders clonable
             distribution_mode_builder: self.distribution_mode_builder.clone(),
             runtime: self.runtime.clone(),

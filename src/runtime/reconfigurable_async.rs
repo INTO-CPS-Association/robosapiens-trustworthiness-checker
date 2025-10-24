@@ -11,7 +11,6 @@ use crate::io::reconfiguration::input_provider_multiplexer::InputProviderMultipl
 use crate::{
     InputProvider, Monitor, Specification, Value,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData},
-    dep_manage::interface::DependencyManager,
     distributed::locality_receiver::LocalityReceiver,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
     semantics::{MonitoringSemantics, StreamContext, distributed::localisation::Localisable},
@@ -93,11 +92,6 @@ impl<
             output_provider: Some(output),
             ..self
         }
-    }
-
-    fn dependencies(self, _dependencies: DependencyManager) -> Self {
-        // We don't currently use the dependencies in the async runtime
-        self
     }
 
     fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self {

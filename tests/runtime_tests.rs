@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Semantics};
-use trustworthiness_checker::dep_manage::interface::{DependencyKind, create_dependency_manager};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
 
@@ -37,14 +36,6 @@ impl TestConfiguration {
     fn untyped_configurations() -> Vec<Self> {
         vec![TestConfiguration::AsyncUntimed]
     }
-
-    fn dependency_kinds(&self) -> Vec<DependencyKind> {
-        match self {
-            TestConfiguration::AsyncUntimed | TestConfiguration::AsyncTypedUntimed => {
-                vec![DependencyKind::Empty]
-            }
-        }
-    }
 }
 
 fn create_builder_from_config(
@@ -63,48 +54,43 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec![0.into(), 1.into(), 2.into()];
-            let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
-            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Defer test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![1.into()]),
-                    (1, vec![2.into()]),
-                    (2, vec![3.into()]),
-                ],
-                "Defer output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Defer test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+            ],
+            "Defer output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -114,48 +100,43 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec![1.into(), 2.into(), 3.into()];
-            let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
-            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec![1.into(), 2.into(), 3.into()];
+        let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Defer x squared test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![1.into()]),
-                    (1, vec![4.into()]),
-                    (2, vec![9.into()]),
-                ],
-                "Defer x squared output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Defer x squared test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![4.into()]),
+                (2, vec![9.into()]),
+            ],
+            "Defer x squared output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -165,48 +146,43 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec![1.into(), 2.into(), 3.into()];
-            let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
-            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec![1.into(), 2.into(), 3.into()];
+        let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Defer deferred test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![Value::Deferred]),
-                    (1, vec![3.into()]),
-                    (2, vec![4.into()]),
-                ],
-                "Defer deferred output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Defer deferred test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Deferred]),
+                (1, vec![3.into()]),
+                (2, vec![4.into()]),
+            ],
+            "Defer deferred output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -216,48 +192,43 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec![0.into(), 1.into(), 2.into()];
-            let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
-            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
+        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Defer deferred2 test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![Value::Deferred]),
-                    (1, vec![2.into()]),
-                    (2, vec![3.into()]),
-                ],
-                "Defer deferred2 output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Defer deferred2 test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Deferred]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+            ],
+            "Defer deferred2 output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -269,55 +240,50 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
             lola_specification(&mut "in x\nin y\nin e\nout z1\nout z2\nz1 = defer(e)\nz2 = x + y")
                 .unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
-            let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
-            let e = vec![
-                Value::Deferred,
-                "x + y".into(),
-                "x + y".into(),
-                "x + y".into(),
-            ];
-            let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y), ("e".into(), e)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
+        let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
+        let e = vec![
+            Value::Deferred,
+            "x + y".into(),
+            "x + y".into(),
+            "x + y".into(),
+        ];
+        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y), ("e".into(), e)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                4,
-                "Defer dependency test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![Value::Deferred, 11.into()]),
-                    (1, vec![22.into(), 22.into()]),
-                    (2, vec![33.into(), 33.into()]),
-                    (3, vec![44.into(), 44.into()]),
-                ],
-                "Defer dependency output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            4,
+            "Defer dependency test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Deferred, 11.into()]),
+                (1, vec![22.into(), 22.into()]),
+                (2, vec![33.into(), 33.into()]),
+                (3, vec![44.into(), 44.into()]),
+            ],
+            "Defer dependency output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -327,48 +293,43 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec!["x0".into(), "x1".into(), "x2".into()];
-            let y = vec!["y0".into(), "y1".into(), "y2".into()];
-            let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec!["x0".into(), "x1".into(), "x2".into()];
+        let y = vec!["y0".into(), "y1".into(), "y2".into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Update both init test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec!["y0".into()]),
-                    (1, vec!["y1".into()]),
-                    (2, vec!["y2".into()]),
-                ],
-                "Update both init output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Update both init test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec!["y0".into()]),
+                (1, vec!["y1".into()]),
+                (2, vec!["y2".into()]),
+            ],
+            "Update both init output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -378,49 +339,44 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-            let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
-            let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+        let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                4,
-                "Update first x then y test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec!["x0".into()]),
-                    (1, vec!["y1".into()]),
-                    (2, vec![Value::Deferred]),
-                    (3, vec!["y3".into()]),
-                ],
-                "Update first x then y output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            4,
+            "Update first x then y test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec!["x0".into()]),
+                (1, vec!["y1".into()]),
+                (2, vec![Value::Deferred]),
+                (3, vec!["y3".into()]),
+            ],
+            "Update first x then y output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -431,49 +387,44 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
         let spec_untyped =
             lola_specification(&mut "in x\nin e\nout z\nz = update(\"def\", defer(e))").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-            let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
-            let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+        let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                4,
-                "Update defer test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec!["def".into()]),
-                    (1, vec!["x1".into()]),
-                    (2, vec!["x2".into()]),
-                    (3, vec!["x3".into()]),
-                ],
-                "Update defer output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            4,
+            "Update defer test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec!["def".into()]),
+                (1, vec!["x1".into()]),
+                (2, vec!["x2".into()]),
+                (3, vec!["x3".into()]),
+            ],
+            "Update defer output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -484,54 +435,49 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
         let spec_untyped =
             lola_specification(&mut "in x\nin y\nout z\nz = defer(update(x, y))").unwrap();
 
-        for kind in config.dependency_kinds() {
-            let x = vec![Value::Deferred, "x".into(), "x_lost".into(), "x_sad".into()];
-            let y = vec![
-                Value::Deferred,
-                "y".into(),
-                "y_won!".into(),
-                "y_happy".into(),
-            ];
-            let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let x = vec![Value::Deferred, "x".into(), "x_lost".into(), "x_sad".into()];
+        let y = vec![
+            Value::Deferred,
+            "y".into(),
+            "y_won!".into(),
+            "y_happy".into(),
+        ];
+        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                4,
-                "Defer update test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![Value::Deferred]),
-                    (1, vec!["y".into()]),
-                    (2, vec!["y_won!".into()]),
-                    (3, vec!["y_happy".into()]),
-                ],
-                "Defer update output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            4,
+            "Defer update test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Deferred]),
+                (1, vec!["y".into()]),
+                (2, vec!["y_won!".into()]),
+                (3, vec!["y_happy".into()]),
+            ],
+            "Defer update output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -541,7 +487,6 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //     for config in vec![TestConfiguration::Constraints] {
 //         let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(x, z))").unwrap();
 //
-//         for kind in config.dependency_kinds() {
 //             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
 //             let input_streams = BTreeMap::from([("x".into(), x)]);
 //             let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -554,8 +499,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //                 .executor(executor.clone())
 //                 .model(spec_untyped.clone())
 //                 .input(Box::new(input_streams))
-//                 .output(output_handler)
-//                 .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+//                 .output(output_handler);
 //
 //             let builder = create_builder_from_config(builder, config);
 //
@@ -566,9 +510,8 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //             assert_eq!(
 //                 outputs.len(),
 //                 4,
-//                 "Recursive update test failed for config {:?} with dependency {:?}",
+//                 "Recursive update test failed for config {:?}",
 //                 config,
-//                 kind
 //             );
 //             assert_eq!(
 //                 outputs,
@@ -578,12 +521,10 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //                     (2, vec!["x2".into()]),
 //                     (3, vec!["x3".into()]),
 //                 ],
-//                 "Recursive update output mismatch for config {:?} with dependency {:?}",
+//                 "Recursive update output mismatch for config {:?}",
 //                 config,
-//                 kind
 //             );
 //         }
-//     }
 // }
 
 // NOTE: While this test is interesting, it cannot work due to how defer is handled.
@@ -597,7 +538,6 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //     for config in vec![TestConfiguration::Constraints] {
 //         let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(defer(x), z)").unwrap();
 //
-//         for kind in config.dependency_kinds() {
 //             let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
 //             let input_streams = BTreeMap::from([("x".into(), x)]);
 //             let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -610,8 +550,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //                 .executor(executor.clone())
 //                 .model(spec_untyped.clone())
 //                 .input(Box::new(input_streams))
-//                 .output(output_handler)
-//                 .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+//                 .output(output_handler);
 //
 //             let builder = create_builder_from_config(builder, config);
 //
@@ -622,9 +561,8 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //             assert_eq!(
 //                 outputs.len(),
 //                 4,
-//                 "Recursive update defer test failed for config {:?} with dependency {:?}",
+//                 "Recursive update defer test failed for config {:?}",
 //                 config,
-//                 kind
 //             );
 //             assert_eq!(
 //                 outputs,
@@ -634,12 +572,10 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 //                     (2, vec![0.into()],),
 //                     (3, vec![0.into()],),
 //                 ],
-//                 "Recursive update defer output mismatch for config {:?} with dependency {:?}",
+//                 "Recursive update defer output mismatch for config {:?}",
 //                 config,
-//                 kind
 //             );
 //         }
-//     }
 // }
 
 pub fn input_streams_constraint() -> BTreeMap<VarName, OutputStream<Value>> {
@@ -669,35 +605,31 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_empty()).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_empty();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_empty();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<Vec<Value>> = outputs.collect().await;
-            assert_eq!(
-                outputs.len(),
-                0,
-                "Runtime initialization failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<Vec<Value>> = outputs.collect().await;
+        assert_eq!(
+            outputs.len(),
+            0,
+            "Runtime initialization failed for config {:?}",
+            config,
+        );
     }
 }
 
@@ -710,46 +642,41 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_constraint();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams_constraint();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Variable test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![1.into()]),
-                    (1, vec![3.into()]),
-                    (2, vec![5.into()]),
-                ],
-                "Variable test output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Variable test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![3.into()]),
+                (2, vec![5.into()]),
+            ],
+            "Variable test output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -762,46 +689,41 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_constraint();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams_constraint();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.take(3).enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Literal expression test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![42.into()]),
-                    (1, vec![42.into()]),
-                    (2, vec![42.into()]),
-                ],
-                "Literal expression output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.take(3).enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Literal expression test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![42.into()]),
+                (1, vec![42.into()]),
+                (2, vec![42.into()]),
+            ],
+            "Literal expression output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -814,46 +736,41 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_constraint();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams_constraint();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Addition test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![2.into()]),
-                    (1, vec![4.into()]),
-                    (2, vec![6.into()]),
-                ],
-                "Addition output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Addition test failed for config {:?}",
+            config,
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![2.into()]),
+                (1, vec![4.into()]),
+                (2, vec![6.into()]),
+            ],
+            "Addition output mismatch for config {:?}",
+            config,
+        );
     }
 }
 
@@ -866,46 +783,41 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_constraint();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams_constraint();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Subtraction test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![Value::Int(-9)]),
-                    (1, vec![Value::Int(-7)]),
-                    (2, vec![Value::Int(-5)]),
-                ],
-                "Subtraction output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Subtraction test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Int(-9)]),
+                (1, vec![Value::Int(-7)]),
+                (2, vec![Value::Int(-5)]),
+            ],
+            "Subtraction output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -920,50 +832,45 @@ async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>)
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_constraint();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams_constraint();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            // TODO: async runtime produces more data than the constraint based runtime
-            let num_expected_outputs = match config {
-                TestConfiguration::AsyncTypedUntimed | TestConfiguration::AsyncUntimed => 4,
-            };
-            assert_eq!(
-                outputs.len(),
-                num_expected_outputs,
-                "Index past mult dependencies test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                &outputs[0..3],
-                vec![
-                    (0, vec![Value::Deferred, Value::Deferred]),
-                    (1, vec![1.into(), Value::Deferred]),
-                    (2, vec![3.into(), 1.into()]),
-                ],
-                "Index past mult dependencies output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        // TODO: async runtime produces more data than the constraint based runtime
+        let num_expected_outputs = match config {
+            TestConfiguration::AsyncTypedUntimed | TestConfiguration::AsyncUntimed => 4,
+        };
+        assert_eq!(
+            outputs.len(),
+            num_expected_outputs,
+            "Index past mult dependencies test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            &outputs[0..3],
+            vec![
+                (0, vec![Value::Deferred, Value::Deferred]),
+                (1, vec![1.into(), Value::Deferred]),
+                (2, vec![3.into(), 1.into()]),
+            ],
+            "Index past mult dependencies output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -978,46 +885,41 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams5();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams5();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "If-else expression test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![true.into()]),
-                    (1, vec![false.into()]),
-                    (2, vec![false.into()]),
-                ],
-                "If-else expression output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "If-else expression test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![true.into()]),
+                (1, vec![false.into()]),
+                (2, vec![false.into()]),
+            ],
+            "If-else expression output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -1030,42 +932,37 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams4();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams4();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                2,
-                "String append test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![(0, vec!["ab".into()]), (1, vec!["cd".into()]),],
-                "String append output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            2,
+            "String append test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![(0, vec!["ab".into()]), (1, vec!["cd".into()]),],
+            "String append output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -1078,46 +975,41 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_constraint();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_streams_constraint();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Default no deferred test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![1.into()]),
-                    (1, vec![3.into()]),
-                    (2, vec![5.into()]),
-                ],
-                "Default no deferred output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Default no deferred test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![3.into()]),
+                (2, vec![5.into()]),
+            ],
+            "Default no deferred output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -1131,49 +1023,44 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = BTreeMap::from([(
-                "x".into(),
-                vec![Value::Deferred, Value::Deferred, Value::Deferred],
-            )]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = BTreeMap::from([(
+            "x".into(),
+            vec![Value::Deferred, Value::Deferred, Value::Deferred],
+        )]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Default all deferred test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![42.into()]),
-                    (1, vec![42.into()]),
-                    (2, vec![42.into()]),
-                ],
-                "Default all deferred output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Default all deferred test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![42.into()]),
+                (1, vec![42.into()]),
+                (2, vec![42.into()]),
+            ],
+            "Default all deferred output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -1187,47 +1074,42 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams =
-                BTreeMap::from([("x".into(), vec![1.into(), Value::Deferred, 5.into()])]);
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams =
+            BTreeMap::from([("x".into(), vec![1.into(), Value::Deferred, 5.into()])]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                3,
-                "Default one deferred test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![1.into()]),
-                    (1, vec![42.into()]),
-                    (2, vec![5.into()]),
-                ],
-                "Default one deferred output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            3,
+            "Default one deferred test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![42.into()]),
+                (2, vec![5.into()]),
+            ],
+            "Default one deferred output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -1240,47 +1122,42 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_empty();
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let input_streams = input_empty();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let outputs: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
-            assert_eq!(
-                outputs.len(),
-                4,
-                "Counter test failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-            assert_eq!(
-                outputs,
-                vec![
-                    (0, vec![1.into()]),
-                    (1, vec![2.into()]),
-                    (2, vec![3.into()]),
-                    (3, vec![4.into()]),
-                ],
-                "Counter output mismatch for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
+        assert_eq!(
+            outputs.len(),
+            4,
+            "Counter test failed for config {:?}",
+            config
+        );
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+                (3, vec![4.into()]),
+            ],
+            "Counter output mismatch for config {:?}",
+            config
+        );
     }
 }
 
@@ -1290,65 +1167,11 @@ async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'st
         // Common specification for all configurations
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration
-            let input_streams = input_streams1();
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams1();
 
-            // Test that monitor continues to work even after output handler goes out of scope
-            let outputs = {
-                // Create output handler based on configuration
-                let mut output_handler = Box::new(ManualOutputHandler::new(
-                    executor.clone(),
-                    spec_untyped.output_vars.clone(),
-                ));
-                let outputs = output_handler.get_output();
-
-                // Build base monitor with common settings
-                let builder = RuntimeBuilder::new()
-                    .executor(executor.clone())
-                    .model(spec_untyped.clone())
-                    .input(Box::new(input_streams))
-                    .output(output_handler)
-                    .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
-
-                // Apply configuration-specific settings
-                let builder = create_builder_from_config(builder, config);
-                let monitor = builder.async_build().await;
-
-                // Start monitor and return outputs stream
-                executor.spawn(monitor.run()).detach();
-                outputs
-                // output_handler goes out of scope here, but monitor should continue
-            };
-
-            // Collect results after output handler has been dropped
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-
-            // Assert expected results - monitor should persist and produce correct outputs
-            assert_eq!(
-                result,
-                vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])],
-                "Monitor persistence failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
-    }
-}
-
-#[apply(async_test)]
-async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>>) {
-    for config in TestConfiguration::all() {
-        // Common specification for all configurations
-        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration (100 elements)
-            let input_streams =
-                trustworthiness_checker::lola_fixtures::input_streams_simple_add(100);
-
+        // Test that monitor continues to work even after output handler goes out of scope
+        let outputs = {
             // Create output handler based on configuration
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -1361,39 +1184,82 @@ async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>
                 .executor(executor.clone())
                 .model(spec_untyped.clone())
                 .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+                .output(output_handler);
 
             // Apply configuration-specific settings
             let builder = create_builder_from_config(builder, config);
-
             let monitor = builder.async_build().await;
 
-            // Run monitor and collect results
+            // Start monitor and return outputs stream
             executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+            outputs
+            // output_handler goes out of scope here, but monitor should continue
+        };
 
-            // Assert that large input produces expected number of outputs
+        // Collect results after output handler has been dropped
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+
+        // Assert expected results - monitor should persist and produce correct outputs
+        assert_eq!(
+            result,
+            vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])],
+            "Monitor persistence failed for config {:?}",
+            config
+        );
+    }
+}
+
+#[apply(async_test)]
+async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>>) {
+    for config in TestConfiguration::all() {
+        // Common specification for all configurations
+        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+
+        // Create fresh input streams for each test iteration (100 elements)
+        let input_streams = trustworthiness_checker::lola_fixtures::input_streams_simple_add(100);
+
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.async_build().await;
+
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+
+        // Assert that large input produces expected number of outputs
+        assert_eq!(
+            result.len(),
+            100,
+            "Expected 100 outputs for large input, got {} for config {:?}",
+            result.len(),
+            config
+        );
+
+        // Verify outputs are correct (z = x + y where x=2*i, y=2*i+1, so z=4*i+1)
+        for (i, (time, values)) in result.iter().enumerate() {
+            assert_eq!(*time, i, "Output time should match index");
+            assert_eq!(values.len(), 1, "Should have exactly one output value");
+            let expected = Value::Int(4 * (i as i64) + 1);
             assert_eq!(
-                result.len(),
-                100,
-                "Expected 100 outputs for large input, got {} for config {:?} with dependency {:?}",
-                result.len(),
-                config,
-                kind
+                values[0], expected,
+                "Output at time {} should be {}, got {:?} for config {:?}",
+                i, expected, values[0], config
             );
-
-            // Verify outputs are correct (z = x + y where x=2*i, y=2*i+1, so z=4*i+1)
-            for (i, (time, values)) in result.iter().enumerate() {
-                assert_eq!(*time, i, "Output time should match index");
-                assert_eq!(values.len(), 1, "Should have exactly one output value");
-                let expected = Value::Int(4 * (i as i64) + 1);
-                assert_eq!(
-                    values[0], expected,
-                    "Output at time {} should be {}, got {:?} for config {:?}",
-                    i, expected, values[0], config
-                );
-            }
         }
     }
 }
@@ -1437,135 +1303,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams3();
-
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
-
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
-
-            let builder = create_builder_from_config(builder, config);
-
-            let monitor = builder.async_build().await;
-
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-
-            assert_eq!(
-                result,
-                vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])]
-            );
-        }
-    }
-}
-
-#[apply(async_test)]
-async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
-    for config in TestConfiguration::all() {
-        let spec_untyped = lola_specification(&mut spec_simple_modulo_monitor_typed()).unwrap();
-
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams3();
-
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
-
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
-
-            let builder = create_builder_from_config(builder, config);
-
-            let monitor = builder.async_build().await;
-
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-
-            // Assert based on configuration expectations
-            match config {
-                TestConfiguration::AsyncUntimed | TestConfiguration::AsyncTypedUntimed => {
-                    assert_eq!(
-                        result,
-                        vec![(0, vec![Value::Int(0)]), (1, vec![Value::Int(1)])]
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[apply(async_test)]
-async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
-    for config in TestConfiguration::async_configurations() {
-        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
-
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_float();
-
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
-
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
-
-            let builder = create_builder_from_config(builder, config);
-
-            let monitor = builder.async_build().await;
-
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
-
-            assert_eq!(result.len(), 2);
-            match result[0].1[0] {
-                Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
-                _ => panic!("Expected float"),
-            }
-            match result[1].1[0] {
-                Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
-                _ => panic!("Expected float"),
-            }
-        }
-    }
-}
-
-// Note: The original test_count_monitor was hanging when mixing configurations in the same test.
-// This was fixed by improving VarManager lifecycle management to stop immediately when subscribers
-// are dropped, addressing the multiple subscription issue for output variables.
-
-#[apply(async_test)]
-async fn test_count_monitor_mixed_configurations(executor: Rc<LocalExecutor<'static>>) {
-    // Test that multiple different configurations can run sequentially without hanging
-    let test_cases = vec![
-        (TestConfiguration::AsyncUntimed, DependencyKind::Empty),
-        (TestConfiguration::AsyncUntimed, DependencyKind::Empty), // Run AsyncUntimed again to verify cleanup
-    ];
-
-    for (iteration, (config, dependency_kind)) in test_cases.into_iter().enumerate() {
-        let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
-        let mut spec_str = "out x: Int\nx = 1 + default(x[-1], 0)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let input_streams = input_streams3();
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -1577,11 +1315,78 @@ async fn test_count_monitor_mixed_configurations(executor: Rc<LocalExecutor<'sta
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
-            .output(output_handler)
-            .dependencies(create_dependency_manager(
-                dependency_kind,
-                spec_untyped.clone(),
-            ));
+            .output(output_handler);
+
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.async_build().await;
+
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+
+        assert_eq!(
+            result,
+            vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])]
+        );
+    }
+}
+
+#[apply(async_test)]
+async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
+    for config in TestConfiguration::all() {
+        let spec_untyped = lola_specification(&mut spec_simple_modulo_monitor_typed()).unwrap();
+
+        let input_streams = input_streams3();
+
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.async_build().await;
+
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+
+        // Assert based on configuration expectations
+        match config {
+            TestConfiguration::AsyncUntimed | TestConfiguration::AsyncTypedUntimed => {
+                assert_eq!(
+                    result,
+                    vec![(0, vec![Value::Int(0)]), (1, vec![Value::Int(1)])]
+                );
+            }
+        }
+    }
+}
+
+#[apply(async_test)]
+async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
+    for config in TestConfiguration::async_configurations() {
+        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
+
+        let input_streams = input_streams_float();
+
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
         let builder = create_builder_from_config(builder, config);
 
@@ -1590,19 +1395,15 @@ async fn test_count_monitor_mixed_configurations(executor: Rc<LocalExecutor<'sta
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
 
-        assert_eq!(
-            result,
-            vec![
-                (0, vec![Value::Int(1)]),
-                (1, vec![Value::Int(2)]),
-                (2, vec![Value::Int(3)]),
-                (3, vec![Value::Int(4)]),
-            ],
-            "Count monitor failed for iteration {} with config {:?} and dependency {:?}",
-            iteration,
-            config,
-            dependency_kind
-        );
+        assert_eq!(result.len(), 2);
+        match result[0].1[0] {
+            Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
+            _ => panic!("Expected float"),
+        }
+        match result[1].1[0] {
+            Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
+            _ => panic!("Expected float"),
+        }
     }
 }
 
@@ -1627,10 +1428,6 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
             .output(output_handler)
-            .dependencies(create_dependency_manager(
-                DependencyKind::Empty,
-                spec_untyped.clone(),
-            ))
             .semantics(Semantics::Untimed)
             .async_build()
             .await;
@@ -1666,10 +1463,6 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
             .output(output_handler)
-            .dependencies(create_dependency_manager(
-                DependencyKind::Empty,
-                spec_untyped.clone(),
-            ))
             .semantics(Semantics::Untimed)
             .async_build()
             .await;
@@ -1776,10 +1569,6 @@ async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'stati
         .model(spec_untyped.clone())
         .input(Box::new(input_streams))
         .output(output_handler)
-        .dependencies(create_dependency_manager(
-            DependencyKind::Empty,
-            spec_untyped.clone(),
-        ))
         .semantics(Semantics::Untimed)
         .async_build()
         .await;
@@ -1805,49 +1594,44 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
         let mut spec_str = "out x: Int\nx = 1 + default(x[-1], 0)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration (empty for count monitor)
-            let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+        // Create fresh input streams for each test iteration (empty for count monitor)
+        let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
 
-            // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            // Apply configuration-specific settings
-            let builder = create_builder_from_config(builder, config);
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            // Run monitor and collect results
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
 
-            // Assert expected results - count functionality should work across configurations
-            assert_eq!(
-                result,
-                vec![
-                    (0, vec![Value::Int(1)]),
-                    (1, vec![Value::Int(2)]),
-                    (2, vec![Value::Int(3)]),
-                    (3, vec![Value::Int(4)]),
-                ],
-                "Count monitor failed for config {:?} with dependency {:?}",
-                config,
-                kind
-            );
-        }
+        // Assert expected results - count functionality should work across configurations
+        assert_eq!(
+            result,
+            vec![
+                (0, vec![Value::Int(1)]),
+                (1, vec![Value::Int(2)]),
+                (2, vec![Value::Int(3)]),
+                (3, vec![Value::Int(4)]),
+            ],
+            "Count monitor failed for config {:?}",
+            config
+        );
     }
 }
 
@@ -1857,38 +1641,35 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
         let mut spec = "in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y";
         let spec_untyped = lola_specification(&mut spec).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams3();
+        let input_streams = input_streams3();
 
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            assert_eq!(result.len(), 2);
-            assert_eq!(
-                result,
-                vec![
-                    (0, vec![Value::Int(3), Value::Int(2)]),
-                    (1, vec![Value::Int(7), Value::Int(12)]),
-                ]
-            );
-        }
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result,
+            vec![
+                (0, vec![Value::Int(3), Value::Int(2)]),
+                (1, vec![Value::Int(7), Value::Int(12)]),
+            ]
+        );
     }
 }
 
@@ -1908,7 +1689,6 @@ async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) {
         .model(spec.clone())
         .input(Box::new(input_streams))
         .output(output_handler)
-        .dependencies(create_dependency_manager(DependencyKind::Empty, spec))
         .semantics(Semantics::Untimed)
         .async_build()
         .await;
@@ -1929,37 +1709,34 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_typed_string_concat()).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams4();
+        let input_streams = input_streams4();
 
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            assert_eq!(
-                result,
-                vec![
-                    (0, vec![Value::Str("ab".into())]),
-                    (1, vec![Value::Str("cd".into())]),
-                ]
-            );
-        }
+        assert_eq!(
+            result,
+            vec![
+                (0, vec![Value::Str("ab".into())]),
+                (1, vec![Value::Str("cd".into())]),
+            ]
+        );
     }
 }
 
@@ -1969,41 +1746,38 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
         let mut spec_str = "in x: Int\nin y: Int\nout z: Int\nz = x[-1]";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = input_streams_constraint_style();
+        let input_streams = input_streams_constraint_style();
 
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            let expected_results = vec![
-                (0, vec![Value::Deferred]), // Default value for x[-1] at time 0
-                (1, vec![Value::Int(1)]),   // x[0] = 1 at time 1
-                (2, vec![Value::Int(3)]),   // x[1] = 3 at time 2
-                (3, vec![Value::Int(5)]),   // x[2] = 3 at time 3
-            ];
-            assert_eq!(
-                result, expected_results,
-                "Temporal access failed for config {:?} with dependency {:?}",
-                config, kind
-            );
-        }
+        let expected_results = vec![
+            (0, vec![Value::Deferred]), // Default value for x[-1] at time 0
+            (1, vec![Value::Int(1)]),   // x[0] = 1 at time 1
+            (2, vec![Value::Int(3)]),   // x[1] = 3 at time 2
+            (3, vec![Value::Int(5)]),   // x[2] = 3 at time 3
+        ];
+        assert_eq!(
+            result, expected_results,
+            "Temporal access failed for config {:?}",
+            config
+        );
     }
 }
 
@@ -2012,51 +1786,47 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_maple_sequence()).unwrap();
 
-        for kind in config.dependency_kinds() {
-            let input_streams = maple_valid_input_stream(10);
+        let input_streams = maple_valid_input_stream(10);
 
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            let builder = create_builder_from_config(builder, config);
-            let monitor = builder.build();
+        let builder = create_builder_from_config(builder, config);
+        let monitor = builder.build();
 
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            // TODO: Different runtimes may handle temporal dependencies differently for complex patterns
-            // Expected: maple sequence should detect complete "maple" patterns in the input stream
-            // The exact number and content of outputs may vary between runtimes due to different
-            // handling of temporal access patterns and default values
+        // TODO: Different runtimes may handle temporal dependencies differently for complex patterns
+        // Expected: maple sequence should detect complete "maple" patterns in the input stream
+        // The exact number and content of outputs may vary between runtimes due to different
+        // handling of temporal access patterns and default values
+        assert!(
+            result.len() >= 5 && result.len() <= 15,
+            "Maple sequence produced {} outputs for config {:?}",
+            result.len(),
+            config
+        );
+
+        // Verify that we get boolean outputs (the specification outputs are all Bool type)
+        for (time, values) in &result {
             assert!(
-                result.len() >= 5 && result.len() <= 15,
-                "Maple sequence produced {} outputs for config {:?} with dependency {:?}, expected 5-15",
-                result.len(),
-                config,
-                kind
+                values.iter().all(|v| matches!(v, Value::Bool(_))),
+                "Expected all boolean outputs at time {}, got {:?} for config {:?}",
+                time,
+                values,
+                config
             );
-
-            // Verify that we get boolean outputs (the specification outputs are all Bool type)
-            for (time, values) in &result {
-                assert!(
-                    values.iter().all(|v| matches!(v, Value::Bool(_))),
-                    "Expected all boolean outputs at time {}, got {:?} for config {:?}",
-                    time,
-                    values,
-                    config
-                );
-            }
         }
     }
 }
@@ -2068,55 +1838,50 @@ async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
         let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s, {x,y})";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration
-            let input_streams = input_streams2();
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams2();
 
-            // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            // Apply configuration-specific settings
-            let builder = create_builder_from_config(builder, config);
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            // Run monitor and collect results
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            // Assert expected results - dynamic monitor should work across configurations
-            assert!(
-                result.len() >= 2,
-                "Expected at least 2 outputs for restricted dynamic monitor, got {} for config {:?} with dependency {:?}",
-                result.len(),
-                config,
-                kind
+        // Assert expected results - dynamic monitor should work across configurations
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 outputs for restricted dynamic monitor, got {} for config {:?}",
+            result.len(),
+            config
+        );
+
+        // Verify that we get outputs with expected structure
+        for (time, values) in &result {
+            assert_eq!(
+                values.len(),
+                2,
+                "Expected 2 output values (z and w) at time {}, got {} for config {:?}",
+                time,
+                values.len(),
+                config
             );
-
-            // Verify that we get outputs with expected structure
-            for (time, values) in &result {
-                assert_eq!(
-                    values.len(),
-                    2,
-                    "Expected 2 output values (z and w) at time {}, got {} for config {:?}",
-                    time,
-                    values.len(),
-                    config
-                );
-            }
         }
     }
 }
@@ -2128,67 +1893,62 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration
-            let input_streams = input_streams_defer_1();
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams_defer_1();
 
-            // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            // Apply configuration-specific settings
-            let builder = create_builder_from_config(builder, config);
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            // Run monitor and collect results
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            // Assert expected results - defer functionality should work across configurations
-            assert!(
-                result.len() >= 2,
-                "Expected at least 2 outputs for defer stream 1, got {} for config {:?} with dependency {:?}",
-                result.len(),
-                config,
-                kind
-            );
+        // Assert expected results - defer functionality should work across configurations
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 outputs for defer stream 1, got {} for config {:?}",
+            result.len(),
+            config
+        );
 
-            let expected_outputs = vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![Value::Int(2)]),
-                (2, vec![Value::Int(3)]),
-                (3, vec![Value::Int(4)]),
-                (4, vec![Value::Int(5)]),
-                (5, vec![Value::Int(6)]),
-                (6, vec![Value::Int(7)]),
-                (7, vec![Value::Int(8)]),
-                (8, vec![Value::Int(9)]),
-                (9, vec![Value::Int(10)]),
-                (10, vec![Value::Int(11)]),
-                (11, vec![Value::Int(12)]),
-                (12, vec![Value::Int(13)]),
-                (13, vec![Value::Int(14)]),
-                (14, vec![Value::Int(15)]),
-            ];
-            assert_eq!(
-                result, expected_outputs,
-                "Did not get expected output for config {:?} with dependency {:?}",
-                config, kind
-            )
-        }
+        let expected_outputs = vec![
+            (0, vec![Value::Deferred]),
+            (1, vec![Value::Int(2)]),
+            (2, vec![Value::Int(3)]),
+            (3, vec![Value::Int(4)]),
+            (4, vec![Value::Int(5)]),
+            (5, vec![Value::Int(6)]),
+            (6, vec![Value::Int(7)]),
+            (7, vec![Value::Int(8)]),
+            (8, vec![Value::Int(9)]),
+            (9, vec![Value::Int(10)]),
+            (10, vec![Value::Int(11)]),
+            (11, vec![Value::Int(12)]),
+            (12, vec![Value::Int(13)]),
+            (13, vec![Value::Int(14)]),
+            (14, vec![Value::Int(15)]),
+        ];
+        assert_eq!(
+            result, expected_outputs,
+            "Did not get expected output for config {:?}",
+            config
+        )
     }
 }
 
@@ -2199,67 +1959,62 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration
-            let input_streams = input_streams_defer_2();
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams_defer_2();
 
-            // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            // Apply configuration-specific settings
-            let builder = create_builder_from_config(builder, config);
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            // Run monitor and collect results
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            // Assert expected results - defer functionality should work across configurations
-            assert!(
-                result.len() >= 2,
-                "Expected at least 2 outputs for defer stream 2, got {} for config {:?} with dependency {:?}",
-                result.len(),
-                config,
-                kind
-            );
+        // Assert expected results - defer functionality should work across configurations
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 outputs for defer stream 2, got {} for config {:?}",
+            result.len(),
+            config
+        );
 
-            let expected_outputs = vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![Value::Deferred]),
-                (2, vec![Value::Deferred]),
-                (3, vec![Value::Int(4)]),
-                (4, vec![Value::Int(5)]),
-                (5, vec![Value::Int(6)]),
-                (6, vec![Value::Int(7)]),
-                (7, vec![Value::Int(8)]),
-                (8, vec![Value::Int(9)]),
-                (9, vec![Value::Int(10)]),
-                (10, vec![Value::Int(11)]),
-                (11, vec![Value::Int(12)]),
-                (12, vec![Value::Int(13)]),
-                (13, vec![Value::Int(14)]),
-                (14, vec![Value::Int(15)]),
-            ];
-            assert_eq!(
-                result, expected_outputs,
-                "Did not get expected output for config {:?} with dependency {:?}",
-                config, kind
-            )
-        }
+        let expected_outputs = vec![
+            (0, vec![Value::Deferred]),
+            (1, vec![Value::Deferred]),
+            (2, vec![Value::Deferred]),
+            (3, vec![Value::Int(4)]),
+            (4, vec![Value::Int(5)]),
+            (5, vec![Value::Int(6)]),
+            (6, vec![Value::Int(7)]),
+            (7, vec![Value::Int(8)]),
+            (8, vec![Value::Int(9)]),
+            (9, vec![Value::Int(10)]),
+            (10, vec![Value::Int(11)]),
+            (11, vec![Value::Int(12)]),
+            (12, vec![Value::Int(13)]),
+            (13, vec![Value::Int(14)]),
+            (14, vec![Value::Int(15)]),
+        ];
+        assert_eq!(
+            result, expected_outputs,
+            "Did not get expected output for config {:?}",
+            config
+        )
     }
 }
 
@@ -2275,67 +2030,62 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration
-            let input_streams = input_streams_defer_3();
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams_defer_3();
 
-            // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            // Apply configuration-specific settings
-            let builder = create_builder_from_config(builder, config);
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            // Run monitor and collect results
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            // Assert expected results - defer functionality should work across configurations
-            assert!(
-                result.len() >= 2,
-                "Expected at least 2 outputs for defer stream 3, got {} for config {:?} with dependency {:?}",
-                result.len(),
-                config,
-                kind
-            );
+        // Assert expected results - defer functionality should work across configurations
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 outputs for defer stream 3, got {} for config {:?}",
+            result.len(),
+            config
+        );
 
-            let expected_outputs = vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![Value::Deferred]),
-                (2, vec![Value::Deferred]),
-                (3, vec![Value::Deferred]),
-                (4, vec![Value::Deferred]),
-                (5, vec![Value::Deferred]),
-                (6, vec![Value::Deferred]),
-                (7, vec![Value::Deferred]),
-                (8, vec![Value::Deferred]),
-                (9, vec![Value::Deferred]),
-                (10, vec![Value::Deferred]),
-                (11, vec![Value::Deferred]),
-                (12, vec![Value::Int(13)]),
-                (13, vec![Value::Int(14)]),
-                (14, vec![Value::Int(15)]),
-            ];
-            assert_eq!(
-                result, expected_outputs,
-                "Did not get expected output for config {:?} with dependency {:?}",
-                config, kind
-            )
-        }
+        let expected_outputs = vec![
+            (0, vec![Value::Deferred]),
+            (1, vec![Value::Deferred]),
+            (2, vec![Value::Deferred]),
+            (3, vec![Value::Deferred]),
+            (4, vec![Value::Deferred]),
+            (5, vec![Value::Deferred]),
+            (6, vec![Value::Deferred]),
+            (7, vec![Value::Deferred]),
+            (8, vec![Value::Deferred]),
+            (9, vec![Value::Deferred]),
+            (10, vec![Value::Deferred]),
+            (11, vec![Value::Deferred]),
+            (12, vec![Value::Int(13)]),
+            (13, vec![Value::Int(14)]),
+            (14, vec![Value::Int(15)]),
+        ];
+        assert_eq!(
+            result, expected_outputs,
+            "Did not get expected output for config {:?}",
+            config
+        )
     }
 }
 
@@ -2353,68 +2103,63 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration
-            let input_streams = input_streams_defer_4();
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams_defer_4();
 
-            // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            // Apply configuration-specific settings
-            let builder = create_builder_from_config(builder, config);
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            // Run monitor and collect results
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            // Assert expected results - defer functionality should work across configurations
-            assert!(
-                result.len() >= 2,
-                "Expected at least 2 outputs for defer stream 4, got {} for config {:?} with dependency {:?}",
-                result.len(),
-                config,
-                kind
-            );
+        // Assert expected results - defer functionality should work across configurations
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 outputs for defer stream 4, got {} for config {:?}",
+            result.len(),
+            config
+        );
 
-            // Notice one output "too many". This is expected behaviour (at least with a global default
-            // history_length = 10 for defer) since once e = x[-1, 0] has arrived
-            // the stream for z = defer(e) will continue as long as x[-1, 0] keeps
-            // producing values (making use of its history) which can continue beyond
-            // the lifetime of the stream for e (since it does not depend on e any more
-            // once a value has been received). This differs from the behaviour of
-            // defer(e) which stops if e stops.
-            //
-            // See also: Comment on sindex combinator.
+        // Notice one output "too many". This is expected behaviour (at least with a global default
+        // history_length = 10 for defer) since once e = x[-1, 0] has arrived
+        // the stream for z = defer(e) will continue as long as x[-1, 0] keeps
+        // producing values (making use of its history) which can continue beyond
+        // the lifetime of the stream for e (since it does not depend on e any more
+        // once a value has been received). This differs from the behaviour of
+        // defer(e) which stops if e stops.
+        //
+        // See also: Comment on sindex combinator.
 
-            let expected_outputs = vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![Value::Deferred]),
-                (2, vec![Value::Int(1)]),
-                (3, vec![Value::Int(2)]),
-                (4, vec![Value::Int(3)]),
-                (5, vec![Value::Int(4)]),
-            ];
-            assert_eq!(
-                result, expected_outputs,
-                "Did not get expected output for config {:?} with dependency {:?}",
-                config, kind
-            );
-        }
+        let expected_outputs = vec![
+            (0, vec![Value::Deferred]),
+            (1, vec![Value::Deferred]),
+            (2, vec![Value::Int(1)]),
+            (3, vec![Value::Int(2)]),
+            (4, vec![Value::Int(3)]),
+            (5, vec![Value::Int(4)]),
+        ];
+        assert_eq!(
+            result, expected_outputs,
+            "Did not get expected output for config {:?}",
+            config
+        );
     }
 }
 
@@ -2430,55 +2175,50 @@ async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        // Test with all applicable dependency kinds for this configuration
-        for kind in config.dependency_kinds() {
-            // Create fresh input streams for each test iteration
-            let input_streams = input_streams_indexing();
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams_indexing();
 
-            // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars.clone(),
-            ));
-            let outputs = output_handler.get_output();
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-            // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
-                .executor(executor.clone())
-                .model(spec_untyped.clone())
-                .input(Box::new(input_streams))
-                .output(output_handler)
-                .dependencies(create_dependency_manager(kind, spec_untyped.clone()));
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-            // Apply configuration-specific settings
-            let builder = create_builder_from_config(builder, config);
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
 
-            let monitor = builder.build();
+        let monitor = builder.build();
 
-            // Run monitor and collect results
-            executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
-            // Assert expected results - future indexing should work across configurations
-            assert!(
-                result.len() >= 2,
-                "Expected at least 2 outputs for future indexing, got {} for config {:?} with dependency {:?}",
-                result.len(),
-                config,
-                kind
+        // Assert expected results - future indexing should work across configurations
+        assert!(
+            result.len() >= 2,
+            "Expected at least 2 outputs for future indexing, got {} for config {:?}",
+            result.len(),
+            config
+        );
+
+        // Verify that we get outputs with expected structure (z and a)
+        for (time, values) in &result {
+            assert_eq!(
+                values.len(),
+                2,
+                "Expected 2 output values (z and a) at time {}, got {} for config {:?}",
+                time,
+                values.len(),
+                config
             );
-
-            // Verify that we get outputs with expected structure (z and a)
-            for (time, values) in &result {
-                assert_eq!(
-                    values.len(),
-                    2,
-                    "Expected 2 output values (z and a) at time {}, got {} for config {:?}",
-                    time,
-                    values.len(),
-                    config
-                );
-            }
         }
     }
 }

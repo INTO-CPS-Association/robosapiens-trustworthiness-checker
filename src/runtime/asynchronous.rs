@@ -35,7 +35,6 @@ use crate::core::OutputHandler;
 use crate::core::Runnable;
 use crate::core::Specification;
 use crate::core::{OutputStream, StreamData, VarName};
-use crate::dep_manage::interface::DependencyManager;
 use crate::semantics::{AbstractContextBuilder, MonitoringSemantics, StreamContext};
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
@@ -1012,11 +1011,6 @@ impl<
         }
     }
 
-    fn dependencies(self, _dependencies: DependencyManager) -> Self {
-        // We don't currently use the dependencies in the async runtime
-        self
-    }
-
     fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
         // We don't currently use the mqtt reconfiguration provider in the standard async runtime
         self
@@ -1157,14 +1151,12 @@ where
         model: M,
         input: Box<dyn InputProvider<Val = Val>>,
         output: Box<dyn OutputHandler<Val = Val>>,
-        dependencies: DependencyManager,
     ) -> Self {
         AsyncMonitorBuilder::new()
             .executor(executor)
             .model(model)
             .input(input)
             .output(output)
-            .dependencies(dependencies)
             .build()
     }
 }
