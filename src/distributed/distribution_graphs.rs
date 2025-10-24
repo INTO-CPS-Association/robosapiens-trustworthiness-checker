@@ -53,6 +53,7 @@ impl From<NodeName> for String {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 struct NodeLabel {
     monitors: Vec<VarName>,
 }

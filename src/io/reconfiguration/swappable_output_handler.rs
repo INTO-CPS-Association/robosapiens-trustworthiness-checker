@@ -168,10 +168,9 @@ mod tests {
     use tc_testutils::streams::{TickSender, tick_streams};
 
     fn gen_data_streams(n: i64) -> (Vec<VarName>, Vec<OutputStream<Value>>, Vec<Vec<Value>>) {
-        let x_stream: OutputStream<Value> =
-            Box::pin(stream::iter((0..n).map(|x| ((x * 2).into()))));
+        let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..n).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
-            Box::pin(stream::iter((0..n).map(|x| ((x * 2 + 1).into()))));
+            Box::pin(stream::iter((0..n).map(|x| (x * 2 + 1).into())));
         let stream_names = vec!["x".into(), "y".into()];
         let streams = vec![x_stream, y_stream];
         let expected = (0..n)
