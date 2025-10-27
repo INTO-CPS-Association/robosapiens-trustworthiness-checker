@@ -20,16 +20,51 @@ use std::collections::BTreeMap;
 use tracing::debug;
 use tracing::info;
 use tracing::instrument;
+use tracing::warn;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 
-pub fn lift1<S: StreamData, R: StreamData>(
+// TODO: Should be applied to input streams only
+fn no_val_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        let mut last : Option<Value>  = None;
+        while let Some(curr) = x_mon.next().await {
+            match curr {
+                Value::NoVal => {
+                    if let Some(last) = &last {
+                        yield last.clone();
+                    } else {
+                        // Only happens when the first value is NoVal
+                        yield Value::NoVal;
+                    }
+                }
+                _ => {
+                    last = Some(curr.clone());
+                    yield curr;
+                }
+            }
+        }
+    })
+}
+
+pub fn no_val_stream_lift1(
+    f: impl CloneFn1<Value, Value>,
+    x_mon: OutputStream<Value>,
+) -> OutputStream<Value> {
+    Box::pin(no_val_lift_base(x_mon).map(move |x| {
+        if x == Value::NoVal {
+            Value::NoVal
+        } else {
+            f(x)
+        }
+    }))
+}
+
+pub fn stream_lift1<S: StreamData, R: StreamData>(
     f: impl CloneFn1<S, R>,
     x_mon: OutputStream<S>,
 ) -> OutputStream<R> {
-    let f = f.clone();
-
     Box::pin(x_mon.map(f))
 }
 
@@ -42,19 +77,36 @@ impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T whe
 {
 }
 
-pub fn lift2<S: StreamData, R: StreamData, U: StreamData>(
+pub fn stream_lift2<S: StreamData, R: StreamData, U: StreamData>(
     f: impl CloneFn2<S, R, U>,
     x_mon: OutputStream<S>,
     y_mon: OutputStream<R>,
 ) -> OutputStream<U> {
     debug!("lift2: Creating combined stream");
-    let f = f.clone();
     Box::pin(x_mon.zip(y_mon).map(move |(x, y)| {
         debug!("lift2: Processing input values");
         let result = f(x, y);
         debug!("lift2: Produced result");
         result
     }))
+}
+
+pub fn no_val_stream_lift2(
+    f: impl CloneFn2<Value, Value, Value>,
+    x_mon: OutputStream<Value>,
+    y_mon: OutputStream<Value>,
+) -> OutputStream<Value> {
+    Box::pin(
+        no_val_lift_base(x_mon)
+            .zip(no_val_lift_base(y_mon))
+            .map(move |(x, y)| {
+                if x == Value::NoVal || y == Value::NoVal {
+                    Value::NoVal
+                } else {
+                    f(x, y)
+                }
+            }),
+    )
 }
 
 pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
@@ -66,24 +118,28 @@ impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, 
 {
 }
 
-pub fn lift3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>(
-    f: impl CloneFn3<S, R, V, U>,
-    x_mon: OutputStream<S>,
-    y_mon: OutputStream<R>,
-    z_mon: OutputStream<V>,
-) -> OutputStream<U> {
-    let f = f.clone();
-
+pub fn no_val_stream_lift3(
+    f: impl CloneFn3<Value, Value, Value, Value>,
+    x_mon: OutputStream<Value>,
+    y_mon: OutputStream<Value>,
+    z_mon: OutputStream<Value>,
+) -> OutputStream<Value> {
     Box::pin(
-        x_mon
-            .zip(y_mon)
-            .zip(z_mon)
-            .map(move |((x, y), z)| f(x, y, z)),
-    ) as LocalBoxStream<'static, U>
+        no_val_lift_base(x_mon)
+            .zip(no_val_lift_base(y_mon))
+            .zip(no_val_lift_base(z_mon))
+            .map(move |((x, y), z)| {
+                if x == Value::NoVal || y == Value::NoVal || z == Value::NoVal {
+                    Value::NoVal
+                } else {
+                    f(x, y, z)
+                }
+            }),
+    )
 }
 
 pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    no_val_stream_lift2(
         |x, y| Value::Bool(x == Value::Bool(true) && y == Value::Bool(true)),
         x,
         y,
@@ -91,7 +147,7 @@ pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
 }
 
 pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    no_val_stream_lift2(
         |x, y| Value::Bool(x == Value::Bool(true) || y == Value::Bool(true)),
         x,
         y,
@@ -99,15 +155,15 @@ pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
-    lift1(|x| Value::Bool(x == Value::Bool(false)), x)
+    no_val_stream_lift1(|x| Value::Bool(x == Value::Bool(false)), x)
 }
 
 pub fn eq(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(|x, y| Value::Bool(x == y), x, y)
+    no_val_stream_lift2(|x, y| Value::Bool(x == y), x, y)
 }
 
 pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    no_val_stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y),
             (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 <= b),
@@ -132,7 +188,7 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    no_val_stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
             (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) < b),
@@ -157,7 +213,7 @@ pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    no_val_stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y),
             (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 >= b),
@@ -182,7 +238,7 @@ pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    no_val_stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x > y),
             (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) > b),
@@ -216,7 +272,7 @@ pub fn if_stm(
     y: OutputStream<Value>,
     z: OutputStream<Value>,
 ) -> OutputStream<Value> {
-    lift3(
+    no_val_stream_lift3(
         |x, y, z| match x {
             Value::Bool(true) => y,
             Value::Bool(false) => z,
@@ -237,19 +293,64 @@ pub fn if_stm(
 // last samples. This is accomplished by yielding the x[-N] sample but having the stream
 // currently at x[0]. However, with recursive streams that puts us in a deadlock when calling
 // x.next()
+//
+// TODO: There is a bug here introduced by async SRV.
+// The bug is that sindex expressions can never yield NoVal, which is usually
+// possible if the first value received in an expression is NoVal.
+// Fixing it requires a larger refactor, probably with a special case for dealing with
+// recursive sindex expressions. Or alternatively, disallowing recursive definitions in sindex.
+//
+// First consider the spec/trace:
+// in x
+// out y
+// y = x[1]
+// 0: x = NoVal
+// 1: x = 42
+// 2: x = 43
+//
+// The correct output here is:
+// 0: y = NoVal
+// 1: y = Deferred
+// 2: y = 42
+//
+// In order to implement this behavior, we need to yield Deferred for i samples,
+// not counting those where x is NoVal. Until x is not NoVal for the first time,
+// we yield NoVal. This is not too hard to implement, and the core looks something like:
+// let val = x.next().await;
+// if val != Value::NoVal {...} else {...}
+//
+// Notice that it requires looking at x in order to decide what to yield.
+//
+// Now consider this recursive spec with the same trace:
+// out z
+// z = default(z[1], 0) + x
+//
+// If we implement sindex like the pseudo-implementation above, we get a deadlock
+// as `z[-1]` needs to look at `z` to decide what to yield, but `z` is waiting for the
+// rhs of the assignment to finish.
+//
+// Potential solution:
+// If we knew which variable the expression is assigned to, we could have a
+// sindex_rec implementation that is implemented more or less like normal sindex,
+// and sindex which is implemented like below.
+// (The correct call would need to be evaluated in semantics.rs where the SExpr
+// is still available).
 pub fn sindex(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
-    if let Ok(i) = usize::try_from(i) {
-        let cs = stream::repeat(Value::Deferred).take(i);
-        // Delay x by i defers
-        Box::pin(cs.chain(x))
-    } else {
-        panic!("Index too large for sindex operation")
+    fn sindex_base(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
+        if let Ok(i) = usize::try_from(i) {
+            let cs = stream::repeat(Value::Deferred).take(i);
+            // Delay x by i defers
+            Box::pin(cs.chain(x))
+        } else {
+            panic!("Index too large for sindex operation")
+        }
     }
+    no_val_lift_base(sindex_base(x, i))
 }
 
 pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     debug!("Creating plus operation stream");
-    lift2(
+    stream_lift2(
         |x, y| {
             debug!("Executing plus operation");
             let result = match (x, y) {
@@ -278,7 +379,7 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
 }
 
 pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 % y),
@@ -297,7 +398,7 @@ pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
 }
 
 pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 - y),
@@ -316,7 +417,7 @@ pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Val
 }
 
 pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 * y),
@@ -335,7 +436,7 @@ pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
 }
 
 pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 / y),
@@ -354,7 +455,7 @@ pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
 }
 
 pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Str(x), Value::Str(y)) => {
                 // ConcreteStreamData::Str(format!("{x}{y}").into());
@@ -769,7 +870,7 @@ pub fn mhas_key(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value
 }
 
 pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
-    lift1(
+    stream_lift1(
         |v| match v {
             Value::Float(v) => v.sin().into(),
             Value::Deferred => Value::Deferred,
@@ -780,7 +881,7 @@ pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
 }
 
 pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
-    lift1(
+    stream_lift1(
         |v| match v {
             Value::Float(v) => v.cos().into(),
             Value::Deferred => Value::Deferred,
@@ -791,7 +892,7 @@ pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
 }
 
 pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
-    lift1(
+    stream_lift1(
         |v| match v {
             Value::Float(v) => v.tan().into(),
             Value::Deferred => Value::Deferred,
@@ -802,7 +903,7 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
 }
 
 pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
-    lift1(
+    stream_lift1(
         |v| match v {
             Value::Int(v) => v.abs().into(),
             Value::Float(v) => v.abs().into(),
