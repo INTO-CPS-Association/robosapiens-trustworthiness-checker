@@ -1,5 +1,4 @@
 use std::rc::Rc;
-use trustworthiness_checker::dep_manage::interface::DependencyKind;
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
@@ -9,7 +8,6 @@ use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
-use trustworthiness_checker::dep_manage::interface::create_dependency_manager;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::lola_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::lola_fixtures::spec_maple_sequence;
@@ -50,35 +48,32 @@ fn from_elem(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(5));
 
     let spec = trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
-    let dep_manager = create_dependency_manager(DependencyKind::Empty, spec.clone());
     let spec_typed = type_check(spec.clone()).expect("Type check failed");
 
     for size in sizes {
         let input_stream_fn = || maple_valid_input_stream(size);
         group.bench_with_input(
             BenchmarkId::new("maple_sequence_untyped_async", size),
-            &(&spec, &dep_manager),
-            |b, &(spec, dep_manager)| {
+            &(&spec),
+            |b, &spec| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
-                        dep_manager.clone(),
                     )
                 })
             },
         );
         group.bench_with_input(
             BenchmarkId::new("maple_sequence_typed_async", size),
-            &(&spec_typed, &dep_manager),
-            |b, &(spec_typed, dep_manager)| {
+            &(&spec_typed),
+            |b, &spec_typed| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
                     monitor_outputs_typed_async(
                         local_smol_executor.executor.clone(),
                         spec_typed.clone(),
                         input_stream_fn(),
-                        dep_manager.clone(),
                     )
                 })
             },
