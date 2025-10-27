@@ -17,6 +17,10 @@ async fn publish_stream(
     mut con: MultiplexedConnection,
 ) -> anyhow::Result<()> {
     while let Some(data) = stream.next().await {
+        if data == Value::NoVal {
+            continue;
+        }
+
         let data = serde_json::to_string(&data).unwrap();
         con.publish(topic_name.clone(), data.clone())
             .await

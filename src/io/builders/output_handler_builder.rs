@@ -7,8 +7,7 @@ use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::cli::StdoutOutputHandler;
 use crate::io::mqtt::{MQTTOutputHandler, MqttFactory};
 use crate::io::redis::RedisOutputHandler;
-use crate::{self as tc, Value};
-use crate::{VarName, core::OutputHandler};
+use crate::{Value, VarName, core::OutputHandler};
 
 #[derive(Clone)]
 pub struct OutputHandlerBuilder {
@@ -72,7 +71,7 @@ impl OutputHandlerBuilder {
             OutputMode {
                 output_stdout: true,
                 ..
-            } => Box::new(StdoutOutputHandler::<tc::Value>::new(
+            } => Box::new(StdoutOutputHandler::new(
                 executor,
                 output_var_names,
                 aux_info,
@@ -168,7 +167,7 @@ impl OutputHandlerBuilder {
                 ..
             } => unimplemented!("ROS output not implemented"),
             // Default to stdout
-            _ => Box::new(StdoutOutputHandler::<tc::Value>::new(
+            _ => Box::new(StdoutOutputHandler::new(
                 executor,
                 output_var_names,
                 aux_info,

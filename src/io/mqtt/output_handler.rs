@@ -50,6 +50,10 @@ async fn publish_stream(
             message_count, topic_name, data
         );
 
+        if data == Value::NoVal {
+            continue;
+        }
+
         let json_str = match serde_json5::to_string(&data) {
             Ok(s) => {
                 debug!("Successfully serialized value to JSON: {}", s);

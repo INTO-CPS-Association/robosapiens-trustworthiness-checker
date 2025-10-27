@@ -5,19 +5,20 @@ use futures::{FutureExt, StreamExt, select_biased};
 use smol::LocalExecutor;
 use tracing::info;
 
-use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
+use crate::Value;
+use crate::core::{OutputHandler, OutputStream, VarName};
 use crate::io::testing::ManualOutputHandler;
 
 /* Some members are defined as Option<T> as either they are provided after
  * construction by provide_streams or once they are used they are taken and
  * cannot be used again; this allows us to manage the lifetimes of our data
  * without mutexes or arcs. */
-pub struct StdoutOutputHandler<V: StreamData> {
-    manual_output_handler: ManualOutputHandler<V>,
+pub struct StdoutOutputHandler {
+    manual_output_handler: ManualOutputHandler<Value>,
     aux_info: Vec<VarName>,
 }
 
-impl<V: StreamData> StdoutOutputHandler<V> {
+impl StdoutOutputHandler {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
@@ -32,14 +33,14 @@ impl<V: StreamData> StdoutOutputHandler<V> {
     }
 }
 
-impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
-    type Val = V;
+impl OutputHandler for StdoutOutputHandler {
+    type Val = Value;
 
     fn var_names(&self) -> Vec<VarName> {
         self.manual_output_handler.var_names()
     }
 
-    fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
+    fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
         self.manual_output_handler.provide_streams(streams);
     }
 
@@ -67,7 +68,7 @@ impl<V: StreamData> OutputHandler for StdoutOutputHandler<V> {
                         match res {
                             Some((i, output)) => for (var, data) in var_names.iter().zip(output) {
                                 info!(?var, ?i, ?data, "Handling output");
-                                if !aux_names.contains(var) {
+                                if !aux_names.contains(var) && data != Value::NoVal {
                                     println!("{}[{}] = {:?}", var, i, data);
                                 }
                             }
@@ -102,7 +103,7 @@ mod tests {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
-        let mut handler: StdoutOutputHandler<Value> =
+        let mut handler =
             StdoutOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()], vec![]);
 
         handler.provide_streams(vec![x_stream, y_stream].into_iter().collect());
