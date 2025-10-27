@@ -471,11 +471,9 @@ mod container_tests {
         let xs_expected = vec![Value::Int(1), Value::Int(2)];
         let ys_expected = vec![Value::Int(3), Value::Int(4)];
 
-        // Note that even if this stream ends, then the InputProvider does not know
-        // that it has ended
-        let xs: OutputStream<Value> = futures::stream::iter(xs_expected.clone()).boxed();
-
-        // We need control over when y is being published
+        // We need control over when x and y is being published
+        let (mut x_tick, xs): (_, OutputStream<Value>) =
+            tick_stream(futures::stream::iter(xs_expected.clone()).boxed());
         let (mut y_tick, ys): (_, OutputStream<Value>) =
             tick_stream(futures::stream::iter(ys_expected.clone()).boxed());
 
@@ -543,6 +541,8 @@ mod container_tests {
             .await
             .expect("y_publisher failed")
         });
+        x_tick.send(()).await?; // Send first x
+        x_tick.send(()).await?; // Send second x
         let x_vals = with_timeout(
             x_stream.take(xs_expected.len()).collect::<Vec<_>>(),
             5,
@@ -561,7 +561,7 @@ mod container_tests {
             .input_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        for _ in 0..ys_expected.len() + 1 {
+        for _ in 0..ys_expected.len() {
             // Send all the ys and +1 to let the stream complete
             y_tick.send(()).await?;
         }
@@ -573,6 +573,10 @@ mod container_tests {
         )
         .await?;
         assert_eq!(y_vals, ys_expected);
+
+        // Final ticks to let streams end:
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
 
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
