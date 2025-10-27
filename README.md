@@ -3,7 +3,7 @@ The work presented here is supported by the RoboSAPIENS project funded by the Eu
 ## MQTT:
 For a minimum example of running with MQTT, run the following specification:
 ```bash
-cargo run -- examples/simple_add.lola --input-mqtt-topics x y --output-mqtt-topics z
+cargo run -- examples/simple_add.lola --mqtt-input --mqtt-output
 ```
 In MQTT Explorer or similar, send the following message on the topic "x" followed by sending the same message on the topic "y":
 ```json
