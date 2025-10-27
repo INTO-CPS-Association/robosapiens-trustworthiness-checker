@@ -19,6 +19,9 @@ match {
 }
 
 Ident: VarName = <s:r"[A-Za-z_]\w*"> => VarName::from(s);
+Uint: u64 = <s:r"[0-9]+"> => u64::from_str(s).unwrap();
+// Negative numbers handled in unary minus - but need a separate case to not accept
+// numbers too large for i64 here.
 Int: i64 = <s:r"[0-9]+"> => i64::from_str(s).unwrap();
 Float: f64 = <s:r"(?:0|[1-9][0-9]*)\.[0-9]*(?:[eE]-?[0-9]+)?"> => f64::from_str(s).unwrap();
 Bool: bool = {
@@ -89,12 +92,10 @@ SIndexHelp: Box<SExpr> = {
     Box<Paren>
 };
 
-// Indexing expression e[idx] (supports negative via "-")
+// Indexing expression e[idx]
 SIndex: SExpr = {
-    <expr: SIndexHelp> "[" <neg: "-"?> <idx: Int> "]" => {
-        let i: isize = idx.try_into().unwrap();
-        let i = if neg.is_some() { -i } else { i };
-        SExpr::SIndex(expr, i)
+    <expr: SIndexHelp> "[" <idx: Uint> "]" => {
+        SExpr::SIndex(expr, idx)
     },
 };
 

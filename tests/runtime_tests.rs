@@ -826,9 +826,9 @@ async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>)
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => {
-                "in x: Int\nout z1: Int\nout z2: Int\nz2 = x[-2]\nz1 = x[-1]"
+                "in x: Int\nout z1: Int\nout z2: Int\nz2 = x[2]\nz1 = x[1]"
             }
-            _ => "in x\nout z1\nout z2\nz2 = x[-2]\nz1 = x[-1]",
+            _ => "in x\nout z1\nout z2\nz2 = x[2]\nz1 = x[1]",
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
@@ -1117,8 +1117,8 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) {
 async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "out x: Int\nx = 1 + default(x[-1], 0)",
-            _ => "out x\nx = 1 + default(x[-1], 0)",
+            TestConfiguration::AsyncTypedUntimed => "out x: Int\nx = 1 + default(x[1], 0)",
+            _ => "out x\nx = 1 + default(x[1], 0)",
         };
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
@@ -1414,7 +1414,7 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
     // First run
     {
         let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
-        let mut spec_str = "out x: Int\nx = 1 + default(x[-1], 0)";
+        let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -1449,7 +1449,7 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
     // Second run - should work now with drop guard cancellation
     {
         let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
-        let mut spec_str = "out x: Int\nx = 1 + default(x[-1], 0)";
+        let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -1555,7 +1555,7 @@ async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'stati
     // Test to verify that drop guard properly stops VarManagers when output streams are dropped
 
     let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
-    let mut spec_str = "out x: Int\nx = 1 + default(x[-1], 0)";
+    let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
     let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
     let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -1591,7 +1591,7 @@ async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'stati
 async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
         // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = "out x: Int\nx = 1 + default(x[-1], 0)";
+        let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration (empty for count monitor)
@@ -1743,7 +1743,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) {
 #[apply(async_test)]
 async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
     for config in TestConfiguration::all() {
-        let mut spec_str = "in x: Int\nin y: Int\nout z: Int\nz = x[-1]";
+        let mut spec_str = "in x: Int\nin y: Int\nout z: Int\nz = x[1]";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint_style();
@@ -1768,7 +1768,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
         let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
 
         let expected_results = vec![
-            (0, vec![Value::Deferred]), // Default value for x[-1] at time 0
+            (0, vec![Value::Deferred]), // Default value for x[1] at time 0
             (1, vec![Value::Int(1)]),   // x[0] = 1 at time 1
             (2, vec![Value::Int(3)]),   // x[1] = 3 at time 2
             (3, vec![Value::Int(5)]),   // x[2] = 3 at time 3
@@ -2138,8 +2138,8 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
         );
 
         // Notice one output "too many". This is expected behaviour (at least with a global default
-        // history_length = 10 for defer) since once e = x[-1, 0] has arrived
-        // the stream for z = defer(e) will continue as long as x[-1, 0] keeps
+        // history_length = 10 for defer) since once e = x[1] has arrived
+        // the stream for z = defer(e) will continue as long as x[1] keeps
         // producing values (making use of its history) which can continue beyond
         // the lifetime of the stream for e (since it does not depend on e any more
         // once a value has been received). This differs from the behaviour of

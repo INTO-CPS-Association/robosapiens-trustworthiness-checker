@@ -153,7 +153,7 @@ pub enum SExpr {
         // Inner SExpr e
         Box<Self>,
         // Index i
-        isize, // TODO: Change to i64 to be the same as Value::Int...
+        u64,
     ),
 
     // Arithmetic Stream expression
@@ -305,7 +305,7 @@ impl LOLASpecification {
     // I.e., if we have an assignment `z = dynamic(s)` then the subcontext provided for
     // `dynamic(s)` does not allow access to `z`.
     // This is necessary in order to allow the clock to advance correctly.
-    // This is an incomplete solution as it unnecessarily restricts the DUP `s = "w[-1]"`
+    // This is an incomplete solution as it unnecessarily restricts the DUP `s = "w[1]"`
     // which should be legal.
     //
     // TODO: Get rid of this hack. What we need to do is:
@@ -319,7 +319,7 @@ impl LOLASpecification {
     // 3. Step 2. may require more information than just a dependency graph provides,
     // as it might need information about subexpressions. E.g., something like
     // `z = dynamic(s)` should disallow the context in `dynamic(s)` to access `z`,
-    // but something like `z = (dynamic(s))[-1]` should allow the subcontext of `dynamic(s)`
+    // but something like `z = (dynamic(s))[1]` should allow the subcontext of `dynamic(s)`
     // to access `z`, because the subcontext is delayed by the SIndex.
     // 3.5. We discussed whether this should be in statements, live in Context, etc. Might require
     //   a lot of thought.

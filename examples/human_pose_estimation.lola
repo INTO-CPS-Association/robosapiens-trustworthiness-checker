@@ -62,12 +62,12 @@ aux rForearmZ
 
 humans = Map.get(rawHuman, "humans")
 hasHumans = List.len(humans) > 0
-hasHumansPrev4 = update(false, hasHumans[-1]) && update(false, hasHumans[-2]) && update(false, hasHumans[-3]) && update(false, hasHumans[-4])
+hasHumansPrev4 = update(false, hasHumans[1]) && update(false, hasHumans[2]) && update(false, hasHumans[3]) && update(false, hasHumans[4])
 human0 = if hasHumans then List.get(humans, 0) else Map()
 humanId = if hasHumans then Map.get(human0, "human_id") else -1
 bodyParts = if hasHumans then Map.get(human0, "body_parts") else List()
 time = Map.get(rawHuman, "time")
-dt = time - time[-1]
+dt = time - time[1]
 
 head = if hasHumans then List.get(bodyParts, 0) else Map()
 neck = if hasHumans then List.get(bodyParts, 1) else Map()
@@ -100,24 +100,24 @@ lForearmHeight = if hasHumans then Map.get(lForearm, "p_2") else -1
 forearmSymmetry = if hasHumans then abs(rForearmHeight - lForearmHeight) < forearmSymEps else true
 
 // Smooth forearm height - averaged over 4 samples
-rForearmHeightSmooth = if hasHumansPrev4 then update(0.0, rForearmHeightSmooth[-1]) + (rForearmHeight - update(0.0, rForearmHeight[-4])) / 4 else update(0.0, rForearmHeightSmooth[-1])
-lForearmHeightSmooth = if hasHumansPrev4 then update(0.0, lForearmHeightSmooth[-1]) + (lForearmHeight - update(0.0, lForearmHeight[-4])) / 4 else update(0.0, lForearmHeightSmooth[-1])
+rForearmHeightSmooth = if hasHumansPrev4 then update(0.0, rForearmHeightSmooth[1]) + (rForearmHeight - update(0.0, rForearmHeight[4])) / 4 else update(0.0, rForearmHeightSmooth[1])
+lForearmHeightSmooth = if hasHumansPrev4 then update(0.0, lForearmHeightSmooth[1]) + (lForearmHeight - update(0.0, lForearmHeight[4])) / 4 else update(0.0, lForearmHeightSmooth[1])
 
 // Forearm constant bone length:
-rForearmDiff = if hasHumans then update(0.0, rForearmHeight - rForearmHeight[-1]) else update(0.0, rForearmDiff[-1])
-rForearmDiffSmooth = if hasHumans then update(0.0, rForearmHeightSmooth - rForearmHeightSmooth[-1]) else update(0.0, rForearmDiffSmooth[-1])
+rForearmDiff = if hasHumans then update(0.0, rForearmHeight - rForearmHeight[1]) else update(0.0, rForearmDiff[1])
+rForearmDiffSmooth = if hasHumans then update(0.0, rForearmHeightSmooth - rForearmHeightSmooth[1]) else update(0.0, rForearmDiffSmooth[1])
 rForearmConstantLength = abs(rForearmDiff) < 0.1 && abs(rForearmDiffSmooth) < 0.1
-lForearmDiff = if hasHumans then update(0.0, lForearmHeight - lForearmHeight[-1]) else update(0.0, lForearmDiff[-1])
-lForearmDiffSmooth = if hasHumans then update(0.0, lForearmHeightSmooth - lForearmHeightSmooth[-1]) else update(0.0, lForearmDiffSmooth[-1])
+lForearmDiff = if hasHumans then update(0.0, lForearmHeight - lForearmHeight[1]) else update(0.0, lForearmDiff[1])
+lForearmDiffSmooth = if hasHumans then update(0.0, lForearmHeightSmooth - lForearmHeightSmooth[1]) else update(0.0, lForearmDiffSmooth[1])
 lForearmConstantLength = abs(lForearmDiff) < 0.1 && abs(lForearmDiffSmooth) < 0.1
 
 // Forearm Velocity:
-rForearmX = if hasHumans then Map.get(rForearm, "x") else update(0.0, rForearmX[-1])
-rForearmY = if hasHumans then Map.get(rForearm, "y") else update(0.0, rForearmY[-1])
-rForearmZ = if hasHumans then Map.get(rForearm, "z") else update(0.0, rForearmZ[-1])
-rForearmVelX = update(0.0, (rForearmX - rForearmX[-1]) / dt)
-rForearmVelY = update(0.0, (rForearmY - rForearmY[-1]) / dt)
-rForearmVelZ = update(0.0, (rForearmZ - rForearmZ[-1]) / dt)
+rForearmX = if hasHumans then Map.get(rForearm, "x") else update(0.0, rForearmX[1])
+rForearmY = if hasHumans then Map.get(rForearm, "y") else update(0.0, rForearmY[1])
+rForearmZ = if hasHumans then Map.get(rForearm, "z") else update(0.0, rForearmZ[1])
+rForearmVelX = update(0.0, (rForearmX - rForearmX[1]) / dt)
+rForearmVelY = update(0.0, (rForearmY - rForearmY[1]) / dt)
+rForearmVelZ = update(0.0, (rForearmZ - rForearmZ[1]) / dt)
 rForearmRealisticVel = abs(rForearmVelX) < 0.01 && abs(rForearmVelY) < 0.01 && abs(rForearmVelZ) < 0.01
 
 DSUAllowed = !hasHumans

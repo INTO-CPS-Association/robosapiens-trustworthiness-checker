@@ -168,7 +168,7 @@ pub enum SExprBool {
         // Inner SExpr e
         Box<Self>,
         // Index i
-        isize,
+        u64,
     ),
 
     Var(VarName),
@@ -185,7 +185,7 @@ pub enum SExprInt {
         // Inner SExpr e
         Box<Self>,
         // Index i
-        isize,
+        u64,
     ),
 
     // Arithmetic Stream expression
@@ -207,7 +207,7 @@ pub enum SExprFloat {
         // Inner SExpr e
         Box<Self>,
         // Index i
-        isize,
+        u64,
     ),
 
     // Arithmetic Stream expression
@@ -230,7 +230,7 @@ pub enum SExprUnit {
         // Inner SExpr e
         Box<Self>,
         // Index i
-        isize,
+        u64,
     ),
 
     // Arithmetic Stream expression
@@ -250,7 +250,7 @@ pub enum SExprStr {
         // Inner SExpr e
         Box<Self>,
         // Index i
-        isize,
+        u64,
     ),
 
     BinOp(Box<Self>, Box<Self>, StrBinOp),
@@ -540,7 +540,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
 }
 
 // Type check an index expression
-impl TypeCheckableHelper<SExprTE> for (&SExpr, isize) {
+impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
     fn type_check_raw(
         &self,
         ctx: &mut TypeContext,

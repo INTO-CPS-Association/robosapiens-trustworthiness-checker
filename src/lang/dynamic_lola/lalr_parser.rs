@@ -150,17 +150,17 @@ mod tests {
         let exp = "Ok(If(Val(Bool(true)), Val(Int(1)), Val(Int(2))))";
         assert_eq!(presult_to_string(&parsed), exp);
 
-        let parsed = parse_sexpr("(x)[-1]");
-        let exp = "Ok(SIndex(Var(VarName::new(\"x\")), -1))";
+        let parsed = parse_sexpr("(x)[1]");
+        let exp = "Ok(SIndex(Var(VarName::new(\"x\")), 1))";
         assert_eq!(presult_to_string(&parsed), exp);
 
-        let parsed = parse_sexpr("(x + y)[-3]");
+        let parsed = parse_sexpr("(x + y)[3]");
         let exp =
-            "Ok(SIndex(BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add)), -3))";
+            "Ok(SIndex(BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add)), 3))";
         assert_eq!(presult_to_string(&parsed), exp);
 
-        let parsed = parse_sexpr("1 + (x)[-1]");
-        let exp = "Ok(BinOp(Val(Int(1)), SIndex(Var(VarName::new(\"x\")), -1), NOp(Add)))";
+        let parsed = parse_sexpr("1 + (x)[1]");
+        let exp = "Ok(BinOp(Val(Int(1)), SIndex(Var(VarName::new(\"x\")), 1), NOp(Add)))";
         assert_eq!(presult_to_string(&parsed), exp);
 
         let parsed = parse_sexpr("\"test\"");
@@ -285,7 +285,7 @@ mod tests {
     fn test_parse_lola_count() {
         let input = "\
             out x\n\
-            x = 1 + (x)[-1]";
+            x = 1 + (x)[1]";
         let count_spec = LOLASpecification {
             input_vars: vec![],
             output_vars: vec!["x".into()],
@@ -294,7 +294,7 @@ mod tests {
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(1.into())),
-                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -499,8 +499,8 @@ mod tests {
         );
         // Time index
         assert_eq!(
-            presult_to_string(&parse_sexpr("x [-1]")),
-            r#"Ok(SIndex(Var(VarName::new("x")), -1))"#
+            presult_to_string(&parse_sexpr("x [1]")),
+            r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
         );
         assert_eq!(
             presult_to_string(&parse_sexpr("x[1 ]")),
@@ -609,8 +609,8 @@ mod tests {
         );
         // Time index in arithmetic expression
         assert_eq!(
-            presult_to_string(&parse_sexpr("x[0] + y[-1]")),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), -1), NOp(Add)))"#
+            presult_to_string(&parse_sexpr("x[0] + y[1]")),
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), 1), NOp(Add)))"#
         );
         assert_eq!(
             presult_to_string(&parse_sexpr("x[1] * (y + 3)")),
@@ -1178,15 +1178,15 @@ mod spec_tests {
 
     fn counter_inf() -> (&'static str, &'static str) {
         (
-            "out z\nz = default(z[-1], 0) + 1",
-            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "out z\nz = default(z[1], 0) + 1",
+            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
-            "in x\nout z\nz = default(z[-1], 0) + x",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "in x\nout z\nz = default(z[1], 0) + x",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 

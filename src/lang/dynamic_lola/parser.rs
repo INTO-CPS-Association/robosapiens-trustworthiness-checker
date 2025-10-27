@@ -13,6 +13,7 @@ use super::ast::*;
 use crate::core::StreamType;
 use crate::core::VarName;
 use crate::distributed::distribution_graphs::NodeName;
+pub use winnow::ascii::dec_uint as uint;
 
 #[derive(Clone)]
 pub struct CombExprParser;
@@ -99,7 +100,7 @@ fn sindex(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: '[',
         _: loop_ms_or_lb_or_lc,
-        integer,
+        uint,
         _: loop_ms_or_lb_or_lc,
         _: ']'
     )
@@ -922,25 +923,25 @@ mod tests {
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"(x)[-1]".to_string()).into())?,
-            SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1),
+            sexpr(&mut (*"(x)[1]".to_string()).into())?,
+            SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1),
         );
         assert_eq!(
-            sexpr(&mut (*"(x + y)[-3]".to_string()).into())?,
+            sexpr(&mut (*"(x + y)[3]".to_string()).into())?,
             SExpr::SIndex(
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
                     Box::new(SExpr::Var("y".into()),),
                     SBinOp::NOp(NumericalBinOp::Add),
                 )),
-                -3
+                3
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"1 + (x)[-1]".to_string()).into())?,
+            sexpr(&mut (*"1 + (x)[1]".to_string()).into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1),),
+                Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1),),
                 SBinOp::NOp(NumericalBinOp::Add),
             )
         );
@@ -1134,7 +1135,7 @@ mod tests {
     fn test_parse_lola_count() -> Result<(), ContextError> {
         let input = "\
             out x\n\
-            x = 1 + (x)[-1]";
+            x = 1 + (x)[1]";
         let count_spec = LOLASpecification {
             input_vars: vec![],
             output_vars: vec!["x".into()],
@@ -1143,7 +1144,7 @@ mod tests {
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), -1)),
+                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -1332,8 +1333,8 @@ mod tests {
         );
         // Time index
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x [-1]")),
-            r#"Ok(SIndex(Var(VarName::new("x")), -1))"#
+            presult_to_string(&sexpr(&mut "x [1]")),
+            r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "x[1 ]")),
@@ -1439,8 +1440,8 @@ mod tests {
         );
         // Time index in arithmetic expression
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x[0] + y[-1]")),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), -1), NOp(Add)))"#
+            presult_to_string(&sexpr(&mut "x[0] + y[1]")),
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), 1), NOp(Add)))"#
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "x[1] * (y + 3)")),
@@ -1980,15 +1981,15 @@ mod spec_tests {
 
     fn counter_inf() -> (&'static str, &'static str) {
         (
-            "out z\nz = default(z[-1], 0) + 1",
-            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "out z\nz = default(z[1], 0) + 1",
+            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
-            "in x\nout z\nz = default(z[-1], 0) + x",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), -1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "in x\nout z\nz = default(z[1], 0) + x",
+            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 

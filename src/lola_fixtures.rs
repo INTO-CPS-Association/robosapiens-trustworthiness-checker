@@ -206,7 +206,7 @@ pub fn spec_typed_string_concat() -> &'static str {
 #[allow(dead_code)]
 pub fn spec_typed_count_monitor() -> &'static str {
     "out x: Int\n\
-     x = 1 + default(x[-1], 0)"
+     x = 1 + default(x[1], 0)"
 }
 
 #[allow(dead_code)]
@@ -223,7 +223,7 @@ pub fn spec_typed_dynamic_monitor() -> &'static str {
 #[allow(dead_code)]
 pub fn spec_count_monitor() -> &'static str {
     "out x\n\
-     x = 1 + default(x[-1], 0)"
+     x = 1 + default(x[1], 0)"
 }
 
 #[allow(dead_code)]
@@ -257,11 +257,11 @@ pub fn spec_maple_sequence() -> &'static str {
      out l: Bool\n
      out e: Bool\n
      out maple : Bool\n
-     m = (stage == \"m\") && default(e[-1], true)\n
-     a = (stage == \"a\") && default(m[-1], false)\n
-     p = (stage == \"p\") && default(a[-1], false)\n
-     l = (stage == \"l\") && default(p[-1], false)\n
-     e = (stage == \"e\") && default(l[-1], false)\n
+     m = (stage == \"m\") && default(e[1], true)\n
+     a = (stage == \"a\") && default(m[1], false)\n
+     p = (stage == \"p\") && default(a[1], false)\n
+     l = (stage == \"l\") && default(p[1], false)\n
+     e = (stage == \"e\") && default(l[1], false)\n
      maple = m || a || p || l || e"
 }
 
@@ -452,7 +452,7 @@ pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
         "e".into(),
         Box::pin(futures::stream::iter((0..5).map(|i| {
             if i == 2 {
-                Value::Str("x[-1]".into())
+                Value::Str("x[1]".into())
             } else {
                 Value::Deferred
             }
@@ -493,7 +493,7 @@ pub fn spec_past_indexing() -> &'static str {
     "in x
      in y
      out z
-     z = x[-1]"
+     z = x[1]"
 }
 
 #[allow(dead_code)]
@@ -545,14 +545,14 @@ pub fn spec_deferred_globally() -> &'static str {
     "in x: Bool
      in e: Str
      out y: Bool
-     y = default(defer(e), x && default(x[-1], true))"
+     y = default(defer(e), x && default(x[1], true))"
 }
 
 #[allow(dead_code)]
 pub fn spec_direct_globally() -> &'static str {
     "in x: Bool
      out y: Bool
-     y = x && default(x[-1], true)"
+     y = x && default(x[1], true)"
 }
 
 #[allow(dead_code)]
@@ -591,7 +591,7 @@ pub fn input_streams_paper_benchmark_globally(
 ) -> BTreeMap<VarName, OutputStream<Value>> {
     let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
     let e1 = stream::repeat(Value::Deferred).take(size * percent / 100 - 1);
-    let e2 = stream::repeat(Value::Str("x || default(y[-1], false)".into()));
+    let e2 = stream::repeat(Value::Str("x || default(y[1], false)".into()));
     let e: OutputStream<Value> = if percent == 100 {
         Box::pin(e1)
     } else if percent == 0 {

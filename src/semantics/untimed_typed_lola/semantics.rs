@@ -58,7 +58,7 @@ where
             SExprInt::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprInt::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyDeferred::Deferred)
+                mc::sindex(e, i)
             }
             SExprInt::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -96,7 +96,7 @@ where
             SExprFloat::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprFloat::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyDeferred::Deferred)
+                mc::sindex(e, i)
             }
             SExprFloat::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -123,7 +123,7 @@ where
             SExprStr::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprStr::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyDeferred::Deferred)
+                mc::sindex(e, i)
             }
             SExprStr::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -162,7 +162,7 @@ where
             SExprUnit::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprUnit::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyDeferred::Deferred)
+                mc::sindex(e, i)
             }
             SExprUnit::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);
@@ -228,7 +228,7 @@ where
             SExprBool::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprBool::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::sindex(e, i, PossiblyDeferred::Deferred)
+                mc::sindex(e, i)
             }
             SExprBool::If(b, e1, e2) => {
                 let b = Self::to_async_stream(*b, ctx);

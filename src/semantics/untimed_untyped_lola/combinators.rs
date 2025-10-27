@@ -237,13 +237,13 @@ pub fn if_stm(
 // last samples. This is accomplished by yielding the x[-N] sample but having the stream
 // currently at x[0]. However, with recursive streams that puts us in a deadlock when calling
 // x.next()
-pub fn sindex(x: OutputStream<Value>, i: isize) -> OutputStream<Value> {
-    let n = i.unsigned_abs();
-    let cs = stream::repeat(Value::Deferred).take(n);
-    if i < 0 {
-        Box::pin(cs.chain(x)) as LocalBoxStream<'static, Value>
+pub fn sindex(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
+    if let Ok(i) = usize::try_from(i) {
+        let cs = stream::repeat(Value::Deferred).take(i);
+        // Delay x by i defers
+        Box::pin(cs.chain(x))
     } else {
-        Box::pin(x.skip(n).chain(cs)) as LocalBoxStream<'static, Value>
+        panic!("Index too large for sindex operation")
     }
 }
 

@@ -58,7 +58,7 @@ fn create_small_varied_expressions(rng: &mut StdRng, size: usize) -> String {
         r#"(Map.remove(Map("a": 1), "a"))"#,
         r#"(Map.has_key(Map("a": 1), "a"))"#,
         // Stream index:
-        "(x[-1])",
+        "(x[1])",
         // Var:
         "(longName)",
         // Mixed / nested
