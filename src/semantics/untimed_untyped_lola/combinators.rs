@@ -25,8 +25,7 @@ use tracing::warn;
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 
-// TODO: Should be applied to input streams only
-fn no_val_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
+fn stream_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
         let mut last : Option<Value>  = None;
         while let Some(curr) = x_mon.next().await {
@@ -48,24 +47,17 @@ fn no_val_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
-pub fn no_val_stream_lift1(
+pub fn stream_lift1(
     f: impl CloneFn1<Value, Value>,
     x_mon: OutputStream<Value>,
 ) -> OutputStream<Value> {
-    Box::pin(no_val_lift_base(x_mon).map(move |x| {
+    Box::pin(stream_lift_base(x_mon).map(move |x| {
         if x == Value::NoVal {
             Value::NoVal
         } else {
             f(x)
         }
     }))
-}
-
-pub fn stream_lift1<S: StreamData, R: StreamData>(
-    f: impl CloneFn1<S, R>,
-    x_mon: OutputStream<S>,
-) -> OutputStream<R> {
-    Box::pin(x_mon.map(f))
 }
 
 pub trait CloneFn2<S: StreamData, R: StreamData, U: StreamData>:
@@ -77,28 +69,14 @@ impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T whe
 {
 }
 
-pub fn stream_lift2<S: StreamData, R: StreamData, U: StreamData>(
-    f: impl CloneFn2<S, R, U>,
-    x_mon: OutputStream<S>,
-    y_mon: OutputStream<R>,
-) -> OutputStream<U> {
-    debug!("lift2: Creating combined stream");
-    Box::pin(x_mon.zip(y_mon).map(move |(x, y)| {
-        debug!("lift2: Processing input values");
-        let result = f(x, y);
-        debug!("lift2: Produced result");
-        result
-    }))
-}
-
-pub fn no_val_stream_lift2(
+pub fn stream_lift2(
     f: impl CloneFn2<Value, Value, Value>,
     x_mon: OutputStream<Value>,
     y_mon: OutputStream<Value>,
 ) -> OutputStream<Value> {
     Box::pin(
-        no_val_lift_base(x_mon)
-            .zip(no_val_lift_base(y_mon))
+        stream_lift_base(x_mon)
+            .zip(stream_lift_base(y_mon))
             .map(move |(x, y)| {
                 if x == Value::NoVal || y == Value::NoVal {
                     Value::NoVal
@@ -118,16 +96,16 @@ impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, 
 {
 }
 
-pub fn no_val_stream_lift3(
+pub fn stream_lift3(
     f: impl CloneFn3<Value, Value, Value, Value>,
     x_mon: OutputStream<Value>,
     y_mon: OutputStream<Value>,
     z_mon: OutputStream<Value>,
 ) -> OutputStream<Value> {
     Box::pin(
-        no_val_lift_base(x_mon)
-            .zip(no_val_lift_base(y_mon))
-            .zip(no_val_lift_base(z_mon))
+        stream_lift_base(x_mon)
+            .zip(stream_lift_base(y_mon))
+            .zip(stream_lift_base(z_mon))
             .map(move |((x, y), z)| {
                 if x == Value::NoVal || y == Value::NoVal || z == Value::NoVal {
                     Value::NoVal
@@ -139,7 +117,7 @@ pub fn no_val_stream_lift3(
 }
 
 pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift2(
+    stream_lift2(
         |x, y| Value::Bool(x == Value::Bool(true) && y == Value::Bool(true)),
         x,
         y,
@@ -147,7 +125,7 @@ pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
 }
 
 pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift2(
+    stream_lift2(
         |x, y| Value::Bool(x == Value::Bool(true) || y == Value::Bool(true)),
         x,
         y,
@@ -155,15 +133,15 @@ pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift1(|x| Value::Bool(x == Value::Bool(false)), x)
+    stream_lift1(|x| Value::Bool(x == Value::Bool(false)), x)
 }
 
 pub fn eq(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift2(|x, y| Value::Bool(x == y), x, y)
+    stream_lift2(|x, y| Value::Bool(x == y), x, y)
 }
 
 pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y),
             (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 <= b),
@@ -188,7 +166,7 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
             (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) < b),
@@ -213,7 +191,7 @@ pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y),
             (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 >= b),
@@ -238,7 +216,7 @@ pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    no_val_stream_lift2(
+    stream_lift2(
         |x, y| match (x, y) {
             (Value::Int(x), Value::Int(y)) => Value::Bool(x > y),
             (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) > b),
@@ -272,7 +250,7 @@ pub fn if_stm(
     y: OutputStream<Value>,
     z: OutputStream<Value>,
 ) -> OutputStream<Value> {
-    no_val_stream_lift3(
+    stream_lift3(
         |x, y, z| match x {
             Value::Bool(true) => y,
             Value::Bool(false) => z,
@@ -345,7 +323,7 @@ pub fn sindex(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
             panic!("Index too large for sindex operation")
         }
     }
-    no_val_lift_base(sindex_base(x, i))
+    stream_lift_base(sindex_base(x, i))
 }
 
 pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
