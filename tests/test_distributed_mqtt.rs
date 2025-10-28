@@ -3,18 +3,25 @@
 mod integration_tests {
 
     use std::rc::Rc;
+    use std::time::Duration;
     use std::vec;
 
     use futures::StreamExt;
-    use smol::LocalExecutor;
+    use smol::{LocalExecutor, Timer};
     use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
     use tc_testutils::streams::with_timeout_res;
     use tracing::info;
-    use trustworthiness_checker::core::Runnable;
+    use trustworthiness_checker::cli::args::OutputMode;
+    use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
-    use trustworthiness_checker::io::mqtt::MqttFactory;
+    use trustworthiness_checker::io::mqtt::{MQTTLocalityReceiver, MqttFactory, MqttMessage};
+    use trustworthiness_checker::io::{InputProviderBuilder, builders::OutputHandlerBuilder};
+    use trustworthiness_checker::lang::dynamic_lola::parser::CombExprParser;
     use trustworthiness_checker::lola_fixtures::*;
-    use trustworthiness_checker::{Specification, Value};
+    use trustworthiness_checker::runtime::asynchronous::Context;
+    use trustworthiness_checker::runtime::reconfigurable_async::ReconfAsyncMonitorBuilder;
+    use trustworthiness_checker::semantics::UntimedLolaSemantics;
+    use trustworthiness_checker::{LOLASpecification, Specification, Value};
     use winnow::Parser;
 
     use macro_rules_attribute::apply;
@@ -501,5 +508,275 @@ mod integration_tests {
             .expect("Z publisher task failed to complete");
 
         Ok(())
+    }
+
+    /// Test for reconfigurable async runtime with 2 reconfigurations.
+    /// This test monitors fixtures/simple_add_distributable.lola and reconfigures
+    /// the runtime twice: (w,v) -> w -> (w,v)
+    #[apply(async_test)]
+    async fn test_reconfigurable_async_runtime_two_reconfigurations(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        info!("Starting reconfigurable async runtime test with 2 reconfigurations");
+
+        // Setup: Parse spec and prepare test infrastructure
+        let spec_content = std::fs::read_to_string("fixtures/simple_add_distributable.lola")
+            .expect("Failed to read simple_add_distributable.lola");
+        let mut spec_str = spec_content.as_str();
+        let spec: LOLASpecification = lola_specification
+            .parse(&mut spec_str)
+            .expect("Failed to parse specification");
+
+        let local_node = "test_node";
+        let mqtt_host = "localhost";
+
+        // Start MQTT server
+        let mqtt_server = start_mqtt().await;
+        let mqtt_port = mqtt_server
+            .get_host_port_ipv4(1883)
+            .await
+            .expect("Failed to get host port for MQTT server");
+        let mqtt_uri = format!("tcp://{}:{}", mqtt_host, mqtt_port);
+
+        info!("MQTT server started on port {}", mqtt_port);
+
+        // Create locality receiver for work assignments
+        let locality_receiver = MQTTLocalityReceiver::new_with_port(
+            mqtt_host.to_string(),
+            local_node.to_string(),
+            mqtt_port,
+        );
+
+        with_timeout_res(locality_receiver.ready(), 10, "locality_receiver.ready()")
+            .await
+            .expect("Locality receiver should be ready");
+        info!("Locality receiver is ready");
+
+        // Create input provider and output handler builders
+        let input_provider_builder = InputProviderBuilder::mqtt(Some(vec![
+            "x".to_string(),
+            "y".to_string(),
+            "z".to_string(),
+        ]))
+        .executor(executor.clone())
+        .mqtt_port(Some(mqtt_port))
+        .model(spec.clone());
+
+        let output_mode = OutputMode {
+            output_stdout: false,
+            output_mqtt_topics: Some(vec!["w".to_string(), "v".to_string()]),
+            mqtt_output: false,
+            output_redis_topics: None,
+            redis_output: false,
+            output_ros_topics: None,
+        };
+
+        let output_handler_builder = OutputHandlerBuilder::new(output_mode)
+            .executor(executor.clone())
+            .output_var_names(vec!["w".into(), "v".into()])
+            .aux_info(vec![])
+            .mqtt_port(Some(mqtt_port));
+
+        // Create and spawn the reconfigurable async monitor
+        info!("Creating reconfigurable async monitor");
+        let monitor_builder = ReconfAsyncMonitorBuilder::<
+            LOLASpecification,
+            Context<Value>,
+            Value,
+            _,
+            UntimedLolaSemantics<CombExprParser>,
+        >::new()
+        .executor(executor.clone())
+        .model(spec.clone())
+        .reconf_provider(locality_receiver.clone())
+        .input_builder(input_provider_builder)
+        .output_builder(output_handler_builder);
+
+        let monitor = Box::new(monitor_builder.async_build().await);
+
+        // Get output subscribers for collecting results BEFORE spawning monitor
+        // to ensure MQTT subscriptions are ready to receive outputs
+        info!("Getting output subscribers");
+        let outputs_w =
+            get_mqtt_outputs("w".to_string(), "w_subscriber".to_string(), mqtt_port).await;
+        let outputs_v =
+            get_mqtt_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;
+
+        // Spawn collector tasks for outputs into bounded channels using stream! macro
+        let (w_tx, mut w_rx) = async_unsync::bounded::channel::<Value>(10).into_split();
+        let (v_tx, mut v_rx) = async_unsync::bounded::channel::<Value>(10).into_split();
+
+        executor
+            .spawn(async move {
+                let mut outputs_w = outputs_w;
+                while let Some(value) = outputs_w.next().await {
+                    w_tx.send(value)
+                        .await
+                        .expect("Failed to send w output to channel");
+                }
+            })
+            .detach();
+
+        executor
+            .spawn(async move {
+                let mut outputs_v = outputs_v;
+                while let Some(value) = outputs_v.next().await {
+                    v_tx.send(value)
+                        .await
+                        .expect("Failed to send v output to channel");
+                }
+            })
+            .detach();
+
+        // Set up channel to signal monitor readiness
+        let (monitor_ready_tx, mut monitor_ready_rx) =
+            async_unsync::bounded::channel::<()>(1).into_split();
+        executor
+            .spawn(async move {
+                monitor_ready_tx
+                    .send(())
+                    .await
+                    .expect("Failed to send monitor ready signal");
+                monitor.run_boxed().await.expect("Monitor run failed");
+            })
+            .detach();
+
+        // Wait for monitor to be ready
+        with_timeout_res(
+            async {
+                match monitor_ready_rx.recv().await {
+                    Some(_) => Ok(()),
+                    None => Err(anyhow::anyhow!("monitor ready channel closed")),
+                }
+            },
+            5,
+            "monitor_ready",
+        )
+        .await
+        .expect("Monitor should signal ready");
+        info!("Monitor is ready");
+
+        // Create MQTT client for sending work assignments
+        let mqtt_client = MQTT_FACTORY
+            .connect(&mqtt_uri)
+            .await
+            .expect("Failed to create MQTT client");
+
+        let work_topic = format!("start_monitors_at_{}", local_node);
+
+        // Define test phases: (work_assignment, inputs, expected_outputs)
+        let phases = vec![
+            (
+                vec!["w".to_string(), "v".to_string()],
+                (Value::Int(1), Value::Int(2), Value::Int(3)),
+                (Value::Int(3), Some(Value::Int(6))),
+            ),
+            (
+                vec!["w".to_string()],
+                (Value::Int(4), Value::Int(5), Value::Int(6)),
+                (Value::Int(9), None),
+            ),
+            (
+                vec!["w".to_string(), "v".to_string()],
+                (Value::Int(7), Value::Int(8), Value::Int(9)),
+                (Value::Int(15), Some(Value::Int(24))),
+            ),
+        ];
+
+        // Execute each test phase
+        for (phase_idx, (work_assignment, inputs, expected_outputs)) in phases.iter().enumerate() {
+            let phase_num = phase_idx + 1;
+            info!(
+                "Phase {}: Sending work assignment {:?}",
+                phase_num, work_assignment
+            );
+
+            // Send work assignment
+            let work_msg =
+                serde_json::to_string(work_assignment).expect("Failed to serialize work");
+            let message = MqttMessage::new(work_topic.clone(), work_msg, 2);
+            mqtt_client
+                .publish(message)
+                .await
+                .expect("Failed to publish work assignment");
+
+            Timer::after(Duration::from_millis(25)).await;
+
+            // Publish inputs
+            info!(
+                "Phase {}: Publishing inputs: x={:?}, y={:?}, z={:?}",
+                phase_num, inputs.0, inputs.1, inputs.2
+            );
+
+            let x_pub = executor.spawn(dummy_mqtt_publisher(
+                format!("x_pub_phase{}", phase_num),
+                "x".to_string(),
+                vec![inputs.0.clone()],
+                mqtt_port,
+            ));
+            let y_pub = executor.spawn(dummy_mqtt_publisher(
+                format!("y_pub_phase{}", phase_num),
+                "y".to_string(),
+                vec![inputs.1.clone()],
+                mqtt_port,
+            ));
+            let z_pub = executor.spawn(dummy_mqtt_publisher(
+                format!("z_pub_phase{}", phase_num),
+                "z".to_string(),
+                vec![inputs.2.clone()],
+                mqtt_port,
+            ));
+
+            Timer::after(Duration::from_millis(100)).await;
+
+            // Collect outputs
+            info!("Phase {}: Collecting outputs", phase_num);
+            let w_output = with_timeout_res(
+                async {
+                    match w_rx.recv().await {
+                        Some(val) => Ok(val),
+                        None => Err(anyhow::anyhow!("w output channel closed")),
+                    }
+                },
+                12,
+                &format!("Phase {} w output", phase_num),
+            )
+            .await
+            .expect("Failed to get w output");
+
+            assert_eq!(
+                w_output, expected_outputs.0,
+                "Phase {}: w output mismatch",
+                phase_num
+            );
+            info!("Phase {}: w = {:?} ✓", phase_num, w_output);
+
+            if let Some(expected_v) = &expected_outputs.1 {
+                let v_output = with_timeout_res(
+                    async {
+                        match v_rx.recv().await {
+                            Some(val) => Ok(val),
+                            None => Err(anyhow::anyhow!("v output channel closed")),
+                        }
+                    },
+                    12,
+                    &format!("Phase {} v output", phase_num),
+                )
+                .await
+                .expect("Failed to get v output");
+
+                assert_eq!(
+                    v_output, *expected_v,
+                    "Phase {}: v output mismatch",
+                    phase_num
+                );
+                info!("Phase {}: v = {:?} ✓", phase_num, v_output);
+            }
+
+            // Wait for publishers to complete
+            x_pub.await.expect("X publisher task failed");
+            y_pub.await.expect("Y publisher task failed");
+            z_pub.await.expect("Z publisher task failed");
+        }
     }
 }
