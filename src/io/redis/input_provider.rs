@@ -4,7 +4,10 @@ use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_unsync::bounded::{self, Receiver, Sender};
-use futures::{StreamExt, future::LocalBoxFuture};
+use futures::{
+    StreamExt,
+    future::{self, LocalBoxFuture},
+};
 use smol::{LocalExecutor, future::yield_now};
 use tracing::info;
 
@@ -54,6 +57,8 @@ impl RedisInputProvider {
 
         let result = AsyncCell::shared();
 
+        // TODO: Should not be spawning a task inside new. Should fix the potential race conditions
+        // instead of circumventing them like this.
         info!("Spawning RedisInputProvider on url: {:?}", url);
         ex.spawn(RedisInputProvider::input_monitor(
             result.clone(),
@@ -114,7 +119,7 @@ impl RedisInputProvider {
         client: redis::Client,
         var_topics: BTreeMap<VarName, String>,
         topic_vars: BTreeMap<String, VarName>,
-        senders: BTreeMap<VarName, Sender<Value>>,
+        mut senders: BTreeMap<VarName, Sender<Value>>,
         started: Rc<AsyncCell<bool>>,
     ) -> anyhow::Result<()> {
         let mut pubsub = client.get_async_pubsub().await?;
@@ -134,6 +139,20 @@ impl RedisInputProvider {
                 .get(var_name)
                 .ok_or_else(|| anyhow!("Unknown sender"))?;
             sender.send(value).await?;
+
+            // Send `NoVal` to all other senders concurrently
+            let futs = senders
+                .iter_mut()
+                .filter(|(name, _)| *name != var_name)
+                .map(|(_, s)| s.send(Value::NoVal));
+
+            // Run them all concurrently
+            let results = future::join_all(futs).await;
+
+            // Check for errors
+            if results.iter().any(|r| r.is_err()) {
+                anyhow::bail!("Failed to send NoVal");
+            }
         }
 
         Ok(())

@@ -154,7 +154,8 @@ impl ROSInputProvider {
             ros_streams.insert(VarName::from(var_name), stream);
         }
 
-        // TODO: This is a bad implementation. Should not be spawning a task inside new.
+        // TODO: Should not be spawning a task inside new. Should fix the potential race conditions
+        // instead of circumventing them like this.
         // Launch the ROS subscriber node in background async task
         executor
             .spawn(async move {

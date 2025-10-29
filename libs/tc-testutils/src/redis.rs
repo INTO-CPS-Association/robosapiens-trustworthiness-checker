@@ -4,6 +4,7 @@ use async_compat::Compat as TokioCompat;
 use async_stream::stream;
 use async_unsync::bounded::{self, Receiver, Sender};
 use async_unsync::oneshot::{self};
+use futures::StreamExt;
 use futures::future::LocalBoxFuture;
 use redis::AsyncTypedCommands;
 use smol::LocalExecutor;
@@ -40,6 +41,30 @@ pub async fn dummy_redis_sender(
     let _ = ready_rx.await;
 
     for message in messages.into_iter() {
+        debug!(?message, ?channel, "Publishing message");
+        con.publish(&channel, message).await?;
+    }
+
+    Ok(())
+}
+
+pub async fn dummy_redis_stream_sender(
+    host: &str,
+    port: Option<u16>,
+    channel: String,
+    mut stream: OutputStream<Value>,
+) -> anyhow::Result<()> {
+    // Note: This version does not wait for a signal on the receiver,
+    // as it expects no data to be available on the `stream` until everything is set up
+
+    let uri = match port {
+        Some(port) => format!("redis://{}:{}", host, port),
+        None => format!("redis://{}", host),
+    };
+    let client = redis::Client::open(uri)?;
+    let mut con = client.get_multiplexed_async_connection().await?;
+
+    while let Some(message) = stream.next().await {
         debug!(?message, ?channel, "Publishing message");
         con.publish(&channel, message).await?;
     }

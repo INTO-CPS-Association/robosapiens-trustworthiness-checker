@@ -16,39 +16,78 @@ mod integration_tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use approx::assert_abs_diff_eq;
     use async_stream::stream;
     use async_unsync::oneshot;
     use futures::FutureExt;
     use futures::StreamExt;
-    use futures::select;
+    use futures::stream;
     use macro_rules_attribute::apply;
     use redis::{self, AsyncTypedCommands};
     use smol::LocalExecutor;
 
     use smol_macros::test as smol_test;
+    use tc_testutils::redis::dummy_redis_stream_sender;
     use tc_testutils::redis::{dummy_redis_receiver, dummy_redis_sender, start_redis};
+    use tc_testutils::streams::TickSender;
+    use tc_testutils::streams::interleave_with_constant;
+    use tc_testutils::streams::receive_values_serially;
+    use tc_testutils::streams::tick_stream;
+    use tc_testutils::streams::with_timeout_res;
     use tracing::{debug, info};
+    use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
         InputProvider, OutputStream, Value, VarName,
+        core::OutputHandler,
         core::REDIS_HOSTNAME,
-        core::{OutputHandler, Runnable},
-        io::{
-            redis::{input_provider::RedisInputProvider, output_handler::RedisOutputHandler},
-            testing::manual_output_handler::ManualOutputHandler,
-        },
-        lola_fixtures::{
-            TestMonitorRunner, spec_simple_add_monitor, spec_simple_add_monitor_typed_float,
-        },
-        lola_specification,
+        io::redis::{input_provider::RedisInputProvider, output_handler::RedisOutputHandler},
     };
-    use winnow::Parser;
+
+    const X_TOPIC: &str = "x";
+    const Y_TOPIC: &str = "y";
+
+    fn generate_test_publisher_tasks(
+        executor: Rc<LocalExecutor<'static>>,
+        port: u16,
+        xs: Vec<Value>,
+        ys: Vec<Value>,
+    ) -> (
+        (TickSender, smol::Task<anyhow::Result<()>>),
+        (TickSender, smol::Task<anyhow::Result<()>>),
+    ) {
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+
+        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+        let x_publisher_task = executor.spawn(with_timeout_res(
+            dummy_redis_stream_sender(
+                REDIS_HOSTNAME,
+                Some(port),
+                X_TOPIC.to_string(),
+                x_pub_stream,
+            ),
+            5,
+            "x_publisher_task",
+        ));
+
+        let y_publisher_task = executor.spawn(with_timeout_res(
+            dummy_redis_stream_sender(
+                REDIS_HOSTNAME,
+                Some(port),
+                Y_TOPIC.to_string(),
+                y_pub_stream,
+            ),
+            5,
+            "y_publisher_task",
+        ));
+
+        ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
+    }
 
     /// Tests basic Redis pub/sub functionality with dummy sender and receiver.
     ///
     /// This test verifies that messages can be published to and received from
     /// Redis channels using the helper functions.
-    #[test_log::test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_dummy_redis_sender_receiver(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -100,23 +139,14 @@ mod integration_tests {
         Ok(())
     }
 
-    /// Tests RedisInputProvider integration with the monitor runtime using integer values.
-    ///
-    /// This test creates a RedisInputProvider that subscribes to Redis channels for
-    /// variables 'x' and 'y', publishes integer values to those channels, and verifies
-    /// that the monitor correctly computes the sum (z = x + y) and produces the expected
-    /// output values.
-    #[test_log::test(apply(smol_test))]
+    /// Tests RedisInputProvider using integer values.
+    #[apply(async_test)]
     async fn test_add_monitor_redis_input(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        let model = lola_specification
-            .parse(spec_simple_add_monitor())
-            .expect("Model could not be parsed");
-
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
-        let zs = vec![Value::Int(4), Value::Int(6)];
+        let stream_len = xs.len();
 
         let redis = start_redis().await;
         let redis_port = redis
@@ -124,234 +154,12 @@ mod integration_tests {
             .await
             .expect("Failed to get host port for Redis server");
 
-        let var_topics = [
-            ("x".into(), "redis_input_x".to_string()),
-            ("y".into(), "redis_input_y".to_string()),
-        ]
-        .into_iter()
-        .collect::<BTreeMap<VarName, _>>();
+        let var_topics = BTreeMap::from_iter([
+            ("x".into(), X_TOPIC.to_string()),
+            ("y".into(), Y_TOPIC.to_string()),
+        ]);
 
-        // Create the Redis input provider
-        let input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
-
-        input_provider.ready().await?;
-
-        // Create oneshot channels for coordination
-        let ready_channel_x = oneshot::channel();
-        let (ready_tx_x, ready_rx_x) = ready_channel_x.into_split();
-        let ready_channel_y = oneshot::channel();
-        let (ready_tx_y, ready_rx_y) = ready_channel_y.into_split();
-
-        // Run the monitor
-        let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
-        let outputs = output_handler.get_output();
-        let runner = TestMonitorRunner::new(
-            executor.clone(),
-            model.clone(),
-            Box::new(input_provider),
-            Box::new(output_handler),
-        );
-
-        let res = executor.spawn(runner.run());
-
-        // Spawn dummy Redis publisher tasks
-        executor
-            .spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "redis_input_x".to_string(),
-                xs,
-                Box::pin(ready_rx_x.map(|_| ())),
-            ))
-            .detach();
-
-        executor
-            .spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "redis_input_y".to_string(),
-                ys,
-                Box::pin(ready_rx_y.map(|_| ())),
-            ))
-            .detach();
-
-        // Signal that senders are ready to start
-        let _ = ready_tx_x.send(());
-        let _ = ready_tx_y.send(());
-
-        // Test we have the expected outputs
-        info!("Waiting for {:?} outputs", zs.len());
-        let outputs = outputs.take(zs.len()).collect::<Vec<_>>().await;
-        info!("Outputs: {:?}", outputs);
-        let expected_outputs = zs.into_iter().map(|val| vec![val]).collect::<Vec<_>>();
-        assert_eq!(outputs, expected_outputs);
-
-        info!("Output collection complete, output stream should now be dropped");
-
-        info!("Waiting for monitor to complete after output stream drop...");
-        let timeout_future = smol::Timer::after(Duration::from_secs(5));
-
-        select! {
-            result = res.fuse() => {
-                info!("Monitor completed: {:?}", result);
-                result?;
-            }
-            _ = futures::FutureExt::fuse(timeout_future) => {
-                return Err(anyhow::anyhow!("Monitor did not complete within timeout after output stream was dropped"));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Tests RedisInputProvider integration with the monitor runtime using floating-point values.
-    ///
-    /// Similar to the integer test, but uses float values to verify that the RedisInputProvider
-    /// correctly handles different data types. Tests that floating-point arithmetic is performed
-    /// correctly and outputs are within expected precision bounds.
-    #[test_log::test(apply(smol_test))]
-    async fn test_add_monitor_redis_input_float(
-        executor: Rc<LocalExecutor<'static>>,
-    ) -> anyhow::Result<()> {
-        let model = lola_specification
-            .parse(spec_simple_add_monitor_typed_float())
-            .expect("Model could not be parsed");
-
-        let xs = vec![Value::Float(1.5), Value::Float(2.5)];
-        let ys = vec![Value::Float(3.5), Value::Float(4.5)];
-        let expected_zs = vec![5.0, 7.0];
-
-        let redis = start_redis().await;
-        let redis_port = redis
-            .get_host_port_ipv4(6379)
-            .await
-            .expect("Failed to get host port for Redis server");
-
-        let var_topics = [
-            ("x".into(), "redis_input_x_float".to_string()),
-            ("y".into(), "redis_input_y_float".to_string()),
-        ]
-        .into_iter()
-        .collect::<BTreeMap<VarName, _>>();
-
-        // Create the Redis input provider
-        let input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
-
-        input_provider.ready().await?;
-
-        // Create oneshot channels for coordination
-        let ready_channel_x = oneshot::channel();
-        let (ready_tx_x, ready_rx_x) = ready_channel_x.into_split();
-        let ready_channel_y = oneshot::channel();
-        let (ready_tx_y, ready_rx_y) = ready_channel_y.into_split();
-
-        // Run the monitor
-        let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
-        let outputs = output_handler.get_output();
-        let runner = TestMonitorRunner::new(
-            executor.clone(),
-            model.clone(),
-            Box::new(input_provider),
-            Box::new(output_handler),
-        );
-
-        let res = executor.spawn(runner.run());
-
-        // Spawn dummy Redis publisher tasks
-        executor
-            .spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "redis_input_x_float".to_string(),
-                xs,
-                Box::pin(ready_rx_x.map(|_| ())),
-            ))
-            .detach();
-
-        executor
-            .spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "redis_input_y_float".to_string(),
-                ys,
-                Box::pin(ready_rx_y.map(|_| ())),
-            ))
-            .detach();
-
-        // Signal that senders are ready to start
-        let _ = ready_tx_x.send(());
-        let _ = ready_tx_y.send(());
-
-        // Test we have the expected outputs
-        info!("Waiting for {:?} outputs", expected_zs.len());
-        let outputs = outputs.take(expected_zs.len()).collect::<Vec<_>>().await;
-        info!("Outputs: {:?}", outputs);
-
-        // Check that the outputs are approximately correct (for floating point)
-        assert_eq!(outputs.len(), expected_zs.len());
-        for (output, expected) in outputs.iter().zip(expected_zs.iter()) {
-            assert_eq!(output.len(), 1);
-            if let Value::Float(actual) = &output[0] {
-                assert_abs_diff_eq!(actual, expected, epsilon = 1e-6);
-            } else {
-                panic!("Expected float output, got {:?}", output[0]);
-            }
-        }
-
-        info!("Output collection complete, output stream should now be dropped");
-
-        info!("Waiting for monitor to complete after output stream drop...");
-        let timeout_future = smol::Timer::after(Duration::from_secs(5));
-
-        select! {
-            result = res.fuse() => {
-                info!("Monitor completed: {:?}", result);
-                result?;
-            }
-            _ = futures::FutureExt::fuse(timeout_future) => {
-                return Err(anyhow::anyhow!("Monitor did not complete within timeout after output stream was dropped"));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Tests RedisInputProvider with multiple channels and different data types.
-    ///
-    /// This test verifies that a single RedisInputProvider can handle multiple
-    /// Redis channels simultaneously, each providing different types of data
-    /// (string, integer, float). It tests the provider's ability to route
-    /// messages from different channels to the correct variable streams.
-    #[test_log::test(apply(smol_test))]
-    async fn test_redis_input_provider_multiple_channels(
-        executor: Rc<LocalExecutor<'static>>,
-    ) -> anyhow::Result<()> {
-        let redis = start_redis().await;
-        let redis_port = redis
-            .get_host_port_ipv4(6379)
-            .await
-            .expect("Failed to get host port for Redis server");
-
-        let var_topics = [
-            ("var1".into(), "channel1".to_string()),
-            ("var2".into(), "channel2".to_string()),
-            ("var3".into(), "channel3".to_string()),
-        ]
-        .into_iter()
-        .collect::<BTreeMap<VarName, _>>();
-
+        // Create the MQTT input provider
         let mut input_provider = RedisInputProvider::new(
             executor.clone(),
             REDIS_HOSTNAME,
@@ -360,100 +168,178 @@ mod integration_tests {
         )
         .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
 
-        // Create oneshot channels for coordination
-        let ready_channel_1 = oneshot::channel();
-        let (ready_tx_1, ready_rx_1) = ready_channel_1.into_split();
-        let ready_channel_2 = oneshot::channel();
-        let (ready_tx_2, ready_rx_2) = ready_channel_2.into_split();
-        let ready_channel_3 = oneshot::channel();
-        let (ready_tx_3, ready_rx_3) = ready_channel_3.into_split();
+        let x_stream = input_provider
+            .input_stream(&"x".into())
+            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
+        let y_stream = input_provider
+            .input_stream(&"y".into())
+            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        // Get input streams for all variables
-        let mut stream1 = input_provider
-            .input_stream(&"var1".into())
-            .expect("Failed to get stream for var1");
-        let mut stream2 = input_provider
-            .input_stream(&"var2".into())
-            .expect("Failed to get stream for var2");
-        let mut stream3 = input_provider
-            .input_stream(&"var3".into())
-            .expect("Failed to get stream for var3");
+        let input_provider_ready = input_provider.ready();
 
-        // Start the input provider
-        let provider_task = executor.spawn(input_provider.run());
+        executor.spawn(input_provider.run()).detach();
+        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
-        input_provider.ready().await?;
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
 
-        // Send test messages to different channels
-        executor
-            .spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "channel1".to_string(),
-                vec![Value::Str("message1".into())],
-                Box::pin(ready_rx_1.map(|_| ())),
-            ))
-            .detach();
+        let (x_vals, y_vals) =
+            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
+                .await?;
 
-        executor
-            .spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "channel2".to_string(),
-                vec![Value::Int(42)],
-                Box::pin(ready_rx_2.map(|_| ())),
-            ))
-            .detach();
+        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
+        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
+        info!(?x_vals, ?y_vals, "Received values");
+        assert_eq!(x_vals, exp_x_vals);
+        assert_eq!(y_vals, exp_y_vals);
 
-        executor
-            .spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "channel3".to_string(),
-                vec![Value::Float(3.14)],
-                Box::pin(ready_rx_3.map(|_| ())),
-            ))
-            .detach();
-
-        // Signal that senders are ready to start
-        let _ = ready_tx_1.send(());
-        let _ = ready_tx_2.send(());
-        let _ = ready_tx_3.send(());
-
-        // Collect messages from all streams
-        let msg1 = executor.run(async { stream1.next().await }).await;
-        let msg2 = executor
-            .run(async { futures::StreamExt::next(&mut stream2).await })
-            .await;
-        let msg3 = executor
-            .run(async { futures::StreamExt::next(&mut stream3).await })
-            .await;
-
-        // Verify messages
-        assert_eq!(msg1, Some(Value::Str("message1".into())));
-        assert_eq!(msg2, Some(Value::Int(42)));
-        assert_eq!(msg3, Some(Value::Float(3.14)));
-
-        // Clean up
-        drop(stream1);
-        drop(stream2);
-        drop(stream3);
-
-        let timeout_future = smol::Timer::after(std::time::Duration::from_secs(2));
-        futures::select! {
-            result = provider_task.fuse() => {
-                info!("Provider completed: {:?}", result);
-                result?;
-            }
-            _ = futures::FutureExt::fuse(timeout_future) => {
-                info!("Provider task did not complete within timeout, this is expected");
-            }
-        }
+        // Final ticks to let them complete
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
+        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        info!("Waiting for publishers to complete...");
+        x_publisher_task.await?;
+        y_publisher_task.await?;
+        info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
     }
 
-    #[test_log::test(apply(smol_test))]
+    /// Tests RedisInputProvider using float values.
+    /// Similar to the integer test, but uses float values to verify that the RedisInputProvider
+    /// correctly handles different data types.
+    #[apply(async_test)]
+    async fn test_add_monitor_redis_input_float(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let xs = vec![Value::Float(1.5), Value::Float(2.5)];
+        let ys = vec![Value::Float(3.5), Value::Float(4.5)];
+        let stream_len = xs.len();
+
+        let redis = start_redis().await;
+        let redis_port = redis
+            .get_host_port_ipv4(6379)
+            .await
+            .expect("Failed to get host port for Redis server");
+
+        let var_topics = BTreeMap::from_iter([
+            ("x".into(), X_TOPIC.to_string()),
+            ("y".into(), Y_TOPIC.to_string()),
+        ]);
+
+        // Create the MQTT input provider
+        let mut input_provider = RedisInputProvider::new(
+            executor.clone(),
+            REDIS_HOSTNAME,
+            Some(redis_port),
+            var_topics,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+
+        let x_stream = input_provider
+            .input_stream(&"x".into())
+            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
+        let y_stream = input_provider
+            .input_stream(&"y".into())
+            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
+
+        let input_provider_ready = input_provider.ready();
+
+        executor.spawn(input_provider.run()).detach();
+        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
+
+        let (x_vals, y_vals) =
+            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
+                .await?;
+
+        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
+        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
+        info!(?x_vals, ?y_vals, "Received values");
+        assert_eq!(x_vals, exp_x_vals);
+        assert_eq!(y_vals, exp_y_vals);
+
+        // Final ticks to let them complete
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
+        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        info!("Waiting for publishers to complete...");
+        x_publisher_task.await?;
+        y_publisher_task.await?;
+        info!("All publishers completed, shutting down MQTT server");
+
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_add_monitor_redis_input_mixed(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let xs = vec![Value::Int(42), Value::Int(69)];
+        let ys = vec![Value::Str("Hello".into()), Value::Str("World".into())];
+        let stream_len = xs.len();
+
+        let redis = start_redis().await;
+        let redis_port = redis
+            .get_host_port_ipv4(6379)
+            .await
+            .expect("Failed to get host port for Redis server");
+
+        let var_topics = BTreeMap::from_iter([
+            ("x".into(), X_TOPIC.to_string()),
+            ("y".into(), Y_TOPIC.to_string()),
+        ]);
+
+        // Create the MQTT input provider
+        let mut input_provider = RedisInputProvider::new(
+            executor.clone(),
+            REDIS_HOSTNAME,
+            Some(redis_port),
+            var_topics,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+
+        let x_stream = input_provider
+            .input_stream(&"x".into())
+            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
+        let y_stream = input_provider
+            .input_stream(&"y".into())
+            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
+
+        let input_provider_ready = input_provider.ready();
+
+        executor.spawn(input_provider.run()).detach();
+        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
+
+        let (x_vals, y_vals) =
+            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
+                .await?;
+
+        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
+        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
+        info!(?x_vals, ?y_vals, "Received values");
+        assert_eq!(x_vals, exp_x_vals);
+        assert_eq!(y_vals, exp_y_vals);
+
+        // Final ticks to let them complete
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
+        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        info!("Waiting for publishers to complete...");
+        x_publisher_task.await?;
+        y_publisher_task.await?;
+        info!("All publishers completed, shutting down MQTT server");
+
+        Ok(())
+    }
+
+    // TODO: TW - Where does the tests below belong? They seem misplaced to me.
+    #[apply(async_test)]
     async fn test_pubsub_roundtrip(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         let redis = start_redis().await;
         let redis_port = redis
@@ -542,7 +428,7 @@ mod integration_tests {
     ///
     /// This test verifies that the Redis serialization handles edge cases correctly,
     /// including strings with special characters, empty values, and complex nested structures.
-    #[test_log::test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_serialization_edge_cases(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -672,7 +558,7 @@ mod integration_tests {
     ///
     /// This test uses Redis's raw string operations to see exactly what bytes
     /// are being sent over the wire when publishing Value types.
-    #[test_log::test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_raw_wire_format_inspection(
         _executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -740,7 +626,7 @@ mod integration_tests {
     /// This test verifies that manually crafted enum format JSON strings can be successfully
     /// deserialized into Value types, ensuring interoperability with external systems
     /// that use the correct enum wire format.
-    #[test_log::test(apply(smol_test))]
+    #[apply(async_test)]
     async fn test_json_interoperability(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
