@@ -13,28 +13,7 @@ command = ["cargo", "check"]
 need_stdout = false
 
 [jobs.check-all]
-command = ["cargo", "check", "--all-targets"]
-need_stdout = false
-
-# Run clippy on the default target
-[jobs.clippy]
-command = ["cargo", "clippy"]
-need_stdout = false
-
-# Run clippy on all targets
-# To disable some lints, you may change the job this way:
-#    [jobs.clippy-all]
-#    command = [
-#        "cargo", "clippy",
-#        "--all-targets",
-#    	 "--",
-#    	 "-A", "clippy::bool_to_int_with_if",
-#    	 "-A", "clippy::collapsible_if",
-#    	 "-A", "clippy::derive_partial_eq_without_eq",
-#    ]
-# need_stdout = false
-[jobs.clippy-all]
-command = ["cargo", "clippy", "--all-targets"]
+command = ["cargo", "check", "--all-features"]
 need_stdout = false
 
 # This job lets you run
