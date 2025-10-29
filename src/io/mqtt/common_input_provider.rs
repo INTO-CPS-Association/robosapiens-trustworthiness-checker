@@ -282,11 +282,21 @@ pub(crate) mod common {
                 .get_mut(var)
                 .ok_or_else(|| anyhow::anyhow!("No sender found for variable {}", var))?;
 
-            // Forward the value downstream
+            // Forward the value to sender
             sender
                 .send(value)
                 .await
                 .map_err(|_| anyhow::anyhow!("Failed to send value"))?;
+
+            // Forward NoVal to other senders to allow async evaluation
+            for (other_var, other_sender) in senders.iter_mut() {
+                if other_var != var {
+                    other_sender
+                        .send(Value::NoVal)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("Failed to send NoVal"))?;
+                }
+            }
 
             Ok(())
         }

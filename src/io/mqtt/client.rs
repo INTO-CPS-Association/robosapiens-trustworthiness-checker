@@ -299,6 +299,8 @@ mod mock {
     use crate::io::mqtt::{MqttClient, MqttMessage, client::MockClient};
 
     /// Mock broker instance
+    /// NOTE: There is an inherent starvation issue with this design.
+    /// The more clients a broker has, the larger the chance of starvation
     #[derive(Default)]
     pub struct MockBroker {
         /// Map of uri -> client_id -> map of senders that forward (subscribed topics, unsubscribed topics)

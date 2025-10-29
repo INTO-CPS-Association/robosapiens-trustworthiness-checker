@@ -78,6 +78,54 @@ where
     }
 }
 
+// For each (x, y) pair, produces [x, NoVal, NoVal, y]
+// Useful for testing e.g., InputProviders that cannot handle simultaneous inputs
+pub fn interleave_with_constant<Iter, ValueType>(
+    values: Iter,
+    constant: ValueType,
+) -> (Vec<ValueType>, Vec<ValueType>)
+where
+    Iter: IntoIterator<Item = (ValueType, ValueType)>,
+    ValueType: Clone,
+{
+    values
+        .into_iter()
+        .fold((vec![], vec![]), |(mut x_vals, mut y_vals), (x, y)| {
+            x_vals.push(x);
+            y_vals.push(constant.clone());
+            x_vals.push(constant.clone());
+            y_vals.push(y);
+            (x_vals, y_vals)
+        })
+}
+
+/// Receives the expected number of values from the x and y subscription streams,
+/// as if x and y was published simultaneously.
+pub async fn receive_values_serially<ValueType>(
+    x_tick: &mut TickSender,
+    y_tick: &mut TickSender,
+    mut x_sub_stream: OutputStream<ValueType>,
+    mut y_sub_stream: OutputStream<ValueType>,
+    stream_len: usize,
+) -> anyhow::Result<(Vec<ValueType>, Vec<ValueType>)> {
+    // Send one x_tick, wait for response. Send one y_tick, wait for response.
+    let (mut x_vals, mut y_vals): (Vec<ValueType>, Vec<ValueType>) = (vec![], vec![]);
+    for _ in 0..stream_len {
+        x_tick.send(()).await?;
+        let x_val = with_timeout(x_sub_stream.next(), 3, "x_sub_stream.next").await;
+        let y_val = with_timeout(y_sub_stream.next(), 3, "y_sub_stream.next").await;
+        x_vals.push(x_val?.expect("x_sub_stream ended"));
+        y_vals.push(y_val?.expect("y_sub_stream ended"));
+
+        y_tick.send(()).await?;
+        let x_val = with_timeout(x_sub_stream.next(), 3, "x_sub_stream.next").await;
+        let y_val = with_timeout(y_sub_stream.next(), 3, "y_sub_stream.next").await;
+        x_vals.push(x_val?.expect("x_sub_stream ended"));
+        y_vals.push(y_val?.expect("y_sub_stream ended"));
+    }
+    Ok((x_vals, y_vals))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{tick_stream, tick_streams};
@@ -92,10 +140,9 @@ mod tests {
     use trustworthiness_checker::{OutputStream, Value, async_test, core::VarName};
 
     fn gen_data_streams(n: i64) -> (Vec<VarName>, Vec<OutputStream<Value>>, Vec<Vec<Value>>) {
-        let x_stream: OutputStream<Value> =
-            Box::pin(stream::iter((0..n).map(|x| ((x * 2).into()))));
+        let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..n).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
-            Box::pin(stream::iter((0..n).map(|x| ((x * 2 + 1).into()))));
+            Box::pin(stream::iter((0..n).map(|x| (x * 2 + 1).into())));
         let stream_names = vec!["x".into(), "y".into()];
         let streams = vec![x_stream, y_stream];
         let expected = (0..n)

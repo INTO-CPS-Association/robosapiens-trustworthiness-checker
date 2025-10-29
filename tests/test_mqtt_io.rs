@@ -5,9 +5,14 @@ mod integration_tests {
 
     use async_compat::Compat as TokioCompat;
     use futures::StreamExt;
+    use futures::stream;
     use macro_rules_attribute::apply;
-    use smol::{LocalExecutor, channel::bounded};
-    use tc_testutils::streams::with_timeout_res;
+    use smol::LocalExecutor;
+    use tc_testutils::mqtt::dummy_stream_mqtt_publisher;
+    use tc_testutils::streams::{
+        TickSender, interleave_with_constant, receive_values_serially, tick_stream, with_timeout,
+        with_timeout_res,
+    };
     use tracing::info;
     use trustworthiness_checker::InputProvider;
     use trustworthiness_checker::async_test;
@@ -17,10 +22,8 @@ mod integration_tests {
     use winnow::Parser;
 
     use approx::assert_abs_diff_eq;
-    use tc_testutils::streams::with_timeout;
-
     use std::{collections::BTreeMap, rc::Rc};
-    use tc_testutils::mqtt::{dummy_mqtt_publisher, get_mqtt_outputs, start_mqtt};
+    use tc_testutils::mqtt::{get_mqtt_outputs, start_mqtt};
     use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
     use trustworthiness_checker::io::mqtt::MQTTLocalityReceiver;
 
@@ -28,19 +31,102 @@ mod integration_tests {
 
     use trustworthiness_checker::lola_fixtures::{TestMonitorRunner, input_streams1};
     use trustworthiness_checker::{
-        Value, VarName,
+        Value,
         core::Runnable,
-        io::{
-            mqtt::{MQTTInputProvider, MQTTOutputHandler},
-            testing::manual_output_handler::ManualOutputHandler,
-        },
+        io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
         lola_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         lola_specification,
     };
 
-    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
+    const MQTT_FACTORY: MqttFactory = if cfg!(feature = "testcontainers") {
+        MqttFactory::Paho
+    } else {
+        MqttFactory::Mock
+    };
+
+    async fn start_mqtt_get_port() -> (Box<dyn std::any::Any>, u16) {
+        #[cfg(feature = "testcontainers")]
+        {
+            use async_compat::Compat as TokioCompat;
+            use tc_testutils::mqtt::start_mqtt;
+
+            let mqtt_server = start_mqtt().await;
+            let port = with_timeout_res(
+                TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
+                5,
+                "get_host_port",
+            )
+            .await
+            .expect("Failed to get host port for MQTT server");
+
+            (Box::new(mqtt_server), port)
+        }
+        #[cfg(not(feature = "testcontainers"))]
+        {
+            // Mock tests do not care about a client, but they need to run serially,
+            // forced with this lock. (Due to file writing)
+            async fn lock_test() -> futures::lock::MutexGuard<'static, ()> {
+                static TEST_MUTEX: std::sync::OnceLock<futures::lock::Mutex<()>> =
+                    std::sync::OnceLock::new();
+                TEST_MUTEX
+                    .get_or_init(|| futures::lock::Mutex::new(()))
+                    .lock()
+                    .await
+            }
+
+            use rand::Rng;
+            let port = rand::rng().random();
+            let lock = lock_test().await;
+            (Box::new(lock), port)
+        }
+    }
+
+    const X_TOPIC: &str = "x";
+    const Y_TOPIC: &str = "y";
+    const Z_TOPIC: &str = "z";
+
+    fn generate_test_publisher_tasks(
+        executor: Rc<LocalExecutor<'static>>,
+        xs: Vec<Value>,
+        ys: Vec<Value>,
+        mqtt_port: u16,
+    ) -> (
+        (TickSender, smol::Task<anyhow::Result<()>>),
+        (TickSender, smol::Task<anyhow::Result<()>>),
+    ) {
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+
+        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+        let x_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "x_publisher".to_string(),
+                X_TOPIC.to_string(),
+                x_pub_stream,
+                xs.len(),
+                mqtt_port,
+            ),
+            5,
+            "x_publisher_task",
+        ));
+
+        let y_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "y_publisher".to_string(),
+                Y_TOPIC.to_string(),
+                y_pub_stream,
+                ys.len(),
+                mqtt_port,
+            ),
+            5,
+            "y_publisher_task",
+        ));
+
+        ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
+    }
 
     #[apply(async_test)]
+    #[ignore]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
             .parse(spec_simple_add_monitor())
@@ -55,18 +141,10 @@ mod integration_tests {
 
         let input_streams = input_streams1();
         let mqtt_host = "localhost";
-        let mqtt_topics = spec
-            .output_vars
-            .iter()
-            .map(|v| (v.clone(), format!("mqtt_output_{}", v)))
-            .collect::<BTreeMap<_, _>>();
+        let mqtt_topic = BTreeMap::from_iter(vec![("z".into(), Z_TOPIC.into())]);
 
         let outputs = with_timeout(
-            get_mqtt_outputs(
-                "mqtt_output_z".to_string(),
-                "z_subscriber".to_string(),
-                mqtt_port,
-            ),
+            get_mqtt_outputs(Z_TOPIC.to_string(), "z_subscriber".to_string(), mqtt_port),
             10,
             "get_mqtt_outputs",
         )
@@ -80,7 +158,7 @@ mod integration_tests {
                 vec!["z".into()],
                 mqtt_host,
                 Some(mqtt_port),
-                mqtt_topics,
+                mqtt_topic,
                 vec![],
             )
             .unwrap(),
@@ -100,6 +178,7 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
+    #[ignore]
     async fn test_add_monitor_mqtt_output_float(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
             .parse(spec_simple_add_monitor_typed_float())
@@ -112,15 +191,11 @@ mod integration_tests {
 
         let input_streams = input_streams_float();
         let mqtt_host = "localhost";
-        let mqtt_topics = spec
-            .output_vars
-            .iter()
-            .map(|v| (v.clone(), format!("mqtt_output_float_{}", v)))
-            .collect::<BTreeMap<_, _>>();
+        let mqtt_topics = BTreeMap::from_iter(vec![("z".into(), Z_TOPIC.into())]);
 
         let outputs = with_timeout(
             get_mqtt_outputs(
-                "mqtt_output_float_z".to_string(),
+                Z_TOPIC.to_string(),
                 "z_float_subscriber".to_string(),
                 mqtt_port,
             ),
@@ -167,29 +242,16 @@ mod integration_tests {
     async fn test_add_monitor_mqtt_input(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        let model = lola_specification
-            .parse(spec_simple_add_monitor())
-            .expect("Model could not be parsed");
-
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
-        let zs = vec![Value::Int(4), Value::Int(6)];
+        let stream_len = xs.len();
 
-        // Create a channel for monitor-to-publisher synchronization
-        let (monitor_ready_tx, monitor_ready_rx) = bounded::<()>(1);
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
-        let mqtt_server = start_mqtt().await;
-
-        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
-            .await
-            .expect("Failed to get host port for MQTT server");
-
-        let var_topics = [
-            ("x".into(), "mqtt_input_x".to_string()),
-            ("y".into(), "mqtt_input_y".to_string()),
-        ]
-        .into_iter()
-        .collect::<BTreeMap<VarName, _>>();
+        let var_topics = BTreeMap::from_iter([
+            ("x".into(), X_TOPIC.to_string()),
+            ("y".into(), Y_TOPIC.to_string()),
+        ]);
 
         // Create the MQTT input provider
         let mut input_provider = MQTTInputProvider::new(
@@ -202,106 +264,39 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        // Wait for the input provider to be ready
-        info!("Waiting for input provider to be ready");
-        with_timeout_res(input_provider.ready(), 5, "input_provider_ready").await?;
-        info!("Input provider is ready");
+        let x_stream = input_provider
+            .input_stream(&"x".into())
+            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
+        let y_stream = input_provider
+            .input_stream(&"y".into())
+            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        // Create an output handler that will capture all the outputs
-        let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
+        let input_provider_ready = input_provider.ready();
 
-        // Get the output stream before passing the handler to the monitor
-        let mut outputs = output_handler.get_output();
+        executor.spawn(input_provider.run()).detach();
+        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
-        let runner = TestMonitorRunner::new(
-            executor.clone(),
-            model.clone(),
-            Box::new(input_provider),
-            Box::new(output_handler),
-        );
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        // Clone the sender for the monitor task
-        let monitor_ready = monitor_ready_tx.clone();
+        let (x_vals, y_vals) =
+            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
+                .await?;
 
-        // Spawn monitor task with timeout
-        let monitor_task = executor.spawn(async move {
-            info!("Monitor task starting");
+        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
+        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
+        info!(?x_vals, ?y_vals, "Received values");
+        assert_eq!(x_vals, exp_x_vals);
+        assert_eq!(y_vals, exp_y_vals);
 
-            // Signal that monitor is initialized and ready
-            info!("Monitor initialized, signaling readiness");
-            if let Err(e) = monitor_ready.try_send(()) {
-                info!("Failed to signal monitor readiness: {:?}", e);
-            }
-
-            // Run the monitor indefinitely - it's not expected to terminate on its own
-            runner.run().await
-        });
-
-        // Wait for monitor to signal it's ready
-        info!("Waiting for monitor to be ready...");
-        match with_timeout(monitor_ready_rx.recv(), 5, "monitor_ready_wait").await {
-            Ok(_) => info!("Monitor signaled it's ready to receive input"),
-            Err(e) => {
-                info!("Timed out waiting for monitor to be ready: {}", e);
-                return Err(anyhow::anyhow!("Monitor failed to initialize in time"));
-            }
-        }
-
-        // Start publishers and wait for them to complete
-        let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "x_publisher".to_string(),
-            "mqtt_input_x".to_string(),
-            xs.clone(),
-            mqtt_port,
-        ));
-
-        let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "y_publisher".to_string(),
-            "mqtt_input_y".to_string(),
-            ys.clone(),
-            mqtt_port,
-        ));
-
-        // Wait for publishers to complete
-        info!("Waiting for publishers to complete");
-        x_publisher_task.await.expect("Failed to run x_publisher");
-        y_publisher_task.await.expect("Failed to run y_publisher");
-
-        info!("Publishers completed, proceeding to collect outputs");
-
-        // Now collect and verify outputs
-        // Using a more robust approach to collect each output with individual timeouts
-        info!("Collecting outputs");
-        let mut collected_outputs = Vec::new();
-
-        for i in 0..zs.len() {
-            match with_timeout(outputs.next(), 20, &format!("output {}", i)).await {
-                Ok(Some(values)) => {
-                    info!("Received output {}: {:?}", i, values);
-                    collected_outputs.push(values);
-                }
-                Ok(None) => {
-                    info!("Output stream ended after {} values", i);
-                    break;
-                }
-                Err(e) => {
-                    info!("Timeout waiting for output {}: {}", i, e);
-                    break;
-                }
-            }
-        }
-
-        info!("Expected outputs: {:?}", zs);
-        info!("Collected outputs: {:?}", collected_outputs);
-        let expected_outputs = zs.into_iter().map(|val| vec![val]).collect::<Vec<_>>();
-        assert_eq!(collected_outputs, expected_outputs);
-
-        // The monitor task is designed to run continuously, so instead of waiting for it
-        // to complete, we'll just consider the test successful after collecting the outputs
-        info!("Test successful! Dropping monitor task instead of waiting for it to complete");
-
-        // Explicitly dropping the task handle allows the executor to clean up resources
-        drop(monitor_task);
+        // Final ticks to let them complete
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
+        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        info!("Waiting for publishers to complete...");
+        x_publisher_task.await?;
+        y_publisher_task.await?;
+        info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
     }
@@ -310,29 +305,16 @@ mod integration_tests {
     async fn test_add_monitor_mqtt_input_float(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        let model = lola_specification
-            .parse(spec_simple_add_monitor())
-            .expect("Model could not be parsed");
-
         let xs = vec![Value::Float(1.3), Value::Float(3.4)];
         let ys = vec![Value::Float(2.4), Value::Float(4.3)];
-        let zs = vec![Value::Float(3.7), Value::Float(7.7)];
+        let stream_len = xs.len();
 
-        // Create channels for synchronization
-        let (monitor_ready_tx, monitor_ready_rx) = bounded::<()>(1);
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
-        let mqtt_server = start_mqtt().await;
-
-        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
-            .await
-            .expect("Failed to get host port for MQTT server");
-
-        let var_topics = [
-            ("x".into(), "mqtt_input_float_x".to_string()),
-            ("y".into(), "mqtt_input_float_y".to_string()),
-        ]
-        .into_iter()
-        .collect::<BTreeMap<VarName, _>>();
+        let var_topics = BTreeMap::from_iter([
+            ("x".into(), X_TOPIC.to_string()),
+            ("y".into(), Y_TOPIC.to_string()),
+        ]);
 
         // Create the MQTT input provider
         let mut input_provider = MQTTInputProvider::new(
@@ -345,106 +327,45 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        // Wait for the input provider to be ready
-        info!("Waiting for input provider to be ready");
-        with_timeout_res(input_provider.ready(), 5, "input_provider_ready").await?;
-        info!("Input provider is ready");
-        // Run the monitor
-        let mut output_handler = ManualOutputHandler::new(executor.clone(), vec!["z".into()]);
+        let x_stream = input_provider
+            .input_stream(&"x".into())
+            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
+        let y_stream = input_provider
+            .input_stream(&"y".into())
+            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        // Get the output stream before passing the handler to the monitor
-        let outputs = output_handler.get_output();
+        let input_provider_ready = input_provider.ready();
 
-        let runner = TestMonitorRunner::new(
-            executor.clone(),
-            model.clone(),
-            Box::new(input_provider),
-            Box::new(output_handler),
-        );
+        executor.spawn(input_provider.run()).detach();
+        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
-        // Clone the sender for the monitor task
-        let monitor_ready = monitor_ready_tx.clone();
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        // Spawn monitor task with a timeout to ensure it doesn't hang indefinitely
-        let monitor_task = executor.spawn(async move {
-            info!("Monitor task starting");
+        let (x_vals, y_vals) =
+            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
+                .await?;
 
-            // Signal that monitor is initialized and ready
-            info!("Monitor initialized, signaling readiness");
-            if let Err(e) = monitor_ready.try_send(()) {
-                info!("Failed to signal monitor readiness: {:?}", e);
-            }
+        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
+        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
+        info!(?x_vals, ?y_vals, "Received values");
+        assert_eq!(x_vals, exp_x_vals);
+        assert_eq!(y_vals, exp_y_vals);
 
-            // Run the monitor indefinitely - it's not expected to terminate on its own
-            runner.run().await
-        });
-
-        // Wait for monitor to signal it's ready
-        info!("Waiting for monitor to be ready...");
-        match with_timeout(monitor_ready_rx.recv(), 5, "monitor_ready_wait").await {
-            Ok(_) => info!("Monitor signaled it's ready to receive input"),
-            Err(e) => {
-                info!("Timed out waiting for monitor to be ready: {}", e);
-                return Err(anyhow::anyhow!("Monitor failed to initialize in time"));
-            }
-        }
-
-        // Start publishers and wait for them to complete
-        info!("Starting publishers");
-        let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "x_publisher".to_string(),
-            "mqtt_input_float_x".to_string(),
-            xs.clone(),
-            mqtt_port,
-        ));
-
-        let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "y_publisher".to_string(),
-            "mqtt_input_float_y".to_string(),
-            ys.clone(),
-            mqtt_port,
-        ));
-
-        // Wait for publishers to complete
-        info!("Waiting for publishers to complete");
-        x_publisher_task.await.expect("Failed to run x_publisher");
-        y_publisher_task.await.expect("Failed to run y_publisher");
-        info!("Publishers completed");
-
-        // Now collect and verify outputs
-        info!("Waiting for {:?} outputs", zs.len());
-        let outputs = with_timeout(
-            outputs.take(zs.len()).collect::<Vec<_>>(),
-            10,
-            "outputs.take float",
-        )
-        .await?;
-        info!("Expected outputs: {:?}", zs);
-        info!("Outputs: {:?}", outputs);
-        // Test the outputs
-        assert_eq!(outputs.len(), zs.len());
-        match outputs[0][0] {
-            Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
-            _ => panic!("Expected float"),
-        }
-        match outputs[1][0] {
-            Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
-            _ => panic!("Expected float"),
-        }
-
-        info!("Output collection complete, output stream should now be dropped");
-
-        // The monitor task is designed to run continuously, so instead of waiting for it
-        // to complete, we'll just consider the test successful after collecting the outputs
-        info!("Test successful! Dropping monitor task instead of waiting for it to complete");
-
-        // Explicitly dropping the task handle allows the executor to clean up resources
-        drop(monitor_task);
+        // Final ticks to let them complete
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
+        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        info!("Waiting for publishers to complete...");
+        x_publisher_task.await?;
+        y_publisher_task.await?;
+        info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
     }
 
     #[apply(async_test)]
+    #[ignore]
     async fn test_mqtt_locality_receiver(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {

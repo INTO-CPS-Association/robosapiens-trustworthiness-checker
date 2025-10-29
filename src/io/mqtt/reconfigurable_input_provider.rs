@@ -228,9 +228,10 @@ impl InputProvider for ReconfMQTTInputProvider {
 }
 
 #[cfg(test)]
-mod container_tests {
+mod integration_tests {
     use async_stream::stream;
     use futures::StreamExt;
+    use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
     use std::vec;
@@ -244,17 +245,13 @@ mod container_tests {
     use crate::io::mqtt::{MqttFactory, ReconfMQTTInputProvider};
     use crate::{Value, VarName};
     use std::any::Any;
-    use tc_testutils::mqtt::{dummy_mqtt_publisher, dummy_stream_mqtt_publisher};
-    use tc_testutils::streams::with_timeout_res;
-    use tc_testutils::streams::{tick_stream, with_timeout};
+    use tc_testutils::mqtt::dummy_stream_mqtt_publisher;
+    use tc_testutils::streams::{
+        TickSender, interleave_with_constant, receive_values_serially, tick_stream, with_timeout,
+        with_timeout_res,
+    };
 
-    #[cfg(feature = "testcontainers")]
-    use async_compat::Compat as TokioCompat;
-    #[cfg(feature = "testcontainers")]
-    use tc_testutils::mqtt::start_mqtt;
-
-    #[cfg(not(feature = "testcontainers"))]
-    use rand::Rng;
+    // TODO: These tests should live with MQTT tests
 
     const MQTT_FACTORY: MqttFactory = if cfg!(feature = "testcontainers") {
         MqttFactory::Paho
@@ -265,6 +262,9 @@ mod container_tests {
     async fn start_mqtt_get_port() -> (Box<dyn Any>, u16) {
         #[cfg(feature = "testcontainers")]
         {
+            use async_compat::Compat as TokioCompat;
+            use tc_testutils::mqtt::start_mqtt;
+
             let mqtt_server = start_mqtt().await;
             let port = with_timeout_res(
                 TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
@@ -278,9 +278,61 @@ mod container_tests {
         }
         #[cfg(not(feature = "testcontainers"))]
         {
+            // Mock tests do not care about a client, but they need to run serially,
+            // forced with this lock. (Due to file writing)
+            async fn lock_test() -> futures::lock::MutexGuard<'static, ()> {
+                static TEST_MUTEX: std::sync::OnceLock<futures::lock::Mutex<()>> =
+                    std::sync::OnceLock::new();
+                TEST_MUTEX
+                    .get_or_init(|| futures::lock::Mutex::new(()))
+                    .lock()
+                    .await
+            }
+
+            use rand::Rng;
             let port = rand::rng().random();
-            (Box::new(()), port)
+            let lock = lock_test().await;
+            (Box::new(lock), port)
         }
+    }
+
+    fn generate_test_publisher_tasks(
+        executor: Rc<LocalExecutor<'static>>,
+        xs: Vec<Value>,
+        ys: Vec<Value>,
+        mqtt_port: u16,
+    ) -> (
+        (TickSender, smol::Task<anyhow::Result<()>>),
+        (TickSender, smol::Task<anyhow::Result<()>>),
+    ) {
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+
+        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+        let x_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "x_publisher".to_string(),
+                "mqtt_input_x".to_string(),
+                x_pub_stream,
+                xs.len(),
+                mqtt_port,
+            ),
+            5,
+            "x_publisher_task",
+        ));
+
+        let y_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "y_publisher".to_string(),
+                "mqtt_input_y".to_string(),
+                y_pub_stream,
+                ys.len(),
+                mqtt_port,
+            ),
+            5,
+            "y_publisher_task",
+        ));
+        ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
     }
 
     #[apply(async_test)]
@@ -289,7 +341,7 @@ mod container_tests {
     ) -> anyhow::Result<()> {
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
-        let expected: Vec<_> = xs.iter().cloned().zip(ys.iter().cloned()).collect();
+        let stream_len = xs.len();
 
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
@@ -328,41 +380,26 @@ mod container_tests {
         executor.spawn(input_provider.run()).detach();
         with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
-        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
-        let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "x_publisher".to_string(),
-            "mqtt_input_x".to_string(),
-            xs,
-            mqtt_port,
-        ));
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "y_publisher".to_string(),
-            "mqtt_input_y".to_string(),
-            ys,
-            mqtt_port,
-        ));
+        let (x_vals, y_vals) =
+            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
+                .await?;
 
-        let xs_fut = with_timeout(
-            x_stream.take(expected.len()).collect::<Vec<_>>(),
-            3,
-            "x_stream.take",
-        );
-        let ys_fut = with_timeout(
-            y_stream.take(expected.len()).collect::<Vec<_>>(),
-            10,
-            "y_stream.take",
-        );
-        let (x_vals, y_vals) = futures::try_join!(xs_fut, ys_fut)?;
-        let received: Vec<_> = x_vals.into_iter().zip(y_vals.into_iter()).collect();
+        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
+        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
+        info!(?x_vals, ?y_vals, "Received values");
+        assert_eq!(x_vals, exp_x_vals);
+        assert_eq!(y_vals, exp_y_vals);
 
-        info!("Received (x, y): {:?}", received);
-        assert_eq!(received, expected);
-
+        // Final ticks to let them complete
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        with_timeout_res(x_publisher_task, 5, "x_publisher_task").await?;
-        with_timeout_res(y_publisher_task, 5, "y_publisher_task").await?;
+        x_publisher_task.await?;
+        y_publisher_task.await?;
         info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
@@ -374,7 +411,6 @@ mod container_tests {
     ) -> anyhow::Result<()> {
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
-        let expected: Vec<_> = xs.iter().cloned().zip(ys.iter().cloned()).collect();
 
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
@@ -423,41 +459,25 @@ mod container_tests {
             .input_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
-        let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "x_publisher".to_string(),
-            "mqtt_input_x".to_string(),
-            xs,
-            mqtt_port,
-        ));
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
-            "y_publisher".to_string(),
-            "mqtt_input_y".to_string(),
-            ys,
-            mqtt_port,
-        ));
+        let (x_vals, y_vals) =
+            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, xs.len()).await?;
 
-        let xs_fut = with_timeout(
-            x_stream.take(expected.len()).collect::<Vec<_>>(),
-            10,
-            "x_stream.take",
-        );
-        let ys_fut = with_timeout(
-            y_stream.take(expected.len()).collect::<Vec<_>>(),
-            10,
-            "y_stream.take",
-        );
-        let (x_vals, y_vals) = futures::try_join!(xs_fut, ys_fut)?;
-        let received: Vec<_> = x_vals.into_iter().zip(y_vals.into_iter()).collect();
+        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
+        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
+        info!(?x_vals, ?y_vals, "Received values");
+        assert_eq!(x_vals, exp_x_vals);
+        assert_eq!(y_vals, exp_y_vals);
 
-        info!("Received (x, y): {:?}", received);
-        assert_eq!(received, expected);
-
+        // Final ticks to let them complete
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        with_timeout_res(x_publisher_task, 5, "x_publisher_task").await?;
-        with_timeout_res(y_publisher_task, 5, "y_publisher_task").await?;
+        x_publisher_task.await?;
+        y_publisher_task.await?;
         info!("All publishers completed, shutting down MQTT server");
 
         Ok(())
@@ -472,10 +492,6 @@ mod container_tests {
         let ys_expected = vec![Value::Int(3), Value::Int(4)];
 
         // We need control over when x and y is being published
-        let (mut x_tick, xs): (_, OutputStream<Value>) =
-            tick_stream(futures::stream::iter(xs_expected.clone()).boxed());
-        let (mut y_tick, ys): (_, OutputStream<Value>) =
-            tick_stream(futures::stream::iter(ys_expected.clone()).boxed());
 
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
@@ -513,36 +529,17 @@ mod container_tests {
             .input_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
 
-        let xs_expected_len = xs_expected.len();
-        let ys_expected_len = ys_expected.len();
-
-        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
-        let x_publisher_task = executor.spawn(async move {
-            dummy_stream_mqtt_publisher(
-                "x_publisher".to_string(),
-                "mqtt_input_x".to_string(),
-                xs,
-                xs_expected_len,
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(
+                executor.clone(),
+                xs_expected.clone(),
+                ys_expected.clone(),
                 mqtt_port,
-            )
-            .await
-            .expect("x_publisher failed")
-        });
+            );
 
-        // Not publishing until ticks arrive
-        let y_publisher_task = executor.spawn(async move {
-            dummy_stream_mqtt_publisher(
-                "y_publisher".to_string(),
-                "mqtt_input_y".to_string(),
-                ys,
-                ys_expected_len,
-                mqtt_port,
-            )
-            .await
-            .expect("y_publisher failed")
-        });
-        x_tick.send(()).await?; // Send first x
-        x_tick.send(()).await?; // Send second x
+        for _ in 0..xs_expected.len() {
+            x_tick.send(()).await?;
+        }
         let x_vals = with_timeout(
             x_stream.take(xs_expected.len()).collect::<Vec<_>>(),
             5,
@@ -551,21 +548,19 @@ mod container_tests {
         .await?;
         assert_eq!(x_vals, xs_expected);
 
-        r_tick.send(()).await.unwrap(); // Trigger reconf to y
-        //
+        r_tick.send(()).await?; // Trigger reconf to y
+
         // Wait for reconf request to be processed.
         // (Without this, the outcome depends on how the Executor happens to run things)
-        smol::Timer::after(std::time::Duration::from_secs(1)).await;
+        smol::Timer::after(std::time::Duration::from_millis(200)).await;
 
         let y_stream = input_provider
             .input_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
         for _ in 0..ys_expected.len() {
-            // Send all the ys and +1 to let the stream complete
             y_tick.send(()).await?;
         }
-
         let y_vals = with_timeout(
             y_stream.take(ys_expected.len()).collect::<Vec<_>>(),
             5,
@@ -574,14 +569,13 @@ mod container_tests {
         .await?;
         assert_eq!(y_vals, ys_expected);
 
-        // Final ticks to let streams end:
+        // Final ticks to let them complete
         x_tick.send(()).await?;
         y_tick.send(()).await?;
-
         // Wait for publishers to complete and then shutdown MQTT server to terminate connections
         info!("Waiting for publishers to complete...");
-        with_timeout(x_publisher_task, 5, "x_publisher_task").await?;
-        with_timeout(y_publisher_task, 5, "y_publisher_task").await?;
+        x_publisher_task.await?;
+        y_publisher_task.await?;
         info!("All publishers completed, shutting down MQTT server");
 
         Ok(())

@@ -13,12 +13,12 @@ fn input_file_data_iter(
     data: UntimedInputFileData,
     key: VarName,
 ) -> Box<dyn Iterator<Item = Value> + 'static> {
-    let max_key = data.keys().max();
-    if let Some(max_key) = max_key {
+    let max_index = data.keys().max();
+    if let Some(max_key) = max_index {
         Box::new((0..=*max_key).map(move |time| {
             data.get(&time)
                 .and_then(|data_for_time| data_for_time.get(&key).cloned())
-                .unwrap_or(Value::Deferred)
+                .unwrap_or(Value::NoVal)
         }))
     } else {
         Box::new(std::iter::empty())
