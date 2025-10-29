@@ -450,7 +450,7 @@ mod integration_tests {
 
         // Wait for reconf request to be processed.
         // (Without this, the outcome depends on how the Executor happens to run things)
-        smol::Timer::after(std::time::Duration::from_secs(1)).await;
+        smol::Timer::after(std::time::Duration::from_millis(200)).await;
 
         let x_stream = input_provider
             .input_stream(&"x".into())

@@ -111,13 +111,13 @@ pub async fn receive_values_serially<ValueType>(
     // Send one x_tick, wait for response. Send one y_tick, wait for response.
     let (mut x_vals, mut y_vals): (Vec<ValueType>, Vec<ValueType>) = (vec![], vec![]);
     for _ in 0..stream_len {
-        x_tick.send(()).await?;
+        with_timeout_res(x_tick.send(()), 3, "x_tick.send").await?;
         let x_val = with_timeout(x_sub_stream.next(), 3, "x_sub_stream.next").await;
         let y_val = with_timeout(y_sub_stream.next(), 3, "y_sub_stream.next").await;
         x_vals.push(x_val?.expect("x_sub_stream ended"));
         y_vals.push(y_val?.expect("y_sub_stream ended"));
 
-        y_tick.send(()).await?;
+        with_timeout_res(y_tick.send(()), 3, "y_tick.send").await?;
         let x_val = with_timeout(x_sub_stream.next(), 3, "x_sub_stream.next").await;
         let y_val = with_timeout(y_sub_stream.next(), 3, "y_sub_stream.next").await;
         x_vals.push(x_val?.expect("x_sub_stream ended"));

@@ -2,6 +2,7 @@ pub(crate) mod common {
     use std::{collections::BTreeMap, rc::Rc};
 
     use async_cell::unsync::AsyncCell;
+    use futures::future;
     use futures::future::LocalBoxFuture;
     use tracing::{debug, info, warn};
 
@@ -288,14 +289,18 @@ pub(crate) mod common {
                 .await
                 .map_err(|_| anyhow::anyhow!("Failed to send value"))?;
 
-            // Forward NoVal to other senders to allow async evaluation
-            for (other_var, other_sender) in senders.iter_mut() {
-                if other_var != var {
-                    other_sender
-                        .send(Value::NoVal)
-                        .await
-                        .map_err(|_| anyhow::anyhow!("Failed to send NoVal"))?;
-                }
+            // Send `NoVal` to all other senders concurrently
+            let futs = senders
+                .iter_mut()
+                .filter(|(name, _)| *name != var)
+                .map(|(_, s)| s.send(Value::NoVal));
+
+            // Run them all concurrently
+            let results = future::join_all(futs).await;
+
+            // Check for errors
+            if results.iter().any(|r| r.is_err()) {
+                anyhow::bail!("Failed to send NoVal");
             }
 
             Ok(())
