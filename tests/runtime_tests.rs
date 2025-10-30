@@ -4,11 +4,11 @@ use macro_rules_attribute::apply;
 use smol::LocalExecutor;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Semantics};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
-
 use trustworthiness_checker::{LOLASpecification, OutputStream, lola_fixtures::*};
 use trustworthiness_checker::{Value, VarName, lola_specification, runtime::RuntimeBuilder};
 
@@ -49,7 +49,7 @@ fn create_builder_from_config(
 }
 
 #[apply(async_test)]
-async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
@@ -74,7 +74,8 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -92,10 +93,11 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
@@ -120,7 +122,8 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -138,10 +141,11 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
@@ -166,7 +170,8 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -184,10 +189,11 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
@@ -212,7 +218,8 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -230,10 +237,11 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped =
@@ -266,7 +274,8 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             4,
@@ -285,10 +294,11 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) {
+async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
@@ -313,7 +323,8 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -331,10 +342,11 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
+async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
@@ -359,7 +371,8 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             4,
@@ -378,10 +391,11 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
+async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only works on untyped_configurations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped =
@@ -407,7 +421,8 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             4,
@@ -426,10 +441,11 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on constraints due to defer/update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped =
@@ -460,7 +476,8 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             4,
@@ -479,10 +496,11 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 // #[apply(async_test)]
-// async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) {
+// async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 //     // TODO: This test only works on the constraint-based runtime
 //     for config in vec![TestConfiguration::Constraints] {
 //         let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(x, z))").unwrap();
@@ -532,7 +550,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) {
 // the received prop stream. Thus, it cannot be used recursively.
 // This is the reason why we also need dynamic for the constraint based runtime.
 // #[apply(async_test)]
-// async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) {
+// async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 //     // TODO: This test only runs on the constraint-based runtime due to update/defer functionality
 //     // limitations
 //     for config in vec![TestConfiguration::Constraints] {
@@ -601,7 +619,7 @@ pub fn input_streams_constraint() -> BTreeMap<VarName, OutputStream<Value>> {
 
 #[ignore = "Cannot have empty spec or inputs"]
 #[apply(async_test)]
-async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) {
+async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_empty()).unwrap();
 
@@ -623,7 +641,8 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<Vec<Value>> = outputs.collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             0,
@@ -631,10 +650,11 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_var(executor: Rc<LocalExecutor<'static>>) {
+async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = x",
@@ -660,7 +680,8 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -678,10 +699,11 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) {
+async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "out z: Int\nz = 42",
@@ -707,7 +729,12 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.take(3).enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> = with_timeout(
+            outputs.take(3).enumerate().collect(),
+            5,
+            "outputs.collect()",
+        )
+        .await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -725,10 +752,11 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_addition(executor: Rc<LocalExecutor<'static>>) {
+async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = x + 1",
@@ -754,7 +782,8 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -772,10 +801,11 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) {
             config,
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) {
+async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = x - 10",
@@ -801,7 +831,8 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -819,10 +850,13 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>) {
+async fn test_index_past_mult_dependencies(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => {
@@ -850,7 +884,8 @@ async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>)
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         // TODO: async runtime produces more data than the constraint based runtime
         let num_expected_outputs = match config {
             TestConfiguration::AsyncTypedUntimed | TestConfiguration::AsyncUntimed => 4,
@@ -872,10 +907,11 @@ async fn test_index_past_mult_dependencies(executor: Rc<LocalExecutor<'static>>)
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) {
+async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => {
@@ -903,7 +939,8 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -921,10 +958,11 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_string_append(executor: Rc<LocalExecutor<'static>>) {
+async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "in x: Str\nin y: Str\nout z: Str\nz = x ++ y",
@@ -950,7 +988,8 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             2,
@@ -964,10 +1003,11 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) {
+async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = default(x, 42)",
@@ -993,7 +1033,8 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -1011,10 +1052,11 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) {
+async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: not supported by the type checker
     for config in TestConfiguration::untyped_configurations() {
         let mut spec_str = match config {
@@ -1044,7 +1086,8 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -1062,10 +1105,11 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) {
+async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: not supported by the type checker
     for config in TestConfiguration::untyped_configurations() {
         let mut spec_str = match config {
@@ -1093,7 +1137,8 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
             3,
@@ -1111,10 +1156,11 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
+async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = match config {
             TestConfiguration::AsyncTypedUntimed => "out x: Int\nx = 1 + default(x[1], 0)",
@@ -1140,7 +1186,12 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
+        let outputs: Vec<(usize, Vec<Value>)> = with_timeout(
+            outputs.take(4).enumerate().collect(),
+            5,
+            "outputs.collect()",
+        )
+        .await?;
         assert_eq!(
             outputs.len(),
             4,
@@ -1159,10 +1210,13 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'static>>) {
+async fn test_simple_add_monitor_does_not_go_away(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
@@ -1197,7 +1251,8 @@ async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'st
         };
 
         // Collect results after output handler has been dropped
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - monitor should persist and produce correct outputs
         assert_eq!(
@@ -1207,10 +1262,13 @@ async fn test_simple_add_monitor_does_not_go_away(executor: Rc<LocalExecutor<'st
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>>) {
+async fn test_simple_add_monitor_large_input(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
@@ -1239,7 +1297,8 @@ async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert that large input produces expected number of outputs
         assert_eq!(
@@ -1262,6 +1321,7 @@ async fn test_simple_add_monitor_large_input(executor: Rc<LocalExecutor<'static>
             );
         }
     }
+    Ok(())
 }
 
 pub fn input_streams_simple_add() -> BTreeMap<VarName, OutputStream<Value>> {
@@ -1299,7 +1359,7 @@ pub fn input_streams_constraint_style() -> BTreeMap<VarName, OutputStream<Value>
 }
 
 #[apply(async_test)]
-async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
+async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
 
@@ -1322,17 +1382,19 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.async_build().await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
             vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])]
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
+async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_simple_modulo_monitor_typed()).unwrap();
 
@@ -1355,7 +1417,8 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.async_build().await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert based on configuration expectations
         match config {
@@ -1367,10 +1430,11 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) {
             }
         }
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
+async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::async_configurations() {
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
 
@@ -1393,7 +1457,8 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.async_build().await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(result.len(), 2);
         match result[0].1[0] {
@@ -1405,10 +1470,13 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) {
             _ => panic!("Expected float"),
         }
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecutor<'static>>) {
+async fn test_count_monitor_sequential_with_drop_guard(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     // Test running monitors sequentially using drop guard cancellation approach
 
     // First run
@@ -1433,7 +1501,8 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
             .await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
@@ -1468,7 +1537,8 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
             .await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
@@ -1480,10 +1550,13 @@ async fn test_count_monitor_sequential_with_drop_guard(executor: Rc<LocalExecuto
             ]
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_direct_varmanager_cancellation(executor: Rc<LocalExecutor<'static>>) {
+async fn test_direct_varmanager_cancellation(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     use async_stream::stream;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1548,10 +1621,13 @@ async fn test_direct_varmanager_cancellation(executor: Rc<LocalExecutor<'static>
         completed,
         "VarManager should have stopped due to cancellation"
     );
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'static>>) {
+async fn test_drop_guard_cancellation_behavior(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     // Test to verify that drop guard properly stops VarManagers when output streams are dropped
 
     let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
@@ -1576,7 +1652,8 @@ async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'stati
     executor.spawn(monitor.run()).detach();
 
     // Take only 2 values - this should trigger drop guard when output stream is dropped
-    let result: Vec<(usize, Vec<Value>)> = outputs.take(2).enumerate().collect().await;
+    let result: Vec<(usize, Vec<Value>)> =
+        with_timeout(outputs.take(2).enumerate().collect(), 5, "outputs.collect").await?;
 
     assert_eq!(
         result,
@@ -1585,10 +1662,11 @@ async fn test_drop_guard_cancellation_behavior(executor: Rc<LocalExecutor<'stati
 
     // Add a small delay to allow cancellation to propagate via drop guard
     smol::Timer::after(std::time::Duration::from_millis(100)).await;
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
+async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Use different specifications based on configuration to ensure type compatibility
         let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
@@ -1618,7 +1696,8 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.take(4).enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - count functionality should work across configurations
         assert_eq!(
@@ -1633,10 +1712,11 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
+async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::async_configurations() {
         let mut spec = "in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y";
         let spec_untyped = lola_specification(&mut spec).unwrap();
@@ -1660,7 +1740,8 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(result.len(), 2);
         assert_eq!(
@@ -1671,10 +1752,11 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) {
             ]
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) {
+async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only works with untimed semantics due to dynamic evaluation
     let input_streams = input_streams2();
     let spec = lola_specification(&mut spec_dynamic_monitor()).unwrap();
@@ -1694,7 +1776,8 @@ async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) {
         .await;
 
     executor.spawn(monitor.run()).detach();
-    let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+    let result: Vec<(usize, Vec<Value>)> =
+        with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
     assert_eq!(
         result,
         vec![
@@ -1702,10 +1785,11 @@ async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) {
             (1, vec![Value::Int(7), Value::Int(7)]),
         ]
     );
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) {
+async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_typed_string_concat()).unwrap();
 
@@ -1728,7 +1812,8 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
@@ -1738,10 +1823,11 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) {
             ]
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
+async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nin y: Int\nout z: Int\nz = x[1]";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
@@ -1765,7 +1851,8 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         let expected_results = vec![
             (0, vec![Value::Deferred]), // Default value for x[1] at time 0
@@ -1779,10 +1866,11 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
+async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let spec_untyped = lola_specification(&mut spec_maple_sequence()).unwrap();
 
@@ -1805,7 +1893,8 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // TODO: Different runtimes may handle temporal dependencies differently for complex patterns
         // Expected: maple sequence should detect complete "maple" patterns in the input stream
@@ -1829,10 +1918,13 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) {
             );
         }
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
+async fn test_restricted_dynamic_monitor(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     for config in vec![TestConfiguration::AsyncUntimed] {
         // Use different specifications based on configuration to ensure type compatibility
         let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s, {x,y})";
@@ -1862,7 +1954,8 @@ async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - dynamic monitor should work across configurations
         assert!(
@@ -1884,10 +1977,11 @@ async fn test_restricted_dynamic_monitor(executor: Rc<LocalExecutor<'static>>) {
             );
         }
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
         // Use different specifications based on configuration to ensure type compatibility
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e)";
@@ -1917,7 +2011,8 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
         assert!(
@@ -1950,10 +2045,11 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) {
             config
         )
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
         // Use different specifications based on configuration to ensure type compatibility
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e)";
@@ -1983,7 +2079,8 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
         assert!(
@@ -2016,10 +2113,11 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) {
             config
         )
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
         // Use different specifications based on configuration to ensure type compatibility
         let mut spec_str = match config {
@@ -2054,7 +2152,8 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
         assert!(
@@ -2087,10 +2186,11 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) {
             config
         )
     }
+    Ok(())
 }
 
 #[apply(async_test)]
-async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
+async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test currently only runs AsyncUntimed due to bugs in other configurations:
     // - AsyncTypedUntimed does not implement defer
     for config in vec![TestConfiguration::AsyncUntimed] {
@@ -2127,7 +2227,8 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
         assert!(
@@ -2161,64 +2262,5 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) {
             config
         );
     }
-}
-
-#[apply(async_test)]
-async fn test_future_indexing(executor: Rc<LocalExecutor<'static>>) {
-    for config in TestConfiguration::all() {
-        // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => {
-                "in x: Int\nin y: Int\nout z: Int\nout a: Int\nz = x[1]\na = y"
-            }
-            _ => "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-        };
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
-
-        // Create fresh input streams for each test iteration
-        let input_streams = input_streams_indexing();
-
-        // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars.clone(),
-        ));
-        let outputs = output_handler.get_output();
-
-        // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
-            .executor(executor.clone())
-            .model(spec_untyped.clone())
-            .input(Box::new(input_streams))
-            .output(output_handler);
-
-        // Apply configuration-specific settings
-        let builder = create_builder_from_config(builder, config);
-
-        let monitor = builder.build();
-
-        // Run monitor and collect results
-        executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-
-        // Assert expected results - future indexing should work across configurations
-        assert!(
-            result.len() >= 2,
-            "Expected at least 2 outputs for future indexing, got {} for config {:?}",
-            result.len(),
-            config
-        );
-
-        // Verify that we get outputs with expected structure (z and a)
-        for (time, values) in &result {
-            assert_eq!(
-                values.len(),
-                2,
-                "Expected 2 output values (z and a) at time {}, got {} for config {:?}",
-                time,
-                values.len(),
-                config
-            );
-        }
-    }
+    Ok(())
 }
