@@ -2264,3 +2264,64 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     }
     Ok(())
 }
+
+#[apply(async_test)]
+#[ignore = "Bug in Defer here. It should not have enough context to resolve the variable at T=2."]
+async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
+    for config in TestConfiguration::untyped_configurations() {
+        // Use different specifications based on configuration to ensure type compatibility
+        let mut spec_str = match config {
+            TestConfiguration::AsyncTypedUntimed => {
+                "in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e)\nz2 = dynamic(e)"
+            }
+            _ => "in x\nin e\nout z1\nout z2\nz1 = defer(e)\nz2 = dynamic(e)",
+        };
+        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+
+        // Create fresh input streams for each test iteration
+        let input_streams = input_streams_defer_comp_dynamic();
+
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.build();
+
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
+
+        for (time, values) in &result {
+            assert_eq!(
+                values.len(),
+                2,
+                "Expected 2 output values (z1 and z2) at time {}, got {} for config {:?}",
+                time,
+                values.len(),
+                config
+            );
+
+            let (v_defer, v_dynamic) = (&values[0], &values[1]);
+            assert_eq!(
+                v_defer, v_dynamic,
+                "Expected defer and dynamic outputs to match at time {}, got {:?} and {:?} for config {:?}.\nFull values:\n{:?}",
+                time, v_defer, v_dynamic, config, result
+            );
+        }
+    }
+    Ok(())
+}

@@ -644,3 +644,28 @@ pub fn input_streams_simple_add(size: usize) -> BTreeMap<VarName, OutputStream<V
     );
     input_streams
 }
+
+#[allow(dead_code)]
+pub fn input_streams_defer_comp_dynamic() -> impl InputProvider<Val = Value> {
+    let mut input_streams = BTreeMap::new();
+
+    // Create x stream with values 1 through 100
+    input_streams.insert(
+        "x".into(),
+        Box::pin(futures::stream::iter((0..5).map(Value::Int))) as OutputStream<Value>,
+    );
+
+    // Create e stream with the defer expression
+    input_streams.insert(
+        "e".into(),
+        Box::pin(futures::stream::iter((0..5).map(|i| {
+            if i == 1 {
+                Value::Str("x[2]".into())
+            } else {
+                Value::Deferred
+            }
+        }))) as OutputStream<Value>,
+    );
+
+    input_streams
+}
