@@ -772,7 +772,7 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         // TODO: Use the real test values
         // let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
-        let e = vec!["x + 1".into(), Value::Deferred, Value::Deferred];
+        let e = vec!["x + 1".into(), Value::NoVal, Value::NoVal];
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),

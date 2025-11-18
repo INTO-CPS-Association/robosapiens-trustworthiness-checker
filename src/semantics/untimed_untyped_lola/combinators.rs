@@ -451,18 +451,28 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
 
 pub fn dynamic<Ctx: StreamContext<Value>, Parser>(
     ctx: &Ctx,
-    mut eval_stream: OutputStream<Value>,
+    eval_stream: OutputStream<Value>,
     vs: Option<EcoVec<VarName>>,
     history_length: usize,
 ) -> OutputStream<Value>
 where
     Parser: ExprParser<SExpr> + 'static,
 {
+    // Note: Slight change in dynamic's behavior after language became async and we introduced
+    // NoVal. Consider the following behavior:
+    // eval_stream yields 42
+    // eval_stream yields Deferred
+    // Before the change, dynamic would evaluate to (42, 42), but now it evaluates
+    // to (42, Deferred).
+    // This is a design decision, but it is more flexible for scenarios where we have, e.g. nested
+    // DUPs. If one wants the old behavior, one can write z = default(dynamic(e), z[-1])
+
     // Create a subcontext with a history window length
     let mut subcontext = match vs {
         Some(vs) => ctx.restricted_subcontext(vs, history_length),
         None => ctx.subcontext(history_length),
     };
+    let mut eval_stream = stream_lift_base(eval_stream);
 
     // Build an output stream for dynamic of x over the subcontext
     Box::pin(stream! {
@@ -476,11 +486,10 @@ where
         }
         let mut prev_data: Option<PrevData> = None;
         while let Some(current) = eval_stream.next().await {
-            // If we have a previous value and it is the same as the current
-            // value or if the current value is deferred (not provided),
-            // continue using the existing stream as our output
+            // If we have a previous value and it is the same as the current value (no need to
+            // repeat evaluation), then continue using the existing stream as our output
             if let Some(prev_data) = &mut prev_data {
-                if prev_data.eval_val == current || current == Value::Deferred {
+                if prev_data.eval_val == current {
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
                     subcontext.tick().await;
@@ -493,17 +502,25 @@ where
                     }
                 }
             }
+            // This match only happens if we have a new Str to evaluate, received Deferred or if we
+            // do not have a `prev_data.eval_output_stream` to evaluate from
             match current {
                 Value::Deferred => {
                     // Consume a sample from the subcontext but return Deferred
                     subcontext.tick().await;
                     yield Value::Deferred;
                 }
+                Value::NoVal => {
+                    // Consume a sample from the subcontext but return NoVal
+                    subcontext.tick().await;
+                    yield Value::NoVal;
+                }
                 Value::Str(s) => {
                     let expr = Parser::parse(&mut s.as_ref())
                         .expect("Invalid dynamic str");
                     debug!("Dynamic evaluated to expression {:?}", expr);
-                    let mut eval_output_stream = UntimedLolaSemantics::<Parser>::to_async_stream(expr, &subcontext);
+                    let eval_output_stream = UntimedLolaSemantics::<Parser>::to_async_stream(expr, &subcontext);
+                    let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
                     subcontext.tick().await;
@@ -547,13 +564,11 @@ pub fn defer<Parser>(
 where
     Parser: ExprParser<SExpr> + 'static,
 {
-    /* Subcontext with current values only*/
     let mut subcontext = ctx.subcontext(history_length);
-    // let mut prog = subcontext.progress_sender.subscriber();
-
     Box::pin(stream! {
         let mut eval_output_stream: Option<OutputStream<Value>> = None;
         let mut i = 0;
+        let mut prev_received_deferred = false;
 
         // Yield Deferred until we have a value to evaluate, then evaluate it
         while let Some(current) = prop_stream.next().await {
@@ -570,13 +585,31 @@ where
                 }
                 Value::Deferred => {
                     // Consume a sample from the subcontext but return Deferred
-                    info!("Defer waiting on deferred");
+                    info!("defer combinator receieved Deferred");
                     if i >= history_length {
                         info!(?i, ?history_length, "Advancing subcontext to clean history");
                         subcontext.tick().await;
                     }
                     i += 1;
+                    prev_received_deferred = true;
                     yield Value::Deferred;
+                }
+                Value::NoVal => {
+                    // Consume a sample from the subcontext but return NoVal
+                    info!("defer combinator receieved NoVal");
+                    if i >= history_length {
+                        info!(?i, ?history_length, "Advancing subcontext to clean history");
+                        subcontext.tick().await;
+                    }
+                    i += 1;
+
+                    // Deferred is sticky compared to NoVal, since Deferred indicates that we have
+                    // a pending property that cannot be evaluated yet with the given context.
+                    if prev_received_deferred {
+                        yield Value::Deferred;
+                    } else {
+                        yield Value::NoVal;
+                    }
                 }
                 _ => panic!("Invalid defer property type {:?}", current)
             }
@@ -587,7 +620,6 @@ where
             // Wind forward the stream to the current time
             let time_progressed = i.min(history_length);
             debug!(?i, ?time_progressed, ?history_length, "Time progressed");
-            // subcontext.tick();
             let mut eval_output_stream = eval_output_stream.skip(time_progressed);
 
             // Yield the saved value until the inner stream is done
@@ -600,11 +632,16 @@ where
 
 // Evaluates to the l.h.s. until the r.h.s. provides a value.
 // Then continues evaluating the r.h.s. (even if it provides Deferred)
-pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn update(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
+    let mut y = stream_lift_base(y);
     Box::pin(stream! {
         while let (Some(x_val), Some(y_val)) = join!(x.next(), y.next()) {
             match (x_val, y_val) {
                 (x_val, Value::Deferred) => {
+                    yield x_val;
+                }
+                (x_val, Value::NoVal) => {
                     yield x_val;
                 }
                 (_, y_val) => {
@@ -620,22 +657,29 @@ pub fn update(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputS
 }
 
 // Evaluates to a placeholder stream whenever Deferred is received.
+//
+// Note: Intentionally does not default to new value with NoVal - if we want this then we can
+// implement a specific combinator for it.
 pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<Value> {
+    let x = stream_lift_base(x);
     let xs = x
         .zip(d)
         .map(|(x, d)| if x == Value::Deferred { d } else { x });
     Box::pin(xs) as LocalBoxStream<'static, Value>
 }
 
+// TODO: Should change to an operator called is_deferred and negate the logic...
 pub fn is_defined(x: OutputStream<Value>) -> OutputStream<Value> {
+    let x = stream_lift_base(x);
     Box::pin(x.map(|x| Value::Bool(x != Value::Deferred)))
 }
 
 // Could also be implemented with is_defined but I think this is more efficient
-pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn when(x: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
     Box::pin(stream! {
         while let Some(x_val) = x.next().await {
-            if x_val == Value::Deferred {
+            if x_val == Value::Deferred || x_val == Value::NoVal {
                 yield Value::Bool(false);
             } else {
                 yield Value::Bool(true);
@@ -648,7 +692,12 @@ pub fn when(mut x: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
-pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
+pub fn list(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
+    let mut xs = xs
+        .into_iter()
+        .map(|x| stream_lift_base(x))
+        .collect::<Vec<_>>();
+
     Box::pin(stream! {
         if xs.is_empty() {
             Value::List(EcoVec::new());
@@ -664,7 +713,9 @@ pub fn list(mut xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     })
 }
 
-pub fn lindex(mut x: OutputStream<Value>, mut i: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lindex(x: OutputStream<Value>, i: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
+    let mut i = stream_lift_base(i);
     Box::pin(stream! {
         while let (Some(l), Some(idx)) = join!(x.next(), i.next()){
             match (l, idx) {
@@ -686,7 +737,9 @@ pub fn lindex(mut x: OutputStream<Value>, mut i: OutputStream<Value>) -> OutputS
     })
 }
 
-pub fn lappend(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lappend(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
+    let mut y = stream_lift_base(y);
     Box::pin(stream! {
         while let (Some(l), Some(val)) = join!(x.next(), y.next()){
             match l {
@@ -700,7 +753,9 @@ pub fn lappend(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> Output
     })
 }
 
-pub fn lconcat(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lconcat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
+    let mut y = stream_lift_base(y);
     Box::pin(stream! {
         while let (Some(l1), Some(l2)) = join!(x.next(), y.next()){
             match (l1, l2) {
@@ -714,7 +769,8 @@ pub fn lconcat(mut x: OutputStream<Value>, mut y: OutputStream<Value>) -> Output
     })
 }
 
-pub fn lhead(mut x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lhead(x: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
     Box::pin(stream! {
         while let Some(l) = x.next().await {
             match l {
@@ -731,7 +787,8 @@ pub fn lhead(mut x: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
-pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn ltail(x: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
     Box::pin(stream! {
         while let Some(l) = x.next().await {
             match l {
@@ -748,7 +805,8 @@ pub fn ltail(mut x: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
-pub fn llen(mut x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn llen(x: OutputStream<Value>) -> OutputStream<Value> {
+    let mut x = stream_lift_base(x);
     Box::pin(stream! {
         while let Some(l) = x.next().await {
             match l {
@@ -761,7 +819,12 @@ pub fn llen(mut x: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
-pub fn map(mut xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> {
+pub fn map(xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> {
+    let mut xs = xs
+        .into_iter()
+        .map(|(k, v)| (k, stream_lift_base(v)))
+        .collect::<BTreeMap<_, _>>();
+
     Box::pin(stream! {
         if xs.is_empty() {
             Value::Map(BTreeMap::new());
@@ -785,7 +848,8 @@ pub fn map(mut xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Val
     })
 }
 
-pub fn mget(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+pub fn mget(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+    let mut xs = stream_lift_base(xs);
     Box::pin(stream! {
         while let Some(val) = xs.next().await {
             match val {
@@ -802,7 +866,8 @@ pub fn mget(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
     })
 }
 
-pub fn mremove(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+pub fn mremove(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+    let mut xs = stream_lift_base(xs);
     Box::pin(stream! {
         while let Some(val) = xs.next().await {
             match val {
@@ -817,10 +882,11 @@ pub fn mremove(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value>
 }
 
 pub fn minsert(
-    mut xs: OutputStream<Value>,
+    xs: OutputStream<Value>,
     k: EcoString,
     mut v: OutputStream<Value>,
 ) -> OutputStream<Value> {
+    let mut xs = stream_lift_base(xs);
     Box::pin(stream! {
         while let (Some(m_val), Some(val)) = join!(xs.next(), v.next()) {
             match m_val {
@@ -834,7 +900,8 @@ pub fn minsert(
     })
 }
 
-pub fn mhas_key(mut xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+pub fn mhas_key(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+    let mut xs = stream_lift_base(xs);
     Box::pin(stream! {
         while let Some(val) = xs.next().await {
             match val {
@@ -893,7 +960,7 @@ pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+mod combinator_tests {
     use super::*;
     use crate::async_test;
     use crate::core::Value;
@@ -987,9 +1054,44 @@ mod tests {
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
-        // Continues evaluating to x+1 until we get a non-deferred value
-        let exp: Vec<Value> = vec![2.into(), 3.into(), 5.into()];
+        // Evaluates to Deferred when we get Deferred
+        // (Think can happen e.g., with nested DUPs)
+        let exp: Vec<Value> = vec![2.into(), Value::Deferred, 5.into()];
         assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    #[ignore = "Bug with dynamic not updating the dependency graph correctly"]
+    async fn test_dynamic_history_dependency_graph(executor: Rc<LocalExecutor<'static>>) {
+        // Tests that dynamic correctly updates the dependency graph.
+        // See comments below
+
+        let e: OutputStream<Value> = Box::pin(stream::iter([
+            "x".into(),
+            "x[1]".into(), // Introduces saving x history one step back
+            "x[2]".into(), // Introduces saving x history two steps back
+            Value::NoVal,
+            Value::NoVal,
+        ]));
+        let x = Box::pin(stream::iter(vec![
+            1.into(),
+            2.into(),
+            3.into(),
+            4.into(),
+            5.into(),
+        ]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        let exp: Vec<Value> = vec![
+            1.into(),
+            Value::Deferred, // Deferred because x at time 0 is not in memory
+            Value::Deferred, // Deferred because x at time 0 is not in memory
+            2.into(),        // x at time 1 is in memory - should be solvable
+            3.into(),
+        ];
+        assert_eq!(res, exp);
     }
 
     #[apply(async_test)]
@@ -1004,6 +1106,7 @@ mod tests {
         let exp: Vec<Value> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
     }
+
     #[apply(async_test)]
     async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
         // This test is interesting since we use x twice in the dynamic strings
@@ -1542,6 +1645,357 @@ mod tests {
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         let res: Vec<Value> = mhas_key(map(m), "z".into()).collect().await;
         let exp: Vec<Value> = vec![false.into(), false.into()];
+        assert_eq!(res, exp);
+    }
+}
+
+#[cfg(test)]
+mod noval_tests {
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::async_test;
+    use crate::core::Value;
+    use crate::runtime::asynchronous::Context;
+    use futures::stream;
+    use macro_rules_attribute::apply;
+    use smol::LocalExecutor;
+
+    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+
+    #[apply(async_test)]
+    async fn test_dynamic_noval_start(executor: Rc<LocalExecutor<'static>>) {
+        let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
+        let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_dynamic_noval_middle(executor: Rc<LocalExecutor<'static>>) {
+        let e: OutputStream<Value> =
+            Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        // Continues evaluating to x + 1 until we get a non-deferred value
+        let exp: Vec<Value> = vec![2.into(), 3.into(), 42.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_dynamic_deferred_sticky(executor: Rc<LocalExecutor<'static>>) {
+        // Tests that deferred is treated as the new "dynamic value" when coming after NoVal
+        let e: OutputStream<Value> = Box::pin(stream::iter([
+            Value::NoVal,
+            Value::Deferred,
+            Value::NoVal,
+            "x".into(),
+            Value::Deferred,
+            Value::NoVal,
+        ]));
+        let x = Box::pin(stream::iter(vec![
+            1.into(),
+            2.into(),
+            3.into(),
+            4.into(),
+            5.into(),
+            6.into(),
+        ]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        let exp: Vec<Value> = vec![
+            Value::NoVal,
+            Value::Deferred,
+            Value::Deferred,
+            4.into(),
+            Value::Deferred,
+            Value::Deferred,
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_dynamic_history_indexing(executor: Rc<LocalExecutor<'static>>) {
+        // Tests a complex scenario with NoVal, Deferred, and indexing into x
+        // First a NoVal. Then x[1] with not enough context produces Deferred.
+        // Then we can yield from x[1]. Then the property becomes x followed by Deferred,
+        // which we can of course yield from. When we get x[1] again, we once more do not have
+        // enough context. Finally, a NoVal, which makes us yield x[1].
+
+        let e: OutputStream<Value> = Box::pin(stream::iter([
+            Value::NoVal,
+            "x[1]".into(),
+            Value::NoVal,
+            "x".into(),
+            Value::Deferred,
+            "x[1]".into(),
+            Value::NoVal,
+        ]));
+        let x = Box::pin(stream::iter(vec![
+            1.into(),
+            2.into(),
+            3.into(),
+            4.into(),
+            5.into(),
+            6.into(),
+            7.into(),
+        ]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        let exp: Vec<Value> = vec![
+            Value::NoVal,
+            Value::Deferred,
+            2.into(),
+            4.into(),
+            Value::Deferred,
+            Value::Deferred,
+            6.into(),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_noval_start(executor: Rc<LocalExecutor<'static>>) {
+        let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
+        let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = defer::<Parser>(&ctx, e, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_noval_middle(executor: Rc<LocalExecutor<'static>>) {
+        let e: OutputStream<Value> =
+            Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
+        let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = defer::<Parser>(&ctx, e, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        // Continues evaluating to x + 1
+        let exp: Vec<Value> = vec![2.into(), 3.into(), 4.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_deferred_sticky(executor: Rc<LocalExecutor<'static>>) {
+        // Tests that deferred is treated as the new "defer value" when coming after NoVal
+        let e: OutputStream<Value> = Box::pin(stream::iter([
+            Value::NoVal,
+            Value::Deferred,
+            Value::NoVal,
+            "x".into(),
+            Value::Deferred,
+            Value::NoVal,
+        ]));
+        let x = Box::pin(stream::iter(vec![
+            1.into(),
+            2.into(),
+            3.into(),
+            4.into(),
+            5.into(),
+            6.into(),
+        ]));
+        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let res_stream = defer::<Parser>(&ctx, e, 1);
+        ctx.run().await;
+        let res: Vec<Value> = res_stream.collect().await;
+        let exp: Vec<Value> = vec![
+            Value::NoVal,
+            Value::Deferred,
+            Value::Deferred,
+            4.into(),
+            5.into(),
+            6.into(),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_update_first_x_then_y() {
+        let x: OutputStream<Value> =
+            Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
+        let y: OutputStream<Value> =
+            Box::pin(stream::iter(vec![Value::NoVal, "y1".into(), "y2".into()]));
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec!["x0".into(), "y1".into(), "y2".into()];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_update_first_y_then_x() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, "x1".into()]));
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec!["y0".into(), "y1".into()];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_update_neither() {
+        use Value::NoVal;
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![NoVal, NoVal, NoVal, NoVal]));
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![NoVal, NoVal, NoVal, NoVal]));
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec![NoVal, NoVal, NoVal, NoVal];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_update_noval_deferred_noval_y() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            "x0".into(),
+            "x1".into(),
+            "x2".into(),
+            "x3".into(),
+        ]));
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::NoVal,
+            Value::Deferred,
+            Value::NoVal,
+            "y3".into(),
+        ]));
+        let res: Vec<Value> = update(x, y).collect().await;
+        let exp: Vec<Value> = vec!["x0".into(), "x1".into(), "x2".into(), "y3".into()];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_random_bin_operators() {
+        // Tests a selected number of operators for correct handling of NoVal
+        let combinators = vec![
+            plus as fn(OutputStream<Value>, OutputStream<Value>) -> OutputStream<Value>,
+            minus,
+            modulo,
+        ];
+
+        for comb in combinators {
+            let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+                Value::NoVal,
+                1.into(),
+                Value::NoVal,
+                3.into(),
+                Value::NoVal,
+            ]));
+            let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+                0.into(),
+                1.into(),
+                Value::NoVal,
+                3.into(),
+                Value::NoVal,
+            ]));
+            let res: Vec<Value> = comb(x, y).collect().await;
+            assert_eq!(res.len(), 5);
+            assert_eq!(res[0], Value::NoVal);
+            assert!(res[1] != Value::NoVal);
+            assert_eq!(res[2], res[1]);
+            assert!(res[3] != Value::NoVal);
+            assert_eq!(res[4], res[3]);
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_random_unary_operators() {
+        // Tests a selected number of operators for correct handling of NoVal
+        let combinators = vec![
+            cos as fn(OutputStream<Value>) -> OutputStream<Value>,
+            not,
+            sin,
+            abs,
+        ];
+        for comb in combinators {
+            let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+                Value::NoVal,
+                1.0.into(),
+                Value::NoVal,
+                3.0.into(),
+                Value::NoVal,
+            ]));
+            let res: Vec<Value> = comb(x).collect().await;
+            assert_eq!(res.len(), 5);
+            assert_eq!(res[0], Value::NoVal);
+            assert!(res[1] != Value::NoVal);
+            assert_eq!(res[2], res[1]);
+            assert!(res[3] != Value::NoVal);
+            assert_eq!(res[4], res[3]);
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_map_noval() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::NoVal,
+            Value::NoVal,
+            "x3".into(),
+            "x4".into(),
+        ]));
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::NoVal,
+            "y2".into(),
+            Value::NoVal,
+            "y4".into(),
+        ]));
+        let m: BTreeMap<EcoString, OutputStream<Value>> =
+            BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let res: Vec<Value> = map(m).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), Value::NoVal),
+                ("y".into(), Value::NoVal),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("x".into(), Value::NoVal),
+                ("y".into(), "y2".into()),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("x".into(), "x3".into()),
+                ("y".into(), "y2".into()),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("x".into(), "x4".into()),
+                ("y".into(), "y4".into()),
+            ])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_list_noval() {
+        let x: Vec<OutputStream<Value>> = vec![
+            Box::pin(stream::iter(vec![
+                Value::NoVal,
+                2.into(),
+                Value::NoVal,
+                4.into(),
+            ])),
+            Box::pin(stream::iter(vec![
+                Value::NoVal,
+                Value::NoVal,
+                3.into(),
+                4.into(),
+            ])),
+        ];
+        let res: Vec<Value> = list(x).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::List(vec![Value::NoVal, Value::NoVal].into()),
+            Value::List(vec![2.into(), Value::NoVal].into()),
+            Value::List(vec![2.into(), 3.into()].into()),
+            Value::List(vec![4.into(), 4.into()].into()),
+        ];
         assert_eq!(res, exp);
     }
 }
