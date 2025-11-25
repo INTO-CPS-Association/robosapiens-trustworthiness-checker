@@ -1,0 +1,13 @@
+in rawHuman
+in useNucOne // Not used yet - comment out to show bug
+out numberOfHumans
+out bugPrevent // TC bug...
+out hasError
+out hadError
+aux cameraChange
+numberOfHumans = Map.get(rawHuman, "number_of_humans")
+bugPrevent = useNucOne
+// Camera starts as being true
+cameraChange = !(default(useNucOne[1], true) == useNucOne)
+hasError = !(!cameraChange || numberOfHumans == 0) // Negated implication
+hadError = hasError == true || default(hadError[1], false) // Globally

@@ -84,31 +84,31 @@ impl ROSMsgType {
                         node.subscribe::<r2r::std_msgs::msg::Float32>(topic, qos)?
                             .map(|val| Value::Float(val.data.into())),
                     ),
-            ROSMsgType::Human => Box::pin(
-                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::Human>(topic, qos)?
+            ROSMsgType::HumanModelPart => Box::pin(
+                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelPart>(topic, qos)?
                             .map(|val| {
                                 serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 Human msg to JSON")
+                                    .expect("Failed to serialize ROS2 HumanModelPart msg to JSON")
                                     .try_into()
-                                    .expect("Failed to serialize ROS2 Human msg to internal representation")
+                                    .expect("Failed to serialize ROS2 HumanModelPart msg to internal representation")
                             }),
                     ),
-            ROSMsgType::HumanList => Box::pin(
-                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanList>(topic, qos)?
+            ROSMsgType::HumanModel => Box::pin(
+                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModel>(topic, qos)?
                             .map(|val| {
                                 serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 HumanList msg to JSON")
+                                    .expect("Failed to serialize ROS2 HumanModel msg to JSON")
                                     .try_into()
-                                    .expect("Failed to serialize ROS2 HumanList msg to internal representation")
+                                    .expect("Failed to serialize ROS2 HumanModel msg to internal representation")
                             }),
                     ),
-            ROSMsgType::HumanBodyPart => Box::pin(
-                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanBodyPart>(topic, qos)?
+            ROSMsgType::HumanModelList => Box::pin(
+                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelList >(topic, qos)?
                             .map(|val| {
                                 serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 HumanBodyPart msg to JSON")
+                                    .expect("Failed to serialize ROS2 HumanModelList msg to JSON")
                                     .try_into()
-                                    .expect("Failed to serialize ROS2 HumanBodyPart msg to internal representation")
+                                    .expect("Failed to serialize ROS2 HumanModelList msg to internal representation")
                             }),
                     ),
         })

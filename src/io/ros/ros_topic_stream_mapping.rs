@@ -15,9 +15,9 @@ pub enum ROSMsgType {
     Int8,
     Float64,
     Float32,
-    Human,
-    HumanList,
-    HumanBodyPart,
+    HumanModelPart,
+    HumanModel,
+    HumanModelList,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -38,9 +38,9 @@ pub fn string_to_ros_msg_type(typ: &str) -> Result<ROSMsgType, anyhow::Error> {
         "Int8" => Ok(ROSMsgType::Int8),
         "Float64" => Ok(ROSMsgType::Float64),
         "Float32" => Ok(ROSMsgType::Float32),
-        "Human" => Ok(ROSMsgType::Human),
-        "HumanList" => Ok(ROSMsgType::HumanList),
-        "HumanBodyPart" => Ok(ROSMsgType::HumanBodyPart),
+        "HumanModelPart" => Ok(ROSMsgType::HumanModelPart),
+        "HumanModel" => Ok(ROSMsgType::HumanModel),
+        "HumanModelList" => Ok(ROSMsgType::HumanModelList),
         typ => Err(anyhow!("Unsupported type {}", typ)),
     }
 }

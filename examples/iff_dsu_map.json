@@ -1,0 +1,10 @@
+{
+    "rawHuman": {
+        "topic": "/human_safety_volume",
+        "msg_type": "HumanModelList"
+    },
+    "useNucOne": {
+        "topic": "/use_nuc_1",
+        "msg_type": "Bool"
+    }
+}
