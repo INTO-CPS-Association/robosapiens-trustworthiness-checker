@@ -231,20 +231,30 @@ impl ROSInputProvider {
             .get_mut(&var)
             .ok_or_else(|| anyhow::anyhow!("No sender found for variable {}", var))?;
 
+        debug!("ROSInputProvider: Got sender");
         // Forward the value to sender
         sender
             .send(value)
             .await
             .map_err(|_| anyhow::anyhow!("Failed to send value"))?;
 
+        debug!("ROSInputProvider: Sent to sender");
         // Send `NoVal` to all other senders concurrently
-        let futs = senders
-            .iter_mut()
-            .filter(|(name, _)| **name != var)
-            .map(|(_, s)| s.send(Value::NoVal));
+        let futs =
+            senders
+                .iter_mut()
+                .filter(|(name, _)| **name != var)
+                .map(|(name, s)| async move {
+                    debug!("ROSInputProvider: Sending NoVal to variable {}", name);
+                    let r = s.send(Value::NoVal).await;
+                    debug!("ROSInputProvider: Sent NoVal to variable {}", name);
+                    r
+                });
 
         // Run them all concurrently
+        debug!("ROSInputProvider: Awaiting results");
         let results = future::join_all(futs).await;
+        debug!("ROSInputProvider: Awaited results");
 
         // Check for errors
         if results.iter().any(|r| r.is_err()) {
