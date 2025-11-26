@@ -126,13 +126,15 @@ mod integration_tests {
 
     /// Helper function to get the path to the binary
     fn get_binary_path() -> String {
-        let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-        let profile = if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        };
-        format!("{}/{}/trustworthiness_checker", target_dir, profile)
+        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not defined");
+        let path = Path::new(&out_dir);
+        let tc_dir_path = path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .expect("OUT_DIR too shallow");
+        let tc_dir = tc_dir_path.to_str().expect("Invalid UTF-8 in path");
+        format!("{}/trustworthiness_checker", tc_dir)
     }
 
     /// Helper function to run the CLI with given arguments and return output
