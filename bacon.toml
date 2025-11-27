@@ -9,7 +9,7 @@ default_job = "check"
 env.CARGO_TERM_COLOR = "always"
 
 [jobs.check]
-command = ["cargo", "check"]
+command = ["cargo", "check", "--profile", "dev-fast"]
 need_stdout = false
 
 [jobs.check-all]
