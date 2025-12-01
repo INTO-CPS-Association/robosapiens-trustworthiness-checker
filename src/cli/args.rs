@@ -27,12 +27,11 @@ pub enum ParserMode {
     /// Parser combinator implementation using the Winnow library
     ///
     /// Provides flexible, composable parsing with good error messages.
-    /// Recommended for most use cases.
     Combinator,
     /// LALR(1) parser implementation using lalrpop
     ///
     /// Generates efficient parsers from grammar definitions.
-    /// Currently not implemented.
+    /// Recommended for most use cases.
     Lalr,
 }
 

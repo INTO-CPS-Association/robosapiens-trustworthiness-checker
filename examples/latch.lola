@@ -1,0 +1,7 @@
+// Run with input file simple_add_async.input
+in x
+in y
+out a
+out b
+a = bind(x, y)
+b = a + 1

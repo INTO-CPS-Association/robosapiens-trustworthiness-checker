@@ -241,7 +241,7 @@ pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
 }
 
 pub fn val(x: Value) -> OutputStream<Value> {
-    Box::pin(stream::repeat(x.clone()))
+    Box::pin(stream::repeat(x))
 }
 
 // Should this return a dyn ConcreteStreamData?
@@ -690,6 +690,27 @@ pub fn when(x: OutputStream<Value>) -> OutputStream<Value> {
             yield Value::Bool(true);
         }
     })
+}
+
+// Latches a stream x to only yield values when another stream y is not NoVal.
+// The result is the latest value received on x
+//
+// Note that latch expressions propagate interestingly when used inside other expressions. E.g.:
+// in x, in y, out a, out b
+// a = latch(x, y) // Only update x when y is not NoVal
+// b = a + 1
+// Here, b is updated whenever x OR y is updated but it is using the current value of a, which is only
+// updated when y is updated. This is because a emits a NoVal when x receives a new value but y
+// does not.
+//
+// Note: `latch` is like `last` in TeSSLa but where on simultaneous events it returns the current val
+// instead of previous val
+pub fn latch(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    let x = stream_lift_base(x);
+    let vals = x
+        .zip(y)
+        .map(|(x, y)| if y == Value::NoVal { Value::NoVal } else { x });
+    Box::pin(vals)
 }
 
 pub fn list(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
@@ -1646,6 +1667,51 @@ mod combinator_tests {
         let res: Vec<Value> = mhas_key(map(m), "z".into()).collect().await;
         let exp: Vec<Value> = vec![false.into(), false.into()];
         assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_latch_never() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, Value::NoVal]));
+        let res: Vec<Value> = latch(s1, s2).collect().await;
+        let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_latch_eventually_always() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, Value::Unit]));
+        let res: Vec<Value> = latch(s1, s2).collect().await;
+        let exp: Vec<Value> = vec![Value::NoVal, 2.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_latch_eventually() {
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let s2: OutputStream<Value> =
+            Box::pin(stream::iter(vec![Value::NoVal, Value::Unit, Value::NoVal]));
+        let res: Vec<Value> = latch(s1, s2).collect().await;
+        let exp: Vec<Value> = vec![Value::NoVal, 2.into(), Value::NoVal];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_latch_interesting_interaction() {
+        let x = [1.into(), 2.into(), 3.into()];
+        let y = [Value::Unit, Value::NoVal, Value::NoVal];
+        let x1: OutputStream<Value> = Box::pin(stream::iter(x.clone()));
+        let x2: OutputStream<Value> = Box::pin(stream::iter(x));
+        let y1: OutputStream<Value> = Box::pin(stream::iter(y.clone()));
+        let y2: OutputStream<Value> = Box::pin(stream::iter(y));
+        let zero = Box::pin(stream::iter(vec![0.into(); 3]));
+        let res1: Vec<Value> = latch(x1, y1).collect().await;
+        let res2: Vec<Value> = plus(zero, latch(x2, y2)).collect().await;
+        let exp1: Vec<Value> = vec![1.into(), Value::NoVal, Value::NoVal];
+        let exp2: Vec<Value> = vec![1.into(), 1.into(), 1.into()];
+        assert_eq!(res1, exp1);
+        assert_eq!(res2, exp2);
     }
 }
 

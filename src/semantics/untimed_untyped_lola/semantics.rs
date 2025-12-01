@@ -129,6 +129,11 @@ where
                 let e = Self::to_async_stream(*e, ctx);
                 mc::when(e)
             }
+            SExpr::Latch(e1, e2) => {
+                let e1 = Self::to_async_stream(*e1, ctx);
+                let e2 = Self::to_async_stream(*e2, ctx);
+                mc::latch(e1, e2)
+            }
             SExpr::SIndex(e, i) => {
                 let e = Self::to_async_stream(*e, ctx);
                 mc::sindex(e, i)

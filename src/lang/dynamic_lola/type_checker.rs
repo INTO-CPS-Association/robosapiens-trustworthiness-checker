@@ -670,6 +670,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::LLen(_) => todo!(),
             SExpr::IsDefined(_) => todo!(),
             SExpr::When(_) => todo!(),
+            SExpr::Latch(_, _) => todo!(),
             SExpr::Sin(_) => todo!(),
             SExpr::Cos(_) => todo!(),
             SExpr::Tan(_) => todo!(),

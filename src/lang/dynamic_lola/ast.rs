@@ -176,6 +176,9 @@ pub enum SExpr {
     IsDefined(Box<Self>), // True when .0 is not Deferred
     When(Box<Self>),      // Becomes true after the first time .0 is not Deferred
 
+    // Asynchronous operations
+    Latch(Box<Self>, Box<Self>),
+
     // Unary expressions (refactor if more are added...)
     Not(Box<Self>),
 
@@ -250,6 +253,11 @@ impl SExpr {
             }
             IsDefined(e) => e.inputs(),
             When(e) => e.inputs(),
+            Latch(e1, e2) => {
+                let mut inputs = e1.inputs();
+                inputs.extend(e2.inputs());
+                inputs
+            }
             List(es) => {
                 let mut inputs = vec![];
                 for e in es {
@@ -364,6 +372,10 @@ impl LOLASpecification {
                     Box::new(traverse_expr(*sexpr, vars)),
                     Box::new(traverse_expr(*sexpr1, vars)),
                     sbin_op.clone(),
+                ),
+                SExpr::Latch(sexpr1, sexpr2) => SExpr::Latch(
+                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr2, vars)),
                 ),
                 SExpr::LIndex(sexpr, sexpr1) => SExpr::LIndex(
                     Box::new(traverse_expr(*sexpr, vars)),
@@ -512,6 +524,7 @@ impl Display for SExpr {
             Default(e, v) => write!(f, "default({}, {})", e, v),
             IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),
             When(sexpr) => write!(f, "when({})", sexpr),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
             List(es) => {
                 let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "[{}]", es_str.join(", "))
