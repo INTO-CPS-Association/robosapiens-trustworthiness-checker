@@ -21,15 +21,8 @@ use std::{
     collections::{BTreeMap, VecDeque},
     rc::Rc,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use unsync::spsc;
-
-/// **************************
-/// NOTE:
-/// This is a prototype of a potential simplification for a runtime.
-/// It currently still has some issues in terms of subcontexts but its overall
-/// design may be useful for future runtimes.
-/// **************************
 
 pub struct LittleMonitorBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
@@ -170,6 +163,7 @@ struct VarManager {
     value_stream: OutputStream<Value>,
     // Subscribers to this specific variable
     subscribers: Vec<spsc::Sender<Value>>,
+    new_subscribers: Vec<(spsc::Sender<Value>, usize)>, // (Sender, history_length)
     // Retained history of values (if needed)
     retained_history: VecDeque<Value>,
     samples_forwarded: usize,
@@ -184,6 +178,7 @@ impl VarManager {
             var_name,
             value_stream,
             subscribers: Vec::new(),
+            new_subscribers: Vec::new(),
             retained_history: VecDeque::new(),
             id,
             samples_forwarded: 0,
@@ -196,8 +191,18 @@ impl VarManager {
     }
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<Value> {
-        let (mut tx, rx) = spsc::channel::<Value>(history_length + 128);
-        // Compute how many Deferreds are needed - needed because history_length is longer than
+        let history_length = if history_length > 0 {
+            warn!(
+                "Subtracting one from history_length (val = {}) to circumvent bug with the other async runtime. Will be fixed in the future but requires changing the combinators.",
+                history_length - 1,
+            );
+            history_length - 1
+        } else {
+            0
+        };
+
+        let (tx, rx) = spsc::channel::<Value>(history_length + 128);
+        // Compute how many Deferreds are needed - needed because new history_len is longer than
         // retained_history.len()
         let missing = std::cmp::min(
             history_length.saturating_sub(self.retained_history.len()),
@@ -217,25 +222,8 @@ impl VarManager {
             self.id,
         );
 
-        // Pre-send requested history - available when requested
-        self.retained_history.iter().skip(
-            self.retained_history
-            .len()
-            .saturating_sub(history_length),
-        ).for_each(|v| {
-            // Should never fail as the capacity is always sufficient
-            if let Err(e) = tx.try_send(v.clone()) {
-            error!(
-                ?self.var_name,
-                ?e,
-                "VarManager {} subscribe: Error sending retained history value to new subscriber.",
-                self.id,
-            );
-            }
-        });
-
-        // Save subscriber for future values
-        self.subscribers.push(tx);
+        // Add to new subs - history will be sent next time we forward values
+        self.new_subscribers.push((tx, history_length));
         stream_utils::channel_to_output_stream(rx)
     }
 
@@ -245,6 +233,30 @@ impl VarManager {
             "VarManager {} forward_value: Waiting for next value.",
             self.id,
         );
+
+        // Forward the requested history to subscribers
+        while let Some((mut tx, history_length)) = self.new_subscribers.pop() {
+            let to_send = std::cmp::min(self.samples_forwarded, history_length);
+            self.retained_history.iter().skip(
+                self.retained_history
+                    .len()
+                    .saturating_sub(to_send),
+            ).for_each(|v| {
+                    // Should never fail as the capacity is always sufficient
+                    if let Err(e) = tx.try_send(v.clone()) {
+                        error!(
+                            ?self.var_name,
+                            ?e,
+                            "VarManager {} subscribe: Error sending retained history value to new subscriber.",
+                            self.id,
+                        );
+                        panic!("Error sending retained history value to new subscriber: {}", e);
+                    }
+                });
+            // Now add to subscribers
+            self.subscribers.push(tx);
+        }
+
         if let Some(val) = self.value_stream.next().await {
             info!(
                 ?self.var_name,
@@ -253,13 +265,20 @@ impl VarManager {
                 self.id,
                 self.subscribers.len()
             );
+            self.samples_forwarded += 1;
+
             // Retain in history if needed
             if self.retained_history.len() > 0 {
                 self.retained_history.pop_front();
                 self.retained_history.push_back(val.clone());
+                info!(
+                    ?self.var_name,
+                    ?self.retained_history,
+                    "VarManager {} forward_value: Updated retained history.",
+                    self.id,
+                );
             }
 
-            self.samples_forwarded += 1;
             let mut disconnected = vec![];
             for (idx, subscriber) in self.subscribers.iter_mut().enumerate() {
                 if let Err(_) = subscriber.send(val.clone()).await {
@@ -671,10 +690,10 @@ impl StreamContext<Value> for LittleContext {
 
     fn restricted_subcontext(&self, vs: EcoVec<VarName>, history_length: usize) -> Self {
         info!(
-            self.id,
             ?vs,
             ?history_length,
-            "LittleContext::restricted_subcontext: Creating restricted subcontext."
+            "LittleContext::restricted_subcontext: Creating restricted subcontext with parent id: {}",
+            self.id
         );
         self.subcontext_common(vs, history_length)
     }
@@ -718,7 +737,6 @@ mod tests {
     use smol::LocalExecutor;
     use std::collections::BTreeMap;
     use std::rc::Rc;
-    use tracing::warn;
 
     use crate::lola_fixtures::*;
     use crate::{Value, lola_specification};
@@ -753,7 +771,6 @@ mod tests {
                 .await
                 .unwrap();
 
-        warn!(?outputs, "Outputs:");
         assert_eq!(outputs.len(), 3,);
         assert_eq!(
             outputs,
@@ -770,9 +787,7 @@ mod tests {
         let spec_untyped = lola_specification(&mut spec_dynamic()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
-        // TODO: Use the real test values
-        // let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
-        let e = vec!["x + 1".into(), Value::NoVal, Value::NoVal];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -795,14 +810,13 @@ mod tests {
                 .await
                 .unwrap();
 
-        warn!(?outputs, "Outputs:");
         assert_eq!(outputs.len(), 3,);
         assert_eq!(
             outputs,
             vec![
                 (0, vec![1.into()]),
-                (1, vec![2.into()]),
-                (2, vec![3.into()]),
+                (1, vec![3.into()]),
+                (2, vec![5.into()]),
             ],
         );
     }

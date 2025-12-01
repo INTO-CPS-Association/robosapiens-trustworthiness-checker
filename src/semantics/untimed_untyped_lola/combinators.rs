@@ -540,16 +540,16 @@ where
     })
 }
 
-pub fn var(ctx: &impl StreamContext<Value>, x: VarName) -> OutputStream<Value> {
-    debug!("Accessing variable");
-    match ctx.var(&x) {
+pub fn var(ctx: &impl StreamContext<Value>, var: VarName) -> OutputStream<Value> {
+    debug!(?var, "Accessing variable");
+    match ctx.var(&var) {
         Some(stream) => {
-            debug!("Found variable");
+            debug!(?var, "Found variable");
             stream
         }
         None => {
-            debug!("Variable not found - this will panic");
-            panic!("Variable \"{}\" not found", x)
+            debug!(?var, "Variable not found - this will panic");
+            panic!("Variable \"{}\" not found", var)
         }
     }
 }
