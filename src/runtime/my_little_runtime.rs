@@ -71,7 +71,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
         let output = self.output.unwrap();
 
         LittleMonitor {
-            _executor: executor,
+            executor,
             model,
             input_provider: input,
             output_handler: output,
@@ -305,7 +305,7 @@ impl VarManager {
 }
 
 pub struct LittleMonitor {
-    _executor: Rc<LocalExecutor<'static>>,
+    executor: Rc<LocalExecutor<'static>>,
     model: LOLASpecification,
     input_provider: Box<dyn InputProvider<Val = Value>>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
@@ -510,21 +510,21 @@ impl Runnable for LittleMonitor {
             .fuse()
         }
 
-        let input_fut = log_end(self.input_provider.run(), "input_provider.run() ended");
+        // TODO: Fix this...
+        // Need to spawn input_provider in a separate task because of weird rule that they are
+        // supposed to run forever...
+        self.executor.spawn(self.input_provider.run()).detach();
         let output_fut = log_end(self.output_handler.run(), "output_handler.run() ended");
         let work_fut = log_end(
             Box::pin(Self::work_task(context, expr_evals)),
-            "LittleMonitor work_task ended",
+            "work_task.run() ended",
         );
 
-        let res = futures::join!(input_fut, output_fut, work_fut);
+        let res = futures::join!(output_fut, work_fut);
         if let Err(e) = res.0 {
-            error!(?e, "Input provider had an error");
-        }
-        if let Err(e) = res.1 {
             error!(?e, "Output handler had an error");
         }
-        if let Err(e) = res.2 {
+        if let Err(e) = res.1 {
             error!(?e, "Work task had an error");
         }
 
@@ -735,7 +735,7 @@ mod tests {
 
     use crate::async_test;
     use crate::core::Runnable;
-    use crate::io::testing::ManualOutputHandler;
+    use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::runtime::my_little_runtime::LittleMonitor;
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
@@ -746,7 +746,7 @@ mod tests {
     use crate::lola_fixtures::*;
     use crate::{Value, lola_specification};
 
-    use tc_testutils::streams::with_timeout;
+    use tc_testutils::streams::{with_timeout, with_timeout_res};
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
@@ -762,7 +762,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = LittleMonitor {
-            _executor: executor.clone(),
+            executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -787,6 +787,31 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn test_simple_add_null_handler(executor: Rc<LocalExecutor<'static>>) {
+        // Testing that the monitor works with a NullOutputHandler
+        // (to avoid previous regressions)
+        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let y = vec![3.into(), 4.into(), 5.into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let output_handler = Box::new(NullOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let monitor = LittleMonitor {
+            executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+        };
+
+        with_timeout_res(monitor.run(), 1, "monitor run")
+            .await
+            .unwrap();
+    }
+
+    #[apply(async_test)]
     async fn test_dependent_outputs(executor: Rc<LocalExecutor<'static>>) {
         // Tests that monitor correctly shuts down when there are multiple outputs that depend
         // on each other
@@ -803,7 +828,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = LittleMonitor {
-            _executor: executor.clone(),
+            executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -841,7 +866,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = LittleMonitor {
-            _executor: executor.clone(),
+            executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,

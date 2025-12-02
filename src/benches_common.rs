@@ -85,6 +85,22 @@ pub async fn monitor_outputs_untyped_async(
     .await;
 }
 
+pub async fn monitor_outputs_untyped_little(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: LOLASpecification,
+    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+) {
+    monitor_runtime_outputs(
+        Runtime::MyLittleRuntime,
+        Semantics::Untimed,
+        executor,
+        spec,
+        input_streams,
+        None,
+    )
+    .await;
+}
+
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: TypedLOLASpecification,

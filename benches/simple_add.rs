@@ -8,6 +8,7 @@ use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
 use trustworthiness_checker::lola_fixtures::input_streams_simple_add;
 use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
@@ -76,6 +77,19 @@ fn from_elem(c: &mut Criterion) {
                     monitor_outputs_typed_async(
                         local_smol_executor.executor.clone(),
                         spec_typed.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("simple_add_untyped_little", size),
+            &(&spec),
+            |b, &spec| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_little(
+                        local_smol_executor.executor.clone(),
+                        spec.clone(),
                         input_stream_fn(),
                     )
                 })
