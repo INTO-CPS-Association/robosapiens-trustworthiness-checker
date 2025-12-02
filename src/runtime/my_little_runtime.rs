@@ -8,7 +8,8 @@ use crate::{
     semantics::{
         AbstractContextBuilder, MonitoringSemantics, StreamContext, untimed_untyped_lola::semantics,
     },
-    stream_utils,
+    stream_utils::{self},
+    utils::cancellation_token::CancellationToken,
 };
 
 use anyhow::anyhow;
@@ -66,24 +67,14 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
     fn build(self) -> LittleMonitor {
         let executor = self.executor.unwrap();
         let model = self.model.unwrap();
-        let mut input = self.input.unwrap();
+        let input = self.input.unwrap();
         let output = self.output.unwrap();
-        let input_streams = model
-            .input_vars()
-            .iter()
-            .map(|var| {
-                let stream = input.input_stream(var);
-                stream.unwrap()
-            })
-            .collect::<Vec<_>>();
-        let has_inputs = !input_streams.is_empty();
 
         LittleMonitor {
             _executor: executor,
             model,
             input_provider: input,
             output_handler: output,
-            _has_inputs: has_inputs,
         }
     }
 
@@ -151,6 +142,10 @@ impl ExprEvalutor {
                 "ExprEvaluator stream finished for variable {}",
                 self.var_name
             );
+            // Drop streams and channels to propagate the news
+            // TODO: Make this more clean
+            self.eval_stream = Box::pin(futures::stream::empty());
+            (self.sender, _) = spsc::channel::<Value>(1);
             Ok(StreamState::Finished)
         }
     }
@@ -201,7 +196,7 @@ impl VarManager {
             0
         };
 
-        let (tx, rx) = spsc::channel::<Value>(history_length + 128);
+        let (tx, rx) = spsc::channel::<Value>(history_length + 8);
         // Compute how many Deferreds are needed - needed because new history_len is longer than
         // retained_history.len()
         let missing = std::cmp::min(
@@ -224,6 +219,7 @@ impl VarManager {
 
         // Add to new subs - history will be sent next time we forward values
         self.new_subscribers.push((tx, history_length));
+
         stream_utils::channel_to_output_stream(rx)
     }
 
@@ -299,6 +295,10 @@ impl VarManager {
             Ok(StreamState::Pending)
         } else {
             info!(?self.var_name, "VarManager {} stream finished", self.id);
+            // TODO: Make this more clean
+            // Close the channels early to let receivers know we are done
+            self.subscribers = vec![];
+            self.new_subscribers = vec![];
             Ok(StreamState::Finished)
         }
     }
@@ -309,7 +309,6 @@ pub struct LittleMonitor {
     model: LOLASpecification,
     input_provider: Box<dyn InputProvider<Val = Value>>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
-    _has_inputs: bool,
 }
 
 impl LittleMonitor {
@@ -434,7 +433,13 @@ impl Runnable for LittleMonitor {
             .iter()
             .map(|var| {
                 let stream = self.input_provider.input_stream(var);
-                (var.clone(), stream.unwrap())
+                (
+                    var.clone(),
+                    stream.expect(&format!(
+                        "Input stream unavailable for input variable: {}",
+                        var
+                    )),
+                )
             })
             .collect::<BTreeMap<VarName, OutputStream<Value>>>();
 
@@ -678,14 +683,14 @@ impl StreamContext<Value> for LittleContext {
             ?history_length,
             "LittleContext::subcontext: Creating subcontext."
         );
-        self.subcontext_common(
-            self.var_managers
-                .borrow()
-                .keys()
-                .cloned()
-                .collect::<EcoVec<VarName>>(),
-            history_length,
-        )
+        // Note: Must be in separate variable to avoid double borrow
+        let vars = self
+            .var_managers
+            .borrow()
+            .keys()
+            .cloned()
+            .collect::<EcoVec<VarName>>();
+        self.subcontext_common(vars, history_length)
     }
 
     fn restricted_subcontext(&self, vs: EcoVec<VarName>, history_length: usize) -> Self {
@@ -716,7 +721,7 @@ impl StreamContext<Value> for LittleContext {
         unimplemented!("StreamContext::clock")
     }
 
-    fn cancellation_token(&self) -> crate::utils::cancellation_token::CancellationToken {
+    fn cancellation_token(&self) -> CancellationToken {
         unimplemented!("StreamContext::cancellation_token")
     }
 
@@ -745,22 +750,21 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
-        let spec_untyped = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
         let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec.output_vars.clone(),
         ));
         let outputs = output_handler.get_output();
 
         let monitor = LittleMonitor {
             _executor: executor.clone(),
-            model: spec_untyped.clone(),
+            model: spec.clone(),
             input_provider: Box::new(input_streams),
-            _has_inputs: true,
             output_handler,
         };
 
@@ -783,23 +787,63 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn test_dependent_outputs(executor: Rc<LocalExecutor<'static>>) {
+        // Tests that monitor correctly shuts down when there are multiple outputs that depend
+        // on each other
+        // (There was a bug where output stream cancellation did not propagate properly)
+        let mut spec = "in x\nout a\nout b\na = x\nb = a + 1";
+        let spec = lola_specification(&mut spec).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let input_streams = BTreeMap::from([("x".into(), x)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = LittleMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![0.into(), 1.into()]),
+                (1, vec![1.into(), 2.into()]),
+                (2, vec![2.into(), 3.into()]),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
-        let spec_untyped = lola_specification(&mut spec_dynamic()).unwrap();
+        let spec = lola_specification(&mut spec_dynamic()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec.output_vars.clone(),
         ));
         let outputs = output_handler.get_output();
 
         let monitor = LittleMonitor {
             _executor: executor.clone(),
-            model: spec_untyped.clone(),
+            model: spec.clone(),
             input_provider: Box::new(input_streams),
-            _has_inputs: true,
             output_handler,
         };
 

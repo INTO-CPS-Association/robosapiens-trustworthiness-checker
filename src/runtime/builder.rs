@@ -15,7 +15,9 @@ use crate::{
         parser::CombExprParser,
         type_checker::{TypedLOLASpecification, type_check},
     },
-    runtime::reconfigurable_async::ReconfAsyncMonitorBuilder,
+    runtime::{
+        my_little_runtime::LittleMonitorBuilder, reconfigurable_async::ReconfAsyncMonitorBuilder,
+    },
     semantics::{
         DistributedSemantics, TypedUntimedLolaSemantics, UntimedLolaSemantics,
         distributed::{contexts::DistributedContext, localisation::LocalitySpec},
@@ -460,6 +462,9 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     _,
                     UntimedLolaSemantics<CombExprParser>,
                 >::new())
+            }
+            (Runtime::MyLittleRuntime, Semantics::Untimed, ParserMode::Lalr) => {
+                Box::new(LittleMonitorBuilder::new())
             }
             (Runtime::Async, Semantics::TypedUntimed, _) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
