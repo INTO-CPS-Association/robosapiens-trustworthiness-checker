@@ -16,7 +16,7 @@ use trustworthiness_checker::{Value, VarName, lola_specification, runtime::Runti
 enum TestConfiguration {
     AsyncUntimed,
     AsyncTypedUntimed,
-    MyLittleRuntime,
+    SemiSyncUntimed,
 }
 
 impl TestConfiguration {
@@ -24,7 +24,7 @@ impl TestConfiguration {
         vec![
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
-            TestConfiguration::MyLittleRuntime,
+            TestConfiguration::SemiSyncUntimed,
         ]
     }
 
@@ -32,14 +32,14 @@ impl TestConfiguration {
         vec![
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
-            TestConfiguration::MyLittleRuntime,
+            TestConfiguration::SemiSyncUntimed,
         ]
     }
 
     fn untyped_configurations() -> Vec<Self> {
         vec![
             TestConfiguration::AsyncUntimed,
-            TestConfiguration::MyLittleRuntime,
+            TestConfiguration::SemiSyncUntimed,
         ]
     }
 }
@@ -57,7 +57,7 @@ fn create_builder_from_config(
             let builder = builder.runtime(Runtime::Async);
             builder.semantics(Semantics::TypedUntimed)
         }
-        TestConfiguration::MyLittleRuntime => builder.runtime(Runtime::MyLittleRuntime),
+        TestConfiguration::SemiSyncUntimed => builder.runtime(Runtime::SemiSync),
     }
 }
 
@@ -65,7 +65,7 @@ fn create_builder_from_config(
 async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -117,7 +117,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
 async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -169,7 +169,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -221,7 +221,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -273,7 +273,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to defer functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -431,7 +431,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
 async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only works on untyped_configurations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -485,7 +485,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on constraints due to defer/update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -931,7 +931,7 @@ async fn test_index_past_mult_dependencies(
         let num_expected_outputs = match config {
             TestConfiguration::AsyncTypedUntimed
             | TestConfiguration::AsyncUntimed
-            | TestConfiguration::MyLittleRuntime => 4,
+            | TestConfiguration::SemiSyncUntimed => 4,
         };
         assert_eq!(
             outputs.len(),
@@ -1467,7 +1467,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
         match config {
             TestConfiguration::AsyncUntimed
             | TestConfiguration::AsyncTypedUntimed
-            | TestConfiguration::MyLittleRuntime => {
+            | TestConfiguration::SemiSyncUntimed => {
                 assert_eq!(
                     result,
                     vec![(0, vec![Value::Int(0)]), (1, vec![Value::Int(1)])]
@@ -2028,7 +2028,7 @@ async fn test_restricted_dynamic_monitor(
 #[apply(async_test)]
 async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -2100,7 +2100,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 #[apply(async_test)]
 async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -2172,7 +2172,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 #[apply(async_test)]
 async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -2251,7 +2251,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     // TODO: This test currently only runs AsyncUntimed due to bugs in other configurations:
     // - AsyncTypedUntimed does not implement defer
     for config in vec![TestConfiguration::AsyncUntimed] {
-        if config == TestConfiguration::MyLittleRuntime {
+        if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }

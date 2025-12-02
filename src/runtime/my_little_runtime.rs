@@ -25,15 +25,15 @@ use std::{
 use tracing::{debug, error, info, warn};
 use unsync::spsc;
 
-pub struct LittleMonitorBuilder {
+pub struct SemiSyncMonitorBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<LOLASpecification>,
     input: Option<Box<dyn InputProvider<Val = Value>>>,
     output: Option<Box<dyn OutputHandler<Val = Value>>>,
 }
 
-impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
-    type Mon = LittleMonitor;
+impl AbstractMonitorBuilder<LOLASpecification, Value> for SemiSyncMonitorBuilder {
+    type Mon = SemiSyncMonitor;
 
     fn new() -> Self {
         Self {
@@ -64,13 +64,13 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for LittleMonitorBuilder {
         self
     }
 
-    fn build(self) -> LittleMonitor {
+    fn build(self) -> SemiSyncMonitor {
         let executor = self.executor.unwrap();
         let model = self.model.unwrap();
         let input = self.input.unwrap();
         let output = self.output.unwrap();
 
-        LittleMonitor {
+        SemiSyncMonitor {
             executor,
             model,
             input_provider: input,
@@ -109,7 +109,7 @@ impl ExprEvalutor {
         var_name: VarName,
         expr: SExpr,
         sender: spsc::Sender<Value>,
-        ctx: &LittleContext,
+        ctx: &SemiSyncContext,
     ) -> Self {
         let eval_stream =
             semantics::UntimedLolaSemantics::<lalr_parser::LALRExprParser>::to_async_stream(
@@ -304,21 +304,21 @@ impl VarManager {
     }
 }
 
-pub struct LittleMonitor {
+pub struct SemiSyncMonitor {
     executor: Rc<LocalExecutor<'static>>,
     model: LOLASpecification,
     input_provider: Box<dyn InputProvider<Val = Value>>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
 }
 
-impl LittleMonitor {
+impl SemiSyncMonitor {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         model: LOLASpecification,
         input: Box<dyn InputProvider<Val = Value>>,
         output: Box<dyn OutputHandler<Val = Value>>,
     ) -> Self {
-        LittleMonitorBuilder::new()
+        SemiSyncMonitorBuilder::new()
             .executor(executor)
             .model(model)
             .input(input)
@@ -357,11 +357,11 @@ impl LittleMonitor {
     }
 
     async fn work_task(
-        mut ctx: LittleContext,
+        mut ctx: SemiSyncContext,
         mut expr_evals: Vec<ExprEvalutor>,
     ) -> anyhow::Result<()> {
         loop {
-            info!("LittleMonitor work_task: Waiting for next tick...");
+            info!("SemiSyncMonitor work_task: Waiting for next tick...");
             let result =
                 futures::join!(ctx.forward_values(), Self::eval_expr_evals(&mut expr_evals));
 
@@ -369,19 +369,19 @@ impl LittleMonitor {
             match result {
                 (Ok(StreamState::Pending), Ok(StreamState::Pending)) => {
                     debug!(
-                        "LittleMonitor work_task: Both forward_values and eval_expr_evals pending, continuing..."
+                        "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals pending, continuing..."
                     );
                     continue;
                 }
                 (Ok(StreamState::Finished), Ok(StreamState::Finished)) => {
                     debug!(
-                        "LittleMonitor work_task: Both forward_values and eval_expr_evals finished, ending work_task."
+                        "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals finished, ending work_task."
                     );
                     return Ok(());
                 }
                 (Ok(StreamState::Pending), Ok(StreamState::Finished)) => {
                     error!(
-                        "LittleMonitor work_task: eval_expr_evals finished but forward_values pending"
+                        "SemiSyncMonitor work_task: eval_expr_evals finished but forward_values pending"
                     );
                     return Err(anyhow!(
                         "eval_expr_evals finished but forward_values pending"
@@ -389,25 +389,25 @@ impl LittleMonitor {
                 }
                 (Ok(StreamState::Finished), Ok(StreamState::Pending)) => {
                     error!(
-                        "LittleMonitor work_task: forward_values finished but eval_expr_evals pending"
+                        "SemiSyncMonitor work_task: forward_values finished but eval_expr_evals pending"
                     );
                     return Err(anyhow!(
                         "forward_values finished but eval_expr_evals pending"
                     ));
                 }
                 (Ok(_), Err(e)) => {
-                    error!(?e, "LittleMonitor work_task: Error in eval_expr_evals");
+                    error!(?e, "SemiSyncMonitor work_task: Error in eval_expr_evals");
                     return Err(e);
                 }
                 (Err(e), Ok(_)) => {
-                    error!(?e, "LittleMonitor work_task: Error in ctx.forward_values");
+                    error!(?e, "SemiSyncMonitor work_task: Error in ctx.forward_values");
                     return Err(e);
                 }
                 (Err(e1), Err(e2)) => {
                     error!(
                         ?e1,
                         ?e2,
-                        "LittleMonitor work_task: Errors in both ctx.forward_values and eval_expr_evals"
+                        "SemiSyncMonitor work_task: Errors in both ctx.forward_values and eval_expr_evals"
                     );
                     return Err(anyhow!("Errors in work_task: {}, {}", e1, e2));
                 }
@@ -416,16 +416,16 @@ impl LittleMonitor {
     }
 }
 
-impl Monitor<LOLASpecification, Value> for LittleMonitor {
+impl Monitor<LOLASpecification, Value> for SemiSyncMonitor {
     fn spec(&self) -> &LOLASpecification {
         &self.model
     }
 }
 
 #[async_trait(?Send)]
-impl Runnable for LittleMonitor {
+impl Runnable for SemiSyncMonitor {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        info!("Running LittleMonitor.");
+        info!("Running SemiSyncMonitor.");
         // Set up input streams
         let input_streams = self
             .model
@@ -481,7 +481,7 @@ impl Runnable for LittleMonitor {
             .collect::<Vec<VarManager>>();
 
         // Create context
-        let builder = LittleContextBuilder::new().var_managers(
+        let builder = SemiSyncContextBuilder::new().var_managers(
             var_managers
                 .into_iter()
                 .map(|vm| (vm.var_name.clone(), vm))
@@ -532,12 +532,12 @@ impl Runnable for LittleMonitor {
     }
 }
 
-struct LittleContextBuilder {
+struct SemiSyncContextBuilder {
     var_managers: Option<BTreeMap<VarName, VarManager>>,
     history_length: Option<usize>,
 }
 
-impl LittleContextBuilder {
+impl SemiSyncContextBuilder {
     fn var_managers(self, var_managers: BTreeMap<VarName, VarManager>) -> Self {
         Self {
             var_managers: Some(var_managers),
@@ -546,10 +546,10 @@ impl LittleContextBuilder {
     }
 }
 
-impl AbstractContextBuilder for LittleContextBuilder {
+impl AbstractContextBuilder for SemiSyncContextBuilder {
     type Val = Value;
 
-    type Ctx = LittleContext;
+    type Ctx = SemiSyncContext;
 
     fn new() -> Self {
         Self {
@@ -582,9 +582,9 @@ impl AbstractContextBuilder for LittleContextBuilder {
     }
 
     fn build(self) -> Self::Ctx {
-        LittleContext::new(
+        SemiSyncContext::new(
             Rc::new(RefCell::new(self.var_managers.expect(
-                "VarManagers must be set before building LittleContext",
+                "VarManagers must be set before building SemiSyncContext",
             ))),
             self.history_length.unwrap_or(0),
         )
@@ -593,7 +593,7 @@ impl AbstractContextBuilder for LittleContextBuilder {
 
 static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-struct LittleContext {
+struct SemiSyncContext {
     // Rc RefCell because of the StreamContext interface for Var...
     var_managers: Rc<RefCell<BTreeMap<VarName, VarManager>>>,
     // History length for new calls to var
@@ -602,13 +602,13 @@ struct LittleContext {
     id: usize,
 }
 
-impl LittleContext {
+impl SemiSyncContext {
     fn new(
         var_managers: Rc<RefCell<BTreeMap<VarName, VarManager>>>,
         history_length: usize,
     ) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        debug!("Creating LittleContext {}", id);
+        debug!("Creating SemiSyncContext {}", id);
         Self {
             var_managers,
             history_length,
@@ -655,7 +655,7 @@ impl LittleContext {
                 }
             })
             .collect::<BTreeMap<_, _>>();
-        let builder = LittleContextBuilder::new()
+        let builder = SemiSyncContextBuilder::new()
             .var_managers(new_managers)
             .history_length(history_length);
         builder.build()
@@ -663,8 +663,8 @@ impl LittleContext {
 }
 
 #[async_trait(?Send)]
-impl StreamContext<Value> for LittleContext {
-    type Builder = LittleContextBuilder;
+impl StreamContext<Value> for SemiSyncContext {
+    type Builder = SemiSyncContextBuilder;
 
     fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {
         let mut manager = self.var_managers.borrow_mut();
@@ -672,7 +672,7 @@ impl StreamContext<Value> for LittleContext {
         info!(
             self.id,
             ?x,
-            "LittleContext::var: Created new output stream for variable"
+            "SemiSyncContext::var: Created new output stream for variable"
         );
         Some(stream)
     }
@@ -681,7 +681,7 @@ impl StreamContext<Value> for LittleContext {
         info!(
             self.id,
             ?history_length,
-            "LittleContext::subcontext: Creating subcontext."
+            "SemiSyncContext::subcontext: Creating subcontext."
         );
         // Note: Must be in separate variable to avoid double borrow
         let vars = self
@@ -697,7 +697,7 @@ impl StreamContext<Value> for LittleContext {
         info!(
             ?vs,
             ?history_length,
-            "LittleContext::restricted_subcontext: Creating restricted subcontext with parent id: {}",
+            "SemiSyncContext::restricted_subcontext: Creating restricted subcontext with parent id: {}",
             self.id
         );
         self.subcontext_common(vs, history_length)
@@ -736,7 +736,7 @@ mod tests {
     use crate::async_test;
     use crate::core::Runnable;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
-    use crate::runtime::my_little_runtime::LittleMonitor;
+    use crate::runtime::my_little_runtime::SemiSyncMonitor;
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -761,7 +761,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = LittleMonitor {
+        let monitor = SemiSyncMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -799,7 +799,7 @@ mod tests {
             executor.clone(),
             spec.output_vars.clone(),
         ));
-        let monitor = LittleMonitor {
+        let monitor = SemiSyncMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -827,7 +827,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = LittleMonitor {
+        let monitor = SemiSyncMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -865,7 +865,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = LittleMonitor {
+        let monitor = SemiSyncMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),

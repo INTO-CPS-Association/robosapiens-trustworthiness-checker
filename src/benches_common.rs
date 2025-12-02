@@ -91,7 +91,7 @@ pub async fn monitor_outputs_untyped_little(
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
 ) {
     monitor_runtime_outputs(
-        Runtime::MyLittleRuntime,
+        Runtime::SemiSync,
         Semantics::Untimed,
         executor,
         spec,
