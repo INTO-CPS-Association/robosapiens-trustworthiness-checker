@@ -15,9 +15,7 @@ use crate::{
         parser::CombExprParser,
         type_checker::{TypedLOLASpecification, type_check},
     },
-    runtime::{
-        my_little_runtime::SemiSyncMonitorBuilder, reconfigurable_async::ReconfAsyncMonitorBuilder,
-    },
+    runtime::{reconfigurable_async::ReconfAsyncMonitorBuilder, semi_sync::SemiSyncMonitorBuilder},
     semantics::{
         DistributedSemantics, TypedUntimedLolaSemantics, UntimedLolaSemantics,
         distributed::{contexts::DistributedContext, localisation::LocalitySpec},

@@ -736,7 +736,7 @@ mod tests {
     use crate::async_test;
     use crate::core::Runnable;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
-    use crate::runtime::my_little_runtime::SemiSyncMonitor;
+    use crate::runtime::semi_sync::SemiSyncMonitor;
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
