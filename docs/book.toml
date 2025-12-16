@@ -1,0 +1,13 @@
+[book]
+title = "RoboSAPIENS Trustworthiness Checker"
+authors = ["RoboSAPIENS Team"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/your-org/robosapiens-trustworthiness-checker"
