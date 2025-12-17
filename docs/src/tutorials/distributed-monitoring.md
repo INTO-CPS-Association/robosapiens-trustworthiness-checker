@@ -42,9 +42,9 @@ In this section we will set up a static distribution of a specification across t
 **File**: `simple_add_distributable.lola`
 
 ```ocaml
-input x: Int
-input y: Int
-input z: Int
+in x: Int
+in y: Int
+in z: Int
 
 w = x + y
 v = w + z
@@ -52,8 +52,8 @@ v = w + z
 
 This specification:
 - Takes inputs `x`, `y`, `z`
-- Computes intermediate `w = x + y`
-- Computes final `v = w + z`
+- Computes intermediate stream `w = x + y`
+- Computes final stream `v = w + z`
 
 We'll split this so Node A computes `w` and Node B computes `v`.
 
@@ -160,9 +160,9 @@ This will use the same specification as before (`simple_add_distributable.lola`)
 **File**: `simple_add_distributable.lola`
 
 ```ocaml
-input x: Int
-input y: Int
-input z: Int
+in x: Int
+in y: Int
+in z: Int
 
 w = x + y
 v = w + z
