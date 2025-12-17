@@ -45,6 +45,8 @@ In this section we will set up a static distribution of a specification across t
 in x: Int
 in y: Int
 in z: Int
+out w: Int
+out v: Int
 
 w = x + y
 v = w + z
@@ -163,6 +165,8 @@ This will use the same specification as before (`simple_add_distributable.lola`)
 in x: Int
 in y: Int
 in z: Int
+out w: Int
+out v: Int
 
 w = x + y
 v = w + z
