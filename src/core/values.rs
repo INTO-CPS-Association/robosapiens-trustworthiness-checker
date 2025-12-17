@@ -30,6 +30,14 @@ pub enum Value {
 }
 
 impl StreamData for Value {}
+impl DeferrableStreamData for Value {
+    fn is_deferred(&self) -> bool {
+        matches!(self, Value::Deferred)
+    }
+    fn deferred_value() -> Self {
+        Value::Deferred
+    }
+}
 
 impl ToRedisArgs for Value {
     fn write_redis_args<W>(&self, out: &mut W)
@@ -256,6 +264,13 @@ impl Display for Value {
  * for the implementation of runtimes to be agnostic of the types of stream
  * values used. */
 pub trait StreamData: Clone + Debug + 'static {}
+
+/* Trait for stream data types that can represent deferred values as a placeholder
+* for when an expression cannot be computed due to a lack of context */
+pub trait DeferrableStreamData: StreamData {
+    fn is_deferred(&self) -> bool;
+    fn deferred_value() -> Self;
+}
 
 // Trait defining the allowed types for expression values
 impl StreamData for i64 {}

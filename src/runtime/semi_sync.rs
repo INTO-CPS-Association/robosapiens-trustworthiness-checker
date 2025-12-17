@@ -1,8 +1,8 @@
 use crate::{
     OutputStream, SExpr, VarName,
     core::{
-        AbstractMonitorBuilder, InputProvider, Monitor, OutputHandler, Runnable, Specification,
-        Value,
+        AbstractMonitorBuilder, DeferrableStreamData, InputProvider, Monitor, OutputHandler,
+        Runnable, Specification, Value,
     },
     lang::dynamic_lola::{ast::LOLASpecification, lalr_parser},
     semantics::{
@@ -151,22 +151,25 @@ impl ExprEvalutor {
     }
 }
 
-struct VarManager {
+struct VarManager<Val>
+where
+    Val: DeferrableStreamData,
+{
     // VarName this manages
     var_name: VarName,
     // Stream where Values are received
-    value_stream: OutputStream<Value>,
+    value_stream: OutputStream<Val>,
     // Subscribers to this specific variable
-    subscribers: Vec<spsc::Sender<Value>>,
-    new_subscribers: Vec<(spsc::Sender<Value>, usize)>, // (Sender, history_length)
+    subscribers: Vec<spsc::Sender<Val>>,
+    new_subscribers: Vec<(spsc::Sender<Val>, usize)>, // (Sender, history_length)
     // Retained history of values (if needed)
-    retained_history: VecDeque<Value>,
+    retained_history: VecDeque<Val>,
     samples_forwarded: usize,
     id: usize,
 }
 
-impl VarManager {
-    fn new(var_name: VarName, value_stream: OutputStream<Value>) -> Self {
+impl<Val: DeferrableStreamData> VarManager<Val> {
+    fn new(var_name: VarName, value_stream: OutputStream<Val>) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(?var_name, "Creating VarManager {}", id);
         Self {
@@ -180,12 +183,12 @@ impl VarManager {
         }
     }
 
-    fn new_from_receiver(var_name: VarName, receiver: spsc::Receiver<Value>) -> Self {
+    fn new_from_receiver(var_name: VarName, receiver: spsc::Receiver<Val>) -> Self {
         let value_stream = stream_utils::channel_to_output_stream(receiver);
         Self::new(var_name, value_stream)
     }
 
-    fn subscribe(&mut self, history_length: usize) -> OutputStream<Value> {
+    fn subscribe(&mut self, history_length: usize) -> OutputStream<Val> {
         let history_length = if history_length > 0 {
             warn!(
                 "Subtracting one from history_length (val = {}) to circumvent bug with the other async runtime. Will be fixed in the future but requires changing the combinators.",
@@ -196,19 +199,18 @@ impl VarManager {
             0
         };
 
-        let (tx, rx) = spsc::channel::<Value>(history_length + 8);
+        let (tx, rx) = spsc::channel::<Val>(history_length + 8);
         // Compute how many Deferreds are needed - needed because new history_len is longer than
         // retained_history.len()
         let missing = std::cmp::min(
             history_length.saturating_sub(self.retained_history.len()),
             self.samples_forwarded,
         );
+        let defer_v = Val::deferred_value();
         // Push them to the history
-        std::iter::repeat(Value::Deferred)
-            .take(missing)
-            .for_each(|v| {
-                self.retained_history.push_front(v);
-            });
+        std::iter::repeat(defer_v).take(missing).for_each(|v| {
+            self.retained_history.push_front(v);
+        });
         info!(
             ?self.var_name,
             history_length,
@@ -478,7 +480,7 @@ impl Runnable for SemiSyncMonitor {
                     .into_iter()
                     .map(|(var_name, stream)| VarManager::new(var_name, stream)),
             )
-            .collect::<Vec<VarManager>>();
+            .collect::<Vec<VarManager<_>>>();
 
         // Create context
         let builder = SemiSyncContextBuilder::new().var_managers(
@@ -533,12 +535,12 @@ impl Runnable for SemiSyncMonitor {
 }
 
 struct SemiSyncContextBuilder {
-    var_managers: Option<BTreeMap<VarName, VarManager>>,
+    var_managers: Option<BTreeMap<VarName, VarManager<Value>>>,
     history_length: Option<usize>,
 }
 
 impl SemiSyncContextBuilder {
-    fn var_managers(self, var_managers: BTreeMap<VarName, VarManager>) -> Self {
+    fn var_managers(self, var_managers: BTreeMap<VarName, VarManager<Value>>) -> Self {
         Self {
             var_managers: Some(var_managers),
             ..self
@@ -595,7 +597,7 @@ static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize:
 
 struct SemiSyncContext {
     // Rc RefCell because of the StreamContext interface for Var...
-    var_managers: Rc<RefCell<BTreeMap<VarName, VarManager>>>,
+    var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Value>>>>,
     // History length for new calls to var
     history_length: usize,
     // Unique identifier for this variable manager
@@ -604,7 +606,7 @@ struct SemiSyncContext {
 
 impl SemiSyncContext {
     fn new(
-        var_managers: Rc<RefCell<BTreeMap<VarName, VarManager>>>,
+        var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Value>>>>,
         history_length: usize,
     ) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

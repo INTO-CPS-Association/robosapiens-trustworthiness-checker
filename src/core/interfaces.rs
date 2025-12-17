@@ -9,13 +9,13 @@ use crate::io::mqtt::MQTTLocalityReceiver;
 
 use super::{StreamData, VarName};
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Semantics {
     Untimed,
     TypedUntimed,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Runtime {
     Async,
     Distributed,

@@ -626,8 +626,11 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
 
                 Box::new(builder)
             }
-            _ => {
-                panic!("Unsupported runtime and semantics combination");
+            (runtime, semantics, parser) => {
+                panic!(
+                    "Unsupported runtime: {:?}, semantics: {:?} and parser: {:?} combination",
+                    runtime, semantics, parser
+                );
             }
         };
 

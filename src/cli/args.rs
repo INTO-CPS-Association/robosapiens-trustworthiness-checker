@@ -22,7 +22,7 @@ pub enum Language {
 ///
 /// Different parsing approaches available for processing specification files,
 /// each with different performance and feature characteristics.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum ParserMode {
     /// Parser combinator implementation using the Winnow library
     ///
