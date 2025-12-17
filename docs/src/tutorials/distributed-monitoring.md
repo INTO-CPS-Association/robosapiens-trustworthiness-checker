@@ -1,21 +1,17 @@
 # Distributed Monitoring
 
-This tutorial explains how to deploy the RoboSAPIENS Trustworthiness Checker across multiple nodes in a distributed system.
+This tutorial explains how to run RoboSAPIENS Trustworthiness Checker on multiple nodes of a distributed system in order to collectively monitor an overall property.
 
 ## Overview
 
-Distributed monitoring allows you to split a DynSRV specification across multiple computing nodes, enabling:
-
-- **Scalability**: Process large specifications by distributing computation
-- **Resilience**: Continue partial monitoring even if some nodes fail
-- **Network Efficiency**: Process data closer to its source
+Distributed monitoring splits a single DynSRV specification into multiple *localised* specifications which monitor the part of a specification relevant to a local network node.
 
 ## Architecture
 
 In distributed monitoring:
 
-1. A **distribution graph** defines which streams are computed on which nodes
-2. Each **local node** runs an instance of the monitor
+1. A **distribution graph** defines which streams are computed on which nodes. This may be either static, or dynamically determined via a central node.
+2. Each **local node** runs an separate, node-specialized instance of the monitor
 3. Nodes communicate via **MQTT** to exchange intermediate results
 4. The specification is split automatically based on the distribution graph
 
@@ -50,8 +46,8 @@ input x: Int
 input y: Int
 input z: Int
 
-output w := x + y
-output v := w + z
+w = x + y
+v = w + z
 ```
 
 This specification:
@@ -67,44 +63,56 @@ We'll split this so Node A computes `w` and Node B computes `v`.
 
 ```json
 {
-  "nodes": {
-    "A": {
-      "streams": ["x", "y", "w"]
-    },
-    "B": {
-      "streams": ["z", "w", "v"]
+  "dist_graph": {
+    "central_monitor": 1,
+    "graph": {
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edge_property": "directed",
+      "edges": [
+        [
+          0,
+          1,
+          0
+        ]
+      ]
     }
   },
-  "edges": [
-    {
-      "from": "A",
-      "to": "B",
-      "streams": ["w"]
-    }
-  ]
+  "var_names": [
+    "x",
+    "y",
+    "z",
+    "w",
+    "v"
+  ],
+  "node_labels": {
+    "0": [
+      "w"
+    ],
+    "1": [
+      "v"
+    ]
+  }
 }
 ```
 
-**Explanation**:
-- **Node A** handles streams `x`, `y`, and computes `w`
-- **Node B** handles stream `z` and computes `v` (needs `w` from Node A)
-- **Edge** A→B indicates `w` is sent from Node A to Node B via MQTT
-
 ### Step 3: Start the Nodes
 
-**Terminal 1 (Node A)**:
+**Node A**:
 
 ```bash
-cargo run --release -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.lola \
   --mqtt-input --mqtt-output \
   --distribution-graph examples/simple_add_distribution_graph.json \
   --local-node A
 ```
 
-**Terminal 2 (Node B)**:
+**Node B**:
 
 ```bash
-cargo run --release -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.lola \
   --mqtt-input --mqtt-output \
   --distribution-graph examples/simple_add_distribution_graph.json \
   --local-node B
@@ -156,32 +164,32 @@ input x: Int
 input y: Int
 input z: Int
 
-output w := x + y
-output v := w + z
+w = x + y
+v = w + z
 ```
 
 This specification:
 - Takes inputs `x`, `y`, `z`
-- Computes intermediate `w = x + y`
-- Computes final `v = w + z`
+- Computes intermediate stream `w = x + y`
+- Computes final stream `v = w + z`
 
 We'll split this so Node A computes `w` and Node B computes `v`.
 
 ### Step 2: Start the local Nodes
 
-**Terminal 1 (Node A)**:
+**Node A**:
 
 ```bash
-cargo run --release -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.lola \
   --mqtt-input --mqtt-output \
   --distributed-work \
   --local-node A
 ```
 
-**Terminal 2 (Node B)**:
+**Node B**:
 
 ```bash
-cargo run --release -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.lola \
   --mqtt-input --mqtt-output \
   --distributed-work \
   --local-node B
@@ -209,17 +217,17 @@ mosquitto_pub -t start_monitors_at_B -m "[v]"
 
 **Note:** This option is under development and may not yet work reliably.
 
-To automatically distribute work randomly across nodes, start the central coordinator:
+To automatically distribute work randomly across nodes, start the central node:
 
-**Terminal 3 (Central Coordinator)**:
+**Central Coordination Node**:
 
 ```bash
-cargo run --release -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.lola \
   --mqtt-input --mqtt-output \
   --mqtt-randomized-distributed A B
 ```
 
-The coordinator will randomly assign streams to the specified nodes (A, B) and send `start_monitors_at_<node>` messages.
+The central coordination node will randomly assign streams to the specified nodes (A, B) and send `start_monitors_at_<node>` messages.
 
 #### Option C: Constraint-based Central Node
 **Note:** This option is under development and may not yet work reliably.
@@ -245,10 +253,10 @@ locality v: dist(source(z)) + dist(monitor(w))
 ```
 
 
-**Terminal 3 (Central Coordinator)**:
+**Central Coordination Node**:
 
 ```bash
-cargo run --release -- examples/simple_add_dist_constraints.lola \
+cargo run -- examples/simple_add_dist_constraints.lola \
   --mqtt-input --mqtt-output \
   --mqtt-static-optimized A B \
   --distribution-constraints w v
@@ -295,31 +303,40 @@ The distribution graph is a JSON file defining the topology.
 
 ```json
 {
-  "nodes": {
-    "node_name": {
-      "streams": ["stream1", "stream2", ...]
+  "dist_graph": {
+    "central_monitor": 1,
+    "graph": {
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edge_property": "directed",
+      "edges": [
+        [
+          0,
+          1,
+          0
+        ]
+      ]
     }
   },
-  "edges": [
-    {
-      "from": "source_node",
-      "to": "destination_node",
-      "streams": ["stream1", ...]
-    }
-  ]
+  "var_names": [
+    "x",
+    "y",
+    "z",
+    "w",
+    "v"
+  ],
+  "node_labels": {
+    "0": [
+      "w"
+    ],
+    "1": [
+      "v"
+    ]
+  }
 }
 ```
-
-### Fields
-
-**`nodes`**: Object mapping node names to their configuration
-- **`streams`**: Array of stream names this node is responsible for
-  - Includes: inputs, outputs, and intermediate streams computed by this node
-
-**`edges`**: Array of connections between nodes
-- **`from`**: Source node name
-- **`to`**: Destination node name
-- **`streams`**: Array of streams sent from source to destination
 
 ## Distribution constraint syntax
 
@@ -330,9 +347,3 @@ Distribution constraints follow the following syntax:
 - `source(x)` - True if input `x` originates at this node
 - `monitor(w)` - True if output `w` is computed at this node
 - `dist(target)` - Network distance to target
-
-## Next Steps
-
-- Explore [Lola Specifications](../advanced/lola-specifications.md) for complex distributed properties
-- Learn about [Configuration](../reference/configuration.md) options for distributed systems
-- See [CLI Options](../reference/cli-options.md) for advanced deployment
