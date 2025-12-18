@@ -24,6 +24,10 @@ need_stdout = false
 command = ["cargo", "test", "--profile", "dev-fast"]
 need_stdout = true
 
+[jobs.test-no-run]
+command = ["cargo", "test", "--no-run", "--profile", "dev-fast"]
+need_stdout = true
+
 [jobs.test-all]
 command = ["cargo", "test", "--all-features", "--profile", "dev-fast"]
 need_stdout = true
