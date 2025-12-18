@@ -669,8 +669,8 @@ mod integration_tests {
         info!("Creating reconfigurable async monitor");
         let monitor_builder = ReconfAsyncMonitorBuilder::<
             LOLASpecification,
-            Context<Value>,
-            Value,
+            Context<TestConfig>,
+            TestConfig,
             _,
             UntimedLolaSemantics<CombExprParser>,
         >::new()

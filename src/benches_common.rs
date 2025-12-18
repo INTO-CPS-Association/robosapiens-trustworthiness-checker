@@ -18,6 +18,7 @@ use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
 use crate::runtime::asynchronous::Context;
+use crate::semantics::AsyncConfig;
 
 use smol::LocalExecutor;
 
@@ -101,6 +102,12 @@ pub async fn monitor_outputs_untyped_little(
     .await;
 }
 
+// NOTE: Temporary only while AsyncConfig is unfinished
+struct Config;
+impl AsyncConfig for Config {
+    type Val = Value;
+}
+
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: TypedLOLASpecification,
@@ -114,8 +121,8 @@ pub async fn monitor_outputs_typed_async(
     ));
     let async_monitor = AsyncMonitorBuilder::<
         _,
-        Context<Value>,
-        _,
+        Context<Config>,
+        Config,
         _,
         crate::semantics::TypedUntimedLolaSemantics,
     >::new()

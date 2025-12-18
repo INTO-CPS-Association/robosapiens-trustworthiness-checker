@@ -11,30 +11,32 @@ use crate::{
         solvers::brute_solver::BruteForceDistConstraintSolver,
     },
     semantics::{
-        MonitoringSemantics,
+        AsyncConfig, MonitoringSemantics,
         distributed::{contexts::DistributedContext, localisation::Localisable},
     },
 };
 
 use super::core::SchedulerPlanner;
 
-pub struct StaticOptimizedSchedulerPlanner<Expr, S, M>
+pub struct StaticOptimizedSchedulerPlanner<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
+    AC: AsyncConfig<Val = Value>,
 {
-    solver: Rc<BruteForceDistConstraintSolver<Expr, S, M>>,
+    solver: Rc<BruteForceDistConstraintSolver<Expr, S, M, AC>>,
     chosen_dist_graph: OnceCell<Rc<LabelledDistributionGraph>>,
 }
 
-impl<Expr, S, M> StaticOptimizedSchedulerPlanner<Expr, S, M>
+impl<Expr, S, M, AC> StaticOptimizedSchedulerPlanner<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
+    AC: AsyncConfig<Val = Value>,
 {
-    pub fn new(solver: BruteForceDistConstraintSolver<Expr, S, M>) -> Self {
+    pub fn new(solver: BruteForceDistConstraintSolver<Expr, S, M, AC>) -> Self {
         Self {
             solver: Rc::new(solver),
             chosen_dist_graph: OnceCell::new(),
@@ -43,11 +45,12 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr, S, M> SchedulerPlanner for StaticOptimizedSchedulerPlanner<Expr, S, M>
+impl<Expr, S, M, AC> SchedulerPlanner for StaticOptimizedSchedulerPlanner<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
+    AC: AsyncConfig<Val = Value>,
 {
     async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
         if let Some(chosen_dist_graph) = self.chosen_dist_graph.get() {

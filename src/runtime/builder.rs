@@ -17,7 +17,7 @@ use crate::{
     },
     runtime::{reconfigurable_async::ReconfAsyncMonitorBuilder, semi_sync::SemiSyncMonitorBuilder},
     semantics::{
-        DistributedSemantics, TypedUntimedLolaSemantics, UntimedLolaSemantics,
+        AsyncConfig, DistributedSemantics, TypedUntimedLolaSemantics, UntimedLolaSemantics,
         distributed::{contexts::DistributedContext, localisation::LocalitySpec},
     },
 };
@@ -422,6 +422,12 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     }
 }
 
+// NOTE: Temporary only while AsyncConfig is unfinished
+struct ValueConfig;
+impl AsyncConfig for ValueConfig {
+    type Val = Value;
+}
+
 impl GenericMonitorBuilder<LOLASpecification, Value> {
     // Creates the common parts of the builder
     fn create_common_builder(
@@ -446,8 +452,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             (Runtime::Async, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(AsyncMonitorBuilder::<
                     LOLASpecification,
-                    Context<Value>,
-                    Value,
+                    Context<ValueConfig>,
+                    ValueConfig,
                     _,
                     UntimedLolaSemantics<LALRExprParser>,
                 >::new())
@@ -455,8 +461,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
                 Box::new(AsyncMonitorBuilder::<
                     LOLASpecification,
-                    Context<Value>,
-                    Value,
+                    Context<ValueConfig>,
+                    ValueConfig,
                     _,
                     UntimedLolaSemantics<CombExprParser>,
                 >::new())
@@ -467,8 +473,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             (Runtime::Async, Semantics::TypedUntimed, _) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
                     TypedLOLASpecification,
-                    Context<Value>,
-                    Value,
+                    Context<ValueConfig>,
+                    ValueConfig,
                     _,
                     TypedUntimedLolaSemantics,
                 >::new()))
@@ -479,8 +485,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     // Reconfigurable async runtime does not work with DistributedContext
                     // or DistributedSemantics as it has no way of proving the graph stream for the
                     // network topology
-                    Context<Value>,
-                    Value,
+                    Context<ValueConfig>,
+                    ValueConfig,
                     _,
                     UntimedLolaSemantics<LALRExprParser>,
                 >::new();
@@ -523,8 +529,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     LOLASpecification,
                     // Reconfigurable async runtime does not work with DistributedContext
                     // as it has no way of proving the graph stream for the network topology
-                    Context<Value>,
-                    Value,
+                    Context<ValueConfig>,
+                    ValueConfig,
                     _,
                     UntimedLolaSemantics<CombExprParser>,
                 >::new();
@@ -578,8 +584,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
 
                 let builder = DistAsyncMonitorBuilder::<
                     LOLASpecification,
-                    DistributedContext<Value>,
-                    Value,
+                    DistributedContext<ValueConfig>,
+                    ValueConfig,
                     _,
                     DistributedSemantics<LALRExprParser>,
                 >::new();

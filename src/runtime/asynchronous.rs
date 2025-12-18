@@ -35,7 +35,7 @@ use crate::core::OutputHandler;
 use crate::core::Runnable;
 use crate::core::Specification;
 use crate::core::{OutputStream, StreamData, VarName};
-use crate::semantics::{AbstractContextBuilder, MonitoringSemantics, StreamContext};
+use crate::semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext};
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
 /// Track the stage of a variable's lifecycle
@@ -458,7 +458,7 @@ impl Display for ContextId {
 //
 /// This is implemented in the background using a combination of
 /// manage_var and store history actors
-pub struct Context<Val: StreamData> {
+pub struct Context<AC: AsyncConfig> {
     /// The executor which is used to run background tasks
     pub executor: Rc<LocalExecutor<'static>>,
     /// The variables which are available in the context
@@ -470,7 +470,7 @@ pub struct Context<Val: StreamData> {
     /// Current clock
     clock: usize,
     /// Variable manangers
-    var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Val>>>>,
+    var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC::Val>>>>,
     /// Cancellation token to stop all var managers when output streams are dropped
     cancellation_token: CancellationToken,
     /// Identifier - used for log messages
@@ -478,9 +478,9 @@ pub struct Context<Val: StreamData> {
     /// Nested context --- Lets us construct a constext which wraps another context. Currently only
     /// used to recursively start parent in distributed monitoring, and not used for subcontexts
     /// (which start and stop independently from the parent)
-    nested: Option<Box<Context<Val>>>,
+    nested: Option<Box<Context<AC>>>,
     /// The builder used to construct us
-    builder: ContextBuilder<Val>,
+    builder: ContextBuilder<AC>,
 }
 
 /// Concrete builder for Context<Val>
@@ -491,18 +491,18 @@ pub struct Context<Val: StreamData> {
 // and should make tests a little easier
 // (e.g. for the distributed runtime)
 // We could look into a crate that derives this in the future.
-pub struct ContextBuilder<Val: StreamData> {
+pub struct ContextBuilder<AC: AsyncConfig> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     var_names: Option<Vec<VarName>>,
-    input_streams: Option<Vec<OutputStream<Val>>>,
+    input_streams: Option<Vec<OutputStream<AC::Val>>>,
     history_length: Option<usize>,
-    nested: Option<Box<Context<Val>>>,
+    nested: Option<Box<Context<AC>>>,
     id: Option<ContextId>,
 }
 
-impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
-    type Val = Val;
-    type Ctx = Context<Val>;
+impl<AC: AsyncConfig> AbstractContextBuilder for ContextBuilder<AC> {
+    type Val = AC::Val;
+    type Ctx = Context<AC>;
 
     fn new() -> Self {
         ContextBuilder {
@@ -553,7 +553,7 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
         res
     }
 
-    fn build(self) -> Context<Val> {
+    fn build(self) -> Context<AC> {
         let builder = self.partial_clone();
         let executor = self.executor.expect("Executor not supplied");
         let var_names = self.var_names.expect("Var names not supplied");
@@ -614,29 +614,29 @@ impl<Val: StreamData> AbstractContextBuilder for ContextBuilder<Val> {
     }
 }
 
-impl<Val: StreamData> ContextBuilder<Val> {
+impl<AC: AsyncConfig> ContextBuilder<AC> {
     pub fn id(mut self, id: usize, parent_id: Option<usize>) -> Self {
         let id = ContextId { id, parent_id };
         self.id = Some(id);
         self
     }
 
-    pub fn nested(mut self, nested: Context<Val>) -> Self {
+    pub fn nested(mut self, nested: Context<AC>) -> Self {
         self.nested = Some(Box::new(nested));
         self
     }
 
-    pub fn maybe_nested(mut self, nested: Option<Context<Val>>) -> Self {
+    pub fn maybe_nested(mut self, nested: Option<Context<AC>>) -> Self {
         self.nested = nested.map(Box::new);
         self
     }
 }
 
-impl<Val: StreamData> Context<Val> {
+impl<AC: AsyncConfig> Context<AC> {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
-        input_streams: Vec<OutputStream<Val>>,
+        input_streams: Vec<OutputStream<AC::Val>>,
         history_length: usize,
     ) -> Self {
         ContextBuilder::new()
@@ -662,10 +662,11 @@ impl<Val: StreamData> Context<Val> {
 }
 
 #[async_trait(?Send)]
-impl<Val: StreamData> StreamContext<Val> for Context<Val> {
-    type Builder = ContextBuilder<Val>;
+impl<AC: AsyncConfig> StreamContext for Context<AC> {
+    type Val = AC::Val;
+    type Builder = ContextBuilder<AC>;
 
-    fn var(&self, var: &VarName) -> Option<OutputStream<Val>> {
+    fn var(&self, var: &VarName) -> Option<OutputStream<AC::Val>> {
         debug!(
             "Context[id={}]: Requesting stream for variable '{}'",
             self.id, var
@@ -879,19 +880,19 @@ impl<Val: StreamData> StreamContext<Val> for Context<Val> {
 ///  - The S type parameter is the monitoring semantics used to evaluate the
 ///    expressions as streams.
 ///  - The M type parameter is the model/specification being monitored.
-pub struct AsyncMonitorRunner<Expr, Val, S, M, Ctx>
+pub struct AsyncMonitorRunner<Expr, AC, S, M, Ctx>
 where
-    Val: StreamData,
-    Ctx: StreamContext<Val>,
-    S: MonitoringSemantics<Expr, Val, Ctx>,
+    AC: AsyncConfig,
+    Ctx: StreamContext,
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
     M: Specification<Expr = Expr>,
 {
     #[allow(dead_code)]
     pub executor: Rc<LocalExecutor<'static>>,
     model: M,
-    input_provider: Box<dyn InputProvider<Val = Val>>,
-    output_handler: Box<dyn OutputHandler<Val = Val>>,
-    output_streams: Vec<OutputStream<Val>>,
+    input_provider: Box<dyn InputProvider<Val = AC::Val>>,
+    output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
+    output_streams: Vec<OutputStream<AC::Val>>,
     cancellation_token: CancellationToken,
     #[allow(dead_code)]
     expr_t: PhantomData<Expr>,
@@ -901,15 +902,15 @@ where
 
 pub struct AsyncMonitorBuilder<
     M: Specification<Expr = Expr>,
-    Ctx: StreamContext<V>,
-    V: StreamData,
+    Ctx: StreamContext,
+    AC: AsyncConfig,
     Expr: 'static,
-    S: MonitoringSemantics<Expr, V, Ctx>,
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
 > {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<M>,
-    pub(super) input: Option<Box<dyn InputProvider<Val = V>>>,
-    pub(super) output: Option<Box<dyn OutputHandler<Val = V>>>,
+    pub(super) input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
+    pub(super) output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
     pub(super) context_builder: Option<Ctx::Builder>,
     expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
@@ -917,11 +918,11 @@ pub struct AsyncMonitorBuilder<
 
 impl<
     M: Specification<Expr = Expr>,
-    Ctx: StreamContext<V>,
-    V: StreamData,
+    Ctx: StreamContext,
+    AC: AsyncConfig,
     Expr,
-    S: MonitoringSemantics<Expr, V, Ctx>,
-> AsyncMonitorBuilder<M, Ctx, V, Expr, S>
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+> AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
 {
     pub fn partial_clone(&self) -> Self {
         Self {
@@ -939,8 +940,8 @@ impl<
     }
 }
 
-pub trait AbstractAsyncMonitorBuilder<M, Ctx: StreamContext<V>, V: StreamData>:
-    AbstractMonitorBuilder<M, V>
+pub trait AbstractAsyncMonitorBuilder<M, Ctx: StreamContext, AC: AsyncConfig>:
+    AbstractMonitorBuilder<M, AC::Val>
 {
     fn context_builder(self, context_builder: Ctx::Builder) -> Self;
 }
@@ -948,12 +949,12 @@ pub trait AbstractAsyncMonitorBuilder<M, Ctx: StreamContext<V>, V: StreamData>:
 impl<
     M: Specification<Expr = Expr>,
     Expr,
-    S: MonitoringSemantics<Expr, Val, Ctx>,
-    Val: StreamData,
-    Ctx: StreamContext<Val>,
-> AbstractAsyncMonitorBuilder<M, Ctx, Val> for AsyncMonitorBuilder<M, Ctx, Val, Expr, S>
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    AC: AsyncConfig,
+    Ctx: StreamContext<Val = AC::Val>,
+> AbstractAsyncMonitorBuilder<M, Ctx, AC> for AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
 {
-    fn context_builder(self, context_builder: <Ctx as StreamContext<Val>>::Builder) -> Self {
+    fn context_builder(self, context_builder: <Ctx as StreamContext>::Builder) -> Self {
         Self {
             context_builder: Some(context_builder),
             ..self
@@ -964,12 +965,12 @@ impl<
 impl<
     M: Specification<Expr = Expr>,
     Expr,
-    S: MonitoringSemantics<Expr, Val, Ctx>,
-    Val: StreamData,
-    Ctx: StreamContext<Val>,
-> AbstractMonitorBuilder<M, Val> for AsyncMonitorBuilder<M, Ctx, Val, Expr, S>
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    AC: AsyncConfig,
+    Ctx: StreamContext<Val = AC::Val>,
+> AbstractMonitorBuilder<M, AC::Val> for AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
 {
-    type Mon = AsyncMonitorRunner<Expr, Val, S, M, Ctx>;
+    type Mon = AsyncMonitorRunner<Expr, AC, S, M, Ctx>;
 
     fn new() -> Self {
         AsyncMonitorBuilder {
@@ -997,14 +998,14 @@ impl<
         }
     }
 
-    fn input(self, input: Box<dyn InputProvider<Val = Val>>) -> Self {
+    fn input(self, input: Box<dyn InputProvider<Val = AC::Val>>) -> Self {
         Self {
             input: Some(input),
             ..self
         }
     }
 
-    fn output(self, output: Box<dyn OutputHandler<Val = Val>>) -> Self {
+    fn output(self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
         Self {
             output: Some(output),
             ..self
@@ -1016,7 +1017,7 @@ impl<
         self
     }
 
-    fn build(self) -> AsyncMonitorRunner<Expr, Val, S, M, Ctx> {
+    fn build(self) -> Self::Mon {
         debug!("AsyncMonitorBuilder: Starting build process");
         let executor = self.executor.expect("Executor not supplied");
         let model = self.model.expect("Model not supplied");
@@ -1060,14 +1061,14 @@ impl<
         let output_oneshots: Vec<_> = output_vars
             .iter()
             .cloned()
-            .map(|_| oneshot::channel::<OutputStream<Val>>().into_split())
+            .map(|_| oneshot::channel::<OutputStream<AC::Val>>().into_split())
             .collect();
         let (output_txs, output_rxs): (Vec<_>, Vec<_>) = output_oneshots.into_iter().unzip();
         let output_txs: BTreeMap<_, _> = output_vars.iter().cloned().zip(output_txs).collect();
         let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
 
         // Combine the input and output streams into a single map
-        let streams: Vec<OutputStream<Val>> = input_streams.chain(output_streams).collect();
+        let streams: Vec<OutputStream<AC::Val>> = input_streams.chain(output_streams).collect();
 
         let mut context = context_builder
             .executor(executor.clone())
@@ -1139,18 +1140,18 @@ impl<
     }
 }
 
-impl<Expr, Val, S, M> AsyncMonitorRunner<Expr, Val, S, M, Context<Val>>
+impl<Expr, AC, S, M> AsyncMonitorRunner<Expr, AC, S, M, Context<AC>>
 where
     Expr: 'static,
-    Val: StreamData,
-    S: MonitoringSemantics<Expr, Val, Context<Val>, Val>,
+    AC: AsyncConfig,
+    S: MonitoringSemantics<Expr, AC::Val, Context<AC>>,
     M: Specification<Expr = Expr>,
 {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         model: M,
-        input: Box<dyn InputProvider<Val = Val>>,
-        output: Box<dyn OutputHandler<Val = Val>>,
+        input: Box<dyn InputProvider<Val = AC::Val>>,
+        output: Box<dyn OutputHandler<Val = AC::Val>>,
     ) -> Self {
         AsyncMonitorBuilder::new()
             .executor(executor)
@@ -1162,12 +1163,12 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr, Val, S, M, Ctx> Monitor<M, Val> for AsyncMonitorRunner<Expr, Val, S, M, Ctx>
+impl<Expr, AC, S, M, Ctx> Monitor<M, AC::Val> for AsyncMonitorRunner<Expr, AC, S, M, Ctx>
 where
     Expr: 'static,
-    Val: StreamData,
-    Ctx: StreamContext<Val>,
-    S: MonitoringSemantics<Expr, Val, Ctx, Val>,
+    AC: AsyncConfig,
+    Ctx: StreamContext,
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
     M: Specification<Expr = Expr>,
 {
     fn spec(&self) -> &M {
@@ -1176,11 +1177,11 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr, Val, S, M, Ctx> Runnable for AsyncMonitorRunner<Expr, Val, S, M, Ctx>
+impl<Expr, AC, S, M, Ctx> Runnable for AsyncMonitorRunner<Expr, AC, S, M, Ctx>
 where
-    Val: StreamData,
-    Ctx: StreamContext<Val>,
-    S: MonitoringSemantics<Expr, Val, Ctx, Val>,
+    AC: AsyncConfig,
+    Ctx: StreamContext,
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
     M: Specification<Expr = Expr>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
@@ -1238,7 +1239,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::Value;
+    use crate::{Value, lola_fixtures::TestConfig};
 
     use super::*;
 
@@ -1323,7 +1324,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_subctx_regression_727dc01(executor: Rc<LocalExecutor<'static>>) {
-        fn mock_indirection<Ctx: StreamContext<Value>>(
+        fn mock_indirection<Ctx: StreamContext<Val = Value>>(
             ctx: &Ctx,
             x: VarName,
         ) -> OutputStream<Value> {
@@ -1339,7 +1340,8 @@ mod tests {
         }
 
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-        let mut ctx: Context<Value> = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx: Context<TestConfig> =
+            Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let var_stream = mock_indirection(&ctx, "x".into());
         ctx.run().await;
         let exp: Vec<Value> = vec![1.into(), 2.into(), 3.into()];

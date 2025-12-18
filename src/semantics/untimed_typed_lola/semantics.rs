@@ -11,9 +11,9 @@ use crate::semantics::{MonitoringSemantics, StreamContext};
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics;
 
-impl<Ctx> MonitoringSemantics<SExprTE, Value, Ctx, Value> for TypedUntimedLolaSemantics
+impl<Ctx> MonitoringSemantics<SExprTE, Value, Ctx> for TypedUntimedLolaSemantics
 where
-    Ctx: StreamContext<Value>,
+    Ctx: StreamContext<Val = Value>,
 {
     fn to_async_stream(expr: SExprTE, ctx: &Ctx) -> OutputStream<Value> {
         match expr {
@@ -36,10 +36,9 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprInt, PossiblyDeferred<i64>, Ctx, Value>
-    for TypedUntimedLolaSemantics
+impl<Ctx> MonitoringSemantics<SExprInt, PossiblyDeferred<i64>, Ctx> for TypedUntimedLolaSemantics
 where
-    Ctx: StreamContext<Value>,
+    Ctx: StreamContext<Val = Value>,
 {
     fn to_async_stream(expr: SExprInt, ctx: &Ctx) -> OutputStream<PossiblyDeferred<i64>> {
         match expr {
@@ -74,10 +73,9 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprFloat, PossiblyDeferred<f64>, Ctx, Value>
-    for TypedUntimedLolaSemantics
+impl<Ctx> MonitoringSemantics<SExprFloat, PossiblyDeferred<f64>, Ctx> for TypedUntimedLolaSemantics
 where
-    Ctx: StreamContext<Value>,
+    Ctx: StreamContext<Val = Value>,
 {
     fn to_async_stream(expr: SExprFloat, ctx: &Ctx) -> OutputStream<PossiblyDeferred<f64>> {
         match expr {
@@ -112,10 +110,9 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprStr, PossiblyDeferred<String>, Ctx, Value>
-    for TypedUntimedLolaSemantics
+impl<Ctx> MonitoringSemantics<SExprStr, PossiblyDeferred<String>, Ctx> for TypedUntimedLolaSemantics
 where
-    Ctx: StreamContext<Value>,
+    Ctx: StreamContext<Val = Value>,
 {
     fn to_async_stream(expr: SExprStr, ctx: &Ctx) -> OutputStream<PossiblyDeferred<String>> {
         match expr {
@@ -151,10 +148,9 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprUnit, PossiblyDeferred<()>, Ctx, Value>
-    for TypedUntimedLolaSemantics
+impl<Ctx> MonitoringSemantics<SExprUnit, PossiblyDeferred<()>, Ctx> for TypedUntimedLolaSemantics
 where
-    Ctx: StreamContext<Value>,
+    Ctx: StreamContext<Val = Value>,
 {
     fn to_async_stream(expr: SExprUnit, ctx: &Ctx) -> OutputStream<PossiblyDeferred<()>> {
         match expr {
@@ -178,10 +174,9 @@ where
     }
 }
 
-impl<Ctx> MonitoringSemantics<SExprBool, PossiblyDeferred<bool>, Ctx, Value>
-    for TypedUntimedLolaSemantics
+impl<Ctx> MonitoringSemantics<SExprBool, PossiblyDeferred<bool>, Ctx> for TypedUntimedLolaSemantics
 where
-    Ctx: StreamContext<Value>,
+    Ctx: StreamContext<Val = Value>,
 {
     fn to_async_stream(expr: SExprBool, ctx: &Ctx) -> OutputStream<PossiblyDeferred<bool>> {
         match expr {

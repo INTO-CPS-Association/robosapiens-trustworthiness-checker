@@ -5,6 +5,7 @@ use crate::core::OutputStream;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
+use crate::semantics::AsyncConfig;
 use crate::semantics::MonitoringSemantics;
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_untyped_lola::combinators as mc;
@@ -19,12 +20,13 @@ where
     _parser: std::marker::PhantomData<Parser>,
 }
 
-impl<Parser> MonitoringSemantics<SExpr, Value, DistributedContext<Value>>
+impl<Parser, AC> MonitoringSemantics<SExpr, Value, DistributedContext<AC>>
     for DistributedSemantics<Parser>
 where
     Parser: ExprParser<SExpr> + 'static,
+    AC: AsyncConfig<Val = Value>,
 {
-    fn to_async_stream(expr: SExpr, ctx: &DistributedContext<Value>) -> OutputStream<Value> {
+    fn to_async_stream(expr: SExpr, ctx: &DistributedContext<AC>) -> OutputStream<Value> {
         match expr {
             SExpr::Val(v) => mc::val(v),
             SExpr::BinOp(e1, e2, op) => {
@@ -53,11 +55,11 @@ where
             SExpr::Var(v) => mc::var(ctx, v),
             SExpr::Dynamic(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic::<DistributedContext<Value>, Parser>(ctx, e, None, 10)
+                mc::dynamic::<DistributedContext<AC>, Parser>(ctx, e, None, 10)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::dynamic::<DistributedContext<Value>, Parser>(ctx, e, Some(vs), 10)
+                mc::dynamic::<DistributedContext<AC>, Parser>(ctx, e, Some(vs), 10)
             }
             SExpr::Defer(e) => {
                 let e = Self::to_async_stream(*e, ctx);

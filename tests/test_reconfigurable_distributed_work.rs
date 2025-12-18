@@ -10,11 +10,12 @@ mod integration_tests {
     use tc_testutils::mqtt::start_mqtt;
     use tracing::info;
     use trustworthiness_checker::{
-        LOLASpecification, Value, async_test,
+        LOLASpecification, async_test,
         core::{AbstractMonitorBuilder, Runnable, Runtime, Semantics},
         distributed::locality_receiver::LocalityReceiver,
         io::mqtt::{MQTTLocalityReceiver, MqttFactory, MqttMessage},
         lang::dynamic_lola::parser::CombExprParser,
+        lola_fixtures::TestConfig,
         runtime::{
             RuntimeBuilder, asynchronous::Context, builder::DistributionMode,
             reconfigurable_async::ReconfAsyncMonitorBuilder,
@@ -124,8 +125,8 @@ mod integration_tests {
         info!("Creating ReconfAsyncMonitorBuilder");
         let builder = ReconfAsyncMonitorBuilder::<
             LOLASpecification,
-            Context<Value>,
-            Value,
+            Context<TestConfig>,
+            TestConfig,
             _,
             UntimedLolaSemantics<CombExprParser>,
         >::new()

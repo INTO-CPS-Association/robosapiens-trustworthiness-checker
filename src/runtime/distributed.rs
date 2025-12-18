@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::{
     InputProvider, Monitor, Specification, Value, VarName,
-    core::{AbstractMonitorBuilder, OutputHandler, Runnable, StreamData, to_typed_stream},
+    core::{AbstractMonitorBuilder, OutputHandler, Runnable, to_typed_stream},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         scheduling::{
@@ -28,7 +28,7 @@ use crate::{
         dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
     },
     semantics::{
-        AbstractContextBuilder, MonitoringSemantics, StreamContext,
+        AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
         distributed::{
             contexts::{DistributedContext, DistributedContextBuilder},
             localisation::Localisable,
@@ -65,12 +65,13 @@ pub enum DistGraphMode {
 
 impl<
     M: Specification<Expr = Expr> + Localisable,
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     Expr: 'static,
-> AbstractAsyncMonitorBuilder<M, DistributedContext<Value>, Value>
-    for DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>
+    AC: AsyncConfig<Val = Value>,
+> AbstractAsyncMonitorBuilder<M, DistributedContext<AC>, AC>
+    for DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>
 {
-    fn context_builder(mut self, context_builder: DistributedContextBuilder<Value>) -> Self {
+    fn context_builder(mut self, context_builder: DistributedContextBuilder<AC>) -> Self {
         self.context_builder = Some(context_builder);
         self
     }
@@ -78,13 +79,13 @@ impl<
 
 pub struct DistAsyncMonitorBuilder<
     M: Specification<Expr = Expr>,
-    Ctx: StreamContext<V>,
-    V: StreamData,
+    Ctx: StreamContext,
+    AC: AsyncConfig,
     Expr: 'static,
-    S: MonitoringSemantics<Expr, V, Ctx>,
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
 > {
-    pub async_monitor_builder: AsyncMonitorBuilder<M, Ctx, V, Expr, S>,
-    input: Option<Box<dyn InputProvider<Val = V>>>,
+    pub async_monitor_builder: AsyncMonitorBuilder<M, Ctx, AC, Expr, S>,
+    input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     pub context_builder: Option<Ctx::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
     scheduler_mode: Option<SchedulerCommunication>,
@@ -92,11 +93,11 @@ pub struct DistAsyncMonitorBuilder<
 
 impl<
     M: Specification<Expr = Expr>,
-    Ctx: StreamContext<Val>,
-    Val: StreamData,
-    S: MonitoringSemantics<Expr, Val, Ctx>,
+    Ctx: StreamContext,
+    AC: AsyncConfig,
+    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
     Expr: 'static,
-> DistAsyncMonitorBuilder<M, Ctx, Val, Expr, S>
+> DistAsyncMonitorBuilder<M, Ctx, AC, Expr, S>
 {
     pub fn static_dist_graph(mut self, graph: LabelledDistributionGraph) -> Self {
         self.dist_graph_mode = Some(DistGraphMode::Static(graph));
@@ -149,9 +150,10 @@ impl<
 }
 impl<
     M: Specification<Expr = Expr> + Localisable,
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     Expr: 'static,
-> DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>
+    AC: AsyncConfig<Val = Value>,
+> DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>
 {
     pub fn scheduler_mode(mut self, scheduler_mode: SchedulerCommunication) -> Self {
         self.scheduler_mode = Some(scheduler_mode);
@@ -165,13 +167,14 @@ pub enum SchedulerCommunication {
     MQTT,
 }
 
-impl<Expr: 'static, S, M> AbstractMonitorBuilder<M, Value>
-    for DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>
+impl<Expr: 'static, S, M, AC> AbstractMonitorBuilder<M, AC::Val>
+    for DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>
 where
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
+    AC: AsyncConfig<Val = Value>,
 {
-    type Mon = DistributedMonitorRunner<Expr, Value, S, M>;
+    type Mon = DistributedMonitorRunner<Expr, AC, S, M>;
 
     fn new() -> Self {
         DistAsyncMonitorBuilder {
@@ -193,12 +196,12 @@ where
         self
     }
 
-    fn input(mut self, input: Box<dyn crate::InputProvider<Val = Value>>) -> Self {
+    fn input(mut self, input: Box<dyn crate::InputProvider<Val = AC::Val>>) -> Self {
         self.input = Some(input);
         self
     }
 
-    fn output(mut self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
+    fn output(mut self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
         debug!("Setting output handler");
         self.async_monitor_builder = self.async_monitor_builder.output(output);
         self
@@ -430,24 +433,24 @@ where
 ///  - The S type parameter is the monitoring semantics used to evaluate the
 ///    expressions as streams.
 ///  - The M type parameter is the model/specification being monitored.
-pub struct DistributedMonitorRunner<Expr, Val, S, M>
+pub struct DistributedMonitorRunner<Expr, AC, S, M>
 where
-    Val: StreamData,
-    S: MonitoringSemantics<Expr, Val, DistributedContext<Val>>,
+    AC: AsyncConfig,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     M: Specification<Expr = Expr>,
 {
-    pub(crate) async_monitor: AsyncMonitorRunner<Expr, Val, S, M, DistributedContext<Val>>,
+    pub(crate) async_monitor: AsyncMonitorRunner<Expr, AC, S, M, DistributedContext<AC>>,
     // TODO: should we be responsible for building the stream of graphs
     pub(crate) scheduler: Scheduler,
 }
 
 #[async_trait(?Send)]
-impl<Expr, M, S, V> Monitor<M, V> for DistributedMonitorRunner<Expr, V, S, M>
+impl<Expr, M, S, AC> Monitor<M, AC::Val> for DistributedMonitorRunner<Expr, AC, S, M>
 where
     Expr: 'static,
     M: Specification<Expr = Expr>,
-    S: MonitoringSemantics<Expr, V, DistributedContext<V>>,
-    V: StreamData,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    AC: AsyncConfig,
 {
     fn spec(&self) -> &M {
         self.async_monitor.spec()
@@ -455,12 +458,12 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr, M, S, V> Runnable for DistributedMonitorRunner<Expr, V, S, M>
+impl<Expr, M, S, AC> Runnable for DistributedMonitorRunner<Expr, AC, S, M>
 where
     Expr: 'static,
     M: Specification<Expr = Expr>,
-    S: MonitoringSemantics<Expr, V, DistributedContext<V>>,
-    V: StreamData,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    AC: AsyncConfig,
 {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {
         let (res1, res2) = join!(self.scheduler.run(), self.async_monitor.run());

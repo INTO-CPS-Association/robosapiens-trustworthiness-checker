@@ -6,29 +6,28 @@ use smol::LocalExecutor;
 
 use crate::{
     OutputStream, VarName,
-    core::StreamData,
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, NodeName, TaggedVarOrNodeName,
     },
     lang::dynamic_lola::ast::VarOrNodeName,
     runtime::asynchronous::{Context as AsyncCtx, ContextBuilder as AsyncCtxBuilder, VarManager},
-    semantics::{AbstractContextBuilder, StreamContext},
+    semantics::{AbstractContextBuilder, AsyncConfig, StreamContext},
 };
 
-pub struct DistributedContextBuilder<Val: StreamData> {
-    async_ctx_builder: AsyncCtxBuilder<Val>,
-    async_ctx: Option<AsyncCtx<Val>>,
-    nested_async_ctx: Option<AsyncCtx<Val>>,
+pub struct DistributedContextBuilder<AC: AsyncConfig> {
+    async_ctx_builder: AsyncCtxBuilder<AC>,
+    async_ctx: Option<AsyncCtx<AC>>,
+    nested_async_ctx: Option<AsyncCtx<AC>>,
     graph_name: Option<String>,
     node_names: Option<Vec<NodeName>>,
     graph_stream: Option<LabelledDistGraphStream>,
-    presupplied_ctx: Option<Box<DistributedContext<Val>>>,
-    built_callbacks: Vec<Box<dyn FnOnce(&mut DistributedContext<Val>)>>,
+    presupplied_ctx: Option<Box<DistributedContext<AC>>>,
+    built_callbacks: Vec<Box<dyn FnOnce(&mut DistributedContext<AC>)>>,
 }
 
-impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> {
-    type Ctx = DistributedContext<Val>;
-    type Val = Val;
+impl<AC: AsyncConfig> AbstractContextBuilder for DistributedContextBuilder<AC> {
+    type Ctx = DistributedContext<AC>;
+    type Val = AC::Val;
 
     fn new() -> Self {
         Self {
@@ -53,7 +52,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
         self
     }
 
-    fn input_streams(mut self, input_streams: Vec<OutputStream<Val>>) -> Self {
+    fn input_streams(mut self, input_streams: Vec<OutputStream<AC::Val>>) -> Self {
         self.async_ctx_builder = self.async_ctx_builder.input_streams(input_streams);
         self
     }
@@ -76,7 +75,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
         }
     }
 
-    fn build(self) -> DistributedContext<Val> {
+    fn build(self) -> DistributedContext<AC> {
         if let Some(presupplied_ctx) = self.presupplied_ctx {
             return *presupplied_ctx;
         }
@@ -113,7 +112,7 @@ impl<Val: StreamData> AbstractContextBuilder for DistributedContextBuilder<Val> 
     }
 }
 
-impl<Val: StreamData> DistributedContextBuilder<Val> {
+impl<AC: AsyncConfig> DistributedContextBuilder<AC> {
     pub fn graph_stream(mut self, graph_stream: LabelledDistGraphStream) -> Self {
         self.graph_stream = Some(graph_stream);
         self
@@ -129,41 +128,42 @@ impl<Val: StreamData> DistributedContextBuilder<Val> {
         self
     }
 
-    pub fn context(mut self, ctx: AsyncCtx<Val>) -> Self {
+    pub fn context(mut self, ctx: AsyncCtx<AC>) -> Self {
         self.async_ctx = Some(ctx);
         self
     }
 
-    pub fn presupplied_ctx(mut self, ctx: DistributedContext<Val>) -> Self {
+    pub fn presupplied_ctx(mut self, ctx: DistributedContext<AC>) -> Self {
         self.presupplied_ctx = Some(Box::new(ctx));
         self
     }
 
-    pub fn nested(mut self, ctx: AsyncCtx<Val>) -> Self {
+    pub fn nested(mut self, ctx: AsyncCtx<AC>) -> Self {
         self.nested_async_ctx = Some(ctx);
         self
     }
 
-    pub fn add_callback(mut self, callback: Box<dyn Fn(&mut DistributedContext<Val>)>) -> Self {
+    pub fn add_callback(mut self, callback: Box<dyn Fn(&mut DistributedContext<AC>)>) -> Self {
         self.built_callbacks.push(callback);
         self
     }
 }
 
-pub struct DistributedContext<Val: StreamData> {
-    ctx: AsyncCtx<Val>,
+pub struct DistributedContext<AC: AsyncConfig> {
+    ctx: AsyncCtx<AC>,
     /// Essentially a shared_ptr that we can at some time take ownership of
     node_names: Vec<NodeName>,
     graph_manager: Rc<RefCell<Option<VarManager<Rc<LabelledDistributionGraph>>>>>,
     executor: Rc<LocalExecutor<'static>>,
-    builder: DistributedContextBuilder<Val>,
+    builder: DistributedContextBuilder<AC>,
 }
 
 #[async_trait(?Send)]
-impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
-    type Builder = DistributedContextBuilder<Val>;
+impl<AC: AsyncConfig> StreamContext for DistributedContext<AC> {
+    type Val = AC::Val;
+    type Builder = DistributedContextBuilder<AC>;
 
-    fn var(&self, x: &VarName) -> Option<OutputStream<Val>> {
+    fn var(&self, x: &VarName) -> Option<OutputStream<AC::Val>> {
         self.ctx.var(x)
     }
 
@@ -227,7 +227,7 @@ impl<Val: StreamData> StreamContext<Val> for DistributedContext<Val> {
     }
 }
 
-impl<Val: StreamData> DistributedContext<Val> {
+impl<AC: AsyncConfig> DistributedContext<AC> {
     pub fn graph(&self) -> Option<LabelledDistGraphStream> {
         if self.is_clock_started() {
             panic!("Cannot request a stream after the clock has started");

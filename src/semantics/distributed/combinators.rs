@@ -1,17 +1,18 @@
 use crate::VarName;
 use crate::core::OutputStream;
-use crate::core::{StreamData, Value};
+use crate::core::Value;
 use crate::distributed::distribution_graphs::{Distance, NodeName};
 use crate::lang::dynamic_lola::ast::VarOrNodeName;
+use crate::semantics::AsyncConfig;
 use async_stream::stream;
 use futures::StreamExt;
 
 use super::contexts::DistributedContext;
 
-pub fn monitored_at<Val: StreamData>(
+pub fn monitored_at<AC: AsyncConfig>(
     var_name: VarName,
     node_name: NodeName,
-    ctx: &DistributedContext<Val>,
+    ctx: &DistributedContext<AC>,
 ) -> OutputStream<Value> {
     let mut graph_stream = ctx.graph().unwrap();
 
@@ -26,10 +27,10 @@ pub fn monitored_at<Val: StreamData>(
     })
 }
 
-pub fn dist<Val: StreamData>(
+pub fn dist<AC: AsyncConfig>(
     u: VarOrNodeName,
     v: VarOrNodeName,
-    ctx: &DistributedContext<Val>,
+    ctx: &DistributedContext<AC>,
 ) -> OutputStream<Value> {
     let u = ctx
         .disambiguate_name(u)
@@ -57,6 +58,7 @@ mod tests {
     use super::*;
     use crate::async_test;
     use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    use crate::lola_fixtures::TestConfig;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{
@@ -71,13 +73,16 @@ mod tests {
     use petgraph::graph::DiGraph;
     use smol::LocalExecutor;
 
+    type TestDistCtx = DistributedContext<TestConfig>;
+    type TestDistCtxBuilder = DistributedContextBuilder<TestConfig>;
+
     #[apply(async_test)]
     async fn test_that_test_can_test(executor: Rc<LocalExecutor<'static>>) {
         // Just a little test to check that we can do our tests... :-)
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let graph_stream = Box::pin(stream::iter(vec![]));
-        let mut ctx = DistributedContextBuilder::new()
+        let mut ctx = TestDistCtxBuilder::new()
             .executor(executor.clone())
             .var_names(vec!["x".into()])
             .input_streams(vec![x])
@@ -87,7 +92,7 @@ mod tests {
             .build();
         let exp = vec![Value::Int(2), Value::Int(4)];
         let res_stream = crate::semantics::untimed_untyped_lola::combinators::dynamic::<
-            DistributedContext<Value>,
+            TestDistCtx,
             LALRExprParser,
         >(&ctx, e, None, 10);
         ctx.run().await;
@@ -123,7 +128,7 @@ mod tests {
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
-        let mut ctx = DistributedContextBuilder::new()
+        let mut ctx = TestDistCtxBuilder::new()
             .executor(executor.clone())
             .var_names(vec!["x".into(), "y".into(), "z".into()])
             .input_streams(vec![x, y, z])
@@ -167,7 +172,7 @@ mod tests {
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
-        let mut ctx = DistributedContextBuilder::new()
+        let mut ctx = TestDistCtxBuilder::new()
             .executor(executor.clone())
             .var_names(vec!["x".into(), "y".into(), "z".into()])
             .input_streams(vec![x, y, z])
@@ -211,7 +216,7 @@ mod tests {
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
-        let mut ctx = DistributedContextBuilder::new()
+        let mut ctx = TestDistCtxBuilder::new()
             .executor(executor.clone())
             .var_names(vec!["x".into(), "y".into(), "z".into()])
             .input_streams(vec![x, y, z])
@@ -255,7 +260,7 @@ mod tests {
 
         let graph_stream = Box::pin(stream::repeat(labelled_graph));
 
-        let ctx = DistributedContextBuilder::new()
+        let ctx = TestDistCtxBuilder::new()
             .executor(executor.clone())
             .var_names(vec!["x".into(), "y".into(), "z".into()])
             .input_streams(vec![x, y, z])

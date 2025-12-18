@@ -16,7 +16,7 @@ use crate::{
     io::testing::ManualOutputHandler,
     runtime::{asynchronous::AbstractAsyncMonitorBuilder, distributed::DistAsyncMonitorBuilder},
     semantics::{
-        AbstractContextBuilder, MonitoringSemantics,
+        AbstractContextBuilder, AsyncConfig, MonitoringSemantics,
         distributed::{
             contexts::{DistributedContext, DistributedContextBuilder},
             localisation::Localisable,
@@ -24,29 +24,31 @@ use crate::{
     },
 };
 
-pub struct BruteForceDistConstraintSolver<Expr, S, M>
+pub struct BruteForceDistConstraintSolver<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
+    AC: AsyncConfig<Val = Value>,
 {
     pub executor: Rc<LocalExecutor<'static>>,
-    pub monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>,
-    pub context_builder: Option<DistributedContextBuilder<Value>>,
+    pub monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>,
+    pub context_builder: Option<DistributedContextBuilder<AC>>,
     pub dist_constraints: Vec<VarName>,
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
 }
 
-impl<Expr, S, M> BruteForceDistConstraintSolver<Expr, S, M>
+impl<Expr, S, M, AC> BruteForceDistConstraintSolver<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, Value, DistributedContext<Value>>,
+    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
+    AC: AsyncConfig<Val = Value>,
 {
     fn output_stream_for_graph(
         &self,
-        monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<Value>, Value, Expr, S>,
+        monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>,
         labelled_graph: Rc<LabelledDistributionGraph>,
     ) -> OutputStream<Vec<bool>> {
         // Build a runtime for constructing the output stream

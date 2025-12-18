@@ -449,7 +449,7 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
     )
 }
 
-pub fn dynamic<Ctx: StreamContext<Value>, Parser>(
+pub fn dynamic<Ctx, Parser>(
     ctx: &Ctx,
     eval_stream: OutputStream<Value>,
     vs: Option<EcoVec<VarName>>,
@@ -457,6 +457,7 @@ pub fn dynamic<Ctx: StreamContext<Value>, Parser>(
 ) -> OutputStream<Value>
 where
     Parser: ExprParser<SExpr> + 'static,
+    Ctx: StreamContext<Val = Value>,
 {
     // Note: Slight change in dynamic's behavior after language became async and we introduced
     // NoVal. Consider the following behavior:
@@ -540,7 +541,7 @@ where
     })
 }
 
-pub fn var(ctx: &impl StreamContext<Value>, var: VarName) -> OutputStream<Value> {
+pub fn var(ctx: &impl StreamContext<Val = Value>, var: VarName) -> OutputStream<Value> {
     debug!(?var, "Accessing variable");
     match ctx.var(&var) {
         Some(stream) => {
@@ -557,7 +558,7 @@ pub fn var(ctx: &impl StreamContext<Value>, var: VarName) -> OutputStream<Value>
 // Defer for an UntimedLolaExpression using the lola_expression parser
 #[instrument(skip(ctx, prop_stream))]
 pub fn defer<Parser>(
-    ctx: &impl StreamContext<Value>,
+    ctx: &impl StreamContext<Val = Value>,
     mut prop_stream: OutputStream<Value>,
     history_length: usize,
 ) -> OutputStream<Value>
@@ -985,6 +986,7 @@ mod combinator_tests {
     use super::*;
     use crate::async_test;
     use crate::core::Value;
+    use crate::lola_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use ecow::eco_vec;
     use futures::stream;
@@ -993,6 +995,8 @@ mod combinator_tests {
     use std::rc::Rc;
 
     type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    // Using this instead of fixture version to in case fixture version changed
+    type TestCtx = Context<TestConfig>;
 
     #[apply(async_test)]
     async fn test_not() {
@@ -1025,7 +1029,7 @@ mod combinator_tests {
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1038,7 +1042,7 @@ mod combinator_tests {
         // This test is interesting since we use x twice in the dynamic strings
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1054,7 +1058,7 @@ mod combinator_tests {
             "x + 2".into(),
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1071,7 +1075,7 @@ mod combinator_tests {
             "x + 2".into(),
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1101,7 +1105,7 @@ mod combinator_tests {
             4.into(),
             5.into(),
         ]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1120,7 +1124,7 @@ mod combinator_tests {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 2);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1134,7 +1138,7 @@ mod combinator_tests {
         let e: OutputStream<Value> =
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1147,7 +1151,7 @@ mod combinator_tests {
         // Using deferred to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, "x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1165,7 +1169,7 @@ mod combinator_tests {
             Value::Deferred,
         ])) as OutputStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1178,7 +1182,7 @@ mod combinator_tests {
         // Using deferred to represent no data on the stream
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, Value::Deferred]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<Parser>(&ctx, e, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1414,7 +1418,7 @@ mod combinator_tests {
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
         let i = Box::pin(stream::iter(vec![0.into(), 1.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["i".into()], vec![i], 10);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["i".into()], vec![i], 10);
         let res_stream = lindex(list(x), var(&ctx, "i".into()));
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1722,18 +1726,21 @@ mod noval_tests {
     use super::*;
     use crate::async_test;
     use crate::core::Value;
+    use crate::lola_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
 
     type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    // Using this instead of fixture version to in case fixture version changed
+    type TestCtx = Context<TestConfig>;
 
     #[apply(async_test)]
     async fn test_dynamic_noval_start(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1746,7 +1753,7 @@ mod noval_tests {
         let e: OutputStream<Value> =
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1774,7 +1781,7 @@ mod noval_tests {
             5.into(),
             6.into(),
         ]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1815,7 +1822,7 @@ mod noval_tests {
             6.into(),
             7.into(),
         ]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = dynamic::<_, Parser>(&ctx, e, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1835,7 +1842,7 @@ mod noval_tests {
     async fn test_defer_noval_start(executor: Rc<LocalExecutor<'static>>) {
         let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = defer::<Parser>(&ctx, e, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1848,7 +1855,7 @@ mod noval_tests {
         let e: OutputStream<Value> =
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = defer::<Parser>(&ctx, e, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1876,7 +1883,7 @@ mod noval_tests {
             5.into(),
             6.into(),
         ]));
-        let mut ctx = Context::new(executor.clone(), vec!["x".into()], vec![x], 1);
+        let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = defer::<Parser>(&ctx, e, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;

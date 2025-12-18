@@ -21,7 +21,7 @@ where
 
 impl<Ctx, Parser> MonitoringSemantics<SExpr, Value, Ctx> for UntimedLolaSemantics<Parser>
 where
-    Ctx: StreamContext<Value>,
+    Ctx: StreamContext<Val = Value>,
     Parser: ExprParser<SExpr> + 'static,
 {
     fn to_async_stream(expr: SExpr, ctx: &Ctx) -> OutputStream<Value> {

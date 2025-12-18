@@ -665,7 +665,8 @@ impl SemiSyncContext {
 }
 
 #[async_trait(?Send)]
-impl StreamContext<Value> for SemiSyncContext {
+impl StreamContext for SemiSyncContext {
+    type Val = Value;
     type Builder = SemiSyncContextBuilder;
 
     fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {

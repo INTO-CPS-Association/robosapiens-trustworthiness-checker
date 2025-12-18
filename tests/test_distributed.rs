@@ -11,6 +11,7 @@ use trustworthiness_checker::{
     core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     io::testing::ManualOutputHandler,
+    lola_fixtures::TestConfig,
     lola_specification,
     runtime::distributed::DistAsyncMonitorBuilder,
     semantics::distributed::semantics::DistributedSemantics,
@@ -20,7 +21,7 @@ use winnow::Parser;
 
 type TestDistSemantics = DistributedSemantics<LALRExprParser>;
 type TestDistMonitorBuilder<Ctx> =
-    DistAsyncMonitorBuilder<LOLASpecification, Ctx, Value, SExpr, TestDistSemantics>;
+    DistAsyncMonitorBuilder<LOLASpecification, Ctx, TestConfig, SExpr, TestDistSemantics>;
 
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
