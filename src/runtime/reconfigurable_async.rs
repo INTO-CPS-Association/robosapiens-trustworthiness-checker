@@ -24,7 +24,7 @@ pub struct ReconfAsyncMonitorBuilder<
     Ctx: StreamContext,
     AC: AsyncConfig<Val = Value>,
     Expr,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
 > {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<M>,
@@ -44,7 +44,7 @@ pub struct ReconfAsyncMonitorBuilder<
 impl<
     M: Specification<Expr = Expr> + Localisable,
     Expr: 'static,
-    S: MonitoringSemantics<Expr, Value, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     Ctx: StreamContext<Val = AC::Val>,
     AC: AsyncConfig<Val = Value>,
 > AbstractMonitorBuilder<M, AC::Val> for ReconfAsyncMonitorBuilder<M, Ctx, AC, Expr, S>
@@ -113,7 +113,7 @@ impl<
 impl<
     M: Specification<Expr = Expr>,
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     Ctx: StreamContext<Val = AC::Val>,
     AC: AsyncConfig<Val = Value>,
 > ReconfAsyncMonitorBuilder<M, Ctx, AC, Expr, S>
@@ -244,7 +244,7 @@ pub struct ReconfAsyncRunner<Expr, S, M, Ctx, AC>
 where
     Expr: 'static,
     Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     M: Specification<Expr = Expr>,
     AC: AsyncConfig<Val = Value>,
 {
@@ -270,7 +270,7 @@ impl<Expr, S, M, Ctx, AC> Monitor<M, AC::Val> for ReconfAsyncRunner<Expr, S, M, 
 where
     Expr: 'static,
     Ctx: StreamContext<Val = AC::Val>,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
@@ -284,7 +284,7 @@ impl<Expr, S, M, Ctx, AC> Runnable for ReconfAsyncRunner<Expr, S, M, Ctx, AC>
 where
     Expr: 'static,
     Ctx: StreamContext<Val = AC::Val>,
-    S: MonitoringSemantics<Expr, Value, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {

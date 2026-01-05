@@ -20,13 +20,13 @@ where
     _parser: std::marker::PhantomData<Parser>,
 }
 
-impl<Parser, AC> MonitoringSemantics<SExpr, Value, DistributedContext<AC>>
+impl<Parser, AC> MonitoringSemantics<SExpr, AC, DistributedContext<AC>>
     for DistributedSemantics<Parser>
 where
     Parser: ExprParser<SExpr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
-    fn to_async_stream(expr: SExpr, ctx: &DistributedContext<AC>) -> OutputStream<Value> {
+    fn to_async_stream(expr: SExpr, ctx: &DistributedContext<AC>) -> OutputStream<AC::Val> {
         match expr {
             SExpr::Val(v) => mc::val(v),
             SExpr::BinOp(e1, e2, op) => {

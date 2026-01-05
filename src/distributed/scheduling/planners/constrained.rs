@@ -21,7 +21,7 @@ use super::core::SchedulerPlanner;
 pub struct StaticOptimizedSchedulerPlanner<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
@@ -32,7 +32,7 @@ where
 impl<Expr, S, M, AC> StaticOptimizedSchedulerPlanner<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
@@ -48,7 +48,7 @@ where
 impl<Expr, S, M, AC> SchedulerPlanner for StaticOptimizedSchedulerPlanner<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {

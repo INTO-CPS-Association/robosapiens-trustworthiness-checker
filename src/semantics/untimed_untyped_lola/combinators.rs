@@ -2,6 +2,7 @@ use crate::SExpr;
 use crate::core::StreamData;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
+use crate::semantics::AsyncConfig;
 use crate::semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics;
 use crate::semantics::{MonitoringSemantics, StreamContext};
 use crate::{OutputStream, VarName};
@@ -449,6 +450,12 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
     )
 }
 
+// NOTE: Temporary only while AsyncConfig is unfinished
+struct ValueConfig;
+impl AsyncConfig for ValueConfig {
+    type Val = Value;
+}
+
 pub fn dynamic<Ctx, Parser>(
     ctx: &Ctx,
     eval_stream: OutputStream<Value>,
@@ -520,7 +527,8 @@ where
                     let expr = Parser::parse(&mut s.as_ref())
                         .expect("Invalid dynamic str");
                     debug!("Dynamic evaluated to expression {:?}", expr);
-                    let eval_output_stream = UntimedLolaSemantics::<Parser>::to_async_stream(expr, &subcontext);
+                    // TODO: When AsyncConfig is done, the types in this line should be inferable
+                    let eval_output_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<_, ValueConfig, _>>::to_async_stream(expr, &subcontext);
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
@@ -579,7 +587,8 @@ where
                     // We have a string to evaluate so do so
                     let expr = Parser::parse(&mut defer_s.as_ref())
                         .expect("Invalid dynamic str");
-                    eval_output_stream = Some(UntimedLolaSemantics::<Parser>::to_async_stream(expr, &subcontext));
+                    // TODO: When AsyncConfig is done, the types in this line should be inferable
+                    eval_output_stream = Some(<UntimedLolaSemantics::<Parser> as MonitoringSemantics<_, ValueConfig, _>>::to_async_stream(expr, &subcontext));
                     debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
                     subcontext.run().await;
                     break;

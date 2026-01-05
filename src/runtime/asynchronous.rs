@@ -884,7 +884,7 @@ pub struct AsyncMonitorRunner<Expr, AC, S, M, Ctx>
 where
     AC: AsyncConfig,
     Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     M: Specification<Expr = Expr>,
 {
     #[allow(dead_code)]
@@ -905,7 +905,7 @@ pub struct AsyncMonitorBuilder<
     Ctx: StreamContext,
     AC: AsyncConfig,
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
 > {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<M>,
@@ -921,7 +921,7 @@ impl<
     Ctx: StreamContext,
     AC: AsyncConfig,
     Expr,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
 > AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
 {
     pub fn partial_clone(&self) -> Self {
@@ -949,7 +949,7 @@ pub trait AbstractAsyncMonitorBuilder<M, Ctx: StreamContext, AC: AsyncConfig>:
 impl<
     M: Specification<Expr = Expr>,
     Expr,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     AC: AsyncConfig,
     Ctx: StreamContext<Val = AC::Val>,
 > AbstractAsyncMonitorBuilder<M, Ctx, AC> for AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
@@ -965,7 +965,7 @@ impl<
 impl<
     M: Specification<Expr = Expr>,
     Expr,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     AC: AsyncConfig,
     Ctx: StreamContext<Val = AC::Val>,
 > AbstractMonitorBuilder<M, AC::Val> for AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
@@ -1144,7 +1144,7 @@ impl<Expr, AC, S, M> AsyncMonitorRunner<Expr, AC, S, M, Context<AC>>
 where
     Expr: 'static,
     AC: AsyncConfig,
-    S: MonitoringSemantics<Expr, AC::Val, Context<AC>>,
+    S: MonitoringSemantics<Expr, AC, Context<AC>>,
     M: Specification<Expr = Expr>,
 {
     pub fn new(
@@ -1168,7 +1168,7 @@ where
     Expr: 'static,
     AC: AsyncConfig,
     Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     M: Specification<Expr = Expr>,
 {
     fn spec(&self) -> &M {
@@ -1181,7 +1181,7 @@ impl<Expr, AC, S, M, Ctx> Runnable for AsyncMonitorRunner<Expr, AC, S, M, Ctx>
 where
     AC: AsyncConfig,
     Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     M: Specification<Expr = Expr>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]

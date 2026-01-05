@@ -65,7 +65,7 @@ pub enum DistGraphMode {
 
 impl<
     M: Specification<Expr = Expr> + Localisable,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     Expr: 'static,
     AC: AsyncConfig<Val = Value>,
 > AbstractAsyncMonitorBuilder<M, DistributedContext<AC>, AC>
@@ -82,7 +82,7 @@ pub struct DistAsyncMonitorBuilder<
     Ctx: StreamContext,
     AC: AsyncConfig,
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
 > {
     pub async_monitor_builder: AsyncMonitorBuilder<M, Ctx, AC, Expr, S>,
     input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
@@ -95,7 +95,7 @@ impl<
     M: Specification<Expr = Expr>,
     Ctx: StreamContext,
     AC: AsyncConfig,
-    S: MonitoringSemantics<Expr, AC::Val, Ctx>,
+    S: MonitoringSemantics<Expr, AC, Ctx>,
     Expr: 'static,
 > DistAsyncMonitorBuilder<M, Ctx, AC, Expr, S>
 {
@@ -150,7 +150,7 @@ impl<
 }
 impl<
     M: Specification<Expr = Expr> + Localisable,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     Expr: 'static,
     AC: AsyncConfig<Val = Value>,
 > DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>
@@ -170,7 +170,7 @@ pub enum SchedulerCommunication {
 impl<Expr: 'static, S, M, AC> AbstractMonitorBuilder<M, AC::Val>
     for DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>
 where
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
@@ -436,7 +436,7 @@ where
 pub struct DistributedMonitorRunner<Expr, AC, S, M>
 where
     AC: AsyncConfig,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     M: Specification<Expr = Expr>,
 {
     pub(crate) async_monitor: AsyncMonitorRunner<Expr, AC, S, M, DistributedContext<AC>>,
@@ -449,7 +449,7 @@ impl<Expr, M, S, AC> Monitor<M, AC::Val> for DistributedMonitorRunner<Expr, AC, 
 where
     Expr: 'static,
     M: Specification<Expr = Expr>,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     AC: AsyncConfig,
 {
     fn spec(&self) -> &M {
@@ -462,7 +462,7 @@ impl<Expr, M, S, AC> Runnable for DistributedMonitorRunner<Expr, AC, S, M>
 where
     Expr: 'static,
     M: Specification<Expr = Expr>,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     AC: AsyncConfig,
 {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {

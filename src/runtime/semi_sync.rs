@@ -6,7 +6,8 @@ use crate::{
     },
     lang::dynamic_lola::{ast::LOLASpecification, lalr_parser},
     semantics::{
-        AbstractContextBuilder, MonitoringSemantics, StreamContext, untimed_untyped_lola::semantics,
+        AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
+        untimed_untyped_lola::semantics,
     },
     stream_utils::{self},
     utils::cancellation_token::CancellationToken,
@@ -104,6 +105,12 @@ struct ExprEvalutor {
     _expr: SExpr,
 }
 
+// NOTE: Temporary only while AsyncConfig is unfinished
+struct ValueConfig;
+impl AsyncConfig for ValueConfig {
+    type Val = Value;
+}
+
 impl ExprEvalutor {
     fn new(
         var_name: VarName,
@@ -111,11 +118,13 @@ impl ExprEvalutor {
         sender: spsc::Sender<Value>,
         ctx: &SemiSyncContext,
     ) -> Self {
+        // TODO: See if this can be written explicitly when AsyncConfig is finished
         let eval_stream =
-            semantics::UntimedLolaSemantics::<lalr_parser::LALRExprParser>::to_async_stream(
-                expr.clone(),
-                ctx,
-            );
+            <semantics::UntimedLolaSemantics<lalr_parser::LALRExprParser> as MonitoringSemantics<
+                _,
+                ValueConfig,
+                _,
+            >>::to_async_stream(expr.clone(), ctx);
         Self {
             var_name,
             _expr: expr,

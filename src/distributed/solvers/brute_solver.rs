@@ -27,7 +27,7 @@ use crate::{
 pub struct BruteForceDistConstraintSolver<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
@@ -42,7 +42,7 @@ where
 impl<Expr, S, M, AC> BruteForceDistConstraintSolver<Expr, S, M, AC>
 where
     Expr: 'static,
-    S: MonitoringSemantics<Expr, AC::Val, DistributedContext<AC>>,
+    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
     M: Specification<Expr = Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
