@@ -768,109 +768,114 @@ pub fn list(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
 }
 
 pub fn lindex(x: OutputStream<Value>, i: OutputStream<Value>) -> OutputStream<Value> {
-    let mut x = stream_lift_base(x);
-    let mut i = stream_lift_base(i);
-    Box::pin(stream! {
-        while let (Some(l), Some(idx)) = join!(x.next(), i.next()){
+    stream_lift2(
+        move |l, idx| {
             match (l, idx) {
                 (Value::List(l), Value::Int(idx)) => {
                     if idx >= 0 {
                         if let Some(val) = l.get(idx as usize) {
-                            yield val.clone();
+                            val.clone()
                         } else {
                             panic!("List index out of bounds: {}", idx);
                         }
-                    }
-                    else {
+                    } else {
                         panic!("List index must be non-negative: {}", idx); // For now
                     }
                 }
-                (l, idx) => panic!("Invalid list index. Expected List and Int expressions. Received: List.get({:?}, {:?})", l, idx)
+                (l, idx) => panic!(
+                    "Invalid list index. Expected List and Int expressions. Received: List.get({:?}, {:?})",
+                    l, idx
+                ),
             }
-        }
-    })
+        },
+        x,
+        i,
+    )
 }
 
 pub fn lappend(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    let mut x = stream_lift_base(x);
-    let mut y = stream_lift_base(y);
-    Box::pin(stream! {
-        while let (Some(l), Some(val)) = join!(x.next(), y.next()){
-            match l {
-                Value::List(mut l) => {
-                    l.push(val);
-                    yield Value::List(l);
-                }
-                l => panic!("Invalid list append. Expected List and Value expressions. Received: List.append({:?}, {:?})", l, val)
+    stream_lift2(
+        move |l, val| match l {
+            Value::List(mut l) => {
+                l.push(val);
+                Value::List(l)
             }
-        }
-    })
+            l => panic!(
+                "Invalid list append. Expected List and Value expressions. Received: List.append({:?}, {:?})",
+                l, val
+            ),
+        },
+        x,
+        y,
+    )
 }
 
 pub fn lconcat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    let mut x = stream_lift_base(x);
-    let mut y = stream_lift_base(y);
-    Box::pin(stream! {
-        while let (Some(l1), Some(l2)) = join!(x.next(), y.next()){
-            match (l1, l2) {
-                (Value::List(mut l1), Value::List(l2)) => {
-                    l1.extend(l2);
-                    yield Value::List(l1);
-                }
-                (l1, l2) => panic!("Invalid list concatenation. Expected List and List expressions. Received: List.concat({:?}, {:?})", l1, l2)
+    stream_lift2(
+        move |l1, l2| match (l1, l2) {
+            (Value::List(mut l1), Value::List(l2)) => {
+                l1.extend(l2);
+                Value::List(l1)
             }
-        }
-    })
+            (l1, l2) => panic!(
+                "Invalid list concatenation. Expected List and List expressions. Received: List.concat({:?}, {:?})",
+                l1, l2
+            ),
+        },
+        x,
+        y,
+    )
 }
 
 pub fn lhead(x: OutputStream<Value>) -> OutputStream<Value> {
-    let mut x = stream_lift_base(x);
-    Box::pin(stream! {
-        while let Some(l) = x.next().await {
-            match l {
-                Value::List(l) => {
-                    if let Some(val) = l.first() {
-                        yield val.clone();
-                    } else {
-                        panic!("List is empty");
-                    }
+    stream_lift1(
+        move |l| match l {
+            Value::List(l) => {
+                if let Some(val) = l.first() {
+                    val.clone()
+                } else {
+                    panic!("List is empty");
                 }
-                l => panic!("Invalid list head. Expected List expression. Received: List.head({:?})", l)
             }
-        }
-    })
+            l => panic!(
+                "Invalid list head. Expected List expression. Received: List.head({:?})",
+                l
+            ),
+        },
+        x,
+    )
 }
 
 pub fn ltail(x: OutputStream<Value>) -> OutputStream<Value> {
-    let mut x = stream_lift_base(x);
-    Box::pin(stream! {
-        while let Some(l) = x.next().await {
-            match l {
-                Value::List(l) => {
-                    if let Some(val) = l.get(1..) {
-                        yield Value::List(val.into());
-                    } else {
-                        panic!("List is empty");
-                    }
+    stream_lift1(
+        move |l| match l {
+            Value::List(l) => {
+                if let Some(val) = l.get(1..) {
+                    Value::List(val.into())
+                } else {
+                    panic!("List is empty");
                 }
-                l => panic!("Invalid list tail. Expected List expression. Received: List.tail({:?})", l)
             }
-        }
-    })
+            l => panic!(
+                "Invalid list tail. Expected List expression. Received: List.tail({:?})",
+                l
+            ),
+        },
+        x,
+    )
 }
 
 pub fn llen(x: OutputStream<Value>) -> OutputStream<Value> {
-    let mut x = stream_lift_base(x);
-    Box::pin(stream! {
-        while let Some(l) = x.next().await {
-            match l {
-                Value::List(l) => {
-                    yield Value::Int(l.len() as i64);
-                }
-                l => panic!("Invalid list len. Expected List expression. Received: List.len({:?})", l)
-            }
-        }
-    })
+    stream_lift1(
+        move |l| match l {
+            Value::List(l) => Value::Int(l.len() as i64),
+            l => panic!(
+                "Invalid list len. Expected List expression. Received: List.len({:?})",
+                l
+            ),
+        },
+        x,
+    )
 }
 
 pub fn map(xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> {
@@ -903,69 +908,72 @@ pub fn map(xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> 
 }
 
 pub fn mget(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
-    let mut xs = stream_lift_base(xs);
-    Box::pin(stream! {
-        while let Some(val) = xs.next().await {
-            match val {
-                Value::Map(map) => {
-                        if let Some(val) = map.get(&k) {
-                            yield val.clone();
-                        } else {
-                            panic!("Missing key for map get: {}", k);
-                        }
+    stream_lift1(
+        move |xs| match xs {
+            Value::Map(map) => {
+                if let Some(val) = map.get(&k) {
+                    val.clone()
+                } else {
+                    panic!("Missing key for map get: {}", k);
                 }
-                v => panic!("Invalid map get. Expected Map expression. Received: Map.get({:?})", v)
             }
-        }
-    })
+            v => panic!(
+                "Invalid map get. Expected Map expression. Received: Map.get({:?})",
+                v
+            ),
+        },
+        xs,
+    )
 }
 
 pub fn mremove(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
-    let mut xs = stream_lift_base(xs);
-    Box::pin(stream! {
-        while let Some(val) = xs.next().await {
-            match val {
-                Value::Map(mut map) => {
-                        map.remove(&k);
-                        yield Value::Map(map);
-                }
-                v => panic!("Invalid map remove. Expected Map expression. Received: Map.remove({:?})", v)
+    stream_lift1(
+        move |xs| match xs {
+            Value::Map(mut map) => {
+                map.remove(&k);
+                Value::Map(map)
             }
-        }
-    })
+            v => panic!(
+                "Invalid map remove. Expected Map expression. Received: Map.remove({:?})",
+                v
+            ),
+        },
+        xs,
+    )
 }
 
 pub fn minsert(
     xs: OutputStream<Value>,
     k: EcoString,
-    mut v: OutputStream<Value>,
+    v: OutputStream<Value>,
 ) -> OutputStream<Value> {
-    let mut xs = stream_lift_base(xs);
-    Box::pin(stream! {
-        while let (Some(m_val), Some(val)) = join!(xs.next(), v.next()) {
-            match m_val {
-                Value::Map(mut map) => {
-                    map.insert(k.clone(), val);
-                    yield Value::Map(map);
-                }
-                v => panic!("Invalid map insert. Expected Map expression. Received: Map.insert({:?})", v)
+    stream_lift2(
+        move |m_val, val| match m_val {
+            Value::Map(mut map) => {
+                map.insert(k.clone(), val);
+                Value::Map(map)
             }
-        }
-    })
+            v => panic!(
+                "Invalid map insert. Expected Map expression. Received: Map.insert({:?})",
+                v
+            ),
+        },
+        xs,
+        v,
+    )
 }
 
 pub fn mhas_key(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
-    let mut xs = stream_lift_base(xs);
-    Box::pin(stream! {
-        while let Some(val) = xs.next().await {
-            match val {
-                Value::Map(map) => {
-                        yield Value::Bool(map.contains_key(&k));
-                }
-                v => panic!("Invalid map has_key. Expected Map expression. Received: Map.has_key({:?})", v)
-            }
-        }
-    })
+    stream_lift1(
+        move |xs| match xs {
+            Value::Map(map) => Value::Bool(map.contains_key(&k)),
+            v => panic!(
+                "Invalid map has_key. Expected Map expression. Received: Map.has_key({:?})",
+                v
+            ),
+        },
+        xs,
+    )
 }
 
 pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
