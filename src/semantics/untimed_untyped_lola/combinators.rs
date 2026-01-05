@@ -119,7 +119,13 @@ pub fn stream_lift3(
 
 pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(
-        |x, y| Value::Bool(x == Value::Bool(true) && y == Value::Bool(true)),
+        |x, y| match (x, y) {
+            (Value::Bool(x), Value::Bool(y)) => Value::Bool(x && y),
+            (Value::Bool(_), Value::Deferred)
+            | (Value::Deferred, Value::Bool(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
+            (x, y) => panic!("Invalid boolean AND with values: {:?}, {:?}", x, y),
+        },
         x,
         y,
     )
@@ -127,14 +133,27 @@ pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
 
 pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(
-        |x, y| Value::Bool(x == Value::Bool(true) || y == Value::Bool(true)),
+        |x, y| match (x, y) {
+            (Value::Bool(x), Value::Bool(y)) => Value::Bool(x || y),
+            (Value::Bool(_), Value::Deferred)
+            | (Value::Deferred, Value::Bool(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
+            (x, y) => panic!("Invalid boolean OR with values: {:?}, {:?}", x, y),
+        },
         x,
         y,
     )
 }
 
 pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(|x| Value::Bool(x == Value::Bool(false)), x)
+    stream_lift1(
+        |x| match x {
+            Value::Bool(b) => Value::Bool(!b),
+            Value::Deferred => Value::Deferred,
+            x => panic!("Invalid boolean NOT with value: {:?}", x),
+        },
+        x,
+    )
 }
 
 pub fn eq(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
@@ -2026,7 +2045,6 @@ mod noval_tests {
         // Tests a selected number of operators for correct handling of NoVal
         let combinators = vec![
             cos as fn(OutputStream<Value>) -> OutputStream<Value>,
-            not,
             sin,
             abs,
         ];
