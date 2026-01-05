@@ -136,6 +136,11 @@ where
                 let e2 = <Self as MonitoringSemantics<SExpr, AC, Ctx>>::to_async_stream(*e2, ctx);
                 mc::latch(e1, e2)
             }
+            SExpr::Init(e1, e2) => {
+                let e1 = <Self as MonitoringSemantics<SExpr, AC, Ctx>>::to_async_stream(*e1, ctx);
+                let e2 = <Self as MonitoringSemantics<SExpr, AC, Ctx>>::to_async_stream(*e2, ctx);
+                mc::init(e1, e2)
+            }
             SExpr::SIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<SExpr, AC, Ctx>>::to_async_stream(*e, ctx);
                 mc::sindex(e, i)

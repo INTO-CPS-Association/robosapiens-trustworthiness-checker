@@ -209,6 +209,24 @@ fn latch(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+fn init(s: &mut &str) -> Result<SExpr> {
+    seq!((
+        _: whitespace,
+        _: literal("init"),
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ',',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    ))
+    .map(|(lhs, rhs)| SExpr::Init(Box::new(lhs), Box::new(rhs)))
+    .parse_next(s)
+}
+
 fn dynamic(s: &mut &str) -> Result<SExpr> {
     seq!((
         _: whitespace,
@@ -612,7 +630,7 @@ fn atom(s: &mut &str) -> Result<SExpr> {
             )),
             // Group 4
             alt((
-                default, when, latch, is_defined, sexpr_list, sexpr_map, var, paren,
+                default, when, latch, init, is_defined, sexpr_list, sexpr_map, var, paren,
             )),
         )),
         whitespace,

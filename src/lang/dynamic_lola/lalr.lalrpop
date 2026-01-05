@@ -118,6 +118,7 @@ SpecialKeywords: SExpr = {
     "is_defined" "(" <Box<Expr>> ")" => SExpr::IsDefined(<>),
     "when" "(" <Box<Expr>> ")" => SExpr::When(<>),
     "latch" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Latch(e1, e2),
+    "init" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Init(e1, e2),
     "List.get" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LIndex(e1, e2),
     "List.concat" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LConcat(e1, e2),
     "List.append" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LAppend(e1, e2),

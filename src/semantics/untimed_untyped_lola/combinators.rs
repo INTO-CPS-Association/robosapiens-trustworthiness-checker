@@ -245,7 +245,6 @@ pub fn val(x: Value) -> OutputStream<Value> {
     Box::pin(stream::repeat(x))
 }
 
-// Should this return a dyn ConcreteStreamData?
 pub fn if_stm(
     x: OutputStream<Value>,
     y: OutputStream<Value>,
@@ -678,6 +677,28 @@ pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<V
     Box::pin(xs) as LocalBoxStream<'static, Value>
 }
 
+// Initializes the x stream with values from the d stream until
+// x provides a value that is not NoVal. Then yields from x.
+// Can be considered a `default` that applies to NoVal.
+pub fn init(mut x: OutputStream<Value>, mut d: OutputStream<Value>) -> OutputStream<Value> {
+    Box::pin(stream! {
+        while let (Some(x_val), Some(d_val)) = join!(x.next(), d.next()) {
+            match x_val {
+                Value::NoVal => {
+                    yield d_val;
+                }
+                _ => {
+                    yield x_val;
+                    break;
+                }
+            }
+        }
+        while let Some(x_val) = x.next().await {
+            yield x_val;
+        }
+    })
+}
+
 // TODO: Should change to an operator called is_deferred and negate the logic...
 pub fn is_defined(x: OutputStream<Value>) -> OutputStream<Value> {
     let x = stream_lift_base(x);
@@ -687,8 +708,10 @@ pub fn is_defined(x: OutputStream<Value>) -> OutputStream<Value> {
 // Could also be implemented with is_defined but I think this is more efficient
 pub fn when(x: OutputStream<Value>) -> OutputStream<Value> {
     let mut x = stream_lift_base(x);
+    debug!("Creating when operation stream");
     Box::pin(stream! {
         while let Some(x_val) = x.next().await {
+            debug!("Received x");
             if x_val == Value::Deferred || x_val == Value::NoVal {
                 yield Value::Bool(false);
             } else {
