@@ -543,6 +543,23 @@ where
                 );
                 mc::or(e1, e2)
             }
+            SExprBool::BinOp(e1, e2, BoolBinOp::Impl) => {
+                let e1 = <Self as MonitoringSemantics<
+                    _,
+                    GenConfig<PossiblyDeferred<bool>>,
+                    _,
+                >>::to_async_stream(
+                    *e1, ctx
+                );
+                let e2 = <Self as MonitoringSemantics<
+                    _,
+                    GenConfig<PossiblyDeferred<bool>>,
+                    _,
+                >>::to_async_stream(
+                    *e2, ctx
+                );
+                mc::implication(e1, e2)
+            }
             SExprBool::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprBool::SIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<

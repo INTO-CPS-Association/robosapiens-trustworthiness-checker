@@ -641,6 +641,7 @@ fn atom(s: &mut &str) -> Result<SExpr> {
 enum BinaryPrecedences {
     // Lowest to highest precedence
     Concat,
+    Impl,
     Or,
     And,
     Eq,
@@ -658,7 +659,8 @@ impl BinaryPrecedences {
     pub fn next(&self) -> Option<Self> {
         use BinaryPrecedences::*;
         match self {
-            Concat => Some(Or),
+            Concat => Some(Impl),
+            Impl => Some(Or),
             Or => Some(And),
             And => Some(Eq),
             Eq => Some(Le),
@@ -678,6 +680,7 @@ impl BinaryPrecedences {
         use BinaryPrecedences::*;
         match self {
             Concat => "++",
+            Impl => "=>",
             Or => "||",
             And => "&&",
             Le => "<=",
@@ -697,6 +700,7 @@ impl BinaryPrecedences {
         use BinaryPrecedences::*;
         match self {
             Concat => SBinOp::SOp(StrBinOp::Concat),
+            Impl => SBinOp::BOp(BoolBinOp::Impl),
             Or => SBinOp::BOp(BoolBinOp::Or),
             And => SBinOp::BOp(BoolBinOp::And),
             Le => SBinOp::COp(CompBinOp::Le),

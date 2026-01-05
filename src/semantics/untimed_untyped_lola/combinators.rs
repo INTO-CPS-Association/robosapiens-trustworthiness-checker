@@ -145,6 +145,20 @@ pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
     )
 }
 
+pub fn implication(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+    stream_lift2(
+        |x, y| match (x, y) {
+            (Value::Bool(x), Value::Bool(y)) => Value::Bool(!x || y),
+            (Value::Bool(_), Value::Deferred)
+            | (Value::Deferred, Value::Bool(_))
+            | (Value::Deferred, Value::Deferred) => Value::Deferred,
+            (x, y) => panic!("Invalid boolean OR with values: {:?}, {:?}", x, y),
+        },
+        x,
+        y,
+    )
+}
+
 pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift1(
         |x| match x {

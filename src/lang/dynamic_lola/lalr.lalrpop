@@ -239,6 +239,13 @@ OrExpr<Next>: SExpr = {
     Next
 };
 
+ImplExpr<Next>: SExpr = {
+    <lhs: Box<ImplExpr<Next>>> "=>" <rhs: Box<Next>> => {
+        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Impl))
+    },
+    Next
+};
+
 // String concat
 ConcatExpr<Next>: SExpr = {
     <lhs: Box<ConcatExpr<Next>>> "++" <rhs: Box<Next>> => {
@@ -277,7 +284,7 @@ TypeAnno: StreamType = {
 
 // Operator precedence chain with Final having highest precedence
 PrecChain<Final>: SExpr = {
-    ConcatExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>>,
+    ConcatExpr<ImplExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>>>,
 }
 
 // The top-level expression

@@ -66,6 +66,10 @@ where
                         debug!("Performing logical AND operation");
                         mc::and(e1, e2)
                     }
+                    SBinOp::BOp(BoolBinOp::Impl) => {
+                        debug!("Performing logical IMPLICATION operation");
+                        mc::implication(e1, e2)
+                    }
                     SBinOp::SOp(StrBinOp::Concat) => {
                         debug!("Performing string concatenation");
                         mc::concat(e1, e2)

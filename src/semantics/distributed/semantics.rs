@@ -40,6 +40,7 @@ where
                     SBinOp::NOp(NumericalBinOp::Mod) => mc::modulo(e1, e2),
                     SBinOp::BOp(BoolBinOp::Or) => mc::or(e1, e2),
                     SBinOp::BOp(BoolBinOp::And) => mc::and(e1, e2),
+                    SBinOp::BOp(BoolBinOp::Impl) => mc::implication(e1, e2),
                     SBinOp::SOp(StrBinOp::Concat) => mc::concat(e1, e2),
                     SBinOp::COp(CompBinOp::Eq) => mc::eq(e1, e2),
                     SBinOp::COp(CompBinOp::Le) => mc::le(e1, e2),

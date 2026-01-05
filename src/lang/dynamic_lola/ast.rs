@@ -71,6 +71,7 @@ impl TryFrom<NumericalBinOp> for FloatBinOp {
 pub enum BoolBinOp {
     Or,
     And,
+    Impl, // Implication
 }
 
 // Str Binary Operations
@@ -505,6 +506,7 @@ impl Display for SExpr {
             BinOp(e1, e2, NOp(NumericalBinOp::Mod)) => write!(f, "({} % {})", e1, e2),
             BinOp(e1, e2, BOp(BoolBinOp::Or)) => write!(f, "({} || {})", e1, e2),
             BinOp(e1, e2, BOp(BoolBinOp::And)) => write!(f, "({} && {})", e1, e2),
+            BinOp(e1, e2, BOp(BoolBinOp::Impl)) => write!(f, "({} => {})", e1, e2),
             BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Eq)) => write!(f, "({} == {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Le)) => write!(f, "({} <= {})", e1, e2),

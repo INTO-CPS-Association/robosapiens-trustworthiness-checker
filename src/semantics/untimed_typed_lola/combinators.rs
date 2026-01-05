@@ -49,6 +49,13 @@ pub fn or(
     deferred_lift2(|x, y| x || y, x, y)
 }
 
+pub fn implication(
+    x: OutputStream<PossiblyDeferred<bool>>,
+    y: OutputStream<PossiblyDeferred<bool>>,
+) -> OutputStream<PossiblyDeferred<bool>> {
+    deferred_lift2(|x, y| !x || y, x, y)
+}
+
 pub fn not(x: OutputStream<PossiblyDeferred<bool>>) -> OutputStream<PossiblyDeferred<bool>> {
     deferred_lift1(|x| !x, x)
 }
