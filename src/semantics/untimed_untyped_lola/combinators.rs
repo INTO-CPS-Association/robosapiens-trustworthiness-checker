@@ -486,6 +486,7 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
 struct ValueConfig;
 impl AsyncConfig for ValueConfig {
     type Val = Value;
+    type CtxVal = Value;
     type Expr = SExpr;
 }
 

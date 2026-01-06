@@ -107,6 +107,7 @@ pub async fn monitor_outputs_untyped_little(
 struct Config;
 impl AsyncConfig for Config {
     type Val = Value;
+    type CtxVal = Value;
     type Expr = SExpr;
 }
 

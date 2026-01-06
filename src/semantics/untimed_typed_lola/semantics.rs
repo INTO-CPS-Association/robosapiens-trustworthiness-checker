@@ -18,6 +18,7 @@ struct GenConfig<Val: StreamData> {
 }
 impl<Val: StreamData> AsyncConfig for GenConfig<Val> {
     type Val = Val;
+    type CtxVal = Val;
     type Expr = SExprTE;
 }
 
