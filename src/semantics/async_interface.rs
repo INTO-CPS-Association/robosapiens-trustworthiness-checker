@@ -59,12 +59,11 @@ pub trait StreamContext: 'static {
     fn cancel(&self);
 }
 
-pub trait MonitoringSemantics<Expr, AC, Ctx>: Clone + 'static
+pub trait MonitoringSemantics<AC>: Clone + 'static
 where
     AC: AsyncConfig,
-    Ctx: StreamContext,
 {
-    fn to_async_stream(expr: Expr, ctx: &Ctx) -> OutputStream<AC::Val>;
+    fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<AC::Val>;
 }
 
 pub trait AsyncConfig: 'static {
@@ -72,6 +71,6 @@ pub trait AsyncConfig: 'static {
     type CtxVal: StreamData;
     type Expr: 'static;
     // type Sem: MonitoringSemantics<Self::Expr, Self::Val, Self::Ctx, Self::CtxVal>;
-    type Ctx: StreamContext;
+    type Ctx: StreamContext<Val = Self::Val>;
     // type CtxBuilder: AbstractContextBuilder<Val = Self::Val, Ctx = Self::Ctx>;
 }

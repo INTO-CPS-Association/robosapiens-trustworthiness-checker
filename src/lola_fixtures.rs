@@ -2,7 +2,10 @@ use crate::{
     InputProvider, LOLASpecification, OutputStream, SExpr, Value, VarName,
     lang::dynamic_lola::lalr_parser::LALRExprParser,
     runtime::asynchronous::{AsyncMonitorRunner, Context},
-    semantics::{AsyncConfig, untimed_untyped_lola::semantics::UntimedLolaSemantics},
+    semantics::{
+        AsyncConfig, distributed::contexts::DistributedContext,
+        untimed_untyped_lola::semantics::UntimedLolaSemantics,
+    },
 };
 use futures::stream;
 use smol::stream::StreamExt;
@@ -18,13 +21,19 @@ impl AsyncConfig for TestConfig {
     type Expr = SExpr;
     type Ctx = Context<Self>;
 }
+pub struct TestDistConfig {}
+impl AsyncConfig for TestDistConfig {
+    type Val = Value;
+    type CtxVal = Value;
+    type Expr = SExpr;
+    type Ctx = DistributedContext<Self>;
+}
 
 // Default semantics to use in tests
 pub type TestSemantics = UntimedLolaSemantics<LALRExprParser>;
 
 // Default monitor runner to use in tests
-pub type TestMonitorRunner<Ctx = Context<TestConfig>> =
-    AsyncMonitorRunner<SExpr, TestConfig, TestSemantics, LOLASpecification, Ctx>;
+pub type TestMonitorRunner = AsyncMonitorRunner<TestConfig, TestSemantics, LOLASpecification>;
 
 pub fn input_empty() -> BTreeMap<VarName, OutputStream<Value>> {
     BTreeMap::new()

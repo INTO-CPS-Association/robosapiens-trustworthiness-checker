@@ -17,7 +17,7 @@ mod integration_tests {
         lang::dynamic_lola::parser::CombExprParser,
         lola_fixtures::TestConfig,
         runtime::{
-            RuntimeBuilder, asynchronous::Context, builder::DistributionMode,
+            RuntimeBuilder, builder::DistributionMode,
             reconfigurable_async::ReconfAsyncMonitorBuilder,
         },
         semantics::{UntimedLolaSemantics, distributed::localisation::LocalitySpec},
@@ -125,9 +125,7 @@ mod integration_tests {
         info!("Creating ReconfAsyncMonitorBuilder");
         let builder = ReconfAsyncMonitorBuilder::<
             LOLASpecification,
-            Context<TestConfig>,
             TestConfig,
-            _,
             UntimedLolaSemantics<CombExprParser>,
         >::new()
         .executor(ex.clone())

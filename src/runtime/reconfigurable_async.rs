@@ -14,17 +14,15 @@ use crate::{
     core::{AbstractMonitorBuilder, OutputHandler, Runnable},
     distributed::locality_receiver::LocalityReceiver,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
-    semantics::{MonitoringSemantics, StreamContext, distributed::localisation::Localisable},
+    semantics::{MonitoringSemantics, distributed::localisation::Localisable},
 };
 
 use super::asynchronous::{AsyncMonitorBuilder, AsyncMonitorRunner};
 
 pub struct ReconfAsyncMonitorBuilder<
-    M: Specification<Expr = Expr>,
-    Ctx: StreamContext,
+    M: Specification<Expr = AC::Expr>,
     AC: AsyncConfig<Val = Value>,
-    Expr,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
+    S: MonitoringSemantics<AC>,
 > {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<M>,
@@ -35,21 +33,17 @@ pub struct ReconfAsyncMonitorBuilder<
     reconf_provider: Option<MQTTLocalityReceiver>,
     #[allow(dead_code)]
     local_node: String,
-    ctx_t: PhantomData<Ctx>,
     ac_t: PhantomData<AC>,
-    expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
 }
 
 impl<
-    M: Specification<Expr = Expr> + Localisable,
-    Expr: 'static,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    Ctx: StreamContext<Val = AC::Val>,
+    M: Specification<Expr = AC::Expr> + Localisable,
+    S: MonitoringSemantics<AC>,
     AC: AsyncConfig<Val = Value>,
-> AbstractMonitorBuilder<M, AC::Val> for ReconfAsyncMonitorBuilder<M, Ctx, AC, Expr, S>
+> AbstractMonitorBuilder<M, AC::Val> for ReconfAsyncMonitorBuilder<M, AC, S>
 {
-    type Mon = ReconfAsyncRunner<Expr, S, M, Ctx, AC>;
+    type Mon = ReconfAsyncRunner<S, M, AC>;
 
     fn new() -> Self {
         ReconfAsyncMonitorBuilder {
@@ -61,9 +55,7 @@ impl<
             output_provider: None,
             reconf_provider: None,
             local_node: "".into(),
-            ctx_t: PhantomData,
             ac_t: PhantomData,
-            expr_t: PhantomData,
             semantics_t: PhantomData,
         }
     }
@@ -100,7 +92,7 @@ impl<
         self.reconf_provider(provider)
     }
 
-    fn build(self) -> ReconfAsyncRunner<Expr, S, M, Ctx, AC> {
+    fn build(self) -> ReconfAsyncRunner<S, M, AC> {
         panic!("One does not simply build a ReconfAsyncRunner - use async_build instead!");
     }
 
@@ -110,13 +102,8 @@ impl<
     }
 }
 
-impl<
-    M: Specification<Expr = Expr>,
-    Expr: 'static,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    Ctx: StreamContext<Val = AC::Val>,
-    AC: AsyncConfig<Val = Value>,
-> ReconfAsyncMonitorBuilder<M, Ctx, AC, Expr, S>
+impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncConfig<Val = Value>>
+    ReconfAsyncMonitorBuilder<M, AC, S>
 {
     pub fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
         Self {
@@ -151,7 +138,7 @@ impl<
     }
 
     // Builds an AsyncMonitorRunner in a non-destructive way
-    pub async fn async_build_async_mon(self) -> AsyncMonitorRunner<Expr, AC, S, M, Ctx> {
+    pub async fn async_build_async_mon(self) -> AsyncMonitorRunner<AC, S, M> {
         let input = if let Some(input_builder) = self.input_builder {
             input_builder.async_build().await
         } else if let Some(input_provider) = self.input_provider {
@@ -164,7 +151,7 @@ impl<
             .output_builder
             .expect("Cannot build without output_builder");
         let output = output_builder.async_build().await;
-        let async_builder = AsyncMonitorBuilder::<M, Ctx, AC, Expr, S>::new()
+        let async_builder = AsyncMonitorBuilder::<M, AC, S>::new()
             .executor(self.executor.expect("Cannot build without executor"))
             .model(self.model.expect("Cannot build without model"))
             .input(input)
@@ -172,7 +159,7 @@ impl<
         async_builder.build()
     }
 
-    pub async fn async_build(self) -> ReconfAsyncRunner<Expr, S, M, Ctx, AC> {
+    pub async fn async_build(self) -> ReconfAsyncRunner<S, M, AC> {
         let local_node = self.local_node.clone();
         let reconf_provider = self.reconf_provider.unwrap_or_else(|| {
             debug!("Creating new LocalityReceiver in async runtime");
@@ -222,8 +209,6 @@ impl<
             input_provider,
             output_provider,
             reconf_provider,
-            ctx_t: PhantomData,
-            expr_t: PhantomData,
             semantics_t: PhantomData,
         }
     }
@@ -240,12 +225,10 @@ impl<
 /// - Stores builders (which are cloneable) instead of built providers (which are not)
 /// - Creates fresh providers for each reconfiguration to avoid state conflicts
 /// - Uses the concrete Value type throughout for compatibility with the builder system
-pub struct ReconfAsyncRunner<Expr, S, M, Ctx, AC>
+pub struct ReconfAsyncRunner<S, M, AC>
 where
-    Expr: 'static,
-    Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    M: Specification<Expr = Expr>,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr>,
     AC: AsyncConfig<Val = Value>,
 {
     executor: Rc<LocalExecutor<'static>>,
@@ -259,19 +242,14 @@ where
     /// Direct output provider - not currently supported in reconfigurable mode
     output_provider: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
     reconf_provider: MQTTLocalityReceiver,
-    ctx_t: PhantomData<Ctx>,
-
-    expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
 }
 
 #[async_trait(?Send)]
-impl<Expr, S, M, Ctx, AC> Monitor<M, AC::Val> for ReconfAsyncRunner<Expr, S, M, Ctx, AC>
+impl<S, M, AC> Monitor<M, AC::Val> for ReconfAsyncRunner<S, M, AC>
 where
-    Expr: 'static,
-    Ctx: StreamContext<Val = AC::Val>,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    M: Specification<Expr = Expr> + Localisable,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
     fn spec(&self) -> &M {
@@ -280,12 +258,10 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr, S, M, Ctx, AC> Runnable for ReconfAsyncRunner<Expr, S, M, Ctx, AC>
+impl<S, M, AC> Runnable for ReconfAsyncRunner<S, M, AC>
 where
-    Expr: 'static,
-    Ctx: StreamContext<Val = AC::Val>,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    M: Specification<Expr = Expr> + Localisable,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr> + Localisable,
     AC: AsyncConfig<Val = Value>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
@@ -388,7 +364,7 @@ where
             // Each reconfiguration gets a completely new AsyncMonitorBuilder instance
             // with fresh providers, avoiding the "Input streams not supplied" panic
             let localized_model = self.model.localise(&work_assignment);
-            let builder = AsyncMonitorBuilder::<M, Ctx, AC, Expr, S>::new()
+            let builder = AsyncMonitorBuilder::<M, AC, S>::new()
                 .executor(self.executor.clone())
                 .model(localized_model)
                 .input(input)

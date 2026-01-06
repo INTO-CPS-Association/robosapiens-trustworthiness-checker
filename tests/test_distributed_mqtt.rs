@@ -20,7 +20,6 @@ mod integration_tests {
     use trustworthiness_checker::io::builders::OutputHandlerBuilder;
     use trustworthiness_checker::io::mqtt::{MQTTLocalityReceiver, MqttFactory, MqttMessage};
     use trustworthiness_checker::lang::dynamic_lola::parser::CombExprParser;
-    use trustworthiness_checker::runtime::asynchronous::Context;
     use trustworthiness_checker::runtime::reconfigurable_async::ReconfAsyncMonitorBuilder;
     use trustworthiness_checker::semantics::UntimedLolaSemantics;
     use trustworthiness_checker::{LOLASpecification, OutputStream, lola_fixtures::*};
@@ -669,9 +668,7 @@ mod integration_tests {
         info!("Creating reconfigurable async monitor");
         let monitor_builder = ReconfAsyncMonitorBuilder::<
             LOLASpecification,
-            Context<TestConfig>,
             TestConfig,
-            _,
             UntimedLolaSemantics<CombExprParser>,
         >::new()
         .executor(executor.clone())

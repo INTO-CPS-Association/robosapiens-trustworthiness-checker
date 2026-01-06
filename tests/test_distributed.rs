@@ -7,11 +7,11 @@ use smol::{
     stream::{self, StreamExt},
 };
 use trustworthiness_checker::{
-    LOLASpecification, OutputStream, SExpr, Value,
+    LOLASpecification, OutputStream, Value,
     core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     io::testing::ManualOutputHandler,
-    lola_fixtures::TestConfig,
+    lola_fixtures::TestDistConfig,
     lola_specification,
     runtime::distributed::DistAsyncMonitorBuilder,
     semantics::distributed::semantics::DistributedSemantics,
@@ -20,8 +20,8 @@ use trustworthiness_checker::{async_test, lang::dynamic_lola::lalr_parser::LALRE
 use winnow::Parser;
 
 type TestDistSemantics = DistributedSemantics<LALRExprParser>;
-type TestDistMonitorBuilder<Ctx> =
-    DistAsyncMonitorBuilder<LOLASpecification, Ctx, TestConfig, SExpr, TestDistSemantics>;
+type TestDistMonitorBuilder =
+    DistAsyncMonitorBuilder<LOLASpecification, TestDistConfig, TestDistSemantics>;
 
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {

@@ -486,7 +486,7 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
 struct ValueConfig<Ctx: StreamContext> {
     _marker: std::marker::PhantomData<Ctx>,
 }
-impl<Ctx: StreamContext> AsyncConfig for ValueConfig<Ctx> {
+impl<Ctx: StreamContext<Val = Value>> AsyncConfig for ValueConfig<Ctx> {
     type Val = Value;
     type CtxVal = Value;
     type Expr = SExpr;
@@ -565,7 +565,7 @@ where
                         .expect("Invalid dynamic str");
                     debug!("Dynamic evaluated to expression {:?}", expr);
                     // TODO: When AsyncConfig is done, the types in this line should be inferable
-                    let eval_output_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<_, ValueConfig<Ctx>, _>>::to_async_stream(expr, &subcontext);
+                    let eval_output_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<ValueConfig<Ctx>>>::to_async_stream(expr, &subcontext);
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
@@ -626,7 +626,7 @@ where
                     let expr = Parser::parse(&mut defer_s.as_ref())
                         .expect("Invalid dynamic str");
                     // TODO: When AsyncConfig is done, the types in this line should be inferable
-                    eval_output_stream = Some(<UntimedLolaSemantics::<Parser> as MonitoringSemantics<_, ValueConfig<Ctx>, _>>::to_async_stream(expr, &subcontext));
+                    eval_output_stream = Some(<UntimedLolaSemantics::<Parser> as MonitoringSemantics<ValueConfig<Ctx>>>::to_async_stream(expr, &subcontext));
                     debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
                     subcontext.run().await;
                     break;

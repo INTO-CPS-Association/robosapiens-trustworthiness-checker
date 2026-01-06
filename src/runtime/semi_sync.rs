@@ -124,9 +124,7 @@ impl ExprEvalutor {
         // TODO: See if this can be written explicitly when AsyncConfig is finished
         let eval_stream =
             <semantics::UntimedLolaSemantics<lalr_parser::LALRExprParser> as MonitoringSemantics<
-                _,
                 ValueConfig,
-                _,
             >>::to_async_stream(expr.clone(), ctx);
         Self {
             var_name,

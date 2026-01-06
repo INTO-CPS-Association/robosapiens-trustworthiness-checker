@@ -880,12 +880,11 @@ impl<AC: AsyncConfig> StreamContext for Context<AC> {
 ///  - The S type parameter is the monitoring semantics used to evaluate the
 ///    expressions as streams.
 ///  - The M type parameter is the model/specification being monitored.
-pub struct AsyncMonitorRunner<Expr, AC, S, M, Ctx>
+pub struct AsyncMonitorRunner<AC, S, M>
 where
     AC: AsyncConfig,
-    Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    M: Specification<Expr = Expr>,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr>,
 {
     #[allow(dead_code)]
     pub executor: Rc<LocalExecutor<'static>>,
@@ -895,34 +894,24 @@ where
     output_streams: Vec<OutputStream<AC::Val>>,
     cancellation_token: CancellationToken,
     #[allow(dead_code)]
-    expr_t: PhantomData<Expr>,
     semantics_t: PhantomData<S>,
-    context_t: PhantomData<Ctx>,
 }
 
 pub struct AsyncMonitorBuilder<
-    M: Specification<Expr = Expr>,
-    Ctx: StreamContext,
+    M: Specification<Expr = AC::Expr>,
     AC: AsyncConfig,
-    Expr: 'static,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
+    S: MonitoringSemantics<AC>,
 > {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<M>,
     pub(super) input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     pub(super) output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
-    pub(super) context_builder: Option<Ctx::Builder>,
-    expr_t: PhantomData<Expr>,
+    pub(super) context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     semantics_t: PhantomData<S>,
 }
 
-impl<
-    M: Specification<Expr = Expr>,
-    Ctx: StreamContext,
-    AC: AsyncConfig,
-    Expr,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-> AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
+impl<M: Specification<Expr = AC::Expr>, AC: AsyncConfig, S: MonitoringSemantics<AC>>
+    AsyncMonitorBuilder<M, AC, S>
 {
     pub fn partial_clone(&self) -> Self {
         Self {
@@ -934,27 +923,21 @@ impl<
                 .context_builder
                 .as_ref()
                 .map(|builder| builder.partial_clone()),
-            expr_t: PhantomData,
             semantics_t: PhantomData,
         }
     }
 }
 
-pub trait AbstractAsyncMonitorBuilder<M, Ctx: StreamContext, AC: AsyncConfig>:
+pub trait AbstractAsyncMonitorBuilder<M, AC: AsyncConfig>:
     AbstractMonitorBuilder<M, AC::Val>
 {
-    fn context_builder(self, context_builder: Ctx::Builder) -> Self;
+    fn context_builder(self, context_builder: <AC::Ctx as StreamContext>::Builder) -> Self;
 }
 
-impl<
-    M: Specification<Expr = Expr>,
-    Expr,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    AC: AsyncConfig,
-    Ctx: StreamContext<Val = AC::Val>,
-> AbstractAsyncMonitorBuilder<M, Ctx, AC> for AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
+impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncConfig>
+    AbstractAsyncMonitorBuilder<M, AC> for AsyncMonitorBuilder<M, AC, S>
 {
-    fn context_builder(self, context_builder: <Ctx as StreamContext>::Builder) -> Self {
+    fn context_builder(self, context_builder: <AC::Ctx as StreamContext>::Builder) -> Self {
         Self {
             context_builder: Some(context_builder),
             ..self
@@ -962,15 +945,10 @@ impl<
     }
 }
 
-impl<
-    M: Specification<Expr = Expr>,
-    Expr,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    AC: AsyncConfig,
-    Ctx: StreamContext<Val = AC::Val>,
-> AbstractMonitorBuilder<M, AC::Val> for AsyncMonitorBuilder<M, Ctx, AC, Expr, S>
+impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncConfig>
+    AbstractMonitorBuilder<M, AC::Val> for AsyncMonitorBuilder<M, AC, S>
 {
-    type Mon = AsyncMonitorRunner<Expr, AC, S, M, Ctx>;
+    type Mon = AsyncMonitorRunner<AC, S, M>;
 
     fn new() -> Self {
         AsyncMonitorBuilder {
@@ -980,7 +958,6 @@ impl<
             output: None,
             context_builder: None,
             semantics_t: PhantomData,
-            expr_t: PhantomData,
         }
     }
 
@@ -1040,7 +1017,9 @@ impl<
             output_handler.var_names()
         );
 
-        let context_builder = self.context_builder.unwrap_or_else(Ctx::Builder::new);
+        let context_builder = self
+            .context_builder
+            .unwrap_or_else(<AC::Ctx as StreamContext>::Builder::new);
         debug!("AsyncMonitorBuilder: Context builder initialized");
 
         let input_vars = model.input_vars().clone();
@@ -1127,9 +1106,7 @@ impl<
             output_handler,
             output_streams,
             cancellation_token,
-            expr_t: PhantomData,
             semantics_t: PhantomData,
-            context_t: PhantomData,
         };
         debug!("AsyncMonitorBuilder: Build process complete, runner created");
         runner
@@ -1140,12 +1117,11 @@ impl<
     }
 }
 
-impl<Expr, AC, S, M> AsyncMonitorRunner<Expr, AC, S, M, Context<AC>>
+impl<AC, S, M> AsyncMonitorRunner<AC, S, M>
 where
-    Expr: 'static,
     AC: AsyncConfig,
-    S: MonitoringSemantics<Expr, AC, Context<AC>>,
-    M: Specification<Expr = Expr>,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr>,
 {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
@@ -1163,13 +1139,11 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr, AC, S, M, Ctx> Monitor<M, AC::Val> for AsyncMonitorRunner<Expr, AC, S, M, Ctx>
+impl<AC, S, M> Monitor<M, AC::Val> for AsyncMonitorRunner<AC, S, M>
 where
-    Expr: 'static,
     AC: AsyncConfig,
-    Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    M: Specification<Expr = Expr>,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr>,
 {
     fn spec(&self) -> &M {
         &self.model
@@ -1177,12 +1151,11 @@ where
 }
 
 #[async_trait(?Send)]
-impl<Expr, AC, S, M, Ctx> Runnable for AsyncMonitorRunner<Expr, AC, S, M, Ctx>
+impl<AC, S, M> Runnable for AsyncMonitorRunner<AC, S, M>
 where
     AC: AsyncConfig,
-    Ctx: StreamContext,
-    S: MonitoringSemantics<Expr, AC, Ctx>,
-    M: Specification<Expr = Expr>,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {

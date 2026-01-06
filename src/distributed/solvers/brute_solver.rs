@@ -24,31 +24,29 @@ use crate::{
     },
 };
 
-pub struct BruteForceDistConstraintSolver<Expr, S, M, AC>
+pub struct BruteForceDistConstraintSolver<S, M, AC>
 where
-    Expr: 'static,
-    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
-    M: Specification<Expr = Expr> + Localisable,
-    AC: AsyncConfig<Val = Value>,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr> + Localisable,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
 {
     pub executor: Rc<LocalExecutor<'static>>,
-    pub monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>,
+    pub monitor_builder: DistAsyncMonitorBuilder<M, AC, S>,
     pub context_builder: Option<DistributedContextBuilder<AC>>,
     pub dist_constraints: Vec<VarName>,
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
 }
 
-impl<Expr, S, M, AC> BruteForceDistConstraintSolver<Expr, S, M, AC>
+impl<S, M, AC> BruteForceDistConstraintSolver<S, M, AC>
 where
-    Expr: 'static,
-    S: MonitoringSemantics<Expr, AC, DistributedContext<AC>>,
-    M: Specification<Expr = Expr> + Localisable,
-    AC: AsyncConfig<Val = Value>,
+    S: MonitoringSemantics<AC>,
+    M: Specification<Expr = AC::Expr> + Localisable,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
 {
     fn output_stream_for_graph(
         &self,
-        monitor_builder: DistAsyncMonitorBuilder<M, DistributedContext<AC>, AC, Expr, S>,
+        monitor_builder: DistAsyncMonitorBuilder<M, AC, S>,
         labelled_graph: Rc<LabelledDistributionGraph>,
     ) -> OutputStream<Vec<bool>> {
         // Build a runtime for constructing the output stream
