@@ -426,21 +426,18 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
 struct ValueConfig;
 impl AsyncConfig for ValueConfig {
     type Val = Value;
-    type CtxVal = Value;
     type Expr = SExpr;
     type Ctx = Context<Self>;
 }
 struct TypedValueConfig;
 impl AsyncConfig for TypedValueConfig {
     type Val = Value;
-    type CtxVal = Value;
     type Expr = SExprTE;
     type Ctx = Context<Self>;
 }
 struct DistValueConfig;
 impl AsyncConfig for DistValueConfig {
     type Val = Value;
-    type CtxVal = Value;
     type Expr = SExpr;
     type Ctx = DistributedContext<Self>;
 }

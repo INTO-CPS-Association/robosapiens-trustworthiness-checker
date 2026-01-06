@@ -17,14 +17,12 @@ use std::collections::BTreeMap;
 pub struct TestConfig {}
 impl AsyncConfig for TestConfig {
     type Val = Value;
-    type CtxVal = Value;
     type Expr = SExpr;
     type Ctx = Context<Self>;
 }
 pub struct TestDistConfig {}
 impl AsyncConfig for TestDistConfig {
     type Val = Value;
-    type CtxVal = Value;
     type Expr = SExpr;
     type Ctx = DistributedContext<Self>;
 }

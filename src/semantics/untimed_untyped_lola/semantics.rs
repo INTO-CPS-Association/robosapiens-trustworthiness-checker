@@ -22,7 +22,7 @@ where
 impl<Parser, AC> MonitoringSemantics<AC> for UntimedLolaSemantics<Parser>
 where
     Parser: ExprParser<SExpr> + 'static,
-    AC: AsyncConfig<Val = Value, CtxVal = Value, Expr = SExpr>,
+    AC: AsyncConfig<Val = Value, Expr = SExpr>,
 {
     fn to_async_stream(expr: SExpr, ctx: &AC::Ctx) -> OutputStream<Value> {
         debug!("Creating async stream for expression: {:?}", expr);

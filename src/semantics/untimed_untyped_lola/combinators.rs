@@ -488,7 +488,6 @@ struct ValueConfig<Ctx: StreamContext> {
 }
 impl<Ctx: StreamContext<Val = Value>> AsyncConfig for ValueConfig<Ctx> {
     type Val = Value;
-    type CtxVal = Value;
     type Expr = SExpr;
     type Ctx = Ctx;
 }

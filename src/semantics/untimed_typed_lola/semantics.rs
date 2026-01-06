@@ -13,7 +13,7 @@ pub struct TypedUntimedLolaSemantics;
 
 impl<AC> MonitoringSemantics<AC> for TypedUntimedLolaSemantics
 where
-    AC: AsyncConfig<Val = Value, CtxVal = Value, Expr = SExprTE>,
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
 {
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<Value> {
         match expr {
