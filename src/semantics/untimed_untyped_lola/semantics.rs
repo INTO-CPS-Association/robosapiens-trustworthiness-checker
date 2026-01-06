@@ -115,7 +115,7 @@ where
             }
             SExpr::Defer(e) => {
                 let e = <Self as MonitoringSemantics<SExpr, AC, Ctx>>::to_async_stream(*e, ctx);
-                mc::defer::<Parser>(ctx, e, 1)
+                mc::defer::<Ctx, Parser>(ctx, e, 1)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<SExpr, AC, Ctx>>::to_async_stream(*e1, ctx);

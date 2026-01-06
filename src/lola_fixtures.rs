@@ -16,6 +16,7 @@ impl AsyncConfig for TestConfig {
     type Val = Value;
     type CtxVal = Value;
     type Expr = SExpr;
+    type Ctx = Context<Self>;
 }
 
 // Default semantics to use in tests

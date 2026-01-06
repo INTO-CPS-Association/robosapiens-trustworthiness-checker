@@ -111,6 +111,7 @@ impl AsyncConfig for ValueConfig {
     type Val = Value;
     type CtxVal = Value;
     type Expr = SExpr;
+    type Ctx = SemiSyncContext;
 }
 
 impl ExprEvalutor {

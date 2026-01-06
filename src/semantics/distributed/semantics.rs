@@ -64,7 +64,7 @@ where
             }
             SExpr::Defer(e) => {
                 let e = Self::to_async_stream(*e, ctx);
-                mc::defer::<Parser>(ctx, e, 10)
+                mc::defer::<DistributedContext<AC>, Parser>(ctx, e, 10)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = Self::to_async_stream(*e1, ctx);

@@ -13,13 +13,15 @@ pub struct TypedUntimedLolaSemantics;
 
 // TODO: The ugly syntax with GenConfig should not be needed when AsyncConfig is finished
 // This must be fixed throughout the file
-struct GenConfig<Val: StreamData> {
+struct GenConfig<Val: StreamData, Ctx: StreamContext> {
     _marker: std::marker::PhantomData<Val>,
+    _marker2: std::marker::PhantomData<Ctx>,
 }
-impl<Val: StreamData> AsyncConfig for GenConfig<Val> {
+impl<Val: StreamData, Ctx: StreamContext> AsyncConfig for GenConfig<Val, Ctx> {
     type Val = Val;
     type CtxVal = Val;
     type Expr = SExprTE;
+    type Ctx = Ctx;
 }
 
 impl<Ctx, AC> MonitoringSemantics<SExprTE, AC, Ctx> for TypedUntimedLolaSemantics
@@ -32,7 +34,7 @@ where
             SExprTE::Int(e) => {
                 from_typed_stream::<PossiblyDeferred<i64>>(<Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
                 >>::to_async_stream(
                     e, ctx
@@ -41,7 +43,7 @@ where
             SExprTE::Float(e) => {
                 from_typed_stream::<PossiblyDeferred<f64>>(<Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
                 >>::to_async_stream(
                     e, ctx
@@ -50,7 +52,7 @@ where
             SExprTE::Str(e) => {
                 from_typed_stream::<PossiblyDeferred<String>>(<Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
                 >>::to_async_stream(
                     e, ctx
@@ -59,7 +61,7 @@ where
             SExprTE::Bool(e) => {
                 from_typed_stream::<PossiblyDeferred<bool>>(<Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
                 >>::to_async_stream(
                     e, ctx
@@ -68,7 +70,7 @@ where
             SExprTE::Unit(e) => {
                 from_typed_stream::<PossiblyDeferred<()>>(<Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
                 >>::to_async_stream(
                     e, ctx
@@ -89,18 +91,14 @@ where
             SExprInt::BinOp(e1, e2, op) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 match op {
                     IntBinOp::Add => mc::plus(e1, e2),
                     IntBinOp::Sub => mc::minus(e1, e2),
@@ -113,52 +111,40 @@ where
             SExprInt::SIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e, ctx
-                );
+                >>::to_async_stream(*e, ctx);
                 mc::sindex(e, i)
             }
             SExprInt::If(b, e1, e2) => {
-                let b= <Self as MonitoringSemantics<
+                let b = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *b, ctx
-                );
+                >>::to_async_stream(*b, ctx);
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
             SExprInt::Default(x, y) => {
                 let x = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *x, ctx
-                );
-                let y= <Self as MonitoringSemantics<
+                >>::to_async_stream(*x, ctx);
+                let y = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *y, ctx
-                );
+                >>::to_async_stream(*y, ctx);
                 mc::default(x, y)
             }
         }
@@ -176,18 +162,14 @@ where
             SExprFloat::BinOp(e1, e2, op) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 match op {
                     FloatBinOp::Add => mc::plus(e1, e2),
                     FloatBinOp::Sub => mc::minus(e1, e2),
@@ -200,52 +182,40 @@ where
             SExprFloat::SIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e, ctx
-                );
+                >>::to_async_stream(*e, ctx);
                 mc::sindex(e, i)
             }
             SExprFloat::If(b, e1, e2) => {
-                let b= <Self as MonitoringSemantics<
+                let b = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *b, ctx
-                );
+                >>::to_async_stream(*b, ctx);
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
             SExprFloat::Default(x, y) => {
                 let x = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *x, ctx
-                );
-                let y= <Self as MonitoringSemantics<
+                >>::to_async_stream(*x, ctx);
+                let y = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<f64>>,
+                    GenConfig<PossiblyDeferred<f64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *y, ctx
-                );
+                >>::to_async_stream(*y, ctx);
                 mc::default(x, y)
             }
         }
@@ -264,35 +234,27 @@ where
             SExprStr::SIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e, ctx
-                );
+                >>::to_async_stream(*e, ctx);
                 mc::sindex(e, i)
             }
             SExprStr::If(b, e1, e2) => {
-                let b= <Self as MonitoringSemantics<
+                let b = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *b, ctx
-                );
+                >>::to_async_stream(*b, ctx);
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
             SExprStr::Dynamic(_) => {
@@ -306,18 +268,14 @@ where
             SExprStr::BinOp(e1, e2, op) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 match op {
                     StrBinOp::Concat => mc::concat(e1, e2),
                 }
@@ -325,18 +283,14 @@ where
             SExprStr::Default(x, y) => {
                 let x = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *x, ctx
-                );
-                let y= <Self as MonitoringSemantics<
+                >>::to_async_stream(*x, ctx);
+                let y = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *y, ctx
-                );
+                >>::to_async_stream(*y, ctx);
                 mc::default(x, y)
             }
         }
@@ -355,7 +309,7 @@ where
             SExprUnit::SIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
                 >>::to_async_stream(
                     *e, ctx
@@ -363,40 +317,34 @@ where
                 mc::sindex(e, i)
             }
             SExprUnit::If(b, e1, e2) => {
-                let b= <Self as MonitoringSemantics<
+                let b = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *b, ctx
-                );
+                >>::to_async_stream(*b, ctx);
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
             SExprUnit::Default(x, y) => {
                 let x = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
                 >>::to_async_stream(
                     *x, ctx
                 );
                 let y= <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
                 >>::to_async_stream(
                     *y, ctx
@@ -419,199 +367,153 @@ where
             SExprBool::EqInt(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e1, ctx
-                );
+                >>::to_async_stream(e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e2, ctx
-                );
+                >>::to_async_stream(e2, ctx);
                 mc::eq(e1, e2)
             }
             SExprBool::EqStr(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e1, ctx
-                );
+                >>::to_async_stream(e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<String>>,
+                    GenConfig<PossiblyDeferred<String>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e2, ctx
-                );
+                >>::to_async_stream(e2, ctx);
                 mc::eq(e1, e2)
             }
             SExprBool::EqUnit(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e1, ctx
-                );
+                >>::to_async_stream(e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<()>>,
+                    GenConfig<PossiblyDeferred<()>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e2, ctx
-                );
+                >>::to_async_stream(e2, ctx);
                 mc::eq(e1, e2)
             }
             SExprBool::EqBool(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::eq(e1, e2)
             }
             SExprBool::LeInt(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e1, ctx
-                );
+                >>::to_async_stream(e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<i64>>,
+                    GenConfig<PossiblyDeferred<i64>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    e2, ctx
-                );
+                >>::to_async_stream(e2, ctx);
                 mc::le(e1, e2)
             }
             SExprBool::Not(e) => {
                 let e = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e, ctx
-                );
+                >>::to_async_stream(*e, ctx);
                 mc::not(e)
             }
             SExprBool::BinOp(e1, e2, BoolBinOp::And) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::and(e1, e2)
             }
             SExprBool::BinOp(e1, e2, BoolBinOp::Or) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::or(e1, e2)
             }
             SExprBool::BinOp(e1, e2, BoolBinOp::Impl) => {
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::implication(e1, e2)
             }
             SExprBool::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
             SExprBool::SIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e, ctx
-                );
+                >>::to_async_stream(*e, ctx);
                 mc::sindex(e, i)
             }
             SExprBool::If(b, e1, e2) => {
-                let b= <Self as MonitoringSemantics<
+                let b = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *b, ctx
-                );
+                >>::to_async_stream(*b, ctx);
                 let e1 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e1, ctx
-                );
+                >>::to_async_stream(*e1, ctx);
                 let e2 = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *e2, ctx
-                );
+                >>::to_async_stream(*e2, ctx);
                 mc::if_stm(b, e1, e2)
             }
             SExprBool::Default(x, y) => {
                 let x = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *x, ctx
-                );
-                let y= <Self as MonitoringSemantics<
+                >>::to_async_stream(*x, ctx);
+                let y = <Self as MonitoringSemantics<
                     _,
-                    GenConfig<PossiblyDeferred<bool>>,
+                    GenConfig<PossiblyDeferred<bool>, Ctx>,
                     _,
-                >>::to_async_stream(
-                    *y, ctx
-                );
+                >>::to_async_stream(*y, ctx);
                 mc::default(x, y)
             }
         }

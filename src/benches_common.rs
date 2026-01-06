@@ -109,6 +109,7 @@ impl AsyncConfig for Config {
     type Val = Value;
     type CtxVal = Value;
     type Expr = SExpr;
+    type Ctx = Context<Self>;
 }
 
 pub async fn monitor_outputs_typed_async(
