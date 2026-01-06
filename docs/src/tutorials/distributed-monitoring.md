@@ -211,10 +211,10 @@ To test the local nodes without starting the central node, you can send the foll
 Using MQTT Explorer or `mosquitto_pub`:
 ```bash
 # Send inputs for Node A
-mosquitto_pub -t start_monitors_at_A -m "[w]"
+mosquitto_pub -t start_monitors_at_A -m "[\"w\"]"
 
 # Send input for Node B
-mosquitto_pub -t start_monitors_at_B -m "[v]"
+mosquitto_pub -t start_monitors_at_B -m "[\"v\"]"
 ```
 
 #### Option B: Randomized Central Node
