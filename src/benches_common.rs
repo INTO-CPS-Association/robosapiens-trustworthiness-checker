@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use crate::LOLASpecification;
 use crate::OutputStream;
+use crate::SExpr;
 use crate::Value;
 use crate::VarName;
 use crate::core::AbstractMonitorBuilder;
@@ -106,6 +107,7 @@ pub async fn monitor_outputs_untyped_little(
 struct Config;
 impl AsyncConfig for Config {
     type Val = Value;
+    type Expr = SExpr;
 }
 
 pub async fn monitor_outputs_typed_async(

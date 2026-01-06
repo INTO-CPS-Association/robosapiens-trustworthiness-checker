@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use tracing::{debug, warn};
 
 use crate::{
-    LOLASpecification, Monitor, Value, VarName,
+    LOLASpecification, Monitor, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
@@ -426,6 +426,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
 struct ValueConfig;
 impl AsyncConfig for ValueConfig {
     type Val = Value;
+    type Expr = SExpr;
 }
 
 impl GenericMonitorBuilder<LOLASpecification, Value> {

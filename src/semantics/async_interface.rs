@@ -70,7 +70,7 @@ where
 pub trait AsyncConfig: 'static {
     type Val: StreamData;
     // type CtxVal: StreamData;
-    // type Expr: 'static;
+    type Expr: 'static;
     // type Sem: MonitoringSemantics<Self::Expr, Self::Val, Self::Ctx, Self::CtxVal>;
     // type Ctx: StreamContext<Self::CtxVal>;
     // type CtxBuilder: AbstractContextBuilder<Val = Self::Val, Ctx = Self::Ctx>;

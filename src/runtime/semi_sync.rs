@@ -109,6 +109,7 @@ struct ExprEvalutor {
 struct ValueConfig;
 impl AsyncConfig for ValueConfig {
     type Val = Value;
+    type Expr = SExpr;
 }
 
 impl ExprEvalutor {

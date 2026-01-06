@@ -18,6 +18,7 @@ struct GenConfig<Val: StreamData> {
 }
 impl<Val: StreamData> AsyncConfig for GenConfig<Val> {
     type Val = Val;
+    type Expr = SExprTE;
 }
 
 impl<Ctx, AC> MonitoringSemantics<SExprTE, AC, Ctx> for TypedUntimedLolaSemantics

@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 pub struct TestConfig {}
 impl AsyncConfig for TestConfig {
     type Val = Value;
+    type Expr = SExpr;
 }
 
 // Default semantics to use in tests
