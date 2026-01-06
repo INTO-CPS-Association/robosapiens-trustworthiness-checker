@@ -1,13 +1,30 @@
+// Run with: cargo run --features ros --profile dev-fast -- --input-ros-topics examples/iff_dsu_map.json examples/iff_dsu.lola
+// Cameras encoded as: true == use the left camera (ORBBEC). false = use the right camera (Intel)
 in rawHuman
-in useNucOne // Not used yet - comment out to show bug
-out numberOfHumans
-out bugPrevent // TC bug...
+in useNucOne
+in reqUseNucOne
 out hasError
 out hadError
-aux cameraChange
+out cameraSwap
+out swapRequest
+out swapRequestSticky
+out safeSwap
+aux swapRequestHelper
+aux numberOfHumans
+
 numberOfHumans = Map.get(rawHuman, "number_of_humans")
-bugPrevent = useNucOne
-// Camera starts as being true
-cameraChange = !(default(useNucOne[1], true) == useNucOne)
-hasError = !(!cameraChange || numberOfHumans == 0) // Negated implication
-hadError = hasError == true || default(hadError[1], false) // Globally
+swapRequest = !(reqUseNucOne == default(reqUseNucOne[1], true))
+swapRequestHelper = if cameraSwap then swapRequest else default(swapRequestHelper[1], swapRequest)
+swapRequestSticky = default(swapRequestHelper[1], false) || swapRequest
+
+// Denotes if we swapped cameras.
+// Default expr encapsulates that we expect the system to use left camera when booted
+// init is to make sure this var is never NoVal. If it is NoVal it means we haven't swapped.
+cameraSwap = init(!(default(useNucOne[1], true) == useNucOne), false)
+
+safeSwap = cameraSwap => numberOfHumans == 0 // cameraSwap implies no humans - either we are not swapping or we are swapping when no people are present
+
+// Implication: swapRequestSticky implies swapping safely and then negated
+// Negated: Because the logic is inverted
+hasError = !(swapRequestSticky => safeSwap)
+hadError = hasError || default(hadError[1], false) // Globally
