@@ -553,7 +553,6 @@ where
                     let expr = Parser::parse(&mut s.as_ref())
                         .expect("Invalid dynamic str");
                     debug!("Dynamic evaluated to expression {:?}", expr);
-                    // TODO: When AsyncConfig is done, the types in this line should be inferable
                     let eval_output_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
@@ -617,7 +616,6 @@ where
                     // We have a string to evaluate so do so
                     let expr = Parser::parse(&mut defer_s.as_ref())
                         .expect("Invalid dynamic str");
-                    // TODO: When AsyncConfig is done, the types in this line should be inferable
                     eval_output_stream = Some(<UntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext));
                     debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
                     subcontext.run().await;

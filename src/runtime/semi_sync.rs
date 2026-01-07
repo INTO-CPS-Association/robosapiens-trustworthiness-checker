@@ -120,7 +120,7 @@ impl ExprEvalutor {
         sender: spsc::Sender<Value>,
         ctx: &SemiSyncContext,
     ) -> Self {
-        // TODO: See if this can be written explicitly when AsyncConfig is finished
+        // TODO: When ExprEvaluator is generic, we can be less explicit about types
         let eval_stream =
             <semantics::UntimedLolaSemantics<lalr_parser::LALRExprParser> as MonitoringSemantics<
                 ValueConfig,
