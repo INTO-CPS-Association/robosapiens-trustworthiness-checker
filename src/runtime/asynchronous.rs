@@ -500,9 +500,11 @@ pub struct ContextBuilder<AC: AsyncConfig> {
     id: Option<ContextId>,
 }
 
-impl<AC: AsyncConfig> AbstractContextBuilder for ContextBuilder<AC> {
-    type Val = AC::Val;
-    type Ctx = Context<AC>;
+impl<AC> AbstractContextBuilder for ContextBuilder<AC>
+where
+    AC: AsyncConfig<Ctx = Context<AC>>,
+{
+    type AC = AC;
 
     fn new() -> Self {
         ContextBuilder {
@@ -530,7 +532,7 @@ impl<AC: AsyncConfig> AbstractContextBuilder for ContextBuilder<AC> {
         self
     }
 
-    fn input_streams(mut self, streams: Vec<OutputStream<Self::Val>>) -> Self {
+    fn input_streams(mut self, streams: Vec<OutputStream<AC::Val>>) -> Self {
         self.input_streams = Some(streams);
         self
     }
@@ -553,7 +555,7 @@ impl<AC: AsyncConfig> AbstractContextBuilder for ContextBuilder<AC> {
         res
     }
 
-    fn build(self) -> Context<AC> {
+    fn build(self) -> AC::Ctx {
         let builder = self.partial_clone();
         let executor = self.executor.expect("Executor not supplied");
         let var_names = self.var_names.expect("Var names not supplied");
@@ -632,14 +634,17 @@ impl<AC: AsyncConfig> ContextBuilder<AC> {
     }
 }
 
-impl<AC: AsyncConfig> Context<AC> {
+impl<AC> Context<AC>
+where
+    AC: AsyncConfig<Ctx = Context<AC>>,
+{
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
         input_streams: Vec<OutputStream<AC::Val>>,
         history_length: usize,
     ) -> Self {
-        ContextBuilder::new()
+        <Self as StreamContext>::Builder::new()
             .executor(executor)
             .var_names(var_names)
             .input_streams(input_streams)
@@ -662,8 +667,11 @@ impl<AC: AsyncConfig> Context<AC> {
 }
 
 #[async_trait(?Send)]
-impl<AC: AsyncConfig> StreamContext for Context<AC> {
-    type Val = AC::Val;
+impl<AC> StreamContext for Context<AC>
+where
+    AC: AsyncConfig<Ctx = Context<AC>>,
+{
+    type AC = AC;
     type Builder = ContextBuilder<AC>;
 
     fn var(&self, var: &VarName) -> Option<OutputStream<AC::Val>> {
@@ -1297,10 +1305,10 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_subctx_regression_727dc01(executor: Rc<LocalExecutor<'static>>) {
-        fn mock_indirection<Ctx: StreamContext<Val = Value>>(
-            ctx: &Ctx,
-            x: VarName,
-        ) -> OutputStream<Value> {
+        fn mock_indirection<AC>(ctx: &AC::Ctx, x: VarName) -> OutputStream<AC::Val>
+        where
+            AC: AsyncConfig<Val = Value>,
+        {
             let mut subcontext = ctx.subcontext(10);
             Box::pin(stream! {
                 let mut var_stream = subcontext.var(&x).unwrap();
@@ -1313,9 +1321,8 @@ mod tests {
         }
 
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-        let mut ctx: Context<TestConfig> =
-            Context::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let var_stream = mock_indirection(&ctx, "x".into());
+        let mut ctx = Context::<TestConfig>::new(executor.clone(), vec!["x".into()], vec![x], 10);
+        let var_stream = mock_indirection::<TestConfig>(&ctx, "x".into());
         ctx.run().await;
         let exp: Vec<Value> = vec![1.into(), 2.into(), 3.into()];
         // If this hangs then we have regressed - previously it meant that subcontexts cannot

@@ -9,11 +9,14 @@ use futures::StreamExt;
 
 use super::contexts::DistributedContext;
 
-pub fn monitored_at<AC: AsyncConfig>(
+pub fn monitored_at<AC>(
     var_name: VarName,
     node_name: NodeName,
-    ctx: &DistributedContext<AC>,
-) -> OutputStream<Value> {
+    ctx: &AC::Ctx,
+) -> OutputStream<AC::Val>
+where
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+{
     let mut graph_stream = ctx.graph().unwrap();
 
     Box::pin(stream! {
@@ -27,11 +30,10 @@ pub fn monitored_at<AC: AsyncConfig>(
     })
 }
 
-pub fn dist<AC: AsyncConfig>(
-    u: VarOrNodeName,
-    v: VarOrNodeName,
-    ctx: &DistributedContext<AC>,
-) -> OutputStream<Value> {
+pub fn dist<AC>(u: VarOrNodeName, v: VarOrNodeName, ctx: &AC::Ctx) -> OutputStream<AC::Val>
+where
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+{
     let u = ctx
         .disambiguate_name(u)
         .expect("Could not find node or variable in the graph");
@@ -58,7 +60,7 @@ mod tests {
     use super::*;
     use crate::async_test;
     use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
-    use crate::lola_fixtures::TestConfig;
+    use crate::lola_fixtures::TestDistConfig;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{
@@ -73,8 +75,7 @@ mod tests {
     use petgraph::graph::DiGraph;
     use smol::LocalExecutor;
 
-    type TestDistCtx = DistributedContext<TestConfig>;
-    type TestDistCtxBuilder = DistributedContextBuilder<TestConfig>;
+    type TestDistCtxBuilder = DistributedContextBuilder<TestDistConfig>;
 
     #[apply(async_test)]
     async fn test_that_test_can_test(executor: Rc<LocalExecutor<'static>>) {
@@ -92,7 +93,7 @@ mod tests {
             .build();
         let exp = vec![Value::Int(2), Value::Int(4)];
         let res_stream = crate::semantics::untimed_untyped_lola::combinators::dynamic::<
-            TestDistCtx,
+            TestDistConfig,
             LALRExprParser,
         >(&ctx, e, None, 10);
         ctx.run().await;
@@ -137,7 +138,7 @@ mod tests {
             .node_names(vec!["A".into(), "B".into(), "C".into()])
             .build();
 
-        let res_x = monitored_at("x".into(), "B".into(), &ctx);
+        let res_x = monitored_at::<TestDistConfig>("x".into(), "B".into(), &ctx);
         ctx.run().await;
         let res_x: Vec<_> = res_x.take(3).collect().await;
 
@@ -181,7 +182,8 @@ mod tests {
             .node_names(vec!["A".into(), "B".into(), "C".into()])
             .build();
 
-        let res = dist(VarOrNodeName("A".into()), VarOrNodeName("C".into()), &ctx);
+        let res =
+            dist::<TestDistConfig>(VarOrNodeName("A".into()), VarOrNodeName("C".into()), &ctx);
         ctx.run().await;
         let res: Vec<_> = res.take(3).collect().await;
 
@@ -225,7 +227,8 @@ mod tests {
             .node_names(vec!["A".into(), "B".into(), "C".into()])
             .build();
 
-        let res = dist(VarOrNodeName("x".into()), VarOrNodeName("C".into()), &ctx);
+        let res =
+            dist::<TestDistConfig>(VarOrNodeName("x".into()), VarOrNodeName("C".into()), &ctx);
         ctx.run().await;
         let res: Vec<_> = res.take(3).collect().await;
 

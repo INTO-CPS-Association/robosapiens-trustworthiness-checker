@@ -8,8 +8,7 @@ use crate::{OutputStream, VarName, core::StreamData};
 
 /// Abstract builder of contexts
 pub trait AbstractContextBuilder {
-    type Val: StreamData;
-    type Ctx: StreamContext<Val = Self::Val>;
+    type AC: AsyncConfig;
 
     fn new() -> Self;
 
@@ -19,19 +18,19 @@ pub trait AbstractContextBuilder {
 
     fn history_length(self, history_length: usize) -> Self;
 
-    fn input_streams(self, streams: Vec<OutputStream<Self::Val>>) -> Self;
+    fn input_streams(self, streams: Vec<OutputStream<<Self::AC as AsyncConfig>::Val>>) -> Self;
 
     fn partial_clone(&self) -> Self;
 
-    fn build(self) -> Self::Ctx;
+    fn build(self) -> <Self::AC as AsyncConfig>::Ctx;
 }
 
 #[async_trait(?Send)]
 pub trait StreamContext: 'static {
-    type Val: StreamData;
-    type Builder: AbstractContextBuilder<Val = Self::Val, Ctx = Self>;
+    type AC: AsyncConfig;
+    type Builder: AbstractContextBuilder<AC = Self::AC>;
 
-    fn var(&self, x: &VarName) -> Option<OutputStream<Self::Val>>;
+    fn var(&self, x: &VarName) -> Option<OutputStream<<Self::AC as AsyncConfig>::Val>>;
 
     fn subcontext(&self, history_length: usize) -> Self;
 
@@ -69,7 +68,5 @@ where
 pub trait AsyncConfig: 'static {
     type Val: StreamData;
     type Expr: 'static;
-    // type Sem: MonitoringSemantics<Self::Expr, Self::Val, Self::Ctx, Self::CtxVal>;
-    type Ctx: StreamContext<Val = Self::Val>;
-    // type CtxBuilder: AbstractContextBuilder<Val = Self::Val, Ctx = Self::Ctx>;
+    type Ctx: StreamContext<AC = Self>;
 }

@@ -101,19 +101,19 @@ where
             }
             SExpr::Var(v) => {
                 debug!("Accessing variable: {:?}", v);
-                mc::var(ctx, v)
+                mc::var::<AC>(ctx, v)
             }
             SExpr::Dynamic(e) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<AC::Ctx, Parser>(ctx, e, None, 1)
+                mc::dynamic::<AC, Parser>(ctx, e, None, 1)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<AC::Ctx, Parser>(ctx, e, Some(vs), 1)
+                mc::dynamic::<AC, Parser>(ctx, e, Some(vs), 1)
             }
             SExpr::Defer(e) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::defer::<AC::Ctx, Parser>(ctx, e, 1)
+                mc::defer::<AC, Parser>(ctx, e, 1)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);

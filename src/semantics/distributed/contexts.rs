@@ -14,10 +14,30 @@ use crate::{
     semantics::{AbstractContextBuilder, AsyncConfig, StreamContext},
 };
 
-pub struct DistributedContextBuilder<AC: AsyncConfig> {
-    async_ctx_builder: AsyncCtxBuilder<AC>,
-    async_ctx: Option<AsyncCtx<AC>>,
-    nested_async_ctx: Option<AsyncCtx<AC>>,
+// An AsyncConfig used internally to map into AsyncCtx from DistributedContext
+pub struct InnerAC<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
+    phantom: std::marker::PhantomData<AC>,
+}
+
+impl<AC> AsyncConfig for InnerAC<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
+    type Val = AC::Val;
+    type Expr = AC::Expr;
+    type Ctx = AsyncCtx<Self>;
+}
+
+pub struct DistributedContextBuilder<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
+    async_ctx_builder: AsyncCtxBuilder<InnerAC<AC>>,
+    async_ctx: Option<AsyncCtx<InnerAC<AC>>>,
+    nested_async_ctx: Option<AsyncCtx<InnerAC<AC>>>,
     graph_name: Option<String>,
     node_names: Option<Vec<NodeName>>,
     graph_stream: Option<LabelledDistGraphStream>,
@@ -25,9 +45,11 @@ pub struct DistributedContextBuilder<AC: AsyncConfig> {
     built_callbacks: Vec<Box<dyn FnOnce(&mut DistributedContext<AC>)>>,
 }
 
-impl<AC: AsyncConfig> AbstractContextBuilder for DistributedContextBuilder<AC> {
-    type Ctx = DistributedContext<AC>;
-    type Val = AC::Val;
+impl<AC> AbstractContextBuilder for DistributedContextBuilder<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
+    type AC = AC;
 
     fn new() -> Self {
         Self {
@@ -75,7 +97,7 @@ impl<AC: AsyncConfig> AbstractContextBuilder for DistributedContextBuilder<AC> {
         }
     }
 
-    fn build(self) -> DistributedContext<AC> {
+    fn build(self) -> AC::Ctx {
         if let Some(presupplied_ctx) = self.presupplied_ctx {
             return *presupplied_ctx;
         }
@@ -112,7 +134,10 @@ impl<AC: AsyncConfig> AbstractContextBuilder for DistributedContextBuilder<AC> {
     }
 }
 
-impl<AC: AsyncConfig> DistributedContextBuilder<AC> {
+impl<AC> DistributedContextBuilder<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
     pub fn graph_stream(mut self, graph_stream: LabelledDistGraphStream) -> Self {
         self.graph_stream = Some(graph_stream);
         self
@@ -128,7 +153,7 @@ impl<AC: AsyncConfig> DistributedContextBuilder<AC> {
         self
     }
 
-    pub fn context(mut self, ctx: AsyncCtx<AC>) -> Self {
+    pub fn context(mut self, ctx: AsyncCtx<InnerAC<AC>>) -> Self {
         self.async_ctx = Some(ctx);
         self
     }
@@ -138,7 +163,7 @@ impl<AC: AsyncConfig> DistributedContextBuilder<AC> {
         self
     }
 
-    pub fn nested(mut self, ctx: AsyncCtx<AC>) -> Self {
+    pub fn nested(mut self, ctx: AsyncCtx<InnerAC<AC>>) -> Self {
         self.nested_async_ctx = Some(ctx);
         self
     }
@@ -149,8 +174,11 @@ impl<AC: AsyncConfig> DistributedContextBuilder<AC> {
     }
 }
 
-pub struct DistributedContext<AC: AsyncConfig> {
-    ctx: AsyncCtx<AC>,
+pub struct DistributedContext<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
+    ctx: AsyncCtx<InnerAC<AC>>,
     /// Essentially a shared_ptr that we can at some time take ownership of
     node_names: Vec<NodeName>,
     graph_manager: Rc<RefCell<Option<VarManager<Rc<LabelledDistributionGraph>>>>>,
@@ -159,8 +187,11 @@ pub struct DistributedContext<AC: AsyncConfig> {
 }
 
 #[async_trait(?Send)]
-impl<AC: AsyncConfig> StreamContext for DistributedContext<AC> {
-    type Val = AC::Val;
+impl<AC> StreamContext for DistributedContext<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
+    type AC = AC;
     type Builder = DistributedContextBuilder<AC>;
 
     fn var(&self, x: &VarName) -> Option<OutputStream<AC::Val>> {
@@ -227,7 +258,10 @@ impl<AC: AsyncConfig> StreamContext for DistributedContext<AC> {
     }
 }
 
-impl<AC: AsyncConfig> DistributedContext<AC> {
+impl<AC> DistributedContext<AC>
+where
+    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+{
     pub fn graph(&self) -> Option<LabelledDistGraphStream> {
         if self.is_clock_started() {
             panic!("Cannot request a stream after the clock has started");

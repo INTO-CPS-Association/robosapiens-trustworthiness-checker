@@ -558,9 +558,7 @@ impl SemiSyncContextBuilder {
 }
 
 impl AbstractContextBuilder for SemiSyncContextBuilder {
-    type Val = Value;
-
-    type Ctx = SemiSyncContext;
+    type AC = ValueConfig;
 
     fn new() -> Self {
         Self {
@@ -584,7 +582,7 @@ impl AbstractContextBuilder for SemiSyncContextBuilder {
         }
     }
 
-    fn input_streams(self, _streams: Vec<OutputStream<Self::Val>>) -> Self {
+    fn input_streams(self, _streams: Vec<OutputStream<<Self::AC as AsyncConfig>::Val>>) -> Self {
         todo!()
     }
 
@@ -592,7 +590,7 @@ impl AbstractContextBuilder for SemiSyncContextBuilder {
         todo!()
     }
 
-    fn build(self) -> Self::Ctx {
+    fn build(self) -> <Self::AC as AsyncConfig>::Ctx {
         SemiSyncContext::new(
             Rc::new(RefCell::new(self.var_managers.expect(
                 "VarManagers must be set before building SemiSyncContext",
@@ -675,7 +673,7 @@ impl SemiSyncContext {
 
 #[async_trait(?Send)]
 impl StreamContext for SemiSyncContext {
-    type Val = Value;
+    type AC = ValueConfig;
     type Builder = SemiSyncContextBuilder;
 
     fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {

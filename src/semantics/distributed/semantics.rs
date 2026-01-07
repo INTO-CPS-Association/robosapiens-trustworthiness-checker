@@ -52,18 +52,18 @@ where
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::not(e)
             }
-            SExpr::Var(v) => mc::var(ctx, v),
+            SExpr::Var(v) => mc::var::<AC>(ctx, v),
             SExpr::Dynamic(e) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<DistributedContext<AC>, Parser>(ctx, e, None, 10)
+                mc::dynamic::<AC, Parser>(ctx, e, None, 10)
             }
             SExpr::RestrictedDynamic(e, vs) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<DistributedContext<AC>, Parser>(ctx, e, Some(vs), 10)
+                mc::dynamic::<AC, Parser>(ctx, e, Some(vs), 10)
             }
             SExpr::Defer(e) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::defer::<DistributedContext<AC>, Parser>(ctx, e, 10)
+                mc::defer::<AC, Parser>(ctx, e, 10)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);
@@ -182,8 +182,10 @@ where
                 let v = <Self as MonitoringSemantics<AC>>::to_async_stream(*v, ctx);
                 mc::abs(v)
             }
-            SExpr::MonitoredAt(var_name, label) => dist_mc::monitored_at(var_name, label, ctx),
-            SExpr::Dist(u, v) => dist_mc::dist(u, v, ctx),
+            SExpr::MonitoredAt(var_name, label) => {
+                dist_mc::monitored_at::<AC>(var_name, label, ctx)
+            }
+            SExpr::Dist(u, v) => dist_mc::dist::<AC>(u, v, ctx),
         }
     }
 }
