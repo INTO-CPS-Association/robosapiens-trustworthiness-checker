@@ -284,10 +284,6 @@ pub trait Runnable {
 /*
  * A runtime monitor for a model/specification of type M over streams with
  * values of type V.
- *
- * The input provider is provided as an Arc<Mutex<dyn InputProvider<V>>> to allow a dynamic
- * type of input provider to be provided and allows the output
- * to borrow from the input provider without worrying about lifetimes.
  */
 #[async_trait(?Send)]
 pub trait Monitor<M, V: StreamData>: Runnable {
