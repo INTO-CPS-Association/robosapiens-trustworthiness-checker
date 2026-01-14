@@ -15,7 +15,10 @@ use crate::{
         parser::CombExprParser,
         type_checker::{SExprTE, TypedLOLASpecification, type_check},
     },
-    runtime::{reconfigurable_async::ReconfAsyncMonitorBuilder, semi_sync::SemiSyncMonitorBuilder},
+    runtime::{
+        reconfigurable_async::ReconfAsyncMonitorBuilder,
+        semi_sync::{SemiSyncContext, SemiSyncMonitorBuilder},
+    },
     semantics::{
         AsyncConfig, DistributedSemantics, TypedUntimedLolaSemantics, UntimedLolaSemantics,
         distributed::{contexts::DistributedContext, localisation::LocalitySpec},
@@ -441,6 +444,12 @@ impl AsyncConfig for DistValueConfig {
     type Expr = SExpr;
     type Ctx = DistributedContext<Self>;
 }
+struct SemiSyncValueConfig;
+impl AsyncConfig for SemiSyncValueConfig {
+    type Val = Value;
+    type Expr = SExpr;
+    type Ctx = SemiSyncContext<Self>;
+}
 
 impl GenericMonitorBuilder<LOLASpecification, Value> {
     // Creates the common parts of the builder
@@ -478,7 +487,11 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 >::new())
             }
             (Runtime::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(SemiSyncMonitorBuilder::new())
+                Box::new(SemiSyncMonitorBuilder::<
+                    SemiSyncValueConfig,
+                    LOLASpecification,
+                    UntimedLolaSemantics<LALRExprParser>,
+                >::new())
             }
             (Runtime::Async, Semantics::TypedUntimed, _) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<

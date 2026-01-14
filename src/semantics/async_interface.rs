@@ -67,6 +67,6 @@ where
 
 pub trait AsyncConfig: 'static {
     type Val: StreamData;
-    type Expr: 'static;
+    type Expr: Clone + 'static;
     type Ctx: StreamContext<AC = Self>;
 }

@@ -1,14 +1,10 @@
 use crate::{
-    OutputStream, SExpr, VarName,
+    OutputStream, VarName,
     core::{
         AbstractMonitorBuilder, DeferrableStreamData, InputProvider, Monitor, OutputHandler,
-        Runnable, Specification, Value,
+        Runnable, Specification,
     },
-    lang::dynamic_lola::{ast::LOLASpecification, lalr_parser},
-    semantics::{
-        AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
-        untimed_untyped_lola::semantics,
-    },
+    semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
     stream_utils::{self},
     utils::cancellation_token::CancellationToken,
 };
@@ -26,15 +22,27 @@ use std::{
 use tracing::{debug, error, info, warn};
 use unsync::spsc;
 
-pub struct SemiSyncMonitorBuilder {
+pub struct SemiSyncMonitorBuilder<AC, S, MS>
+where
+    AC: AsyncConfig,
+    S: Specification<Expr = AC::Expr>,
+    MS: MonitoringSemantics<AC>,
+{
     executor: Option<Rc<LocalExecutor<'static>>>,
-    model: Option<LOLASpecification>,
-    input: Option<Box<dyn InputProvider<Val = Value>>>,
-    output: Option<Box<dyn OutputHandler<Val = Value>>>,
+    model: Option<S>,
+    input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
+    output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
+    _marker: std::marker::PhantomData<MS>,
 }
 
-impl AbstractMonitorBuilder<LOLASpecification, Value> for SemiSyncMonitorBuilder {
-    type Mon = SemiSyncMonitor;
+impl<AC, S, MS> AbstractMonitorBuilder<S, AC::Val> for SemiSyncMonitorBuilder<AC, S, MS>
+where
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+    S: Specification<Expr = AC::Expr>,
+    MS: MonitoringSemantics<AC>,
+{
+    type Mon = SemiSyncMonitor<AC, S, MS>;
 
     fn new() -> Self {
         Self {
@@ -42,6 +50,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for SemiSyncMonitorBuilder
             model: None,
             input: None,
             output: None,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -50,22 +59,22 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for SemiSyncMonitorBuilder
         self
     }
 
-    fn model(mut self, model: LOLASpecification) -> Self {
+    fn model(mut self, model: S) -> Self {
         self.model = Some(model);
         self
     }
 
-    fn input(mut self, input: Box<dyn InputProvider<Val = Value>>) -> Self {
+    fn input(mut self, input: Box<dyn InputProvider<Val = AC::Val>>) -> Self {
         self.input = Some(input);
         self
     }
 
-    fn output(mut self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
+    fn output(mut self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
         self.output = Some(output);
         self
     }
 
-    fn build(self) -> SemiSyncMonitor {
+    fn build(self) -> SemiSyncMonitor<AC, S, MS> {
         let executor = self.executor.unwrap();
         let model = self.model.unwrap();
         let input = self.input.unwrap();
@@ -76,6 +85,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value> for SemiSyncMonitorBuilder
             model,
             input_provider: input,
             output_handler: output,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -94,42 +104,43 @@ enum StreamState {
     Finished,
 }
 
-struct ExprEvalutor {
+struct ExprEvalutor<AC, MS>
+where
+    AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
+    MS: MonitoringSemantics<AC>,
+{
     // Sender that forwards it to the VarManager
-    sender: spsc::Sender<Value>,
+    sender: spsc::Sender<AC::Val>,
     // Stream that evaluates the expression
-    eval_stream: OutputStream<Value>,
+    eval_stream: OutputStream<AC::Val>,
+
+    _marker: std::marker::PhantomData<MS>,
 
     // Kept for debugging
     var_name: VarName,
-    _expr: SExpr,
+    _expr: AC::Expr,
 }
 
-// NOTE: Temporary only while AsyncConfig is unfinished
-struct ValueConfig;
-impl AsyncConfig for ValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = SemiSyncContext;
-}
-
-impl ExprEvalutor {
+impl<AC, MS> ExprEvalutor<AC, MS>
+where
+    AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
+    MS: MonitoringSemantics<AC>,
+{
     fn new(
         var_name: VarName,
-        expr: SExpr,
-        sender: spsc::Sender<Value>,
-        ctx: &SemiSyncContext,
+        expr: AC::Expr,
+        sender: spsc::Sender<AC::Val>,
+        ctx: &AC::Ctx,
     ) -> Self {
-        // TODO: When ExprEvaluator is generic, we can be less explicit about types
-        let eval_stream =
-            <semantics::UntimedLolaSemantics<lalr_parser::LALRExprParser> as MonitoringSemantics<
-                ValueConfig,
-            >>::to_async_stream(expr.clone(), ctx);
+        let eval_stream = MS::to_async_stream(expr.clone(), ctx);
         Self {
             var_name,
             _expr: expr,
             sender,
             eval_stream,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -154,31 +165,36 @@ impl ExprEvalutor {
             // Drop streams and channels to propagate the news
             // TODO: Make this more clean
             self.eval_stream = Box::pin(futures::stream::empty());
-            (self.sender, _) = spsc::channel::<Value>(1);
+            (self.sender, _) = spsc::channel::<AC::Val>(1);
             Ok(StreamState::Finished)
         }
     }
 }
 
-struct VarManager<Val>
+struct VarManager<AC>
 where
-    Val: DeferrableStreamData,
+    AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
 {
     // VarName this manages
     var_name: VarName,
     // Stream where Values are received
-    value_stream: OutputStream<Val>,
+    value_stream: OutputStream<AC::Val>,
     // Subscribers to this specific variable
-    subscribers: Vec<spsc::Sender<Val>>,
-    new_subscribers: Vec<(spsc::Sender<Val>, usize)>, // (Sender, history_length)
+    subscribers: Vec<spsc::Sender<AC::Val>>,
+    new_subscribers: Vec<(spsc::Sender<AC::Val>, usize)>, // (Sender, history_length)
     // Retained history of values (if needed)
-    retained_history: VecDeque<Val>,
+    retained_history: VecDeque<AC::Val>,
     samples_forwarded: usize,
     id: usize,
 }
 
-impl<Val: DeferrableStreamData> VarManager<Val> {
-    fn new(var_name: VarName, value_stream: OutputStream<Val>) -> Self {
+impl<AC> VarManager<AC>
+where
+    AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
+{
+    fn new(var_name: VarName, value_stream: OutputStream<AC::Val>) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(?var_name, "Creating VarManager {}", id);
         Self {
@@ -192,12 +208,12 @@ impl<Val: DeferrableStreamData> VarManager<Val> {
         }
     }
 
-    fn new_from_receiver(var_name: VarName, receiver: spsc::Receiver<Val>) -> Self {
+    fn new_from_receiver(var_name: VarName, receiver: spsc::Receiver<AC::Val>) -> Self {
         let value_stream = stream_utils::channel_to_output_stream(receiver);
         Self::new(var_name, value_stream)
     }
 
-    fn subscribe(&mut self, history_length: usize) -> OutputStream<Val> {
+    fn subscribe(&mut self, history_length: usize) -> OutputStream<AC::Val> {
         let history_length = if history_length > 0 {
             warn!(
                 "Subtracting one from history_length (val = {}) to circumvent bug with the other async runtime. Will be fixed in the future but requires changing the combinators.",
@@ -208,14 +224,14 @@ impl<Val: DeferrableStreamData> VarManager<Val> {
             0
         };
 
-        let (tx, rx) = spsc::channel::<Val>(history_length + 8);
+        let (tx, rx) = spsc::channel::<AC::Val>(history_length + 8);
         // Compute how many Deferreds are needed - needed because new history_len is longer than
         // retained_history.len()
         let missing = std::cmp::min(
             history_length.saturating_sub(self.retained_history.len()),
             self.samples_forwarded,
         );
-        let defer_v = Val::deferred_value();
+        let defer_v = <AC::Val as DeferrableStreamData>::deferred_value();
         // Push them to the history
         std::iter::repeat(defer_v).take(missing).for_each(|v| {
             self.retained_history.push_front(v);
@@ -315,19 +331,31 @@ impl<Val: DeferrableStreamData> VarManager<Val> {
     }
 }
 
-pub struct SemiSyncMonitor {
+pub struct SemiSyncMonitor<AC, S, MS>
+where
+    AC: AsyncConfig,
+    S: Specification<Expr = AC::Expr>,
+    MS: MonitoringSemantics<AC>,
+{
     executor: Rc<LocalExecutor<'static>>,
-    model: LOLASpecification,
-    input_provider: Box<dyn InputProvider<Val = Value>>,
-    output_handler: Box<dyn OutputHandler<Val = Value>>,
+    model: S,
+    input_provider: Box<dyn InputProvider<Val = AC::Val>>,
+    output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
+    _marker: std::marker::PhantomData<MS>,
 }
 
-impl SemiSyncMonitor {
+impl<AC, S, MS> SemiSyncMonitor<AC, S, MS>
+where
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+    S: Specification<Expr = AC::Expr>,
+    MS: MonitoringSemantics<AC>,
+{
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
-        model: LOLASpecification,
-        input: Box<dyn InputProvider<Val = Value>>,
-        output: Box<dyn OutputHandler<Val = Value>>,
+        model: S,
+        input: Box<dyn InputProvider<Val = AC::Val>>,
+        output: Box<dyn OutputHandler<Val = AC::Val>>,
     ) -> Self {
         SemiSyncMonitorBuilder::new()
             .executor(executor)
@@ -337,7 +365,9 @@ impl SemiSyncMonitor {
             .build()
     }
 
-    async fn eval_expr_evals(expr_evals: &mut Vec<ExprEvalutor>) -> anyhow::Result<StreamState> {
+    async fn eval_expr_evals(
+        expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
+    ) -> anyhow::Result<StreamState> {
         let mut to_remove = vec![];
         for expr_eval in expr_evals.iter_mut() {
             match expr_eval.eval_value().await {
@@ -368,8 +398,8 @@ impl SemiSyncMonitor {
     }
 
     async fn work_task(
-        mut ctx: SemiSyncContext,
-        mut expr_evals: Vec<ExprEvalutor>,
+        mut ctx: SemiSyncContext<AC>,
+        mut expr_evals: Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<()> {
         loop {
             info!("SemiSyncMonitor work_task: Waiting for next tick...");
@@ -427,14 +457,26 @@ impl SemiSyncMonitor {
     }
 }
 
-impl Monitor<LOLASpecification, Value> for SemiSyncMonitor {
-    fn spec(&self) -> &LOLASpecification {
+impl<AC, S, MS> Monitor<S, AC::Val> for SemiSyncMonitor<AC, S, MS>
+where
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+    S: Specification<Expr = AC::Expr>,
+    MS: MonitoringSemantics<AC>,
+{
+    fn spec(&self) -> &S {
         &self.model
     }
 }
 
 #[async_trait(?Send)]
-impl Runnable for SemiSyncMonitor {
+impl<AC, S, MS> Runnable for SemiSyncMonitor<AC, S, MS>
+where
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+    S: Specification<Expr = AC::Expr>,
+    MS: MonitoringSemantics<AC>,
+{
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         info!("Running SemiSyncMonitor.");
         // Set up input streams
@@ -452,7 +494,7 @@ impl Runnable for SemiSyncMonitor {
                     )),
                 )
             })
-            .collect::<BTreeMap<VarName, OutputStream<Value>>>();
+            .collect::<BTreeMap<VarName, OutputStream<AC::Val>>>();
 
         // Prepare for ExprEvalutors and create VarManagers for output variables
         let (expr_eval_components, mut var_managers): (BTreeMap<_, _>, Vec<_>) = self
@@ -460,9 +502,9 @@ impl Runnable for SemiSyncMonitor {
             .output_vars()
             .iter()
             .map(|var_name| {
-                let (sender, receiver): (spsc::Sender<Value>, spsc::Receiver<Value>) =
+                let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
                     spsc::channel(128);
-                let var_manager = VarManager::new_from_receiver(var_name.clone(), receiver);
+                let var_manager = VarManager::<AC>::new_from_receiver(var_name.clone(), receiver);
                 let expr = self.model.var_expr(var_name).ok_or_else(|| {
                     anyhow!(
                         "No expression found for output variable {} when setting up Monitor",
@@ -477,7 +519,7 @@ impl Runnable for SemiSyncMonitor {
         let subscriptions = var_managers
             .iter_mut()
             .map(|vm| vm.subscribe(0))
-            .collect::<Vec<OutputStream<Value>>>();
+            .collect::<Vec<OutputStream<AC::Val>>>();
         self.output_handler.provide_streams(subscriptions);
 
         // Let VarManagers used by Context also include input streams
@@ -487,7 +529,7 @@ impl Runnable for SemiSyncMonitor {
             .chain(
                 input_streams
                     .into_iter()
-                    .map(|(var_name, stream)| VarManager::new(var_name, stream)),
+                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream)),
             )
             .collect::<Vec<VarManager<_>>>();
 
@@ -507,7 +549,7 @@ impl Runnable for SemiSyncMonitor {
                 let expr = expr_res.unwrap();
                 ExprEvalutor::new(var_name, expr, sender, &context)
             })
-            .collect::<Vec<ExprEvalutor>>();
+            .collect::<Vec<ExprEvalutor<AC, MS>>>();
 
         // Little helper function that logs after a future has ended. Reduces lines of code...
         fn log_end<Fut, T>(fut: Fut, msg: &'static str) -> impl futures::Future<Output = T>
@@ -543,13 +585,21 @@ impl Runnable for SemiSyncMonitor {
     }
 }
 
-struct SemiSyncContextBuilder {
-    var_managers: Option<BTreeMap<VarName, VarManager<Value>>>,
+pub struct SemiSyncContextBuilder<AC>
+where
+    AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
+{
+    var_managers: Option<BTreeMap<VarName, VarManager<AC>>>,
     history_length: Option<usize>,
 }
 
-impl SemiSyncContextBuilder {
-    fn var_managers(self, var_managers: BTreeMap<VarName, VarManager<Value>>) -> Self {
+impl<AC> SemiSyncContextBuilder<AC>
+where
+    AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
+{
+    fn var_managers(self, var_managers: BTreeMap<VarName, VarManager<AC>>) -> Self {
         Self {
             var_managers: Some(var_managers),
             ..self
@@ -557,8 +607,12 @@ impl SemiSyncContextBuilder {
     }
 }
 
-impl AbstractContextBuilder for SemiSyncContextBuilder {
-    type AC = ValueConfig;
+impl<AC> AbstractContextBuilder for SemiSyncContextBuilder<AC>
+where
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+{
+    type AC = AC;
 
     fn new() -> Self {
         Self {
@@ -602,18 +656,26 @@ impl AbstractContextBuilder for SemiSyncContextBuilder {
 
 static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-struct SemiSyncContext {
+pub struct SemiSyncContext<AC>
+where
+    AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
+{
     // Rc RefCell because of the StreamContext interface for Var...
-    var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Value>>>>,
+    var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>,
     // History length for new calls to var
     history_length: usize,
     // Unique identifier for this variable manager
     id: usize,
 }
 
-impl SemiSyncContext {
+impl<AC> SemiSyncContext<AC>
+where
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+{
     fn new(
-        var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<Value>>>>,
+        var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>,
         history_length: usize,
     ) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -658,7 +720,10 @@ impl SemiSyncContext {
             .filter_map(|(var_name, manager)| {
                 if vs.contains(var_name) {
                     let stream = manager.subscribe(history_length);
-                    Some((var_name.clone(), VarManager::new(var_name.clone(), stream)))
+                    Some((
+                        var_name.clone(),
+                        VarManager::<AC>::new(var_name.clone(), stream),
+                    ))
                 } else {
                     None
                 }
@@ -672,11 +737,15 @@ impl SemiSyncContext {
 }
 
 #[async_trait(?Send)]
-impl StreamContext for SemiSyncContext {
-    type AC = ValueConfig;
-    type Builder = SemiSyncContextBuilder;
+impl<AC> StreamContext for SemiSyncContext<AC>
+where
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+{
+    type AC = AC;
+    type Builder = SemiSyncContextBuilder<AC>;
 
-    fn var(&self, x: &VarName) -> Option<OutputStream<Value>> {
+    fn var(&self, x: &VarName) -> Option<OutputStream<AC::Val>> {
         let mut manager = self.var_managers.borrow_mut();
         let stream = manager.get_mut(x)?.subscribe(self.history_length);
         info!(
@@ -743,20 +812,31 @@ impl StreamContext for SemiSyncContext {
 #[cfg(test)]
 mod tests {
 
-    use crate::async_test;
     use crate::core::Runnable;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
-    use crate::runtime::semi_sync::SemiSyncMonitor;
+    use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    use crate::runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor};
+    use crate::semantics::{AsyncConfig, UntimedLolaSemantics};
+    use crate::{LOLASpecification, lola_fixtures::*};
+    use crate::{SExpr, async_test};
+    use crate::{Value, lola_specification};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
-    use crate::lola_fixtures::*;
-    use crate::{Value, lola_specification};
-
     use tc_testutils::streams::{with_timeout, with_timeout_res};
+
+    struct ValueConfig;
+    impl AsyncConfig for ValueConfig {
+        type Val = Value;
+        type Expr = SExpr;
+        type Ctx = SemiSyncContext<Self>;
+    }
+
+    type TestMonitor =
+        SemiSyncMonitor<ValueConfig, LOLASpecification, UntimedLolaSemantics<LALRExprParser>>;
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
@@ -771,11 +851,12 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = SemiSyncMonitor {
+        let monitor = TestMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            _marker: std::marker::PhantomData,
         };
 
         executor.spawn(monitor.run()).detach();
@@ -809,11 +890,12 @@ mod tests {
             executor.clone(),
             spec.output_vars.clone(),
         ));
-        let monitor = SemiSyncMonitor {
+        let monitor = TestMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            _marker: std::marker::PhantomData,
         };
 
         with_timeout_res(monitor.run(), 1, "monitor run")
@@ -837,11 +919,12 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = SemiSyncMonitor {
+        let monitor = TestMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            _marker: std::marker::PhantomData,
         };
 
         executor.spawn(monitor.run()).detach();
@@ -875,11 +958,12 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = SemiSyncMonitor {
+        let monitor = TestMonitor {
             executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            _marker: std::marker::PhantomData,
         };
 
         executor.spawn(monitor.run()).detach();
