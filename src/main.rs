@@ -54,7 +54,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = RuntimeBuilder::new();
 
-    let parser = cli.parser_mode.unwrap_or(ParserMode::Combinator);
+    let parser = cli.parser_mode.unwrap_or(ParserMode::Lalr);
     let language = cli.language.unwrap_or(Language::DynSRV);
 
     let mqtt_port = cli.mqtt_port;
