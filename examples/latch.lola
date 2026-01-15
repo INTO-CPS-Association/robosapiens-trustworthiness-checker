@@ -3,5 +3,5 @@ in x
 in y
 out a
 out b
-a = bind(x, y)
+a = latch(x, y)
 b = a + 1
