@@ -5,7 +5,10 @@ use tracing::debug_span;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::mqtt::MqttFactory;
-use crate::{self as tc, Value};
+use crate::io::testing::ManualInputProvider;
+use crate::runtime::semi_sync::SemiSyncContext;
+use crate::semantics::AsyncConfig;
+use crate::{self as tc, SExpr, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
 
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
@@ -29,6 +32,15 @@ pub enum InputProviderSpec {
         /// Topics
         Option<Vec<String>>,
     ),
+    Manual,
+}
+
+// TODO: This should not be required when InputProviderBuilder becomes generic
+struct ValueConfig;
+impl AsyncConfig for ValueConfig {
+    type Val = Value;
+    type Expr = SExpr;
+    type Ctx = SemiSyncContext<Self>;
 }
 
 #[derive(Clone)]
@@ -180,6 +192,13 @@ impl InputProviderBuilder {
                     .await
                     .expect("Redis input provider failed to start");
                 Box::new(redis_input_provider) as Box<dyn InputProvider<Val = Value>>
+            }
+            InputProviderSpec::Manual => {
+                let input_vars = self
+                    .input_vars
+                    .expect("Input vars must be provided for manual input provider");
+                Box::new(ManualInputProvider::<ValueConfig>::new(input_vars))
+                    as Box<dyn InputProvider<Val = Value>>
             }
         }
     }
