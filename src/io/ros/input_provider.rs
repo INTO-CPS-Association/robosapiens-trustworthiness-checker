@@ -68,6 +68,15 @@ impl ROSMsgType {
                         node.subscribe::<r2r::std_msgs::msg::Int32>(topic, qos)?
                             .map(|val| Value::Int(val.data.into())),
                     ),
+            ROSMsgType::Int32List => Box::pin(
+                node.subscribe::<r2r::std_msgs::msg::Int32MultiArray>(topic, qos)?
+                    .map(|val| {
+                        serde_json::to_value(val.data)
+                            .expect("Failed to serialize ROS2 Int32MultiArray msg to JSON")
+                            .try_into()
+                            .expect("Failed to serialize ROS2 Int32MultiArray msg to internal representation")
+                    }),
+                    ),
             ROSMsgType::Int16 => Box::pin(
                         node.subscribe::<r2r::std_msgs::msg::Int16>(topic, qos)?
                             .map(|val| Value::Int(val.data.into())),
@@ -109,6 +118,24 @@ impl ROSMsgType {
                                     .expect("Failed to serialize ROS2 HumanModelList msg to JSON")
                                     .try_into()
                                     .expect("Failed to serialize ROS2 HumanModelList msg to internal representation")
+                            }),
+                    ),
+            ROSMsgType::RVData => Box::pin(
+                        node.subscribe::<r2r::id_pose_msgs::msg::RVData>(topic, qos)?
+                            .map(|val| {
+                                serde_json::to_value(val)
+                                    .expect("Failed to serialize ROS2 RVData msg to JSON")
+                                    .try_into()
+                                    .expect("Failed to serialize ROS2 RVData msg to internal representation")
+                            }),
+                    ),
+            ROSMsgType::RVDataArray => Box::pin(
+                        node.subscribe::<r2r::id_pose_msgs::msg::RVDataArray>(topic, qos)?
+                            .map(|val| {
+                                serde_json::to_value(val)
+                                    .expect("Failed to serialize ROS2 RVDataArray msg to JSON")
+                                    .try_into()
+                                    .expect("Failed to serialize ROS2 RVDataArray msg to internal representation")
                             }),
                     ),
         })
