@@ -1,6 +1,6 @@
 {
     "x": {
-        "topic": "/x",
-        "msg_type": "RVDataArray"
+        "topic": "/RV_data",
+        "msg_type": "RVData"
     }
 }
