@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::future::pending;
 
 use futures::future::LocalBoxFuture;
@@ -42,17 +43,12 @@ impl InputProvider for UntimedInputFileData {
     }
 
     fn vars(&self) -> Vec<VarName> {
-        fn union(xs: Vec<VarName>, ys: Vec<VarName>) -> Vec<VarName> {
-            xs.iter()
-                .cloned()
-                .chain(ys.into_iter().filter(|y| xs.iter().any(|x| y == x)))
-                .collect()
-        }
-
-        self.values()
-            .fold(vec![], |acc, m| union(acc, m.keys().cloned().collect()))
-            .into_iter()
-            .collect()
+        let uniques: HashSet<VarName> = self
+            .values()
+            .flat_map(|inner| inner.keys())
+            .cloned()
+            .collect();
+        uniques.into_iter().collect()
     }
 }
 
@@ -113,5 +109,59 @@ mod tests {
         let input_stream = data.input_stream(&"x".into()).unwrap();
         let input_vec = input_stream.collect::<Vec<_>>().await;
         assert_eq!(input_vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    }
+
+    #[apply(async_test)]
+    async fn test_input_file_as_stream_multi_var() {
+        let mut data: UntimedInputFileData = BTreeMap::new();
+        data.insert(0, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(1));
+            map.insert("y".into(), Value::Int(2));
+            map
+        });
+        data.insert(1, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(2));
+            map.insert("y".into(), Value::Int(3));
+            map
+        });
+        data.insert(2, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(3));
+            map.insert("y".into(), Value::Int(4));
+            map
+        });
+
+        let x_stream = data.input_stream(&"x".into()).unwrap();
+        let x_vec = x_stream.collect::<Vec<_>>().await;
+        assert_eq!(x_vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let y_stream = data.input_stream(&"y".into()).unwrap();
+        let y_vec = y_stream.collect::<Vec<_>>().await;
+        assert_eq!(y_vec, vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
+    }
+
+    #[apply(async_test)]
+    async fn test_input_file_vars() {
+        let mut data: UntimedInputFileData = BTreeMap::new();
+        data.insert(0, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(1));
+            map.insert("y".into(), Value::Int(2));
+            map
+        });
+        data.insert(1, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(2));
+            map.insert("y".into(), Value::Int(3));
+            map
+        });
+        data.insert(2, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(3));
+            map.insert("y".into(), Value::Int(4));
+            map
+        });
+        assert_eq!(data.vars(), vec!["x".into(), "y".into()]);
     }
 }

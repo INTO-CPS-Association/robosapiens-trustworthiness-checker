@@ -38,6 +38,7 @@ pub trait InputProvider {
     /// an error result
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
 
+    // TODO: Change into returning a set instead of a Vec
     fn vars(&self) -> Vec<VarName>;
 }
 

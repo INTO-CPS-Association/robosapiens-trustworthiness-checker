@@ -6,7 +6,7 @@ use crate::core::{Runtime, Semantics};
 ///
 /// Different formal specification languages that can be used to define
 /// monitoring properties and system behavior constraints.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Language {
     /// DynSRV runtime-verification language
     ///

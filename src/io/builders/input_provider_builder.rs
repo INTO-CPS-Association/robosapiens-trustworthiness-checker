@@ -43,7 +43,7 @@ impl AsyncConfig for ValueConfig {
     type Ctx = SemiSyncContext<Self>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InputProviderBuilder {
     spec: InputProviderSpec,
     lang: Option<Language>,
