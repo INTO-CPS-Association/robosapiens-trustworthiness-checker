@@ -14,12 +14,14 @@ use std::collections::BTreeMap;
 // Dead code is allowed in this file since cargo does not correctly
 // track when functions are used in tests or with specific features.
 
+#[derive(Clone)]
 pub struct TestConfig {}
 impl AsyncConfig for TestConfig {
     type Val = Value;
     type Expr = SExpr;
     type Ctx = Context<Self>;
 }
+#[derive(Clone)]
 pub struct TestDistConfig {}
 impl AsyncConfig for TestDistConfig {
     type Val = Value;

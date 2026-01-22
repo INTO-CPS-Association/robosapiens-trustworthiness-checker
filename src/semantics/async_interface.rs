@@ -65,8 +65,8 @@ where
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<AC::Val>;
 }
 
-pub trait AsyncConfig: 'static {
+pub trait AsyncConfig: Clone + 'static {
     type Val: StreamData;
-    type Expr: Clone + 'static;
+    type Expr: Clone;
     type Ctx: StreamContext<AC = Self>;
 }

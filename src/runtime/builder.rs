@@ -426,24 +426,28 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
 }
 
 // NOTE: Temporary only while AsyncConfig is unfinished
+#[derive(Clone)]
 struct ValueConfig;
 impl AsyncConfig for ValueConfig {
     type Val = Value;
     type Expr = SExpr;
     type Ctx = Context<Self>;
 }
+#[derive(Clone)]
 struct TypedValueConfig;
 impl AsyncConfig for TypedValueConfig {
     type Val = Value;
     type Expr = SExprTE;
     type Ctx = Context<Self>;
 }
+#[derive(Clone)]
 struct DistValueConfig;
 impl AsyncConfig for DistValueConfig {
     type Val = Value;
     type Expr = SExpr;
     type Ctx = DistributedContext<Self>;
 }
+#[derive(Clone)]
 struct SemiSyncValueConfig;
 impl AsyncConfig for SemiSyncValueConfig {
     type Val = Value;

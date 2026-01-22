@@ -828,6 +828,7 @@ mod tests {
 
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
+    #[derive(Clone)]
     struct ValueConfig;
     impl AsyncConfig for ValueConfig {
         type Val = Value;

@@ -36,6 +36,7 @@ pub enum InputProviderSpec {
 }
 
 // TODO: This should not be required when InputProviderBuilder becomes generic
+#[derive(Clone)]
 struct ValueConfig;
 impl AsyncConfig for ValueConfig {
     type Val = Value;

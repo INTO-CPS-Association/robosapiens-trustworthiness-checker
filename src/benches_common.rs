@@ -104,6 +104,7 @@ pub async fn monitor_outputs_untyped_little(
 }
 
 // NOTE: Temporary only while AsyncConfig is unfinished
+#[derive(Clone)]
 struct ConfigTyped;
 impl AsyncConfig for ConfigTyped {
     type Val = Value;
