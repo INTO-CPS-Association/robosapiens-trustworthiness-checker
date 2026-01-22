@@ -12,7 +12,7 @@ bench = false
 testcontainers = ["testcontainers-modules", "async-compat"]
 
 [dependencies]
-testcontainers-modules = { version = "0.12.1", optional = true, features = [
+testcontainers-modules = { version = "0.14.0", optional = true, features = [
     "mosquitto",
     "redis",
 ] }
