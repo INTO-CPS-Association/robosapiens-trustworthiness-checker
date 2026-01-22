@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::future::pending;
 
 use futures::future::LocalBoxFuture;
@@ -43,7 +43,7 @@ impl InputProvider for UntimedInputFileData {
     }
 
     fn vars(&self) -> Vec<VarName> {
-        let uniques: HashSet<VarName> = self
+        let uniques: BTreeSet<VarName> = self
             .values()
             .flat_map(|inner| inner.keys())
             .cloned()
