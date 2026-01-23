@@ -126,7 +126,6 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    #[ignore]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
             .parse(spec_simple_add_monitor())
@@ -178,7 +177,6 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    #[ignore]
     async fn test_add_monitor_mqtt_output_float(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification
             .parse(spec_simple_add_monitor_typed_float())
@@ -365,7 +363,6 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    #[ignore]
     async fn test_mqtt_locality_receiver(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
