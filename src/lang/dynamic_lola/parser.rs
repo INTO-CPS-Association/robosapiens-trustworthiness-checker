@@ -11,6 +11,7 @@ use winnow::token::literal;
 use super::super::core::parser::*;
 use super::ast::*;
 use crate::core::StreamType;
+use crate::core::StreamTypeAscription;
 use crate::core::VarName;
 use crate::distributed::distribution_graphs::NodeName;
 pub use winnow::ascii::dec_uint as uint;
@@ -129,17 +130,31 @@ fn ifelse(s: &mut &str) -> Result<SExpr> {
 }
 
 fn defer(s: &mut &str) -> Result<SExpr> {
-    seq!((
-        _: whitespace,
-        _: literal("defer"),
-        _: loop_ms_or_lb_or_lc,
-        _: '(',
-        _: loop_ms_or_lb_or_lc,
-        sexpr,
-        _: loop_ms_or_lb_or_lc,
-        _: ')',
+    alt((
+        seq!((
+            _: whitespace,
+            _: literal("defer"),
+            _: loop_ms_or_lb_or_lc,
+            _: '(',
+            _: loop_ms_or_lb_or_lc,
+            sexpr,
+            _: loop_ms_or_lb_or_lc,
+            _: ')',
+        ))
+        .map(|(e,)| SExpr::Defer(Box::new(e), StreamTypeAscription::Unascribed)),
+        seq!((
+            _: whitespace,
+            _: literal("defer"),
+            _: loop_ms_or_lb_or_lc,
+            _: '(',
+            _: loop_ms_or_lb_or_lc,
+            sexpr,
+            type_annotation,
+            _: loop_ms_or_lb_or_lc,
+            _: ')',
+        ))
+        .map(|(e, st)| SExpr::Defer(Box::new(e), StreamTypeAscription::Ascribed(st))),
     ))
-    .map(|(e,)| SExpr::Defer(Box::new(e)))
     .parse_next(s)
 }
 
@@ -228,37 +243,72 @@ fn init(s: &mut &str) -> Result<SExpr> {
 }
 
 fn dynamic(s: &mut &str) -> Result<SExpr> {
-    seq!((
-        _: whitespace,
-        _: alt(("dynamic", "eval")),
-        _: loop_ms_or_lb_or_lc,
-        _: '(',
-        _: loop_ms_or_lb_or_lc,
-        sexpr,
-        _: loop_ms_or_lb_or_lc,
-        _: ')',
-        _: whitespace,
+    alt((
+        seq!((
+            _: whitespace,
+            _: alt(("dynamic", "eval")),
+            _: loop_ms_or_lb_or_lc,
+            _: '(',
+            _: loop_ms_or_lb_or_lc,
+            sexpr,
+            _: loop_ms_or_lb_or_lc,
+            _: ')',
+        ))
+        .map(|(e,)| SExpr::Dynamic(Box::new(e), StreamTypeAscription::Unascribed)),
+        seq!((
+            _: whitespace,
+            _: alt(("dynamic", "eval")),
+            _: loop_ms_or_lb_or_lc,
+            _: '(',
+            _: loop_ms_or_lb_or_lc,
+            sexpr,
+            type_annotation,
+            _: loop_ms_or_lb_or_lc,
+            _: ')',
+        ))
+        .map(|(e, st)| SExpr::Dynamic(Box::new(e), StreamTypeAscription::Ascribed(st))),
     ))
-    .map(|(e,)| SExpr::Dynamic(Box::new(e)))
     .parse_next(s)
 }
 
 fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
-    seq!((
-        _: whitespace,
-        _: alt(("dynamic", "eval")),
-        _: loop_ms_or_lb_or_lc,
-        _: '(',
-        _: loop_ms_or_lb_or_lc,
-        sexpr,
-        _: loop_ms_or_lb_or_lc,
-        _: literal(","),
-        _: loop_ms_or_lb_or_lc,
-        var_set,
-        _: ')',
-        _: whitespace,
+    alt((
+        seq!((
+            _: whitespace,
+            _: alt(("dynamic", "eval")),
+            _: loop_ms_or_lb_or_lc,
+            _: '(',
+            _: loop_ms_or_lb_or_lc,
+            sexpr,
+            _: loop_ms_or_lb_or_lc,
+            _: literal(","),
+            _: loop_ms_or_lb_or_lc,
+            var_set,
+            _: loop_ms_or_lb_or_lc,
+            _: ')',
+        ))
+        .map(|(e, var_set)| {
+            SExpr::RestrictedDynamic(Box::new(e), StreamTypeAscription::Unascribed, var_set)
+        }),
+        seq!((
+            _: whitespace,
+            _: alt(("dynamic", "eval")),
+            _: loop_ms_or_lb_or_lc,
+            _: '(',
+            _: loop_ms_or_lb_or_lc,
+            sexpr,
+            type_annotation,
+            _: loop_ms_or_lb_or_lc,
+            _: literal(","),
+            _: loop_ms_or_lb_or_lc,
+            var_set,
+            _: loop_ms_or_lb_or_lc,
+            _: ')',
+        ))
+        .map(|(e, st, var_set)| {
+            SExpr::RestrictedDynamic(Box::new(e), StreamTypeAscription::Ascribed(st), var_set)
+        }),
     ))
-    .map(|(e, vs)| SExpr::RestrictedDynamic(Box::new(e), vs))
     .parse_next(s)
 }
 
@@ -1218,7 +1268,13 @@ mod tests {
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
-                ("w".into(), SExpr::Dynamic(Box::new(SExpr::Var("s".into())))),
+                (
+                    "w".into(),
+                    SExpr::Dynamic(
+                        Box::new(SExpr::Var("s".into())),
+                        StreamTypeAscription::Unascribed,
+                    ),
+                ),
             ]),
             BTreeMap::new(),
             vec![],
@@ -1585,7 +1641,7 @@ mod tests {
     fn test_parse_defer() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"defer(x)"#)),
-            r#"Ok(Defer(Var(VarName::new("x"))))"#
+            r#"Ok(Defer(Var(VarName::new("x")), Unascribed))"#
         )
     }
 
@@ -1980,7 +2036,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&sexpr(&mut "dynamic(!s)")),
-            r#"Ok(Dynamic(Not(Var(VarName::new("s")))))"#
+            r#"Ok(Dynamic(Not(Var(VarName::new("s"))), Unascribed))"#
         );
     }
 

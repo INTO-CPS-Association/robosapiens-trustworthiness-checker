@@ -5,6 +5,8 @@ use ecow::EcoVec;
 use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
+#[cfg(test)]
+use crate::core::StreamTypeAscription;
 use crate::lang::core::parser::ExprParser as EParserTrait;
 use crate::{LOLASpecification, SExpr, lang::dynamic_lola::ast::STopDecl};
 
@@ -328,7 +330,13 @@ mod tests {
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
-                ("w".into(), SExpr::Dynamic(Box::new(SExpr::Var("s".into())))),
+                (
+                    "w".into(),
+                    SExpr::Dynamic(
+                        Box::new(SExpr::Var("s".into())),
+                        StreamTypeAscription::Unascribed,
+                    ),
+                ),
             ]),
             BTreeMap::new(),
             vec![],
@@ -742,7 +750,7 @@ mod tests {
     fn test_parse_defer() {
         assert_eq!(
             presult_to_string(&parse_sexpr(r#"defer(x)"#)),
-            r#"Ok(Defer(Var(VarName::new("x"))))"#
+            r#"Ok(Defer(Var(VarName::new("x")), Unascribed))"#
         )
     }
 
@@ -1137,7 +1145,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&parse_sexpr("dynamic(!s)")),
-            r#"Ok(Dynamic(Not(Var(VarName::new("s")))))"#
+            r#"Ok(Dynamic(Not(Var(VarName::new("s"))), Unascribed))"#
         );
     }
 

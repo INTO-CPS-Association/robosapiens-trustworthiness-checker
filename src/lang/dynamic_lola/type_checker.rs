@@ -1,7 +1,7 @@
 use ecow::EcoVec;
 
 use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
-use crate::core::{StreamData, StreamType};
+use crate::core::{StreamData, StreamType, StreamTypeAscription};
 use crate::{LOLASpecification, Specification};
 use crate::{Value, VarName};
 use std::collections::BTreeMap;
@@ -57,6 +57,16 @@ impl StreamData for PossiblyDeferred<i64> {}
 impl StreamData for PossiblyDeferred<f64> {}
 impl StreamData for PossiblyDeferred<String> {}
 impl StreamData for PossiblyDeferred<()> {}
+
+fn extract_type(expr: &SExprTE) -> StreamType {
+    match expr {
+        SExprTE::Bool(_) => StreamType::Bool,
+        SExprTE::Int(_) => StreamType::Int,
+        SExprTE::Float(_) => StreamType::Float,
+        SExprTE::Str(_) => StreamType::Str,
+        SExprTE::Unit(_) => StreamType::Unit,
+    }
+}
 
 impl TryFrom<Value> for PossiblyDeferred<i64> {
     type Error = ();
@@ -174,6 +184,11 @@ pub enum SExprBool {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
+
+    // Deferred and dynamic expressions
+    Defer(Box<SExprStr>),
+    Dynamic(Box<SExprStr>),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -196,6 +211,11 @@ pub enum SExprInt {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
+
+    // Deferred and dynamic expressions
+    Defer(Box<SExprStr>),
+    Dynamic(Box<SExprStr>),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -218,6 +238,11 @@ pub enum SExprFloat {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
+
+    // Deferred and dynamic expressions
+    Defer(Box<SExprStr>),
+    Dynamic(Box<SExprStr>),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
 }
 
 // Stream expressions - now with types
@@ -239,6 +264,11 @@ pub enum SExprUnit {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
+
+    // Deferred and dynamic expressions
+    Defer(Box<SExprStr>),
+    Dynamic(Box<SExprStr>),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -260,10 +290,12 @@ pub enum SExprStr {
 
     Var(VarName),
 
-    // Eval
-    Dynamic(Box<Self>),
-    RestrictedDynamic(Box<Self>, EcoVec<VarName>),
     Default(Box<Self>, Box<Self>),
+
+    // Deferred and dynamic expressions
+    Defer(Box<SExprStr>),
+    Dynamic(Box<SExprStr>),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
 }
 
 // Stream expression typed enum
@@ -602,6 +634,33 @@ impl TypeCheckableHelper<SExprTE> for VarName {
     }
 }
 
+impl TypeCheckableHelper<SExprTE> for (SExpr, StreamTypeAscription) {
+    fn type_check_raw(
+        &self,
+        ctx: &mut TypeContext,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
+        let (expr, ascription) = self;
+        let expr_te = expr.type_check_raw(ctx, errs)?;
+
+        match ascription {
+            StreamTypeAscription::Unascribed => Ok(expr_te),
+            StreamTypeAscription::Ascribed(expected_ty) => {
+                let actual_ty = extract_type(&expr_te);
+                if actual_ty == *expected_ty {
+                    Ok(expr_te)
+                } else {
+                    errs.push(SemanticError::TypeError(format!(
+                        "Type mismatch: expected {:?}, got {:?}",
+                        expected_ty, actual_ty
+                    )));
+                    Err(())
+                }
+            }
+        }
+    }
+}
+
 // Type check an expression
 impl TypeCheckableHelper<SExprTE> for SExpr {
     fn type_check_raw(
@@ -619,34 +678,126 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             }
             SExpr::SIndex(inner, idx) => (inner.deref(), *idx).type_check_raw(ctx, errs),
             SExpr::Var(id) => id.type_check_raw(ctx, errs),
-            SExpr::Dynamic(e) => {
+            SExpr::Dynamic(e, type_ascription) => {
                 let e_check = e.type_check_raw(ctx, errs)?;
-                match e_check {
-                    SExprTE::Str(e_str) => Ok(SExprTE::Str(SExprStr::Dynamic(Box::new(e_str)))),
-                    _ => {
-                        errs.push(SemanticError::TypeError(
-                            "Dynamic can only be applied to string expressions".into(),
-                        ));
-                        Err(())
+
+                // Ascriptions are required for defers in strictly-typed expressions
+                let type_ascription = match type_ascription {
+                    StreamTypeAscription::Ascribed(ta) => ta,
+                    StreamTypeAscription::Unascribed => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Type ascription required for defer"
+                        )));
+                        return Err(());
                     }
+                };
+
+                // Inner stream type must be Str
+                let e_str = match e_check {
+                    SExprTE::Str(e_str) => e_str,
+                    ty => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Expected Dynamic to be applied to a Str, got {:?}",
+                            ty
+                        )));
+                        return Err(());
+                    }
+                };
+
+                // Use the type ascription to determine the output type
+                match &type_ascription {
+                    StreamType::Int => Ok(SExprTE::Int(SExprInt::Dynamic(Box::new(e_str)))),
+                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::Dynamic(Box::new(e_str)))),
+                    StreamType::Str => Ok(SExprTE::Str(SExprStr::Dynamic(Box::new(e_str)))),
+                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Dynamic(Box::new(e_str)))),
+                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Dynamic(Box::new(e_str)))),
                 }
             }
-            SExpr::RestrictedDynamic(e, vs) => {
+            SExpr::RestrictedDynamic(e, type_ascription, vs) => {
                 let e_check = e.type_check_raw(ctx, errs)?;
-                match e_check {
-                    SExprTE::Str(e_str) => Ok(SExprTE::Str(SExprStr::RestrictedDynamic(
+
+                // Inner stream type must be Str
+                let e_str = match e_check {
+                    SExprTE::Str(e_str) => e_str,
+                    ty => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Expected RestrictedDynamic to be applied to a Str, got {:?}",
+                            ty
+                        )));
+                        return Err(());
+                    }
+                };
+
+                // Verify type ascription if provided - RestrictedDynamic only supports Str output
+                let type_ascription = match type_ascription {
+                    StreamTypeAscription::Ascribed(ta) => ta,
+                    StreamTypeAscription::Unascribed => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Type ascription required for dynamic"
+                        )));
+                        return Err(());
+                    }
+                };
+
+                // Use the type ascription to determine the output type
+                match &type_ascription {
+                    StreamType::Int => Ok(SExprTE::Int(SExprInt::RestrictedDynamic(
                         Box::new(e_str),
                         vs.clone(),
                     ))),
-                    _ => {
-                        errs.push(SemanticError::TypeError(
-                            "Dynamic can only be applied to string expressions".into(),
-                        ));
-                        Err(())
-                    }
+                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::RestrictedDynamic(
+                        Box::new(e_str),
+                        vs.clone(),
+                    ))),
+                    StreamType::Str => Ok(SExprTE::Str(SExprStr::RestrictedDynamic(
+                        Box::new(e_str),
+                        vs.clone(),
+                    ))),
+                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::RestrictedDynamic(
+                        Box::new(e_str),
+                        vs.clone(),
+                    ))),
+                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::RestrictedDynamic(
+                        Box::new(e_str),
+                        vs.clone(),
+                    ))),
                 }
             }
-            SExpr::Defer(_) => todo!("Implement support for Defer"),
+            SExpr::Defer(e, type_ascription) => {
+                let e_check = e.type_check_raw(ctx, errs)?;
+
+                // Ascriptions are required for defer in strictly-typed expressions
+                let type_ascription = match type_ascription {
+                    StreamTypeAscription::Ascribed(ta) => ta,
+                    StreamTypeAscription::Unascribed => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Type ascription required for defer"
+                        )));
+                        return Err(());
+                    }
+                };
+
+                // Inner stream type must be Str
+                let e_str = match e_check {
+                    SExprTE::Str(e_str) => e_str,
+                    ty => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Expected Defer to be applied to a Str, got {:?}",
+                            ty
+                        )));
+                        return Err(());
+                    }
+                };
+
+                // Use the type ascription to determine the output type
+                match &type_ascription {
+                    StreamType::Int => Ok(SExprTE::Int(SExprInt::Defer(Box::new(e_str)))),
+                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::Defer(Box::new(e_str)))),
+                    StreamType::Str => Ok(SExprTE::Str(SExprStr::Defer(Box::new(e_str)))),
+                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Defer(Box::new(e_str)))),
+                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Defer(Box::new(e_str)))),
+                }
+            }
             SExpr::Update(_, _) => todo!("Implement support for Update"),
             SExpr::Default(se, d) => (se.deref(), d.deref()).type_check_raw(ctx, errs),
             SExpr::Not(sexpr) => {
@@ -1179,5 +1330,267 @@ mod tests {
         if let Ok(_) = sexpr.type_check_with_default() {
             assert!(false, "Expected type error but got a successful result");
         }
+    }
+
+    #[test]
+    fn test_defer_nested_int_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Defer(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Int),
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        let expected = Ok(SExprTE::Int(SExprInt::BinOp(
+            Box::new(SExprInt::Val(PossiblyDeferred::Known(1))),
+            Box::new(SExprInt::Defer(Box::new(SExprStr::Var("x".into())))),
+            IntBinOp::Add,
+        )));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_defer_nested_int_ascription_no_eval() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Defer(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Int),
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        let expected = Ok(SExprTE::Int(SExprInt::BinOp(
+            Box::new(SExprInt::Val(PossiblyDeferred::Known(1))),
+            Box::new(SExprInt::Defer(Box::new(SExprStr::Var("x".into())))),
+            IntBinOp::Add,
+        )));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_defer_nested_int_ascription_incorrect_inner_type() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Defer(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Int),
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Bool);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_defer_nested_bool_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Bool(true))),
+            Box::new(SExprV::Defer(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Bool),
+            )),
+            SBinOp::BOp(BoolBinOp::And),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
+            Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
+            Box::new(SExprBool::Defer(Box::new(SExprStr::Var("x".into())))),
+            BoolBinOp::And,
+        )));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_defer_nested_int_bool_false_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Defer(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Bool),
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_defer_nested_int_missing_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Defer(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Unascribed,
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dynamic_nested_int_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Dynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Int),
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        let expected = Ok(SExprTE::Int(SExprInt::BinOp(
+            Box::new(SExprInt::Val(PossiblyDeferred::Known(1))),
+            Box::new(SExprInt::Dynamic(Box::new(SExprStr::Var("x".into())))),
+            IntBinOp::Add,
+        )));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_dynamic_nested_bool_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Bool(true))),
+            Box::new(SExprV::Dynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Bool),
+            )),
+            SBinOp::BOp(BoolBinOp::And),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
+            Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
+            Box::new(SExprBool::Dynamic(Box::new(SExprStr::Var("x".into())))),
+            BoolBinOp::And,
+        )));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_dynamic_nested_int_bool_false_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Dynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Bool),
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Int);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dynamic_nested_int_unascribed() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::Dynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Unascribed,
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Int);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restricted_dynamic_nested_str_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Str("hello".into()))),
+            Box::new(SExprV::RestrictedDynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Str),
+                EcoVec::from(vec!["x".into(), "y".into()]),
+            )),
+            SBinOp::SOp(StrBinOp::Concat),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        let expected = Ok(SExprTE::Str(SExprStr::BinOp(
+            Box::new(SExprStr::Val(PossiblyDeferred::Known("hello".into()))),
+            Box::new(SExprStr::RestrictedDynamic(
+                Box::new(SExprStr::Var("x".into())),
+                EcoVec::from(vec!["x".into(), "y".into()]),
+            )),
+            StrBinOp::Concat,
+        )));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_restricted_dynamic_nested_int_ascription_error() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Int(1))),
+            Box::new(SExprV::RestrictedDynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Bool),
+                EcoVec::from(vec!["x".into(), "y".into()]),
+            )),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restricted_dynamic_nested_str_bool_false_ascription() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Str("test".into()))),
+            Box::new(SExprV::RestrictedDynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Ascribed(StreamType::Bool),
+                EcoVec::from(vec!["x".into(), "y".into()]),
+            )),
+            SBinOp::SOp(StrBinOp::Concat),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        // Type ascription mismatch should cause error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restricted_dynamic_nested_str_unascribed() {
+        let expr = SExprV::BinOp(
+            Box::new(SExprV::Val(Value::Str("hello".into()))),
+            Box::new(SExprV::RestrictedDynamic(
+                Box::new(SExprV::Var("x".into())),
+                StreamTypeAscription::Unascribed,
+                EcoVec::from(vec!["x".into(), "y".into()]),
+            )),
+            SBinOp::SOp(StrBinOp::Concat),
+        );
+        let mut ctx = TypeContext::new();
+        ctx.insert("x".into(), StreamType::Str);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
     }
 }

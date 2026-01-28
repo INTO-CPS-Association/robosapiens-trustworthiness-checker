@@ -290,6 +290,24 @@ pub enum StreamType {
     Unit,
 }
 
+impl Display for StreamType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamType::Int => write!(f, "int"),
+            StreamType::Float => write!(f, "float"),
+            StreamType::Str => write!(f, "str"),
+            StreamType::Bool => write!(f, "bool"),
+            StreamType::Unit => write!(f, "unit"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum StreamTypeAscription {
+    Ascribed(StreamType),
+    Unascribed,
+}
+
 impl Serialize for Value {
     // Certain edge cases were not covered by derived Serialize, such as serializing List
     // symmetrically, hence manual impl

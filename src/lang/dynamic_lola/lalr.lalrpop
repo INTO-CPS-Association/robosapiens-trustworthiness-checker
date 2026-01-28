@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use ecow::{EcoString, EcoVec};
 
 use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp};
-use crate::core::{Value, VarName, StreamType};
+use crate::core::{Value, VarName, StreamType, StreamTypeAscription};
 
 grammar;
 
@@ -110,9 +110,12 @@ ContainerExpr: SExpr = {
 // -----------------------------------------------------------------------------
 
 SpecialKeywords: SExpr = {
-    "dynamic" "(" <Box<Expr>> ")" => SExpr::Dynamic(<>),
-    "eval" "(" <Box<Expr>> ")" => SExpr::Dynamic(<>),
-    "defer" "(" <Box<Expr>> ")" => SExpr::Defer(<>),
+    "dynamic" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e, StreamTypeAscription::Unascribed),
+    "dynamic" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" => SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)),
+    "eval" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e, StreamTypeAscription::Unascribed),
+    "eval" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" => SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)),
+    "defer" "(" <e: Box<Expr>> ")" => SExpr::Defer(e, StreamTypeAscription::Unascribed),
+    "defer" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" => SExpr::Defer(e, StreamTypeAscription::Ascribed(t)),
     "update" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Update(e1, e2),
     "default" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Default(e1, e2),
     "is_defined" "(" <Box<Expr>> ")" => SExpr::IsDefined(<>),
