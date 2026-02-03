@@ -1,7 +1,7 @@
 use super::combinators as mc;
-use super::helpers::{from_typed_stream, to_typed_stream};
 use crate::core::OutputStream;
 use crate::core::Value;
+use crate::core::stream_casting::{from_typed_stream, to_typed_stream};
 use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dynamic_lola::type_checker::{
     PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
@@ -87,7 +87,10 @@ where
     }
 }
 
-fn to_async_stream_float<AC>(expr: SExprFloat, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<f64>>
+fn to_async_stream_float<AC>(
+    expr: SExprFloat,
+    ctx: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<f64>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -138,7 +141,10 @@ where
     }
 }
 
-fn to_async_stream_str<AC>(expr: SExprStr, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<String>>
+fn to_async_stream_str<AC>(
+    expr: SExprStr,
+    ctx: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<String>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -183,7 +189,10 @@ where
     }
 }
 
-fn to_async_stream_bool<AC>(expr: SExprBool, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<bool>>
+fn to_async_stream_bool<AC>(
+    expr: SExprBool,
+    ctx: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -582,8 +591,10 @@ mod tests {
         let res: Vec<PartialStreamValue<f64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [2.5, 3.5]
-        let exp: Vec<PartialStreamValue<f64>> =
-            vec![PartialStreamValue::Known(2.5), PartialStreamValue::Known(3.5)];
+        let exp: Vec<PartialStreamValue<f64>> = vec![
+            PartialStreamValue::Known(2.5),
+            PartialStreamValue::Known(3.5),
+        ];
         assert_eq!(res, exp);
     }
 
@@ -703,8 +714,10 @@ mod tests {
         let res: Vec<PartialStreamValue<f64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [2.5, 4.0]
-        let exp: Vec<PartialStreamValue<f64>> =
-            vec![PartialStreamValue::Known(2.5), PartialStreamValue::Known(4.0)];
+        let exp: Vec<PartialStreamValue<f64>> = vec![
+            PartialStreamValue::Known(2.5),
+            PartialStreamValue::Known(4.0),
+        ];
         assert_eq!(res, exp);
     }
 

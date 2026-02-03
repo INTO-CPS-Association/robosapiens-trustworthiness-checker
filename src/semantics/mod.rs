@@ -12,8 +12,8 @@ mod tests {
     use std::pin::Pin;
 
     use crate::{
-        Value, lang::dynamic_lola::type_checker::PartialStreamValue,
-        semantics::untimed_typed_lola::helpers::to_typed_stream,
+        Value, core::stream_casting::to_typed_stream,
+        lang::dynamic_lola::type_checker::PartialStreamValue,
     };
 
     use super::*;
