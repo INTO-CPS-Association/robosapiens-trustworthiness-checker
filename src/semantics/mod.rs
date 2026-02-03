@@ -12,7 +12,7 @@ mod tests {
     use std::pin::Pin;
 
     use crate::{
-        Value, lang::dynamic_lola::type_checker::PossiblyDeferred,
+        Value, lang::dynamic_lola::type_checker::PartialStreamValue,
         semantics::untimed_typed_lola::helpers::to_typed_stream,
     };
 
@@ -62,9 +62,9 @@ mod tests {
             for (typed_op, untyped_op) in ops {
                 // Create distinct typed and untyped input and output streams
                 let xs_untyped_stream = Box::pin(stream::iter(xs.clone().into_iter()).map(Value::Int));
-                let xs_typed_stream : Pin<Box<dyn Stream<Item = PossiblyDeferred<i64>>>> = to_typed_stream(xs_untyped_stream.clone());
+                let xs_typed_stream : Pin<Box<dyn Stream<Item = PartialStreamValue<i64>>>> = to_typed_stream(xs_untyped_stream.clone());
                 let ys_untyped_stream = Box::pin(stream::iter(ys.clone().into_iter()).map(Value::Int));
-                let ys_typed_stream : Pin<Box<dyn Stream<Item = PossiblyDeferred<i64>>>> = to_typed_stream(ys_untyped_stream.clone());
+                let ys_typed_stream : Pin<Box<dyn Stream<Item = PartialStreamValue<i64>>>> = to_typed_stream(ys_untyped_stream.clone());
 
                 // Apply the typed and untyped operators to the input streams
                 let zs_typed = typed_op(xs_typed_stream, ys_typed_stream).map(Into::<Value>::into);
@@ -96,9 +96,9 @@ mod tests {
             for (op_name, typed_op, untyped_op) in ops {
                 // Create distinct typed and untyped input and output streams
                 let xs_untyped_stream = Box::pin(stream::iter(xs.clone().into_iter()).map(Value::Float));
-                let xs_typed_stream : Pin<Box<dyn Stream<Item = PossiblyDeferred<f64>>>> = to_typed_stream(xs_untyped_stream.clone());
+                let xs_typed_stream : Pin<Box<dyn Stream<Item = PartialStreamValue<f64>>>> = to_typed_stream(xs_untyped_stream.clone());
                 let ys_untyped_stream = Box::pin(stream::iter(ys.clone().into_iter()).map(Value::Float));
-                let ys_typed_stream : Pin<Box<dyn Stream<Item = PossiblyDeferred<f64>>>> = to_typed_stream(ys_untyped_stream.clone());
+                let ys_typed_stream : Pin<Box<dyn Stream<Item = PartialStreamValue<f64>>>> = to_typed_stream(ys_untyped_stream.clone());
 
                 // Apply the typed and untyped operators to the input streams
                 let zs_typed = typed_op(xs_typed_stream, ys_typed_stream).map(Into::<Value>::into);

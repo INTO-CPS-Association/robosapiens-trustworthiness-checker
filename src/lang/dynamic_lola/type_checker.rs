@@ -47,16 +47,17 @@ pub trait TypeCheckable<TypedExpr> {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum PossiblyDeferred<T> {
+pub enum PartialStreamValue<T> {
     Known(T),
+    NoVal,
     Deferred,
 }
 
-impl StreamData for PossiblyDeferred<bool> {}
-impl StreamData for PossiblyDeferred<i64> {}
-impl StreamData for PossiblyDeferred<f64> {}
-impl StreamData for PossiblyDeferred<String> {}
-impl StreamData for PossiblyDeferred<()> {}
+impl StreamData for PartialStreamValue<bool> {}
+impl StreamData for PartialStreamValue<i64> {}
+impl StreamData for PartialStreamValue<f64> {}
+impl StreamData for PartialStreamValue<String> {}
+impl StreamData for PartialStreamValue<()> {}
 
 fn extract_type(expr: &SExprTE) -> StreamType {
     match expr {
@@ -68,102 +69,117 @@ fn extract_type(expr: &SExprTE) -> StreamType {
     }
 }
 
-impl TryFrom<Value> for PossiblyDeferred<i64> {
+impl TryFrom<Value> for PartialStreamValue<i64> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Int(i) => Ok(PossiblyDeferred::Known(i)),
+            Value::Int(i) => Ok(PartialStreamValue::Known(i)),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyDeferred<f64> {
+impl TryFrom<Value> for PartialStreamValue<f64> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Float(x) => Ok(PossiblyDeferred::Known(x)),
+            Value::Float(x) => Ok(PartialStreamValue::Known(x)),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyDeferred<String> {
+impl TryFrom<Value> for PartialStreamValue<String> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Str(i) => Ok(PossiblyDeferred::Known(i.to_string())),
+            Value::Str(i) => Ok(PartialStreamValue::Known(i.to_string())),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyDeferred<bool> {
+impl TryFrom<Value> for PartialStreamValue<bool> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Bool(i) => Ok(PossiblyDeferred::Known(i)),
+            Value::Bool(i) => Ok(PartialStreamValue::Known(i)),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
         }
     }
 }
-impl TryFrom<Value> for PossiblyDeferred<()> {
+impl TryFrom<Value> for PartialStreamValue<()> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Unit => Ok(PossiblyDeferred::Known(())),
+            Value::Unit => Ok(PartialStreamValue::Known(())),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
         }
     }
 }
 
-impl From<PossiblyDeferred<i64>> for Value {
-    fn from(value: PossiblyDeferred<i64>) -> Self {
+impl From<PartialStreamValue<i64>> for Value {
+    fn from(value: PartialStreamValue<i64>) -> Self {
         match value {
-            PossiblyDeferred::Known(v) => Value::Int(v),
-            PossiblyDeferred::Deferred => Value::Deferred,
+            PartialStreamValue::Known(v) => Value::Int(v),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
         }
     }
 }
 
-impl From<PossiblyDeferred<f64>> for Value {
-    fn from(value: PossiblyDeferred<f64>) -> Self {
+impl From<PartialStreamValue<f64>> for Value {
+    fn from(value: PartialStreamValue<f64>) -> Self {
         match value {
-            PossiblyDeferred::Known(v) => Value::Float(v),
-            PossiblyDeferred::Deferred => Value::Deferred,
+            PartialStreamValue::Known(v) => Value::Float(v),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
         }
     }
 }
-impl From<PossiblyDeferred<String>> for Value {
-    fn from(value: PossiblyDeferred<String>) -> Self {
+impl From<PartialStreamValue<String>> for Value {
+    fn from(value: PartialStreamValue<String>) -> Self {
         match value {
-            PossiblyDeferred::Known(v) => Value::Str(v.into()),
-            PossiblyDeferred::Deferred => Value::Deferred,
+            PartialStreamValue::Known(v) => Value::Str(v.into()),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
         }
     }
 }
-impl From<PossiblyDeferred<bool>> for Value {
-    fn from(value: PossiblyDeferred<bool>) -> Self {
+impl From<PartialStreamValue<bool>> for Value {
+    fn from(value: PartialStreamValue<bool>) -> Self {
         match value {
-            PossiblyDeferred::Known(v) => Value::Bool(v),
-            PossiblyDeferred::Deferred => Value::Deferred,
+            PartialStreamValue::Known(v) => Value::Bool(v),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
         }
     }
 }
-impl From<PossiblyDeferred<()>> for Value {
-    fn from(value: PossiblyDeferred<()>) -> Self {
+impl From<PartialStreamValue<()>> for Value {
+    fn from(value: PartialStreamValue<()>) -> Self {
         match value {
-            PossiblyDeferred::Known(_) => Value::Unit,
-            PossiblyDeferred::Deferred => Value::Deferred,
+            PartialStreamValue::Known(_) => Value::Unit,
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
         }
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SExprBool {
-    Val(PossiblyDeferred<bool>),
+    Val(PartialStreamValue<bool>),
     EqInt(SExprInt, SExprInt),
     EqStr(SExprStr, SExprStr),
     EqBool(Box<Self>, Box<Self>),
@@ -204,7 +220,7 @@ pub enum SExprInt {
     ),
 
     // Arithmetic Stream expression
-    Val(PossiblyDeferred<i64>),
+    Val(PartialStreamValue<i64>),
 
     BinOp(Box<Self>, Box<Self>, IntBinOp),
 
@@ -231,7 +247,7 @@ pub enum SExprFloat {
     ),
 
     // Arithmetic Stream expression
-    Val(PossiblyDeferred<f64>),
+    Val(PartialStreamValue<f64>),
 
     BinOp(Box<Self>, Box<Self>, FloatBinOp),
 
@@ -259,7 +275,7 @@ pub enum SExprUnit {
     ),
 
     // Arithmetic Stream expression
-    Val(PossiblyDeferred<()>),
+    Val(PartialStreamValue<()>),
 
     Var(VarName),
 
@@ -286,7 +302,7 @@ pub enum SExprStr {
     BinOp(Box<Self>, Box<Self>, StrBinOp),
 
     // Arithmetic Stream expression
-    Val(PossiblyDeferred<String>),
+    Val(PartialStreamValue<String>),
 
     Var(VarName),
 
@@ -363,15 +379,17 @@ impl TypeCheckableHelper<SExprTE> for Value {
         errs: &mut SemanticErrors,
     ) -> Result<SExprTE, ()> {
         match self {
-            Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(PossiblyDeferred::Known(*v)))),
-            Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(PossiblyDeferred::Known(*v)))),
-            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(PossiblyDeferred::Known(
+            Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(*v)))),
+            Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(PartialStreamValue::Known(
+                *v,
+            )))),
+            Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(PartialStreamValue::Known(
                 v.into(),
             )))),
-            Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PossiblyDeferred::Known(*v)))),
+            Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(*v)))),
             Value::List(_) => todo!(),
             Value::Map(_) => todo!(),
-            Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PossiblyDeferred::Known(())))),
+            Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PartialStreamValue::Known(())))),
             Value::Deferred => {
                 errs.push(SemanticError::DeferredError(format!(
                     "Stream expression {:?} not assigned a type before semantic analysis",
@@ -1010,12 +1028,14 @@ mod tests {
         ];
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
         let expected: Vec<SemantResultStr> = vec![
-            Ok(SExprTE::Int(SExprInt::Val(PossiblyDeferred::Known(1)))),
-            Ok(SExprTE::Str(SExprStr::Val(PossiblyDeferred::Known(
+            Ok(SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(1)))),
+            Ok(SExprTE::Str(SExprStr::Val(PartialStreamValue::Known(
                 "".into(),
             )))),
-            Ok(SExprTE::Bool(SExprBool::Val(PossiblyDeferred::Known(true)))),
-            Ok(SExprTE::Unit(SExprUnit::Val(PossiblyDeferred::Known(())))),
+            Ok(SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(
+                true,
+            )))),
+            Ok(SExprTE::Unit(SExprUnit::Val(PartialStreamValue::Known(())))),
         ];
 
         assert!(results.eq(expected.into_iter()));
@@ -1152,7 +1172,7 @@ mod tests {
         let vals: Vec<SExpr> = generate_binop_combinations(&int_val, &int_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
-        let int_t_val = vec![SExprInt::Val(PossiblyDeferred::Known(0))];
+        let int_t_val = vec![SExprInt::Val(PartialStreamValue::Known(0))];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprInt> =
@@ -1169,7 +1189,7 @@ mod tests {
         let vals: Vec<SExpr> = generate_binop_combinations(&str_val, &str_val, sbinops.clone());
         let results = vals.iter().map(TypeCheckable::type_check_with_default);
 
-        let str_t_val = vec![SExprStr::Val(PossiblyDeferred::Known("".into()))];
+        let str_t_val = vec![SExprStr::Val(PartialStreamValue::Known("".into()))];
 
         // Generate the different combinations and turn them into "Ok" results
         let expected_tmp: Vec<SExprStr> = generate_concat_combinations(&str_t_val, &str_t_val);
@@ -1191,7 +1211,7 @@ mod tests {
 
         // Create a vector of all SBinOp variants
         let bexpr = Box::new(SExpr::Val(true.into()));
-        let bexpr_checked = Box::new(SExprBool::Val(PossiblyDeferred::Known(true)));
+        let bexpr_checked = Box::new(SExprBool::Val(PartialStreamValue::Known(true)));
 
         let vals_tmp = generate_if_combinations(&val_variants, &val_variants, bexpr.clone());
 
@@ -1207,23 +1227,23 @@ mod tests {
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprInt::If(
                 bexpr_checked.clone(),
-                Box::new(SExprInt::Val(PossiblyDeferred::Known(0))),
-                Box::new(SExprInt::Val(PossiblyDeferred::Known(0))),
+                Box::new(SExprInt::Val(PartialStreamValue::Known(0))),
+                Box::new(SExprInt::Val(PartialStreamValue::Known(0))),
             ))),
             Ok(SExprTE::Str(SExprStr::If(
                 bexpr_checked.clone(),
-                Box::new(SExprStr::Val(PossiblyDeferred::Known("".into()))),
-                Box::new(SExprStr::Val(PossiblyDeferred::Known("".into()))),
+                Box::new(SExprStr::Val(PartialStreamValue::Known("".into()))),
+                Box::new(SExprStr::Val(PartialStreamValue::Known("".into()))),
             ))),
             Ok(SExprTE::Bool(SExprBool::If(
                 bexpr_checked.clone(),
-                Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
-                Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
+                Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
+                Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
             ))),
             Ok(SExprTE::Unit(SExprUnit::If(
                 bexpr_checked.clone(),
-                Box::new(SExprUnit::Val(PossiblyDeferred::Known(()))),
-                Box::new(SExprUnit::Val(PossiblyDeferred::Known(()))),
+                Box::new(SExprUnit::Val(PartialStreamValue::Known(()))),
+                Box::new(SExprUnit::Val(PartialStreamValue::Known(()))),
             ))),
         ];
 
@@ -1346,7 +1366,7 @@ mod tests {
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
-            Box::new(SExprInt::Val(PossiblyDeferred::Known(1))),
+            Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
             Box::new(SExprInt::Defer(Box::new(SExprStr::Var("x".into())))),
             IntBinOp::Add,
         )));
@@ -1367,7 +1387,7 @@ mod tests {
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
-            Box::new(SExprInt::Val(PossiblyDeferred::Known(1))),
+            Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
             Box::new(SExprInt::Defer(Box::new(SExprStr::Var("x".into())))),
             IntBinOp::Add,
         )));
@@ -1404,7 +1424,7 @@ mod tests {
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
-            Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
+            Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
             Box::new(SExprBool::Defer(Box::new(SExprStr::Var("x".into())))),
             BoolBinOp::And,
         )));
@@ -1457,7 +1477,7 @@ mod tests {
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
-            Box::new(SExprInt::Val(PossiblyDeferred::Known(1))),
+            Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
             Box::new(SExprInt::Dynamic(Box::new(SExprStr::Var("x".into())))),
             IntBinOp::Add,
         )));
@@ -1478,7 +1498,7 @@ mod tests {
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
-            Box::new(SExprBool::Val(PossiblyDeferred::Known(true))),
+            Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
             Box::new(SExprBool::Dynamic(Box::new(SExprStr::Var("x".into())))),
             BoolBinOp::And,
         )));
@@ -1532,7 +1552,7 @@ mod tests {
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         let expected = Ok(SExprTE::Str(SExprStr::BinOp(
-            Box::new(SExprStr::Val(PossiblyDeferred::Known("hello".into()))),
+            Box::new(SExprStr::Val(PartialStreamValue::Known("hello".into()))),
             Box::new(SExprStr::RestrictedDynamic(
                 Box::new(SExprStr::Var("x".into())),
                 EcoVec::from(vec!["x".into(), "y".into()]),

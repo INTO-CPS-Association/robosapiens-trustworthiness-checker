@@ -4,7 +4,7 @@ use crate::core::OutputStream;
 use crate::core::Value;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dynamic_lola::type_checker::{
-    PossiblyDeferred, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
+    PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
 };
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 
@@ -18,25 +18,25 @@ where
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<Value> {
         match expr {
             SExprTE::Int(e) => {
-                from_typed_stream::<PossiblyDeferred<i64>>(to_async_stream_int::<AC>(e, ctx))
+                from_typed_stream::<PartialStreamValue<i64>>(to_async_stream_int::<AC>(e, ctx))
             }
             SExprTE::Float(e) => {
-                from_typed_stream::<PossiblyDeferred<f64>>(to_async_stream_float::<AC>(e, ctx))
+                from_typed_stream::<PartialStreamValue<f64>>(to_async_stream_float::<AC>(e, ctx))
             }
             SExprTE::Str(e) => {
-                from_typed_stream::<PossiblyDeferred<String>>(to_async_stream_str::<AC>(e, ctx))
+                from_typed_stream::<PartialStreamValue<String>>(to_async_stream_str::<AC>(e, ctx))
             }
             SExprTE::Bool(e) => {
-                from_typed_stream::<PossiblyDeferred<bool>>(to_async_stream_bool::<AC>(e, ctx))
+                from_typed_stream::<PartialStreamValue<bool>>(to_async_stream_bool::<AC>(e, ctx))
             }
             SExprTE::Unit(e) => {
-                from_typed_stream::<PossiblyDeferred<()>>(to_async_stream_unit::<AC>(e, ctx))
+                from_typed_stream::<PartialStreamValue<()>>(to_async_stream_unit::<AC>(e, ctx))
             }
         }
     }
 }
 
-fn to_async_stream_int<AC>(expr: SExprInt, ctx: &AC::Ctx) -> OutputStream<PossiblyDeferred<i64>>
+fn to_async_stream_int<AC>(expr: SExprInt, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<i64>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -87,7 +87,7 @@ where
     }
 }
 
-fn to_async_stream_float<AC>(expr: SExprFloat, ctx: &AC::Ctx) -> OutputStream<PossiblyDeferred<f64>>
+fn to_async_stream_float<AC>(expr: SExprFloat, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<f64>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -138,7 +138,7 @@ where
     }
 }
 
-fn to_async_stream_str<AC>(expr: SExprStr, ctx: &AC::Ctx) -> OutputStream<PossiblyDeferred<String>>
+fn to_async_stream_str<AC>(expr: SExprStr, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<String>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -183,7 +183,7 @@ where
     }
 }
 
-fn to_async_stream_bool<AC>(expr: SExprBool, ctx: &AC::Ctx) -> OutputStream<PossiblyDeferred<bool>>
+fn to_async_stream_bool<AC>(expr: SExprBool, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -261,7 +261,7 @@ where
     }
 }
 
-fn to_async_stream_unit<AC>(expr: SExprUnit, ctx: &AC::Ctx) -> OutputStream<PossiblyDeferred<()>>
+fn to_async_stream_unit<AC>(expr: SExprUnit, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<()>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -332,7 +332,7 @@ mod tests {
     #[should_panic(expected = "Defer with string parsing not implemented in typed semantics")]
     async fn test_defer_int_runtime(executor: Rc<LocalExecutor<'static>>) {
         // Test defer with integer type - should evaluate "x + 1"
-        let e_str = Box::new(SExprStr::Val(PossiblyDeferred::Known("x + 1".into())));
+        let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x + 1".into())));
         let defer_expr = SExprInt::Defer(e_str);
 
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
@@ -340,11 +340,11 @@ mod tests {
 
         let res_stream = to_async_stream_int::<TestConfig>(defer_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<i64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [2, 3]
-        let exp: Vec<PossiblyDeferred<i64>> =
-            vec![PossiblyDeferred::Known(2), PossiblyDeferred::Known(3)];
+        let exp: Vec<PartialStreamValue<i64>> =
+            vec![PartialStreamValue::Known(2), PartialStreamValue::Known(3)];
         assert_eq!(res, exp);
     }
 
@@ -352,7 +352,7 @@ mod tests {
     #[should_panic(expected = "Defer with string parsing not implemented in typed semantics")]
     async fn test_defer_int_x_squared_runtime(executor: Rc<LocalExecutor<'static>>) {
         // Test defer with expression using x twice
-        let e_str = Box::new(SExprStr::Val(PossiblyDeferred::Known("x * x".into())));
+        let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x * x".into())));
         let defer_expr = SExprInt::Defer(e_str);
 
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
@@ -360,11 +360,11 @@ mod tests {
 
         let res_stream = to_async_stream_int::<TestConfig>(defer_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<i64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [4, 9]
-        let exp: Vec<PossiblyDeferred<i64>> =
-            vec![PossiblyDeferred::Known(4), PossiblyDeferred::Known(9)];
+        let exp: Vec<PartialStreamValue<i64>> =
+            vec![PartialStreamValue::Known(4), PartialStreamValue::Known(9)];
         assert_eq!(res, exp);
     }
 
@@ -372,7 +372,7 @@ mod tests {
     #[should_panic(expected = "Defer with string parsing not implemented in typed semantics")]
     async fn test_defer_bool_runtime(executor: Rc<LocalExecutor<'static>>) {
         // Test defer with boolean type
-        let e_str = Box::new(SExprStr::Val(PossiblyDeferred::Known("x && y".into())));
+        let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x && y".into())));
         let defer_expr = SExprBool::Defer(e_str);
 
         let x = Box::pin(stream::iter(vec![Value::Bool(true), Value::Bool(false)]));
@@ -386,12 +386,12 @@ mod tests {
 
         let res_stream = to_async_stream_bool::<TestConfig>(defer_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<bool>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<bool>> = res_stream.collect().await;
 
         // Once implemented, should produce: [true, false]
-        let exp: Vec<PossiblyDeferred<bool>> = vec![
-            PossiblyDeferred::Known(true),
-            PossiblyDeferred::Known(false),
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
         ];
         assert_eq!(res, exp);
     }
@@ -400,7 +400,7 @@ mod tests {
     #[should_panic(expected = "Defer with string parsing not implemented in typed semantics")]
     async fn test_defer_with_deferred_value_runtime(executor: Rc<LocalExecutor<'static>>) {
         // Test defer when the string expression itself is deferred
-        let e_str = Box::new(SExprStr::Val(PossiblyDeferred::Deferred));
+        let e_str = Box::new(SExprStr::Val(PartialStreamValue::Deferred));
         let defer_expr = SExprInt::Defer(e_str);
 
         let x = Box::pin(stream::iter(vec![2.into()]));
@@ -408,10 +408,10 @@ mod tests {
 
         let res_stream = to_async_stream_int::<TestConfig>(defer_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<i64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
 
         // Once implemented, should return Deferred when expression is deferred
-        let exp: Vec<PossiblyDeferred<i64>> = vec![PossiblyDeferred::Deferred];
+        let exp: Vec<PartialStreamValue<i64>> = vec![PartialStreamValue::Deferred];
         assert_eq!(res, exp);
     }
 
@@ -436,11 +436,11 @@ mod tests {
 
         let res_stream = to_async_stream_int::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<i64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [2, 4]
-        let exp: Vec<PossiblyDeferred<i64>> =
-            vec![PossiblyDeferred::Known(2), PossiblyDeferred::Known(4)];
+        let exp: Vec<PartialStreamValue<i64>> =
+            vec![PartialStreamValue::Known(2), PartialStreamValue::Known(4)];
         assert_eq!(res, exp);
     }
 
@@ -465,11 +465,11 @@ mod tests {
 
         let res_stream = to_async_stream_int::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<i64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [4, 9]
-        let exp: Vec<PossiblyDeferred<i64>> =
-            vec![PossiblyDeferred::Known(4), PossiblyDeferred::Known(9)];
+        let exp: Vec<PartialStreamValue<i64>> =
+            vec![PartialStreamValue::Known(4), PartialStreamValue::Known(9)];
         assert_eq!(res, exp);
     }
 
@@ -494,11 +494,11 @@ mod tests {
 
         let res_stream = to_async_stream_int::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<i64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [Deferred, 3]
-        let exp: Vec<PossiblyDeferred<i64>> =
-            vec![PossiblyDeferred::Deferred, PossiblyDeferred::Known(3)];
+        let exp: Vec<PartialStreamValue<i64>> =
+            vec![PartialStreamValue::Deferred, PartialStreamValue::Known(3)];
         assert_eq!(res, exp);
     }
 
@@ -524,13 +524,13 @@ mod tests {
 
         let res_stream = to_async_stream_int::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<i64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [2, Deferred, 5]
-        let exp: Vec<PossiblyDeferred<i64>> = vec![
-            PossiblyDeferred::Known(2),
-            PossiblyDeferred::Deferred,
-            PossiblyDeferred::Known(5),
+        let exp: Vec<PartialStreamValue<i64>> = vec![
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(5),
         ];
         assert_eq!(res, exp);
     }
@@ -557,12 +557,12 @@ mod tests {
 
         let res_stream = to_async_stream_bool::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<bool>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<bool>> = res_stream.collect().await;
 
         // Once implemented, should produce: [false, true]
-        let exp: Vec<PossiblyDeferred<bool>> = vec![
-            PossiblyDeferred::Known(false),
-            PossiblyDeferred::Known(true),
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
         ];
         assert_eq!(res, exp);
     }
@@ -571,7 +571,7 @@ mod tests {
     #[should_panic(expected = "Defer with string parsing not implemented in typed semantics")]
     async fn test_defer_float_runtime(executor: Rc<LocalExecutor<'static>>) {
         // Test defer with float type
-        let e_str = Box::new(SExprStr::Val(PossiblyDeferred::Known("x + 1.5".into())));
+        let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x + 1.5".into())));
         let defer_expr = SExprFloat::Defer(e_str);
 
         let x = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Float(2.0)]));
@@ -579,11 +579,11 @@ mod tests {
 
         let res_stream = to_async_stream_float::<TestConfig>(defer_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<f64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<f64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [2.5, 3.5]
-        let exp: Vec<PossiblyDeferred<f64>> =
-            vec![PossiblyDeferred::Known(2.5), PossiblyDeferred::Known(3.5)];
+        let exp: Vec<PartialStreamValue<f64>> =
+            vec![PartialStreamValue::Known(2.5), PartialStreamValue::Known(3.5)];
         assert_eq!(res, exp);
     }
 
@@ -591,7 +591,7 @@ mod tests {
     #[should_panic(expected = "Defer with string parsing not implemented in typed semantics")]
     async fn test_defer_unit_runtime(executor: Rc<LocalExecutor<'static>>) {
         // Test defer with unit type
-        let e_str = Box::new(SExprStr::Val(PossiblyDeferred::Known("()".into())));
+        let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("()".into())));
         let defer_expr = SExprUnit::Defer(e_str);
 
         let x = Box::pin(stream::iter(vec![Value::Unit, Value::Unit]));
@@ -599,11 +599,11 @@ mod tests {
 
         let res_stream = to_async_stream_unit::<TestConfig>(defer_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<()>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<()>> = res_stream.collect().await;
 
         // Once implemented, should produce: [(), ()]
-        let exp: Vec<PossiblyDeferred<()>> =
-            vec![PossiblyDeferred::Known(()), PossiblyDeferred::Known(())];
+        let exp: Vec<PartialStreamValue<()>> =
+            vec![PartialStreamValue::Known(()), PartialStreamValue::Known(())];
         assert_eq!(res, exp);
     }
 
@@ -611,7 +611,7 @@ mod tests {
     #[should_panic(expected = "Defer with string parsing not implemented in typed semantics")]
     async fn test_defer_str_runtime(executor: Rc<LocalExecutor<'static>>) {
         // Test defer with string type
-        let e_str = Box::new(SExprStr::Val(PossiblyDeferred::Known("x ++ y".into())));
+        let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x ++ y".into())));
         let defer_expr = SExprStr::Defer(e_str);
 
         let x = Box::pin(stream::iter(vec![
@@ -631,12 +631,12 @@ mod tests {
 
         let res_stream = to_async_stream_str::<TestConfig>(defer_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<String>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<String>> = res_stream.collect().await;
 
         // Once implemented, should produce: ["hello world", "hi there"]
-        let exp: Vec<PossiblyDeferred<String>> = vec![
-            PossiblyDeferred::Known("hello world".into()),
-            PossiblyDeferred::Known("hi there".into()),
+        let exp: Vec<PartialStreamValue<String>> = vec![
+            PartialStreamValue::Known("hello world".into()),
+            PartialStreamValue::Known("hi there".into()),
         ];
         assert_eq!(res, exp);
     }
@@ -669,12 +669,12 @@ mod tests {
 
         let res_stream = to_async_stream_str::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<String>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<String>> = res_stream.collect().await;
 
         // Once implemented, should produce: ["hello world", "there hi "]
-        let exp: Vec<PossiblyDeferred<String>> = vec![
-            PossiblyDeferred::Known("hello world".into()),
-            PossiblyDeferred::Known("there hi ".into()),
+        let exp: Vec<PartialStreamValue<String>> = vec![
+            PartialStreamValue::Known("hello world".into()),
+            PartialStreamValue::Known("there hi ".into()),
         ];
         assert_eq!(res, exp);
     }
@@ -700,11 +700,11 @@ mod tests {
 
         let res_stream = to_async_stream_float::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<f64>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<f64>> = res_stream.collect().await;
 
         // Once implemented, should produce: [2.5, 4.0]
-        let exp: Vec<PossiblyDeferred<f64>> =
-            vec![PossiblyDeferred::Known(2.5), PossiblyDeferred::Known(4.0)];
+        let exp: Vec<PartialStreamValue<f64>> =
+            vec![PartialStreamValue::Known(2.5), PartialStreamValue::Known(4.0)];
         assert_eq!(res, exp);
     }
 
@@ -729,11 +729,11 @@ mod tests {
 
         let res_stream = to_async_stream_unit::<TestConfig>(dynamic_expr, &ctx);
         ctx.run().await;
-        let res: Vec<PossiblyDeferred<()>> = res_stream.collect().await;
+        let res: Vec<PartialStreamValue<()>> = res_stream.collect().await;
 
         // Once implemented, should produce: [(), ()]
-        let exp: Vec<PossiblyDeferred<()>> =
-            vec![PossiblyDeferred::Known(()), PossiblyDeferred::Known(())];
+        let exp: Vec<PartialStreamValue<()>> =
+            vec![PartialStreamValue::Known(()), PartialStreamValue::Known(())];
         assert_eq!(res, exp);
     }
 }
