@@ -14,6 +14,7 @@ use crate::core::Runnable;
 use crate::core::Runtime;
 use crate::core::Semantics;
 use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
+use crate::lang::dynamic_lola::lalr_parser::LALRParser;
 use crate::lang::dynamic_lola::type_checker::SExprTE;
 use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use crate::runtime::RuntimeBuilder;
@@ -123,12 +124,15 @@ pub async fn monitor_outputs_typed_async(
         executor.clone(),
         spec.output_vars.clone(),
     ));
-    let async_monitor =
-        AsyncMonitorBuilder::<_, ConfigTyped, crate::semantics::TypedUntimedLolaSemantics>::new()
-            .executor(executor.clone())
-            .model(spec.clone())
-            .input(Box::new(input_streams))
-            .output(output_handler)
-            .build();
+    let async_monitor = AsyncMonitorBuilder::<
+        _,
+        ConfigTyped,
+        crate::semantics::TypedUntimedLolaSemantics<LALRParser>,
+    >::new()
+    .executor(executor.clone())
+    .model(spec.clone())
+    .input(Box::new(input_streams))
+    .output(output_handler)
+    .build();
     async_monitor.run().await.expect("Error running monitor");
 }

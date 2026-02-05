@@ -265,6 +265,11 @@ impl Display for Value {
  * values used. */
 pub trait StreamData: Clone + Debug + 'static {}
 
+/* Trait for stream data with a statically known stream type */
+pub trait TypedStreamData: StreamData {
+    fn stream_data_type() -> StreamType;
+}
+
 /* Trait for stream data types that can represent deferred values as a placeholder
 * for when an expression cannot be computed due to a lack of context */
 pub trait DeferrableStreamData: StreamData {
@@ -299,6 +304,42 @@ impl Display for StreamType {
             StreamType::Bool => write!(f, "bool"),
             StreamType::Unit => write!(f, "unit"),
         }
+    }
+}
+
+impl TypedStreamData for i64 {
+    fn stream_data_type() -> StreamType {
+        StreamType::Int
+    }
+}
+
+impl TypedStreamData for u64 {
+    fn stream_data_type() -> StreamType {
+        StreamType::Int
+    }
+}
+
+impl TypedStreamData for f64 {
+    fn stream_data_type() -> StreamType {
+        StreamType::Float
+    }
+}
+
+impl TypedStreamData for String {
+    fn stream_data_type() -> StreamType {
+        StreamType::Str
+    }
+}
+
+impl TypedStreamData for bool {
+    fn stream_data_type() -> StreamType {
+        StreamType::Bool
+    }
+}
+
+impl TypedStreamData for () {
+    fn stream_data_type() -> StreamType {
+        StreamType::Unit
     }
 }
 

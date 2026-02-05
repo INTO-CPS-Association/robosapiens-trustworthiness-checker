@@ -2,6 +2,8 @@ use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::Value;
 use crate::core::stream_casting::{from_typed_stream, to_typed_stream};
+use crate::lang::core::parser::ExprParser;
+use crate::lang::dynamic_lola::ast::SExpr;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dynamic_lola::type_checker::{
     PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
@@ -9,10 +11,16 @@ use crate::lang::dynamic_lola::type_checker::{
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 
 #[derive(Clone)]
-pub struct TypedUntimedLolaSemantics;
-
-impl<AC> MonitoringSemantics<AC> for TypedUntimedLolaSemantics
+pub struct TypedUntimedLolaSemantics<Parser>
 where
+    Parser: ExprParser<SExpr> + 'static,
+{
+    _parser: std::marker::PhantomData<Parser>,
+}
+
+impl<Parser, AC> MonitoringSemantics<AC> for TypedUntimedLolaSemantics<Parser>
+where
+    Parser: ExprParser<SExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
 {
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<Value> {

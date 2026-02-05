@@ -482,6 +482,8 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
     )
 }
 
+// WARNING: this currently mirrors the code of the typed combinator so both should be updated in
+// tandom
 pub fn dynamic<AC, Parser>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
@@ -1785,6 +1787,145 @@ mod combinator_tests {
         let exp2: Vec<Value> = vec![1.into(), 1.into(), 1.into()];
         assert_eq!(res1, exp1);
         assert_eq!(res2, exp2);
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_delay_1() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![Value::Deferred, Value::Int(1), Value::Int(2), Value::Int(3)];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_delay_2() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ]));
+        let res: Vec<Value> = sindex(x, 2).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Deferred,
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_noval_at_start() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::NoVal,
+            Value::Int(1),
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Deferred, // NoVal after Deferred repeats Deferred
+            Value::Int(1),
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_noval_in_middle() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::NoVal,
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Int(1),
+            Value::Int(1), // NoVal repeats the last known value
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_multiple_noval() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::NoVal,
+            Value::NoVal,
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Int(1),
+            Value::Int(1), // First NoVal repeats Int(1)
+            Value::Int(1), // Second NoVal also repeats Int(1)
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_with_deferred_in_stream() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::Deferred,
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred, // Added by sindex
+            Value::Int(1),
+            Value::Deferred, // Deferred from stream
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_noval_after_deferred() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Deferred,
+            Value::NoVal,
+            Value::Int(1),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred, // Added by sindex
+            Value::Deferred, // From stream
+            Value::Deferred, // NoVal repeats last value which was Deferred
+            Value::Int(1),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_complex_pattern() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::NoVal,
+            Value::Deferred,
+            Value::Int(2),
+            Value::NoVal,
+        ]));
+        let res: Vec<Value> = sindex(x, 2).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred, // Added by sindex
+            Value::Deferred, // Added by sindex
+            Value::Int(1),
+            Value::Int(1),   // NoVal repeats Int(1)
+            Value::Deferred, // Deferred from stream
+            Value::Int(2),
+            Value::Int(2), // NoVal repeats Int(2)
+        ];
+        assert_eq!(res, exp)
     }
 }
 

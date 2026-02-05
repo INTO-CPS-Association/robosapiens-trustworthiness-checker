@@ -160,9 +160,7 @@ impl<
     }
 
     fn build(self) -> Self::Mon {
-        let builder = self.0.build();
-        // Perform type checking here
-        builder
+        self.0.build()
     }
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
@@ -515,11 +513,18 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     ));
                 Box::new(builder)
             }
-            (Runtime::Async, Semantics::TypedUntimed, _) => {
+            (Runtime::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
                     TypedLOLASpecification,
                     TypedValueConfig,
-                    TypedUntimedLolaSemantics,
+                    TypedUntimedLolaSemantics<LALRParser>,
+                >::new()))
+            }
+            (Runtime::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
+                Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
+                    TypedLOLASpecification,
+                    TypedValueConfig,
+                    TypedUntimedLolaSemantics<CombExprParser>,
                 >::new()))
             }
             (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Lalr) => {
