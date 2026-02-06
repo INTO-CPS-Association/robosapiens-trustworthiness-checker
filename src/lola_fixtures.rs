@@ -1,6 +1,6 @@
 use crate::{
     InputProvider, LOLASpecification, OutputStream, SExpr, Value, VarName,
-    lang::dynamic_lola::lalr_parser::LALRParser,
+    lang::dynamic_lola::{lalr_parser::LALRParser, type_checker::SExprTE},
     runtime::asynchronous::{AsyncMonitorRunner, Context},
     semantics::{
         AsyncConfig, distributed::contexts::DistributedContext,
@@ -19,6 +19,13 @@ pub struct TestConfig {}
 impl AsyncConfig for TestConfig {
     type Val = Value;
     type Expr = SExpr;
+    type Ctx = Context<Self>;
+}
+#[derive(Clone)]
+pub struct TestTypedConfig {}
+impl AsyncConfig for TestTypedConfig {
+    type Val = Value;
+    type Expr = SExprTE;
     type Ctx = Context<Self>;
 }
 #[derive(Clone)]

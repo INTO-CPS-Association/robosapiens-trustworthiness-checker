@@ -202,9 +202,9 @@ pub enum SExprBool {
     Default(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>),
-    Dynamic(Box<SExprStr>),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
+    Defer(Box<SExprStr>, TypeContext),
+    Dynamic(Box<SExprStr>, TypeContext),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -229,9 +229,9 @@ pub enum SExprInt {
     Default(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>),
-    Dynamic(Box<SExprStr>),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
+    Defer(Box<SExprStr>, TypeContext),
+    Dynamic(Box<SExprStr>, TypeContext),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -256,9 +256,9 @@ pub enum SExprFloat {
     Default(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>),
-    Dynamic(Box<SExprStr>),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
+    Defer(Box<SExprStr>, TypeContext),
+    Dynamic(Box<SExprStr>, TypeContext),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
 }
 
 // Stream expressions - now with types
@@ -282,9 +282,9 @@ pub enum SExprUnit {
     Default(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>),
-    Dynamic(Box<SExprStr>),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
+    Defer(Box<SExprStr>, TypeContext),
+    Dynamic(Box<SExprStr>, TypeContext),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -309,9 +309,9 @@ pub enum SExprStr {
     Default(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>),
-    Dynamic(Box<SExprStr>),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>),
+    Defer(Box<SExprStr>, TypeContext),
+    Dynamic(Box<SExprStr>, TypeContext),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
 }
 
 // Stream expression typed enum
@@ -734,11 +734,26 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
 
                 // Use the type ascription to determine the output type
                 match &type_ascription {
-                    StreamType::Int => Ok(SExprTE::Int(SExprInt::Dynamic(Box::new(e_str)))),
-                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::Dynamic(Box::new(e_str)))),
-                    StreamType::Str => Ok(SExprTE::Str(SExprStr::Dynamic(Box::new(e_str)))),
-                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Dynamic(Box::new(e_str)))),
-                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Dynamic(Box::new(e_str)))),
+                    StreamType::Int => Ok(SExprTE::Int(SExprInt::Dynamic(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
+                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::Dynamic(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
+                    StreamType::Str => Ok(SExprTE::Str(SExprStr::Dynamic(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
+                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Dynamic(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
+                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Dynamic(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
                 }
             }
             SExpr::RestrictedDynamic(e, type_ascription, vs) => {
@@ -772,22 +787,27 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     StreamType::Int => Ok(SExprTE::Int(SExprInt::RestrictedDynamic(
                         Box::new(e_str),
                         vs.clone(),
+                        ctx.clone(),
                     ))),
                     StreamType::Float => Ok(SExprTE::Float(SExprFloat::RestrictedDynamic(
                         Box::new(e_str),
                         vs.clone(),
+                        ctx.clone(),
                     ))),
                     StreamType::Str => Ok(SExprTE::Str(SExprStr::RestrictedDynamic(
                         Box::new(e_str),
                         vs.clone(),
+                        ctx.clone(),
                     ))),
                     StreamType::Bool => Ok(SExprTE::Bool(SExprBool::RestrictedDynamic(
                         Box::new(e_str),
                         vs.clone(),
+                        ctx.clone(),
                     ))),
                     StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::RestrictedDynamic(
                         Box::new(e_str),
                         vs.clone(),
+                        ctx.clone(),
                     ))),
                 }
             }
@@ -819,11 +839,24 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
 
                 // Use the type ascription to determine the output type
                 match &type_ascription {
-                    StreamType::Int => Ok(SExprTE::Int(SExprInt::Defer(Box::new(e_str)))),
-                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::Defer(Box::new(e_str)))),
-                    StreamType::Str => Ok(SExprTE::Str(SExprStr::Defer(Box::new(e_str)))),
-                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Defer(Box::new(e_str)))),
-                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Defer(Box::new(e_str)))),
+                    StreamType::Int => {
+                        Ok(SExprTE::Int(SExprInt::Defer(Box::new(e_str), ctx.clone())))
+                    }
+                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::Defer(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
+                    StreamType::Str => {
+                        Ok(SExprTE::Str(SExprStr::Defer(Box::new(e_str), ctx.clone())))
+                    }
+                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Defer(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
+                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Defer(
+                        Box::new(e_str),
+                        ctx.clone(),
+                    ))),
                 }
             }
             SExpr::Update(_, _) => todo!("Implement support for Update"),
@@ -1375,9 +1408,14 @@ mod tests {
         let mut ctx = TypeContext::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
+        let mut expected_ctx = TypeContext::new();
+        expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
             Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
-            Box::new(SExprInt::Defer(Box::new(SExprStr::Var("x".into())))),
+            Box::new(SExprInt::Defer(
+                Box::new(SExprStr::Var("x".into())),
+                expected_ctx.clone(),
+            )),
             IntBinOp::Add,
         )));
         assert_eq!(result, expected);
@@ -1396,9 +1434,14 @@ mod tests {
         let mut ctx = TypeContext::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
+        let mut expected_ctx = TypeContext::new();
+        expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
             Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
-            Box::new(SExprInt::Defer(Box::new(SExprStr::Var("x".into())))),
+            Box::new(SExprInt::Defer(
+                Box::new(SExprStr::Var("x".into())),
+                expected_ctx.clone(),
+            )),
             IntBinOp::Add,
         )));
         assert_eq!(result, expected);
@@ -1433,9 +1476,14 @@ mod tests {
         let mut ctx = TypeContext::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
+        let mut expected_ctx = TypeContext::new();
+        expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
             Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
-            Box::new(SExprBool::Defer(Box::new(SExprStr::Var("x".into())))),
+            Box::new(SExprBool::Defer(
+                Box::new(SExprStr::Var("x".into())),
+                expected_ctx.clone(),
+            )),
             BoolBinOp::And,
         )));
         assert_eq!(result, expected);
@@ -1486,9 +1534,14 @@ mod tests {
         let mut ctx = TypeContext::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
+        let mut expected_ctx = TypeContext::new();
+        expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
             Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
-            Box::new(SExprInt::Dynamic(Box::new(SExprStr::Var("x".into())))),
+            Box::new(SExprInt::Dynamic(
+                Box::new(SExprStr::Var("x".into())),
+                expected_ctx.clone(),
+            )),
             IntBinOp::Add,
         )));
         assert_eq!(result, expected);
@@ -1507,9 +1560,14 @@ mod tests {
         let mut ctx = TypeContext::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
+        let mut expected_ctx = TypeContext::new();
+        expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
             Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
-            Box::new(SExprBool::Dynamic(Box::new(SExprStr::Var("x".into())))),
+            Box::new(SExprBool::Dynamic(
+                Box::new(SExprStr::Var("x".into())),
+                expected_ctx.clone(),
+            )),
             BoolBinOp::And,
         )));
         assert_eq!(result, expected);
@@ -1561,11 +1619,14 @@ mod tests {
         let mut ctx = TypeContext::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
+        let mut expected_ctx = TypeContext::new();
+        expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Str(SExprStr::BinOp(
             Box::new(SExprStr::Val(PartialStreamValue::Known("hello".into()))),
             Box::new(SExprStr::RestrictedDynamic(
                 Box::new(SExprStr::Var("x".into())),
                 EcoVec::from(vec!["x".into(), "y".into()]),
+                expected_ctx.clone(),
             )),
             StrBinOp::Concat,
         )));

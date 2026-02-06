@@ -392,23 +392,6 @@ where
     })
 }
 
-pub fn var<AC>(ctx: &AC::Ctx, var: VarName) -> OutputStream<Value>
-where
-    AC: AsyncConfig<Val = Value>,
-{
-    debug!(?var, "Accessing variable");
-    match ctx.var(&var) {
-        Some(stream) => {
-            debug!(?var, "Found variable");
-            stream
-        }
-        None => {
-            debug!(?var, "Variable not found - this will panic");
-            panic!("Variable \"{}\" not found", var)
-        }
-    }
-}
-
 // Defer for an UntimedLolaExpression using the lola_expression parser
 // TODO: this currently has unnecessary potentially-panicing casts since the types in the untyped
 // semantics are not granular enough
