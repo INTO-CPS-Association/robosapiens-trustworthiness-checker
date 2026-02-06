@@ -63,13 +63,13 @@ fn create_builder_from_config(
 
 #[apply(async_test)]
 async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: This test only runs on untyped configurations due to defer functionality limitations
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
+        let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -115,13 +115,13 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
 
 #[apply(async_test)]
 async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: This test only runs on untyped configurations due to defer functionality limitations
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
+        let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
@@ -167,13 +167,13 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
 #[apply(async_test)]
 async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: This test only runs on untyped configurations due to defer functionality limitations
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
+        let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
@@ -219,13 +219,13 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
 #[apply(async_test)]
 async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: This test only runs on untyped configurations due to defer functionality limitations
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = lola_specification(&mut "in x\nin e\nout z\nz = defer(e)").unwrap();
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
+        let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
@@ -271,15 +271,13 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
 #[apply(async_test)]
 async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: This test only runs on untyped configurations due to defer functionality limitations
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped =
-            lola_specification(&mut "in x\nin y\nin e\nout z1\nout z2\nz1 = defer(e)\nz2 = x + y")
-                .unwrap();
+        let mut spec_str = "in x: Int\nin y: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = x + y";
+        let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
         let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
@@ -697,10 +695,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
 #[apply(async_test)]
 async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = x",
-            _ => "in x\nout z\nz = x",
-        };
+        let mut spec_str = "in x: Int\nout z: Int\nz = x";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
@@ -746,10 +741,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 #[apply(async_test)]
 async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "out z: Int\nz = 42",
-            _ => "out z\nz = 42",
-        };
+        let mut spec_str = "out z: Int\nz = 42";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
@@ -799,10 +791,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 #[apply(async_test)]
 async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = x + 1",
-            _ => "in x\nout z\nz = x + 1",
-        };
+        let mut spec_str = "in x: Int\nout z: Int\nz = x + 1";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
@@ -848,10 +837,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
 #[apply(async_test)]
 async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = x - 10",
-            _ => "in x\nout z\nz = x - 10",
-        };
+        let mut spec_str = "in x: Int\nout z: Int\nz = x - 10";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
@@ -899,12 +885,7 @@ async fn test_index_past_mult_dependencies(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => {
-                "in x: Int\nout z1: Int\nout z2: Int\nz2 = x[2]\nz1 = x[1]"
-            }
-            _ => "in x\nout z1\nout z2\nz2 = x[2]\nz1 = x[1]",
-        };
+        let mut spec_str = "in x: Int\nout z1: Int\nout z2: Int\nz2 = x[2]\nz1 = x[1]";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
@@ -956,12 +937,7 @@ async fn test_index_past_mult_dependencies(
 #[apply(async_test)]
 async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => {
-                "in x: Bool\nin y: Bool\nout z: Bool\nz = if(x) then y else false"
-            }
-            _ => "in x\nin y\nout z\nz = if(x) then y else false",
-        };
+        let mut spec_str = "in x: Bool\nin y: Bool\nout z: Bool\nz = if(x) then y else false";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams5();
@@ -1007,10 +983,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 #[apply(async_test)]
 async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "in x: Str\nin y: Str\nout z: Str\nz = x ++ y",
-            _ => "in x\nin y\nout z\nz = x ++ y",
-        };
+        let mut spec_str = "in x: Str\nin y: Str\nout z: Str\nz = x ++ y";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams4();
@@ -1052,10 +1025,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 #[apply(async_test)]
 async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = default(x, 42)",
-            _ => "in x\nout z\nz = default(x, 42)",
-        };
+        let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
@@ -1100,12 +1070,8 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
 
 #[apply(async_test)]
 async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: not supported by the type checker
-    for config in TestConfiguration::untyped_configurations() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = default(x, 42)",
-            _ => "in x\nout z\nz = default(x, 42)",
-        };
+    for config in TestConfiguration::all() {
+        let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = BTreeMap::from([(
@@ -1153,12 +1119,8 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
 #[apply(async_test)]
 async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: not supported by the type checker
-    for config in TestConfiguration::untyped_configurations() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "in x: Int\nout z: Int\nz = default(x, 42)",
-            _ => "in x\nout z\nz = default(x, 42)",
-        };
+    for config in TestConfiguration::all() {
+        let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams =
@@ -1205,10 +1167,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 #[apply(async_test)]
 async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => "out x: Int\nx = 1 + default(x[1], 0)",
-            _ => "out x\nx = 1 + default(x[1], 0)",
-        };
+        let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         let input_streams = input_empty();
@@ -1436,6 +1395,138 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
     Ok(())
 }
 
+/// Verify that the untyped semantics (AsyncUntimed, SemiSyncUntimed) works with
+/// specifications that have no type annotations (since type annotations are used
+/// for most tests)
+#[apply(async_test)]
+async fn test_simple_add_monitor_untyped_spec(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    for config in TestConfiguration::untyped_configurations() {
+        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+
+        let input_streams = input_streams3();
+
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.build();
+
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
+
+        assert_eq!(
+            result,
+            vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])],
+            "Untyped spec failed for config {:?}",
+            config,
+        );
+    }
+    Ok(())
+}
+
+/// Verify that the untyped semantics (AsyncUntimed, SemiSyncUntimed) works with
+/// specifications that have no type annotations and which involve defer
+/// for most tests)
+#[apply(async_test)]
+async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
+    for config in TestConfiguration::untyped_configurations() {
+        if config == TestConfiguration::SemiSyncUntimed {
+            continue;
+        }
+        let mut spec_str = "in x\nin e\nout z\nz = defer(e)";
+        let spec = lola_specification(&mut spec_str).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.build();
+
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
+
+        assert_eq!(
+            result,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+            ],
+            "Untyped defer spec failed for config {:?}",
+            config,
+        );
+    }
+    Ok(())
+}
+
+/// Verify that the untyped semantics works with an annotation-free spec with dynamic
+#[apply(async_test)]
+async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
+    for config in TestConfiguration::untyped_configurations() {
+        let mut spec_str = spec_dynamic_monitor();
+        let spec = lola_specification(&mut spec_str).unwrap();
+
+        let input_streams = input_streams2();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.build();
+
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
+
+        assert_eq!(
+            result,
+            vec![
+                (0, vec![Value::Int(3), Value::Int(3)]),
+                (1, vec![Value::Int(7), Value::Int(7)]),
+            ],
+            "Untyped dynamic spec failed for config {:?}",
+            config,
+        );
+    }
+    Ok(())
+}
+
 #[apply(async_test)]
 async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
@@ -1523,77 +1614,82 @@ async fn test_count_monitor_sequential_with_drop_guard(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     // Test running monitors sequentially using drop guard cancellation approach
+    for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
+        // First run
+        {
+            let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+            let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
+            let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-    // First run
-    {
-        let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
-        let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+            let mut output_handler = Box::new(ManualOutputHandler::new(
+                executor.clone(),
+                spec_untyped.output_vars.clone(),
+            ));
+            let outputs = output_handler.get_output();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars.clone(),
-        ));
-        let outputs = output_handler.get_output();
+            let monitor = RuntimeBuilder::new()
+                .executor(executor.clone())
+                .model(spec_untyped.clone())
+                .input(Box::new(input_streams))
+                .output(output_handler)
+                .semantics(semantics)
+                .async_build()
+                .await;
 
-        let monitor = RuntimeBuilder::new()
-            .executor(executor.clone())
-            .model(spec_untyped.clone())
-            .input(Box::new(input_streams))
-            .output(output_handler)
-            .semantics(Semantics::Untimed)
-            .async_build()
-            .await;
+            executor.spawn(monitor.run()).detach();
+            let result: Vec<(usize, Vec<Value>)> =
+                with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
-        executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
-            with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
+            assert_eq!(
+                result,
+                vec![
+                    (0, vec![Value::Int(1)]),
+                    (1, vec![Value::Int(2)]),
+                    (2, vec![Value::Int(3)]),
+                    (3, vec![Value::Int(4)]),
+                ],
+                "First run failed for semantics {:?}",
+                semantics,
+            );
+        }
 
-        assert_eq!(
-            result,
-            vec![
-                (0, vec![Value::Int(1)]),
-                (1, vec![Value::Int(2)]),
-                (2, vec![Value::Int(3)]),
-                (3, vec![Value::Int(4)]),
-            ]
-        );
-    }
+        // Second run - should work now with drop guard cancellation
+        {
+            let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+            let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
+            let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-    // Second run - should work now with drop guard cancellation
-    {
-        let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
-        let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+            let mut output_handler = Box::new(ManualOutputHandler::new(
+                executor.clone(),
+                spec_untyped.output_vars.clone(),
+            ));
+            let outputs = output_handler.get_output();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars.clone(),
-        ));
-        let outputs = output_handler.get_output();
+            let monitor = RuntimeBuilder::new()
+                .executor(executor.clone())
+                .model(spec_untyped.clone())
+                .input(Box::new(input_streams))
+                .output(output_handler)
+                .semantics(semantics)
+                .async_build()
+                .await;
 
-        let monitor = RuntimeBuilder::new()
-            .executor(executor.clone())
-            .model(spec_untyped.clone())
-            .input(Box::new(input_streams))
-            .output(output_handler)
-            .semantics(Semantics::Untimed)
-            .async_build()
-            .await;
+            executor.spawn(monitor.run()).detach();
+            let result: Vec<(usize, Vec<Value>)> =
+                with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
-        executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
-            with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
-
-        assert_eq!(
-            result,
-            vec![
-                (0, vec![Value::Int(1)]),
-                (1, vec![Value::Int(2)]),
-                (2, vec![Value::Int(3)]),
-                (3, vec![Value::Int(4)]),
-            ]
-        );
+            assert_eq!(
+                result,
+                vec![
+                    (0, vec![Value::Int(1)]),
+                    (1, vec![Value::Int(2)]),
+                    (2, vec![Value::Int(3)]),
+                    (3, vec![Value::Int(4)]),
+                ],
+                "Second run failed for semantics {:?}",
+                semantics,
+            );
+        }
     }
     Ok(())
 }
@@ -1674,39 +1770,42 @@ async fn test_drop_guard_cancellation_behavior(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     // Test to verify that drop guard properly stops VarManagers when output streams are dropped
+    for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
+        let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+        let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
+        let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-    let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
-    let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-    let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec_untyped.output_vars.clone(),
-    ));
-    let outputs = output_handler.get_output();
+        let monitor = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler)
+            .semantics(semantics)
+            .async_build()
+            .await;
 
-    let monitor = RuntimeBuilder::new()
-        .executor(executor.clone())
-        .model(spec_untyped.clone())
-        .input(Box::new(input_streams))
-        .output(output_handler)
-        .semantics(Semantics::Untimed)
-        .async_build()
-        .await;
+        executor.spawn(monitor.run()).detach();
 
-    executor.spawn(monitor.run()).detach();
+        // Take only 2 values - this should trigger drop guard when output stream is dropped
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.take(2).enumerate().collect(), 5, "outputs.collect").await?;
 
-    // Take only 2 values - this should trigger drop guard when output stream is dropped
-    let result: Vec<(usize, Vec<Value>)> =
-        with_timeout(outputs.take(2).enumerate().collect(), 5, "outputs.collect").await?;
+        assert_eq!(
+            result,
+            vec![(0, vec![Value::Int(1)]), (1, vec![Value::Int(2)]),],
+            "Drop guard cancellation failed for semantics {:?}",
+            semantics,
+        );
 
-    assert_eq!(
-        result,
-        vec![(0, vec![Value::Int(1)]), (1, vec![Value::Int(2)]),]
-    );
-
-    // Add a small delay to allow cancellation to propagate via drop guard
-    smol::Timer::after(std::time::Duration::from_millis(100)).await;
+        // Add a small delay to allow cancellation to propagate via drop guard
+        smol::Timer::after(std::time::Duration::from_millis(100)).await;
+    }
     Ok(())
 }
 
@@ -1801,35 +1900,40 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 }
 
 #[apply(async_test)]
-async fn test_eval_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: This test only works with untimed semantics due to dynamic evaluation
-    let input_streams = input_streams2();
-    let spec = lola_specification(&mut spec_dynamic_monitor()).unwrap();
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let outputs = output_handler.get_output();
+async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
+    for config in TestConfiguration::all() {
+        let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int)";
+        let input_streams = input_streams2();
+        let spec = lola_specification(&mut spec_str).unwrap();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
 
-    let monitor = RuntimeBuilder::new()
-        .executor(executor.clone())
-        .model(spec.clone())
-        .input(Box::new(input_streams))
-        .output(output_handler)
-        .semantics(Semantics::Untimed)
-        .async_build()
-        .await;
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
 
-    executor.spawn(monitor.run()).detach();
-    let result: Vec<(usize, Vec<Value>)> =
-        with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
-    assert_eq!(
-        result,
-        vec![
-            (0, vec![Value::Int(3), Value::Int(3)]),
-            (1, vec![Value::Int(7), Value::Int(7)]),
-        ]
-    );
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.build();
+
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
+        assert_eq!(
+            result,
+            vec![
+                (0, vec![Value::Int(3), Value::Int(3)]),
+                (1, vec![Value::Int(7), Value::Int(7)]),
+            ],
+            "Dynamic monitor untimed failed for config {:?}",
+            config,
+        );
+    }
     Ok(())
 }
 
@@ -1970,9 +2074,12 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 async fn test_restricted_dynamic_monitor(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
-    for config in vec![TestConfiguration::AsyncUntimed] {
-        // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s, {x,y})";
+    for config in TestConfiguration::all() {
+        if config == TestConfiguration::SemiSyncUntimed {
+            // dynamic evaluation not yet verified on SemiSync
+            continue;
+        }
+        let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int, {x,y})";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
@@ -2027,13 +2134,12 @@ async fn test_restricted_dynamic_monitor(
 
 #[apply(async_test)]
 async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e)";
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
@@ -2099,13 +2205,12 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
 #[apply(async_test)]
 async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e)";
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
@@ -2171,18 +2276,12 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
 #[apply(async_test)]
 async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    for config in TestConfiguration::untyped_configurations() {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => {
-                "in x: Int\nin e: Str\nout z: Int\nz = defer(e)"
-            }
-            _ => "in x\nin e\nout z\nz = defer(e)",
-        };
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
@@ -2248,20 +2347,12 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
 #[apply(async_test)]
 async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    // TODO: This test currently only runs AsyncUntimed due to bugs in other configurations:
-    // - AsyncTypedUntimed does not implement defer
-    for config in vec![TestConfiguration::AsyncUntimed] {
+    for config in TestConfiguration::all() {
         if config == TestConfiguration::SemiSyncUntimed {
             // Bugs in defer that this runtime does not like
             continue;
         }
-        // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => {
-                "in x: Int\nin e: Str\nout z: Int\nz = defer(e)"
-            }
-            _ => "in x\nin e\nout z\nz = defer(e)",
-        };
+        let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
@@ -2329,14 +2420,12 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 #[apply(async_test)]
 #[ignore = "Bug in Defer here. It should not have enough context to resolve the variable at T=2."]
 async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    for config in TestConfiguration::untyped_configurations() {
-        // Use different specifications based on configuration to ensure type compatibility
-        let mut spec_str = match config {
-            TestConfiguration::AsyncTypedUntimed => {
-                "in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e)\nz2 = dynamic(e)"
-            }
-            _ => "in x\nin e\nout z1\nout z2\nz1 = defer(e)\nz2 = dynamic(e)",
-        };
+    for config in TestConfiguration::all() {
+        if config == TestConfiguration::SemiSyncUntimed {
+            // Bugs in defer that this runtime does not like
+            continue;
+        }
+        let mut spec_str = "in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = dynamic(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration

@@ -84,15 +84,15 @@ where
         }
         SExprInt::Defer(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, i64>(ctx, e, 0, &type_ctx)
+            mc::defer::<AC, Parser, i64>(ctx, e, 1, &type_ctx)
         }
         SExprInt::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, i64>(ctx, e, None, 0, &type_ctx)
+            mc::dynamic::<AC, Parser, i64>(ctx, e, None, 1, &type_ctx)
         }
         SExprInt::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, i64>(ctx, e, Some(vs), 0, &type_ctx)
+            mc::dynamic::<AC, Parser, i64>(ctx, e, Some(vs), 1, &type_ctx)
         }
     }
 }
@@ -136,15 +136,15 @@ where
         }
         SExprFloat::Defer(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, f64>(ctx, e, 0, &type_ctx)
+            mc::defer::<AC, Parser, f64>(ctx, e, 1, &type_ctx)
         }
         SExprFloat::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, f64>(ctx, e, None, 0, &type_ctx)
+            mc::dynamic::<AC, Parser, f64>(ctx, e, None, 1, &type_ctx)
         }
         SExprFloat::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, f64>(ctx, e, Some(vs), 0, &type_ctx)
+            mc::dynamic::<AC, Parser, f64>(ctx, e, Some(vs), 1, &type_ctx)
         }
     }
 }
@@ -172,11 +172,11 @@ where
         }
         SExprStr::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, String>(ctx, e, None, 0, &type_ctx)
+            mc::dynamic::<AC, Parser, String>(ctx, e, None, 1, &type_ctx)
         }
         SExprStr::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, String>(ctx, e, Some(vs), 0, &type_ctx)
+            mc::dynamic::<AC, Parser, String>(ctx, e, Some(vs), 1, &type_ctx)
         }
         SExprStr::BinOp(e1, e2, op) => {
             let e1 = to_async_stream_str::<AC, Parser>(*e1, ctx);
@@ -192,7 +192,7 @@ where
         }
         SExprStr::Defer(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, String>(ctx, e, 0, &type_ctx)
+            mc::defer::<AC, Parser, String>(ctx, e, 1, &type_ctx)
         }
     }
 }
@@ -263,15 +263,15 @@ where
         }
         SExprBool::Defer(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, bool>(ctx, e, 0, &type_ctx)
+            mc::defer::<AC, Parser, bool>(ctx, e, 1, &type_ctx)
         }
         SExprBool::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, bool>(ctx, e, None, 0, &type_ctx)
+            mc::dynamic::<AC, Parser, bool>(ctx, e, None, 1, &type_ctx)
         }
         SExprBool::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, bool>(ctx, e, Some(vs), 0, &type_ctx)
+            mc::dynamic::<AC, Parser, bool>(ctx, e, Some(vs), 1, &type_ctx)
         }
     }
 }
@@ -304,15 +304,15 @@ where
         }
         SExprUnit::Defer(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, ()>(ctx, e, 0, &type_ctx)
+            mc::defer::<AC, Parser, ()>(ctx, e, 1, &type_ctx)
         }
         SExprUnit::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, ()>(ctx, e, None, 0, &type_ctx)
+            mc::dynamic::<AC, Parser, ()>(ctx, e, None, 1, &type_ctx)
         }
         SExprUnit::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, ()>(ctx, e, Some(vs), 0, &type_ctx)
+            mc::dynamic::<AC, Parser, ()>(ctx, e, Some(vs), 1, &type_ctx)
         }
     }
 }
