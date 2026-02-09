@@ -160,13 +160,10 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        let mut input_provider =
+            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
+                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        input_provider.connect().await?;
 
         let x_stream = input_provider
             .input_stream(&"x".into())
@@ -228,13 +225,10 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        let mut input_provider =
+            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
+                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        input_provider.connect().await?;
 
         let x_stream = input_provider
             .input_stream(&"x".into())
@@ -293,13 +287,10 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        let mut input_provider =
+            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
+                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        input_provider.connect().await?;
 
         let x_stream = input_provider
             .input_stream(&"x".into())

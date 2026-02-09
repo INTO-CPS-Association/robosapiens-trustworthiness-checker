@@ -186,17 +186,18 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let redis_input_provider = tc::io::redis::RedisInputProvider::new(
-                    self.executor.unwrap().clone(),
+                let mut redis_input_provider = tc::io::redis::RedisInputProvider::new(
                     REDIS_HOSTNAME,
                     self.redis_port,
                     var_topics,
                 )
                 .expect("Redis input provider could not be created");
+
                 redis_input_provider
-                    .ready()
+                    .connect()
                     .await
-                    .expect("Redis input provider failed to start");
+                    .expect("Redis input provider failed to connect");
+
                 Box::new(redis_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::Manual => {

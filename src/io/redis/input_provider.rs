@@ -8,27 +8,21 @@ use futures::{
     StreamExt,
     future::{self, LocalBoxFuture},
 };
-use smol::{LocalExecutor, future::yield_now};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{InputProvider, OutputStream, Value, VarName};
 
-pub struct VarData {
-    pub variable: VarName,
-    pub channel_name: String,
-    stream: Option<OutputStream<Value>>,
-}
-
 pub struct RedisInputProvider {
-    pub host: String,
-    pub var_data: BTreeMap<VarName, VarData>,
-    pub result: Rc<AsyncCell<anyhow::Result<()>>>,
     pub started: Rc<AsyncCell<bool>>,
+    client: redis::Client,
+    redis_stream: Option<redis::aio::PubSubStream>,
+    var_topics: BTreeMap<VarName, String>,
+    var_streams: BTreeMap<VarName, OutputStream<Value>>,
+    senders: BTreeMap<VarName, Sender<Value>>,
 }
 
 impl RedisInputProvider {
     pub fn new(
-        ex: Rc<LocalExecutor<'static>>,
         hostname: &str,
         port: Option<u16>,
         var_topics: BTreeMap<VarName, String>,
@@ -46,90 +40,54 @@ impl RedisInputProvider {
                     ((v.clone(), tx), (v.clone(), rx))
                 })
                 .unzip();
-        let topic_vars = var_topics
-            .iter()
-            .map(|(k, v)| (v.clone(), k.clone()))
-            .collect::<BTreeMap<_, _>>();
+
+        let var_streams: BTreeMap<VarName, OutputStream<Value>> = receivers
+            .into_iter()
+            .map(|(v, mut rx)| {
+                let stream: OutputStream<Value> = Box::pin(stream! {
+                    while let Some(x) = rx.recv().await {
+                        yield x
+                    }
+                });
+                (v.clone(), stream)
+            })
+            .collect();
 
         let started = AsyncCell::shared();
 
         let client = redis::Client::open(url.clone())?;
 
-        let result = AsyncCell::shared();
-
-        // TODO: Should not be spawning a task inside new. Should fix the potential race conditions
-        // instead of circumventing them like this.
-        info!("Spawning RedisInputProvider on url: {:?}", url);
-        ex.spawn(RedisInputProvider::input_monitor(
-            result.clone(),
-            client,
-            var_topics.clone(),
-            topic_vars,
-            senders,
-            started.clone(),
-        ))
-        .detach();
-
-        let var_data = var_topics
-            .into_iter()
-            .zip(receivers.into_values())
-            .map(|((v, topic), mut rx)| {
-                let stream = stream! {
-                    while let Some(x) = rx.recv().await {
-                        yield x
-                    }
-                };
-                (
-                    v.clone(),
-                    VarData {
-                        variable: v,
-                        channel_name: topic,
-                        stream: Some(Box::pin(stream)),
-                    },
-                )
-            })
-            .collect();
-
         Ok(RedisInputProvider {
-            host: url,
-            result,
-            var_data,
             started,
+            client: client,
+            redis_stream: None,
+            var_topics: var_topics,
+            senders: senders,
+            var_streams: var_streams,
         })
     }
 
-    async fn input_monitor(
-        result: Rc<AsyncCell<anyhow::Result<()>>>,
-        client: redis::Client,
-        var_topics: BTreeMap<VarName, String>,
-        topic_vars: BTreeMap<String, VarName>,
-        senders: BTreeMap<VarName, Sender<Value>>,
-        started: Rc<AsyncCell<bool>>,
-    ) {
-        let result = result.guard_shared(Err(anyhow!("RedisInputProvider crashed")));
-        result.set(
-            RedisInputProvider::input_monitor_with_result(
-                client, var_topics, topic_vars, senders, started,
-            )
-            .await,
-        );
-    }
-
-    async fn input_monitor_with_result(
-        client: redis::Client,
-        var_topics: BTreeMap<VarName, String>,
-        topic_vars: BTreeMap<String, VarName>,
-        mut senders: BTreeMap<VarName, Sender<Value>>,
-        started: Rc<AsyncCell<bool>>,
-    ) -> anyhow::Result<()> {
-        let mut pubsub = client.get_async_pubsub().await?;
-        let channel_names = var_topics.values().collect::<Vec<_>>();
+    pub async fn connect(&mut self) -> anyhow::Result<()> {
+        let mut pubsub = self.client.get_async_pubsub().await?;
+        let channel_names = self.var_topics.values().collect::<Vec<_>>();
         info!("Subscribing to Redis channel_names: {:?}", channel_names);
         pubsub.subscribe(channel_names).await?;
-        started.set(true);
-        let mut stream = pubsub.on_message();
+        let stream = pubsub.into_on_message();
+        self.redis_stream = Some(stream);
+        self.started.set(true);
+        Ok(())
+    }
 
-        while let Some(msg) = stream.next().await {
+    async fn run_logic(
+        var_topics: BTreeMap<VarName, String>,
+        mut senders: BTreeMap<VarName, Sender<Value>>,
+        mut redis_stream: redis::aio::PubSubStream,
+    ) -> anyhow::Result<()> {
+        let topic_vars = var_topics
+            .iter()
+            .map(|(k, v)| (v.clone(), k.clone()))
+            .collect::<BTreeMap<_, _>>();
+        while let Some(msg) = redis_stream.next().await {
             let var_name = topic_vars
                 .get(msg.get_channel_name())
                 .ok_or_else(|| anyhow!("Unknown channel name"))?;
@@ -163,26 +121,48 @@ impl InputProvider for RedisInputProvider {
     type Val = Value;
 
     fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
-        let var_data = self.var_data.get_mut(var)?;
-        let stream = var_data.stream.take()?;
-        Some(stream)
+        self.var_streams.remove(var)
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(self.result.take_shared())
+        let stream = self.redis_stream.take();
+
+        match stream {
+            Some(stream) => Box::pin(Self::run_logic(
+                self.var_topics.clone(),
+                std::mem::take(&mut self.senders),
+                stream,
+            )),
+            None => Box::pin(future::ready(Err(anyhow!("Not connected to Redis yet")))),
+        }
     }
 
     fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         let started = self.started.clone();
         Box::pin(async move {
+            info!("Checking if Redis input provider is ready");
+            let mut attempts = 0;
             while !started.get().await {
-                yield_now().await;
+                attempts += 1;
+                info!(
+                    "Redis input provider not ready yet, checking again (attempt #{})",
+                    attempts
+                );
+                smol::Timer::after(std::time::Duration::from_millis(100)).await;
+
+                if attempts > 50 {
+                    warn!(
+                        "Redis input provider still not ready after 5 seconds, continuing to wait"
+                    );
+                    attempts = 0;
+                }
             }
+            info!("Redis input provider is ready");
             Ok(())
         })
     }
 
     fn vars(&self) -> Vec<VarName> {
-        self.var_data.keys().cloned().collect()
+        self.var_topics.keys().cloned().collect()
     }
 }
