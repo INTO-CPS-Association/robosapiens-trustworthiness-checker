@@ -1,6 +1,6 @@
 use crate::{
     InputProvider, LOLASpecification, OutputStream, SExpr, Value, VarName,
-    lang::dynamic_lola::lalr_parser::LALRExprParser,
+    lang::dynamic_lola::lalr_parser::LALRParser,
     runtime::asynchronous::{AsyncMonitorRunner, Context},
     semantics::{
         AsyncConfig, distributed::contexts::DistributedContext,
@@ -30,7 +30,7 @@ impl AsyncConfig for TestDistConfig {
 }
 
 // Default semantics to use in tests
-pub type TestSemantics = UntimedLolaSemantics<LALRExprParser>;
+pub type TestSemantics = UntimedLolaSemantics<LALRParser>;
 
 // Default monitor runner to use in tests
 pub type TestMonitorRunner = AsyncMonitorRunner<TestConfig, TestSemantics, LOLASpecification>;

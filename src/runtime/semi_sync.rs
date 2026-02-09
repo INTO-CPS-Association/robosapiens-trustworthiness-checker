@@ -814,7 +814,7 @@ mod tests {
 
     use crate::core::Runnable;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
-    use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    use crate::lang::dynamic_lola::lalr_parser::LALRParser;
     use crate::runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor};
     use crate::semantics::{AsyncConfig, UntimedLolaSemantics};
     use crate::{LOLASpecification, lola_fixtures::*};
@@ -837,7 +837,7 @@ mod tests {
     }
 
     type TestMonitor =
-        SemiSyncMonitor<ValueConfig, LOLASpecification, UntimedLolaSemantics<LALRExprParser>>;
+        SemiSyncMonitor<ValueConfig, LOLASpecification, UntimedLolaSemantics<LALRParser>>;
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {

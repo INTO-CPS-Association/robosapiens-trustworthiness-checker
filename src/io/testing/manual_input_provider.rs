@@ -10,7 +10,6 @@ use unsync::spsc::Sender as SpscSender;
 const CHANNEL_SIZE: usize = 10;
 
 struct Channel<AC: AsyncConfig> {
-    #[allow(dead_code)]
     sender: Option<SpscSender<AC::Val>>,
     receiver: Option<OutputStream<AC::Val>>,
 }
@@ -44,8 +43,7 @@ impl<AC: AsyncConfig> ManualInputProvider<AC> {
         Self { vars }
     }
 
-    #[allow(dead_code)]
-    fn sender_stream(&mut self, var: &VarName) -> Option<SpscSender<AC::Val>> {
+    pub fn sender_channel(&mut self, var: &VarName) -> Option<SpscSender<AC::Val>> {
         self.vars.get_mut(var)?.sender.take()
     }
 }
@@ -98,10 +96,10 @@ mod tests {
             .input_stream(&"y".into())
             .expect("y stream should exist");
         let mut x_sender = input_provider
-            .sender_stream(&"x".into())
+            .sender_channel(&"x".into())
             .expect("x sender should exist");
         let mut y_sender = input_provider
-            .sender_stream(&"y".into())
+            .sender_channel(&"y".into())
             .expect("y sender should exist");
 
         // For completeness:

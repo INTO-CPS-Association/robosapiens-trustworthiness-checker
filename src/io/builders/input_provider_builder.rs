@@ -46,7 +46,7 @@ impl AsyncConfig for ValueConfig {
 
 #[derive(Clone, Debug)]
 pub struct InputProviderBuilder {
-    spec: InputProviderSpec,
+    pub spec: InputProviderSpec,
     lang: Option<Language>,
     input_vars: Option<Vec<VarName>>,
     executor: Option<Rc<LocalExecutor<'static>>>,
@@ -104,6 +104,11 @@ impl InputProviderBuilder {
 
     pub fn redis_port(mut self, port: Option<u16>) -> Self {
         self.redis_port = port;
+        self
+    }
+
+    pub fn spec(mut self, spec: InputProviderSpec) -> Self {
+        self.spec = spec;
         self
     }
 

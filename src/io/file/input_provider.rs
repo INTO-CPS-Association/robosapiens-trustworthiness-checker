@@ -42,6 +42,9 @@ impl InputProvider for UntimedInputFileData {
         Box::pin(futures::future::ready(Ok(())))
     }
 
+    // TODO: Technically a bug here. It returns vars seen in the input file, not the ones defined
+    // in the model. If an input_stream is defined in the model but not used as an input there is a
+    // discrepancy here. Requires having access to the model inside UntimedInputFileData.
     fn vars(&self) -> Vec<VarName> {
         let uniques: BTreeSet<VarName> = self
             .values()

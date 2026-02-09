@@ -346,6 +346,16 @@ impl Specification for TypedLOLASpecification {
     fn var_expr(&self, var: &VarName) -> Option<SExprTE> {
         self.exprs.get(var).cloned()
     }
+
+    fn add_input_var(&mut self, var: VarName) {
+        // TODO: How to add type info?
+        self.input_vars = self
+            .input_vars
+            .iter()
+            .cloned()
+            .chain(std::iter::once(var))
+            .collect();
+    }
 }
 
 pub fn type_check(spec: LOLASpecification) -> SemanticResult<TypedLOLASpecification> {

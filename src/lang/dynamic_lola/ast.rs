@@ -497,6 +497,23 @@ impl Specification for LOLASpecification {
     fn var_expr(&self, var: &VarName) -> Option<SExpr> {
         Some(self.exprs.get(var)?.clone())
     }
+
+    fn add_input_var(&mut self, var: VarName) {
+        let input_vars = self
+            .input_vars
+            .iter()
+            .cloned()
+            .chain(std::iter::once(var))
+            .collect();
+        // Call new so we make sure that fix_dynamic is also called
+        *self = LOLASpecification::new(
+            input_vars,
+            self.output_vars.clone(),
+            self.exprs.clone(),
+            self.type_annotations.clone(),
+            self.aux_info.clone(),
+        );
+    }
 }
 
 impl Display for SExpr {

@@ -1,9 +1,9 @@
-use std::{collections::BTreeMap, rc::Rc};
-
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
+use std::fmt::Debug;
+use std::{collections::BTreeMap, rc::Rc};
 
 use crate::io::mqtt::MQTTLocalityReceiver;
 
@@ -21,6 +21,7 @@ pub enum Runtime {
     Distributed,
     ReconfigurableAsync,
     SemiSync,
+    ReconfigurableSemiSync,
 }
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
@@ -39,6 +40,8 @@ pub trait InputProvider {
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
 
     // TODO: Change into returning a set instead of a Vec
+    // TODO: Consider deleting this and making Runtimes use the Model instead so we have
+    // consistency. See e.g., bug with UntimedInputFileData
     fn vars(&self) -> Vec<VarName>;
 }
 
@@ -128,7 +131,7 @@ impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
     }
 }
 
-pub trait Specification: Clone + 'static {
+pub trait Specification: Debug + Clone + 'static {
     type Expr;
 
     fn input_vars(&self) -> Vec<VarName>;
@@ -143,6 +146,8 @@ pub trait Specification: Clone + 'static {
     }
 
     fn var_expr(&self, var: &VarName) -> Option<Self::Expr>;
+
+    fn add_input_var(&mut self, var: VarName);
 }
 
 // This could alternatively implement Sink

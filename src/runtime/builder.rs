@@ -11,12 +11,13 @@ use crate::{
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
     lang::dynamic_lola::{
-        lalr_parser::LALRExprParser,
+        lalr_parser::LALRParser,
         parser::CombExprParser,
         type_checker::{SExprTE, TypedLOLASpecification, type_check},
     },
     runtime::{
         reconfigurable_async::ReconfAsyncMonitorBuilder,
+        reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder,
         semi_sync::{SemiSyncContext, SemiSyncMonitorBuilder},
     },
     semantics::{
@@ -480,7 +481,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 Box::new(AsyncMonitorBuilder::<
                     LOLASpecification,
                     ValueConfig,
-                    UntimedLolaSemantics<LALRExprParser>,
+                    UntimedLolaSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
@@ -494,8 +495,25 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 Box::new(SemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
                     LOLASpecification,
-                    UntimedLolaSemantics<LALRExprParser>,
+                    UntimedLolaSemantics<LALRParser>,
                 >::new())
+            }
+            (Runtime::ReconfigurableSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
+                let mut builder = ReconfSemiSyncMonitorBuilder::<
+                    SemiSyncValueConfig,
+                    LOLASpecification,
+                    UntimedLolaSemantics<LALRParser>,
+                    LALRParser,
+                >::new();
+                builder =
+                    builder.input_builder(input_provider_builder.expect(
+                        "Input provider builder required for ReconfigurableSemiSync runtime",
+                    ));
+                builder =
+                    builder.output_builder(output_handler_builder.expect(
+                        "Output handler builder required for ReconfigurableSemiSync runtime",
+                    ));
+                Box::new(builder)
             }
             (Runtime::Async, Semantics::TypedUntimed, _) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
@@ -511,7 +529,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     // or DistributedSemantics as it has no way of proving the graph stream for the
                     // network topology
                     ValueConfig,
-                    UntimedLolaSemantics<LALRExprParser>,
+                    UntimedLolaSemantics<LALRParser>,
                 >::new();
 
                 debug!(
@@ -606,7 +624,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 let builder = DistAsyncMonitorBuilder::<
                     LOLASpecification,
                     DistValueConfig,
-                    DistributedSemantics<LALRExprParser>,
+                    DistributedSemantics<LALRParser>,
                 >::new();
 
                 let builder = builder.maybe_mqtt_reconfig_provider(mqtt_reconfig_provider);
@@ -705,7 +723,9 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
 
         // Construct inputs and outputs:
         // Skip this for ReconfigurableAsync runtime since we handle builders directly in the match above
-        let builder = if self.runtime == Runtime::ReconfigurableAsync {
+        let builder = if self.runtime == Runtime::ReconfigurableAsync
+            || self.runtime == Runtime::ReconfigurableSemiSync
+        {
             builder
         } else {
             // Normal handling for non-reconfigurable runtimes

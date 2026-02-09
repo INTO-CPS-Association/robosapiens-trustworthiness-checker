@@ -5,18 +5,22 @@ use ecow::EcoVec;
 use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
-#[cfg(test)]
-use crate::core::StreamTypeAscription;
-use crate::lang::core::parser::ExprParser as EParserTrait;
+use crate::lang::core::parser::{ExprParser as EParserTrait, SpecParser as SParserTrait};
 use crate::{LOLASpecification, SExpr, lang::dynamic_lola::ast::STopDecl};
 
 #[derive(Clone)]
-pub struct LALRExprParser;
+pub struct LALRParser;
 
-impl EParserTrait<SExpr> for LALRExprParser {
+impl EParserTrait<SExpr> for LALRParser {
     fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
         debug!("Parsing expr: {}", input);
         parse_sexpr(input)
+    }
+}
+impl SParserTrait<LOLASpecification> for LALRParser {
+    fn parse(input: &mut &str) -> anyhow::Result<LOLASpecification> {
+        debug!("Parsing expr: {}", input);
+        parse_str(input)
     }
 }
 
@@ -98,6 +102,8 @@ mod tests {
     use crate::VarName;
     use crate::lang::dynamic_lola::ast::NumericalBinOp;
     use crate::lang::dynamic_lola::ast::SBinOp;
+
+    use crate::core::StreamTypeAscription;
 
     use super::*;
     use test_log::test;

@@ -16,10 +16,10 @@ use trustworthiness_checker::{
     runtime::distributed::DistAsyncMonitorBuilder,
     semantics::distributed::semantics::DistributedSemantics,
 };
-use trustworthiness_checker::{async_test, lang::dynamic_lola::lalr_parser::LALRExprParser};
+use trustworthiness_checker::{async_test, lang::dynamic_lola::lalr_parser::LALRParser};
 use winnow::Parser;
 
-type TestDistSemantics = DistributedSemantics<LALRExprParser>;
+type TestDistSemantics = DistributedSemantics<LALRParser>;
 type TestDistMonitorBuilder =
     DistAsyncMonitorBuilder<LOLASpecification, TestDistConfig, TestDistSemantics>;
 

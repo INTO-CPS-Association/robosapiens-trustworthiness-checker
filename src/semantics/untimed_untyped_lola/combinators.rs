@@ -1063,7 +1063,7 @@ mod combinator_tests {
     use smol::LocalExecutor;
     use std::rc::Rc;
 
-    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRParser;
     // Using this instead of fixture version to in case fixture version changed
     type TestCtx = Context<TestConfig>;
 
@@ -1801,7 +1801,7 @@ mod noval_tests {
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
 
-    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRParser;
     // Using this instead of fixture version to in case fixture version changed
     type TestCtx = Context<TestConfig>;
 

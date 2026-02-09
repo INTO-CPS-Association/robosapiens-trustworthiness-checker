@@ -190,6 +190,15 @@ impl Specification for LOLASpecification {
     fn var_expr(&self, var: &VarName) -> Option<DistSExpr> {
         Some(self.exprs.get(var)?.clone())
     }
+
+    fn add_input_var(&mut self, var: VarName) {
+        self.input_vars = self
+            .input_vars
+            .iter()
+            .cloned()
+            .chain(std::iter::once(var))
+            .collect();
+    }
 }
 
 impl Display for DistSExpr {

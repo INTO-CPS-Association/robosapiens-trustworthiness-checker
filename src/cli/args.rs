@@ -64,7 +64,7 @@ pub struct InputMode {
 }
 
 /// Output handler configuration for monitoring results
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Debug)]
 #[group(required = false, multiple = false)]
 pub struct OutputMode {
     #[clap(long, help = "Output monitoring results to stdout")]
