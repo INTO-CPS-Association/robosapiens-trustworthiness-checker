@@ -117,11 +117,126 @@ pub fn eq<X: Eq + StreamData>(
     deferred_lift2(|x, y| x == y, x, y)
 }
 
+pub fn eq_partial<X: PartialEq + StreamData>(
+    x: OutputStream<PartialStreamValue<X>>,
+    y: OutputStream<PartialStreamValue<X>>,
+) -> OutputStream<PartialStreamValue<bool>> {
+    deferred_lift2(|x, y| x == y, x, y)
+}
+
 pub fn le(
     x: OutputStream<PartialStreamValue<i64>>,
     y: OutputStream<PartialStreamValue<i64>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
     deferred_lift2(|x, y| x <= y, x, y)
+}
+
+pub fn le_partial<T: PartialOrd + StreamData>(
+    x: OutputStream<PartialStreamValue<T>>,
+    y: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<bool>> {
+    deferred_lift2(|x, y| x <= y, x, y)
+}
+
+pub fn lt<T: PartialOrd + StreamData>(
+    x: OutputStream<PartialStreamValue<T>>,
+    y: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<bool>> {
+    deferred_lift2(|x, y| x < y, x, y)
+}
+
+pub fn ge<T: PartialOrd + StreamData>(
+    x: OutputStream<PartialStreamValue<T>>,
+    y: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<bool>> {
+    deferred_lift2(|x, y| x >= y, x, y)
+}
+
+pub fn gt<T: PartialOrd + StreamData>(
+    x: OutputStream<PartialStreamValue<T>>,
+    y: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<bool>> {
+    deferred_lift2(|x, y| x > y, x, y)
+}
+
+pub fn sin(x: OutputStream<PartialStreamValue<f64>>) -> OutputStream<PartialStreamValue<f64>> {
+    deferred_lift1(|x: f64| x.sin(), x)
+}
+
+pub fn cos(x: OutputStream<PartialStreamValue<f64>>) -> OutputStream<PartialStreamValue<f64>> {
+    deferred_lift1(|x: f64| x.cos(), x)
+}
+
+pub fn tan(x: OutputStream<PartialStreamValue<f64>>) -> OutputStream<PartialStreamValue<f64>> {
+    deferred_lift1(|x: f64| x.tan(), x)
+}
+
+pub fn abs_int(x: OutputStream<PartialStreamValue<i64>>) -> OutputStream<PartialStreamValue<i64>> {
+    deferred_lift1(|x: i64| x.abs(), x)
+}
+
+pub fn abs_float(
+    x: OutputStream<PartialStreamValue<f64>>,
+) -> OutputStream<PartialStreamValue<f64>> {
+    deferred_lift1(|x: f64| x.abs(), x)
+}
+
+pub fn is_defined<T: StreamData>(
+    x: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<bool>> {
+    let x = deferred_stream_lift_base(x);
+    Box::pin(x.map(|x| match x {
+        PartialStreamValue::Deferred => PartialStreamValue::Known(false),
+        PartialStreamValue::NoVal => PartialStreamValue::NoVal,
+        PartialStreamValue::Known(_) => PartialStreamValue::Known(true),
+    }))
+}
+
+pub fn when<T: StreamData>(
+    x: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<bool>> {
+    let mut x = deferred_stream_lift_base(x);
+    Box::pin(stream! {
+        while let Some(x_val) = x.next().await {
+            match x_val {
+                PartialStreamValue::Deferred | PartialStreamValue::NoVal => {
+                    yield PartialStreamValue::Known(false);
+                }
+                PartialStreamValue::Known(_) => {
+                    yield PartialStreamValue::Known(true);
+                    break;
+                }
+            }
+        }
+        while x.next().await.is_some() {
+            yield PartialStreamValue::Known(true);
+        }
+    })
+}
+
+pub fn init<T: StreamData + 'static>(
+    mut x: OutputStream<PartialStreamValue<T>>,
+    mut d: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<T>> {
+    Box::pin(stream! {
+        loop {
+            let x_next = x.next().await;
+            let d_next = d.next().await;
+            match (x_next, d_next) {
+                (Some(PartialStreamValue::NoVal), Some(d_val)) => {
+                    yield d_val;
+                }
+                (Some(x_val), Some(_)) => {
+                    yield x_val;
+                    break;
+                }
+                _ => return,
+            }
+        }
+        while let Some(x_val) = x.next().await {
+            yield x_val;
+        }
+    })
 }
 
 pub fn val<X: StreamData>(x: X) -> OutputStream<X> {
@@ -485,9 +600,6 @@ where
 // - list, lindex, lappend, lconcat, lhead, ltail, llen: List operations
 // - map, mget, mremove, minsert, mhas_key: Map operations
 // - latch: Latch operator for state management
-// - lt, gt, ge: Additional comparison operators
-// - abs, sin, cos, tan: Mathematical functions
-// - init, is_defined, when: Additional stream combinators
 // They will require additional tests once ported.
 mod tests {
     use super::*;
@@ -1372,6 +1484,658 @@ mod tests {
             PartialStreamValue::Known(5),
             PartialStreamValue::Known(6),
         ];
+        assert_eq!(res, exp);
+    }
+
+    // ========== Tests for comparison combinators ==========
+
+    #[apply(async_test)]
+    async fn test_lt_int() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(2),
+        ]));
+        let y: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(1),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = lt(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_lt_float() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(2.0),
+        ]));
+        let y: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(1.0),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = lt(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_lt_str() {
+        let x: OutputStream<PartialStreamValue<String>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known("apple".into()),
+            PartialStreamValue::Known("cherry".into()),
+        ]));
+        let y: OutputStream<PartialStreamValue<String>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known("banana".into()),
+            PartialStreamValue::Known("banana".into()),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = lt(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_ge_int() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(2),
+        ]));
+        let y: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(1),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = ge(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_ge_float() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(2.0),
+        ]));
+        let y: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(1.0),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = ge(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_gt_int() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(2),
+        ]));
+        let y: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(1),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = gt(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_gt_float() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(2.0),
+        ]));
+        let y: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(1.0),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = gt(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_le_partial_float() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(2.0),
+        ]));
+        let y: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2.0),
+            PartialStreamValue::Known(3.0),
+            PartialStreamValue::Known(1.0),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = le_partial(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_le_partial_str() {
+        let x: OutputStream<PartialStreamValue<String>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known("apple".into()),
+            PartialStreamValue::Known("banana".into()),
+            PartialStreamValue::Known("cherry".into()),
+        ]));
+        let y: OutputStream<PartialStreamValue<String>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known("banana".into()),
+            PartialStreamValue::Known("banana".into()),
+            PartialStreamValue::Known("banana".into()),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = le_partial(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_eq_partial_float() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1.0),
+            PartialStreamValue::Known(3.0),
+        ]));
+        let y: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1.0),
+            PartialStreamValue::Known(2.0),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = eq_partial(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    // ========== Tests for comparison combinators with Deferred/NoVal ==========
+
+    #[apply(async_test)]
+    async fn test_lt_with_deferred() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(3),
+        ]));
+        let y: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Deferred,
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Deferred,
+        ];
+        let res: Vec<PartialStreamValue<bool>> = lt(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_gt_with_noval() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(5),
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Known(3),
+        ]));
+        let y: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(4),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = gt(x, y).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    // ========== Tests for trigonometric and math combinators ==========
+
+    #[apply(async_test)]
+    async fn test_sin() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(0.0),
+            PartialStreamValue::Known(std::f64::consts::FRAC_PI_2),
+        ]));
+        let res: Vec<PartialStreamValue<f64>> = sin(x).collect().await;
+        match &res[0] {
+            PartialStreamValue::Known(v) => assert!((v - 0.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+        match &res[1] {
+            PartialStreamValue::Known(v) => assert!((v - 1.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_cos() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(0.0),
+            PartialStreamValue::Known(std::f64::consts::PI),
+        ]));
+        let res: Vec<PartialStreamValue<f64>> = cos(x).collect().await;
+        match &res[0] {
+            PartialStreamValue::Known(v) => assert!((v - 1.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+        match &res[1] {
+            PartialStreamValue::Known(v) => assert!((v - (-1.0)).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_tan() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(0.0),
+            PartialStreamValue::Known(std::f64::consts::FRAC_PI_4),
+        ]));
+        let res: Vec<PartialStreamValue<f64>> = tan(x).collect().await;
+        match &res[0] {
+            PartialStreamValue::Known(v) => assert!((v - 0.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+        match &res[1] {
+            PartialStreamValue::Known(v) => assert!((v - 1.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_sin_with_deferred() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(0.0),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(std::f64::consts::FRAC_PI_2),
+        ]));
+        let res: Vec<PartialStreamValue<f64>> = sin(x).collect().await;
+        match &res[0] {
+            PartialStreamValue::Known(v) => assert!((v - 0.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+        assert_eq!(res[1], PartialStreamValue::Deferred);
+        match &res[2] {
+            PartialStreamValue::Known(v) => assert!((v - 1.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_abs_int() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(-5),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(0),
+            PartialStreamValue::Known(-1),
+        ]));
+        let exp: Vec<PartialStreamValue<i64>> = vec![
+            PartialStreamValue::Known(5),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(0),
+            PartialStreamValue::Known(1),
+        ];
+        let res: Vec<PartialStreamValue<i64>> = abs_int(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_abs_float() {
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(-5.5),
+            PartialStreamValue::Known(3.2),
+            PartialStreamValue::Known(0.0),
+        ]));
+        let res: Vec<PartialStreamValue<f64>> = abs_float(x).collect().await;
+        match &res[0] {
+            PartialStreamValue::Known(v) => assert!((v - 5.5).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+        match &res[1] {
+            PartialStreamValue::Known(v) => assert!((v - 3.2).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+        match &res[2] {
+            PartialStreamValue::Known(v) => assert!((v - 0.0).abs() < 1e-10),
+            other => panic!("Expected Known, got {:?}", other),
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_abs_int_with_deferred() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(-5),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(3),
+        ]));
+        let exp: Vec<PartialStreamValue<i64>> = vec![
+            PartialStreamValue::Known(5),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(3),
+        ];
+        let res: Vec<PartialStreamValue<i64>> = abs_int(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    // ========== Tests for is_defined combinator ==========
+
+    #[apply(async_test)]
+    async fn test_is_defined_all_known() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Known(2),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = is_defined(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_is_defined_with_deferred() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(3),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = is_defined(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_is_defined_with_noval() {
+        // deferred_stream_lift_base replaces NoVal with the last known value,
+        // so after Known(1), a NoVal becomes Known(1) which is_defined maps to true.
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Deferred,
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = is_defined(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_is_defined_all_deferred() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Deferred,
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = is_defined(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_is_defined_bool_stream() {
+        let x: OutputStream<PartialStreamValue<bool>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(false),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = is_defined(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    // ========== Tests for when combinator ==========
+
+    #[apply(async_test)]
+    async fn test_when_never_defined() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Deferred,
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = when(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_when_immediately_defined() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(42),
+            PartialStreamValue::Known(43),
+            PartialStreamValue::Known(44),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = when(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_when_eventually_defined() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Known(20),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = when(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_when_with_noval_then_defined() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Deferred,
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(true),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = when(x).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    // ========== Tests for init combinator ==========
+
+    #[apply(async_test)]
+    async fn test_init_no_noval() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(3),
+        ]));
+        let d: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Known(20),
+            PartialStreamValue::Known(30),
+        ]));
+        let exp: Vec<PartialStreamValue<i64>> = vec![
+            PartialStreamValue::Known(1),
+            PartialStreamValue::Known(2),
+            PartialStreamValue::Known(3),
+        ];
+        let res: Vec<PartialStreamValue<i64>> = init(x, d).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_init_starts_with_noval() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::NoVal,
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(4),
+        ]));
+        let d: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Known(20),
+            PartialStreamValue::Known(30),
+            PartialStreamValue::Known(40),
+        ]));
+        let exp: Vec<PartialStreamValue<i64>> = vec![
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Known(20),
+            PartialStreamValue::Known(3),
+            PartialStreamValue::Known(4),
+        ];
+        let res: Vec<PartialStreamValue<i64>> = init(x, d).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_init_all_noval() {
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::NoVal,
+            PartialStreamValue::NoVal,
+        ]));
+        let d: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Known(20),
+        ]));
+        let exp: Vec<PartialStreamValue<i64>> =
+            vec![PartialStreamValue::Known(10), PartialStreamValue::Known(20)];
+        let res: Vec<PartialStreamValue<i64>> = init(x, d).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_init_with_deferred_in_x() {
+        // Deferred is not NoVal, so init should switch to x on Deferred
+        let x: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(3),
+        ]));
+        let d: OutputStream<PartialStreamValue<i64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Known(20),
+            PartialStreamValue::Known(30),
+        ]));
+        let exp: Vec<PartialStreamValue<i64>> = vec![
+            PartialStreamValue::Known(10),
+            PartialStreamValue::Deferred,
+            PartialStreamValue::Known(3),
+        ];
+        let res: Vec<PartialStreamValue<i64>> = init(x, d).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_init_bool_stream() {
+        let x: OutputStream<PartialStreamValue<bool>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ]));
+        let d: OutputStream<PartialStreamValue<bool>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(false),
+        ]));
+        let exp: Vec<PartialStreamValue<bool>> = vec![
+            PartialStreamValue::Known(false),
+            PartialStreamValue::Known(true),
+            PartialStreamValue::Known(false),
+        ];
+        let res: Vec<PartialStreamValue<bool>> = init(x, d).collect().await;
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_init_string_stream() {
+        let x: OutputStream<PartialStreamValue<String>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Known("hello".into()),
+        ]));
+        let d: OutputStream<PartialStreamValue<String>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known("default".into()),
+            PartialStreamValue::Known("default".into()),
+        ]));
+        let exp: Vec<PartialStreamValue<String>> = vec![
+            PartialStreamValue::Known("default".into()),
+            PartialStreamValue::Known("hello".into()),
+        ];
+        let res: Vec<PartialStreamValue<String>> = init(x, d).collect().await;
         assert_eq!(res, exp);
     }
 }

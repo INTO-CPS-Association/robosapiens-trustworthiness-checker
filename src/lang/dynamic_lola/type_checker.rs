@@ -177,14 +177,31 @@ impl From<PartialStreamValue<()>> for Value {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SExprBool {
     Val(PartialStreamValue<bool>),
+
+    // Equality comparisons
     EqInt(SExprInt, SExprInt),
+    EqFloat(SExprFloat, SExprFloat),
     EqStr(SExprStr, SExprStr),
     EqBool(Box<Self>, Box<Self>),
     EqUnit(SExprUnit, SExprUnit),
+
+    // Ordering comparisons
     LeInt(SExprInt, SExprInt),
+    LeFloat(SExprFloat, SExprFloat),
+    LeStr(SExprStr, SExprStr),
+    LtInt(SExprInt, SExprInt),
+    LtFloat(SExprFloat, SExprFloat),
+    LtStr(SExprStr, SExprStr),
+    GeInt(SExprInt, SExprInt),
+    GeFloat(SExprFloat, SExprFloat),
+    GeStr(SExprStr, SExprStr),
+    GtInt(SExprInt, SExprInt),
+    GtFloat(SExprFloat, SExprFloat),
+    GtStr(SExprStr, SExprStr),
+
     BinOp(Box<Self>, Box<Self>, BoolBinOp),
     Not(Box<Self>),
     If(Box<SExprBool>, Box<Self>, Box<Self>),
@@ -201,13 +218,28 @@ pub enum SExprBool {
 
     Default(Box<Self>, Box<Self>),
 
+    // Async operators
+    Init(Box<Self>, Box<Self>),
+
+    // Boolean-producing unary operators on typed streams
+    IsDefinedInt(SExprInt),
+    IsDefinedFloat(SExprFloat),
+    IsDefinedStr(SExprStr),
+    IsDefinedBool(Box<SExprBool>),
+    IsDefinedUnit(SExprUnit),
+    WhenInt(SExprInt),
+    WhenFloat(SExprFloat),
+    WhenStr(SExprStr),
+    WhenBool(Box<SExprBool>),
+    WhenUnit(SExprUnit),
+
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeContext),
     Dynamic(Box<SExprStr>, TypeContext),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SExprInt {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
@@ -227,6 +259,12 @@ pub enum SExprInt {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
+
+    // Math functions
+    Abs(Box<Self>),
+
+    // Async operators
+    Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeContext),
@@ -255,6 +293,15 @@ pub enum SExprFloat {
 
     Default(Box<Self>, Box<Self>),
 
+    // Trigonometric and math functions
+    Sin(Box<Self>),
+    Cos(Box<Self>),
+    Tan(Box<Self>),
+    Abs(Box<Self>),
+
+    // Async operators
+    Init(Box<Self>, Box<Self>),
+
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeContext),
     Dynamic(Box<SExprStr>, TypeContext),
@@ -262,7 +309,7 @@ pub enum SExprFloat {
 }
 
 // Stream expressions - now with types
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SExprUnit {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
@@ -281,13 +328,16 @@ pub enum SExprUnit {
 
     Default(Box<Self>, Box<Self>),
 
+    // Async operators
+    Init(Box<Self>, Box<Self>),
+
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeContext),
     Dynamic(Box<SExprStr>, TypeContext),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SExprStr {
     If(Box<SExprBool>, Box<Self>, Box<Self>),
 
@@ -307,6 +357,9 @@ pub enum SExprStr {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
+
+    // Async operators
+    Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeContext),
@@ -470,18 +523,66 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 SExprStr::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
 
-            // Comparison operations - could use a refactor
-            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(
-                SExprTE::Bool(SExprBool::EqBool(Box::new(se1), Box::new(se2))),
-            ),
-            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::EqStr(se1, se2)))
-            }
+            // Comparison operations
+            // Equality
             (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
                 Ok(SExprTE::Bool(SExprBool::EqInt(se1, se2)))
             }
+            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::EqFloat(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::EqStr(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(
+                SExprTE::Bool(SExprBool::EqBool(Box::new(se1), Box::new(se2))),
+            ),
+            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Unit(se1)), Ok(SExprTE::Unit(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::EqUnit(se1, se2)))
+            }
+
+            // Less than or equal
             (SBinOp::COp(CompBinOp::Le), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
                 Ok(SExprTE::Bool(SExprBool::LeInt(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Le), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::LeFloat(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Le), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::LeStr(se1, se2)))
+            }
+
+            // Less than
+            (SBinOp::COp(CompBinOp::Lt), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::LtInt(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Lt), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::LtFloat(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Lt), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::LtStr(se1, se2)))
+            }
+
+            // Greater than or equal
+            (SBinOp::COp(CompBinOp::Ge), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::GeInt(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Ge), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::GeFloat(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Ge), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::GeStr(se1, se2)))
+            }
+
+            // Greater than
+            (SBinOp::COp(CompBinOp::Gt), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::GtInt(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Gt), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::GtFloat(se1, se2)))
+            }
+            (SBinOp::COp(CompBinOp::Gt), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
+                Ok(SExprTE::Bool(SExprBool::GtStr(se1, se2)))
             }
 
             // Any other case where sub-expressions are Ok, but `op` is not supported
@@ -873,28 +974,123 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     }
                 }
             }
-            SExpr::List(_) => todo!(),
-            SExpr::LIndex(_, _) => todo!(),
-            SExpr::LAppend(_, _) => todo!(),
-            SExpr::LConcat(_, _) => todo!(),
-            SExpr::LHead(_) => todo!(),
-            SExpr::LTail(_) => todo!(),
-            SExpr::LLen(_) => todo!(),
-            SExpr::IsDefined(_) => todo!(),
-            SExpr::When(_) => todo!(),
-            SExpr::Latch(_, _) => todo!(),
-            SExpr::Init(_, _) => todo!(),
-            SExpr::Sin(_) => todo!(),
-            SExpr::Cos(_) => todo!(),
-            SExpr::Tan(_) => todo!(),
-            SExpr::Abs(_) => todo!(),
-            SExpr::MonitoredAt(_, _) => todo!(),
-            SExpr::Dist(_, _) => todo!(),
-            SExpr::Map(_) => todo!(),
-            SExpr::MGet(_, _) => todo!(),
-            SExpr::MInsert(_, _, _) => todo!(),
-            SExpr::MRemove(_, _) => todo!(),
-            SExpr::MHasKey(_, _) => todo!(),
+            SExpr::List(_) => todo!("Implement support for typed List"),
+            SExpr::LIndex(_, _) => todo!("Implement support for typed LIndex"),
+            SExpr::LAppend(_, _) => todo!("Implement support for typed LAppend"),
+            SExpr::LConcat(_, _) => todo!("Implement support for typed LConcat"),
+            SExpr::LHead(_) => todo!("Implement support for typed LHead"),
+            SExpr::LTail(_) => todo!("Implement support for typed LTail"),
+            SExpr::LLen(_) => todo!("Implement support for typed LLen"),
+            SExpr::IsDefined(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                match sexpr_check {
+                    SExprTE::Int(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedInt(se))),
+                    SExprTE::Float(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedFloat(se))),
+                    SExprTE::Str(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedStr(se))),
+                    SExprTE::Bool(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedBool(Box::new(se)))),
+                    SExprTE::Unit(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedUnit(se))),
+                }
+            }
+            SExpr::When(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                match sexpr_check {
+                    SExprTE::Int(se) => Ok(SExprTE::Bool(SExprBool::WhenInt(se))),
+                    SExprTE::Float(se) => Ok(SExprTE::Bool(SExprBool::WhenFloat(se))),
+                    SExprTE::Str(se) => Ok(SExprTE::Bool(SExprBool::WhenStr(se))),
+                    SExprTE::Bool(se) => Ok(SExprTE::Bool(SExprBool::WhenBool(Box::new(se)))),
+                    SExprTE::Unit(se) => Ok(SExprTE::Bool(SExprBool::WhenUnit(se))),
+                }
+            }
+            SExpr::Latch(_, _) => todo!("Implement support for typed Latch"),
+            SExpr::Init(se1, se2) => {
+                let se1_check = se1.type_check_raw(ctx, errs);
+                let se2_check = se2.type_check_raw(ctx, errs);
+                match (se1_check, se2_check) {
+                    (Ok(SExprTE::Int(e1)), Ok(SExprTE::Int(e2))) => {
+                        Ok(SExprTE::Int(SExprInt::Init(Box::new(e1), Box::new(e2))))
+                    }
+                    (Ok(SExprTE::Float(e1)), Ok(SExprTE::Float(e2))) => {
+                        Ok(SExprTE::Float(SExprFloat::Init(Box::new(e1), Box::new(e2))))
+                    }
+                    (Ok(SExprTE::Str(e1)), Ok(SExprTE::Str(e2))) => {
+                        Ok(SExprTE::Str(SExprStr::Init(Box::new(e1), Box::new(e2))))
+                    }
+                    (Ok(SExprTE::Bool(e1)), Ok(SExprTE::Bool(e2))) => {
+                        Ok(SExprTE::Bool(SExprBool::Init(Box::new(e1), Box::new(e2))))
+                    }
+                    (Ok(SExprTE::Unit(e1)), Ok(SExprTE::Unit(e2))) => {
+                        Ok(SExprTE::Unit(SExprUnit::Init(Box::new(e1), Box::new(e2))))
+                    }
+                    (Ok(ste1), Ok(ste2)) => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Init requires both arguments to have the same type, got {:?} and {:?}",
+                            ste1, ste2
+                        )));
+                        Err(())
+                    }
+                    _ => Err(()),
+                }
+            }
+            SExpr::Sin(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                match sexpr_check {
+                    SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Sin(Box::new(se)))),
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Sin can only be applied to float expressions, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::Cos(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                match sexpr_check {
+                    SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Cos(Box::new(se)))),
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Cos can only be applied to float expressions, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::Tan(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                match sexpr_check {
+                    SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Tan(Box::new(se)))),
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Tan can only be applied to float expressions, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::Abs(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                match sexpr_check {
+                    SExprTE::Int(se) => Ok(SExprTE::Int(SExprInt::Abs(Box::new(se)))),
+                    SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Abs(Box::new(se)))),
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Abs can only be applied to numeric expressions, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::MonitoredAt(_, _) => todo!("Implement support for typed MonitoredAt"),
+            SExpr::Dist(_, _) => todo!("Implement support for typed Dist"),
+            SExpr::Map(_) => todo!("Implement support for typed Map"),
+            SExpr::MGet(_, _) => todo!("Implement support for typed MGet"),
+            SExpr::MInsert(_, _, _) => todo!("Implement support for typed MInsert"),
+            SExpr::MRemove(_, _) => todo!("Implement support for typed MRemove"),
+            SExpr::MHasKey(_, _) => todo!("Implement support for typed MHasKey"),
         }
     }
 }

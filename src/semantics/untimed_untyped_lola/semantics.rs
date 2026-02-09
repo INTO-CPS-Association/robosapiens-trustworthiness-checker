@@ -248,7 +248,7 @@ mod tests {
     use crate::async_test;
     use crate::core::StreamTypeAscription;
     use crate::lang::dynamic_lola::ast::SExpr;
-    use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    use crate::lang::dynamic_lola::lalr_parser::LALRParser;
     use crate::lola_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use crate::semantics::StreamContext;
@@ -257,7 +257,7 @@ mod tests {
     use smol::LocalExecutor;
     use std::rc::Rc;
 
-    type Semantics = UntimedLolaSemantics<LALRExprParser>;
+    type Semantics = UntimedLolaSemantics<LALRParser>;
     type TestCtx = Context<TestConfig>;
 
     fn to_stream(expr: SExpr, ctx: &TestCtx) -> OutputStream<Value> {
