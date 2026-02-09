@@ -466,7 +466,7 @@ where
 mod tests {
     use super::*;
     use crate::core::StreamType;
-    use crate::lang::dynamic_lola::type_checker::TypeContext;
+    use crate::lang::dynamic_lola::type_checker::TypeInfo;
     use crate::lola_fixtures::TestTypedConfig;
     use crate::runtime::asynchronous::Context;
     use crate::{async_test, lang::dynamic_lola::lalr_parser::LALRParser};
@@ -477,7 +477,7 @@ mod tests {
 
     type TestCtx = Context<TestTypedConfig>;
 
-    fn type_ctx(vars: &[(&str, StreamType)]) -> TypeContext {
+    fn type_ctx(vars: &[(&str, StreamType)]) -> TypeInfo {
         vars.iter().map(|(v, t)| ((*v).into(), t.clone())).collect()
     }
 

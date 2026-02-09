@@ -16,19 +16,19 @@ pub enum SemanticError {
 }
 
 pub type SemanticErrors = Vec<SemanticError>;
-pub type TypeContext = BTreeMap<VarName, StreamType>;
+pub type TypeInfo = BTreeMap<VarName, StreamType>;
 
 pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
 
 pub trait TypeCheckableHelper<TypedExpr> {
     fn type_check_raw(
         &self,
-        ctx: &mut TypeContext,
+        ctx: &mut TypeInfo,
         errs: &mut SemanticErrors,
     ) -> Result<TypedExpr, ()>;
 }
 impl<TypedExpr, R: TypeCheckableHelper<TypedExpr>> TypeCheckable<TypedExpr> for R {
-    fn type_check(&self, context: &mut TypeContext) -> SemanticResult<TypedExpr> {
+    fn type_check(&self, context: &mut TypeInfo) -> SemanticResult<TypedExpr> {
         let mut errors = Vec::new();
         let res = self.type_check_raw(context, &mut errors);
         match res {
@@ -39,11 +39,11 @@ impl<TypedExpr, R: TypeCheckableHelper<TypedExpr>> TypeCheckable<TypedExpr> for 
 }
 pub trait TypeCheckable<TypedExpr> {
     fn type_check_with_default(&self) -> SemanticResult<TypedExpr> {
-        let mut context = TypeContext::new();
+        let mut context = TypeInfo::new();
         self.type_check(&mut context)
     }
 
-    fn type_check(&self, context: &mut TypeContext) -> SemanticResult<TypedExpr>;
+    fn type_check(&self, context: &mut TypeInfo) -> SemanticResult<TypedExpr>;
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -234,9 +234,9 @@ pub enum SExprBool {
     WhenUnit(SExprUnit),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeContext),
-    Dynamic(Box<SExprStr>, TypeContext),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -267,9 +267,9 @@ pub enum SExprInt {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeContext),
-    Dynamic(Box<SExprStr>, TypeContext),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -303,9 +303,9 @@ pub enum SExprFloat {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeContext),
-    Dynamic(Box<SExprStr>, TypeContext),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
 
 // Stream expressions - now with types
@@ -332,9 +332,9 @@ pub enum SExprUnit {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeContext),
-    Dynamic(Box<SExprStr>, TypeContext),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -362,9 +362,9 @@ pub enum SExprStr {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeContext),
-    Dynamic(Box<SExprStr>, TypeContext),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeContext),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
 
 // Stream expression typed enum
@@ -436,11 +436,7 @@ pub fn type_check(spec: LOLASpecification) -> SemanticResult<TypedLOLASpecificat
 }
 
 impl TypeCheckableHelper<SExprTE> for Value {
-    fn type_check_raw(
-        &self,
-        _: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, _: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         match self {
             Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(*v)))),
             Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(PartialStreamValue::Known(
@@ -469,11 +465,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
 
 // Type check a binary operation
 impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         let (op, se1, se2) = self;
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
@@ -601,11 +593,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
 
 // Type check a default operation
 impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         let (se1, se2) = *self;
         let se1_check = se1.type_check_raw(ctx, errs);
         let se2_check = se2.type_check_raw(ctx, errs);
@@ -645,11 +633,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
 
 // Type check an if expression
 impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         let (b, se1, se2) = *self;
         let b_check = b.type_check_raw(ctx, errs);
         let se1_check = se1.type_check_raw(ctx, errs);
@@ -702,11 +686,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
 
 // Type check an index expression
 impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         let (inner, idx) = *self;
         let inner_check = inner.type_check_raw(ctx, errs);
 
@@ -738,11 +718,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
 
 // Type check a variable
 impl TypeCheckableHelper<SExprTE> for VarName {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         let type_opt = ctx.get(self);
         match type_opt {
             Some(t) => match t {
@@ -764,11 +740,7 @@ impl TypeCheckableHelper<SExprTE> for VarName {
 }
 
 impl TypeCheckableHelper<SExprTE> for (SExpr, StreamTypeAscription) {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         let (expr, ascription) = self;
         let expr_te = expr.type_check_raw(ctx, errs)?;
 
@@ -792,11 +764,7 @@ impl TypeCheckableHelper<SExprTE> for (SExpr, StreamTypeAscription) {
 
 // Type check an expression
 impl TypeCheckableHelper<SExprTE> for SExpr {
-    fn type_check_raw(
-        &self,
-        ctx: &mut TypeContext,
-        errs: &mut SemanticErrors,
-    ) -> Result<SExprTE, ()> {
+    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
         match self {
             SExpr::Val(sdata) => sdata.type_check_raw(ctx, errs),
             SExpr::BinOp(se1, se2, op) => {
@@ -1101,7 +1069,7 @@ mod tests {
 
     use crate::lang::dynamic_lola::ast::{NumericalBinOp, StrBinOp};
 
-    use super::{SemanticResult, TypeCheckable, TypeContext};
+    use super::{SemanticResult, TypeCheckable, TypeInfo};
 
     use super::*;
     use test_log::test;
@@ -1542,7 +1510,7 @@ mod tests {
             .map(|n| SExprV::Var(n.into()));
 
         // Fake context/environment that simulates type-checking context
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         for (n, t) in variant_names.into_iter().zip(variant_types.into_iter()) {
             ctx.insert(n.into(), t);
         }
@@ -1601,10 +1569,10 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
-        let mut expected_ctx = TypeContext::new();
+        let mut expected_ctx = TypeInfo::new();
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
             Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
@@ -1627,10 +1595,10 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
-        let mut expected_ctx = TypeContext::new();
+        let mut expected_ctx = TypeInfo::new();
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
             Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
@@ -1653,7 +1621,7 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Bool);
         let result = expr.type_check(&mut ctx);
         assert!(result.is_err());
@@ -1669,10 +1637,10 @@ mod tests {
             )),
             SBinOp::BOp(BoolBinOp::And),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
-        let mut expected_ctx = TypeContext::new();
+        let mut expected_ctx = TypeInfo::new();
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
             Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
@@ -1695,7 +1663,7 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         assert!(result.is_err());
@@ -1711,7 +1679,7 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         assert!(result.is_err());
@@ -1727,10 +1695,10 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
-        let mut expected_ctx = TypeContext::new();
+        let mut expected_ctx = TypeInfo::new();
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
             Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
@@ -1753,10 +1721,10 @@ mod tests {
             )),
             SBinOp::BOp(BoolBinOp::And),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
-        let mut expected_ctx = TypeContext::new();
+        let mut expected_ctx = TypeInfo::new();
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
             Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
@@ -1779,7 +1747,7 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Int);
         let result = expr.type_check(&mut ctx);
         assert!(result.is_err());
@@ -1795,7 +1763,7 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Int);
         let result = expr.type_check(&mut ctx);
         assert!(result.is_err());
@@ -1812,10 +1780,10 @@ mod tests {
             )),
             SBinOp::SOp(StrBinOp::Concat),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
-        let mut expected_ctx = TypeContext::new();
+        let mut expected_ctx = TypeInfo::new();
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Str(SExprStr::BinOp(
             Box::new(SExprStr::Val(PartialStreamValue::Known("hello".into()))),
@@ -1840,7 +1808,7 @@ mod tests {
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         assert!(result.is_err());
@@ -1857,7 +1825,7 @@ mod tests {
             )),
             SBinOp::SOp(StrBinOp::Concat),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         // Type ascription mismatch should cause error
@@ -1875,7 +1843,7 @@ mod tests {
             )),
             SBinOp::SOp(StrBinOp::Concat),
         );
-        let mut ctx = TypeContext::new();
+        let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         assert!(result.is_err());

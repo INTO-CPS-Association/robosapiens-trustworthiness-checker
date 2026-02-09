@@ -4,7 +4,7 @@ use crate::core::values::StreamTypeAscription;
 use crate::core::{StreamData, TypedStreamData};
 use crate::lang::core::parser::ExprParser;
 use crate::lang::dynamic_lola::type_checker::PartialStreamValue;
-use crate::lang::dynamic_lola::type_checker::{SExprTE, TypeCheckable, TypeContext};
+use crate::lang::dynamic_lola::type_checker::{SExprTE, TypeCheckable, TypeInfo};
 use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
 use crate::semantics::{
     AsyncConfig, MonitoringSemantics, StreamContext, TypedUntimedLolaSemantics,
@@ -392,7 +392,7 @@ pub fn dynamic<AC, Parser, T>(
     eval_stream: OutputStream<PartialStreamValue<String>>,
     vs: Option<EcoVec<VarName>>,
     history_length: usize,
-    type_ctx: &TypeContext,
+    type_ctx: &TypeInfo,
 ) -> OutputStream<PartialStreamValue<T>>
 where
     Parser: ExprParser<SExpr> + 'static,
@@ -515,7 +515,7 @@ pub fn defer<AC, Parser, T>(
     ctx: &AC::Ctx,
     mut prop_stream: OutputStream<PartialStreamValue<String>>,
     history_length: usize,
-    type_ctx: &TypeContext,
+    type_ctx: &TypeInfo,
 ) -> OutputStream<PartialStreamValue<T>>
 where
     Parser: ExprParser<SExpr> + 'static,
@@ -1147,7 +1147,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1164,7 +1164,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1182,7 +1182,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1203,7 +1203,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1223,7 +1223,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 1, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1241,7 +1241,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 1, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1272,7 +1272,7 @@ mod tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 1, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1308,7 +1308,7 @@ mod tests {
             7.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = dynamic::<TypedTestConfig, Parser, i64>(&ctx, e, None, 1, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1332,7 +1332,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 2, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1349,7 +1349,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1366,7 +1366,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1385,7 +1385,7 @@ mod tests {
         ])) as OutputStream<PartialStreamValue<String>>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1406,7 +1406,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 10, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1423,7 +1423,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 1, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1441,7 +1441,7 @@ mod tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 1, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
@@ -1472,7 +1472,7 @@ mod tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let type_ctx: TypeContext = BTreeMap::from([("x".into(), StreamType::Int)]);
+        let type_ctx: TypeInfo = BTreeMap::from([("x".into(), StreamType::Int)]);
         let res_stream = defer::<TypedTestConfig, Parser, i64>(&ctx, e, 1, &type_ctx);
         ctx.run().await;
         let res: Vec<PartialStreamValue<i64>> = res_stream.collect().await;
