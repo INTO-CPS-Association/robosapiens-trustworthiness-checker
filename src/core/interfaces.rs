@@ -19,7 +19,6 @@ pub enum Semantics {
 pub enum Runtime {
     Async,
     Distributed,
-    ReconfigurableAsync,
     SemiSync,
     ReconfigurableSemiSync,
 }

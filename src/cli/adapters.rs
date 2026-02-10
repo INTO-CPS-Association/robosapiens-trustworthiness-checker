@@ -115,28 +115,6 @@ impl DistributionModeBuilder {
 
     pub async fn build(self) -> anyhow::Result<BuilderDistributionMode> {
         Ok(match (self.distribution_mode, self.runtime) {
-            (_, Some(Runtime::ReconfigurableAsync)) => {
-                debug!("setting up reconfigurable distribution mode");
-                let local_node = self.local_node.context("Local node not specified")?;
-                let receiver = match self.mqtt_port {
-                    Some(port) => crate::io::mqtt::MQTTLocalityReceiver::new_with_port(
-                        MQTT_HOSTNAME.to_string(),
-                        local_node.into(),
-                        port,
-                    ),
-                    None => crate::io::mqtt::MQTTLocalityReceiver::new(
-                        MQTT_HOSTNAME.to_string(),
-                        local_node.into(),
-                    ),
-                };
-                debug!("Initiating MQTT locality receiver");
-                receiver
-                    .ready()
-                    .await
-                    .context("Failed to initialize MQTT locality receiver")?;
-                debug!("Initialized MQTT locality receiver");
-                BuilderDistributionMode::ReconfigurableLocalMonitor(receiver)
-            }
             (
                 DistributionMode {
                     distribution_graph: Some(file_path),

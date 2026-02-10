@@ -16,7 +16,6 @@ use crate::{
         type_checker::{SExprTE, TypedLOLASpecification, type_check},
     },
     runtime::{
-        reconfigurable_async::ReconfAsyncMonitorBuilder,
         reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder,
         semi_sync::{SemiSyncContext, SemiSyncMonitorBuilder},
     },
@@ -527,92 +526,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     TypedUntimedLolaSemantics<CombExprParser>,
                 >::new()))
             }
-            (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Lalr) => {
-                let mut builder = ReconfAsyncMonitorBuilder::<
-                    LOLASpecification,
-                    // Reconfigurable async runtime does not work with DistributedContext
-                    // or DistributedSemantics as it has no way of proving the graph stream for the
-                    // network topology
-                    ValueConfig,
-                    UntimedLolaSemantics<LALRParser>,
-                >::new();
-
-                debug!(
-                    "Checking runtime distribution mode: {:?}",
-                    distribution_mode
-                );
-                if let DistributionMode::LocalMonitorWithReceiverAndLocality(_, receiver) =
-                    &distribution_mode
-                {
-                    debug!("Building runtime with LocalMonitorWithReceiverAndLocality");
-                    // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
-                    builder = builder.reconf_provider(receiver.clone());
-                } else if let DistributionMode::ReconfigurableLocalMonitor(receiver) =
-                    &distribution_mode
-                {
-                    debug!("Building runtime with ReconfigurableLocalMonitor");
-                    // If we have a ReconfigurableLocalMonitor, pass the receiver to the builder
-                    builder = builder.reconf_provider(receiver.clone());
-                } else {
-                    debug!(
-                        "No matching distribution mode found for MQTT receiver, mode was: {:?}",
-                        distribution_mode
-                    );
-                }
-
-                // For reconfigurable runtime, pass builders instead of built providers
-                if let Some(input_provider_builder) = input_provider_builder {
-                    builder = builder.input_builder(input_provider_builder);
-                }
-                if let Some(output_handler_builder) = output_handler_builder {
-                    builder = builder.output_builder(output_handler_builder);
-                }
-
-                Box::new(builder)
-            }
-            (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Combinator) => {
-                let mut builder = ReconfAsyncMonitorBuilder::<
-                    LOLASpecification,
-                    // Reconfigurable async runtime does not work with DistributedContext
-                    // as it has no way of proving the graph stream for the network topology
-                    ValueConfig,
-                    UntimedLolaSemantics<CombExprParser>,
-                >::new();
-
-                // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
-                debug!(
-                    "Checking Combinator runtime distribution mode: {:?}",
-                    distribution_mode
-                );
-                if let DistributionMode::LocalMonitorWithReceiverAndLocality(_, receiver) =
-                    &distribution_mode
-                {
-                    debug!("Combinator: Building runtime with LocalMonitorWithReceiverAndLocality");
-                    builder = builder.reconf_provider(receiver.clone());
-                } else if let DistributionMode::ReconfigurableLocalMonitor(receiver) =
-                    &distribution_mode
-                {
-                    debug!("Combinator: Building runtime with ReconfigurableLocalMonitor");
-                    builder = builder.reconf_provider(receiver.clone());
-                } else {
-                    debug!(
-                        "Combinator: No matching distribution mode for MQTT receiver, mode was: {:?}",
-                        distribution_mode
-                    );
-                }
-
-                builder = builder.maybe_mqtt_reconfig_provider(mqtt_reconfig_provider);
-
-                // For reconfigurable runtime, pass builders instead of built providers
-                if let Some(input_provider_builder) = input_provider_builder {
-                    builder = builder.input_builder(input_provider_builder);
-                }
-                if let Some(output_handler_builder) = output_handler_builder {
-                    builder = builder.output_builder(output_handler_builder);
-                }
-
-                Box::new(builder)
-            }
             (Runtime::Distributed, Semantics::Untimed, _) => {
                 debug!(
                     "Setting up distributed runtime with distribution_mode = {:?}",
@@ -727,10 +640,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             );
 
         // Construct inputs and outputs:
-        // Skip this for ReconfigurableAsync runtime since we handle builders directly in the match above
-        let builder = if self.runtime == Runtime::ReconfigurableAsync
-            || self.runtime == Runtime::ReconfigurableSemiSync
-        {
+        // Skip this for ReconfigurableSemiSync runtime since we handle builders directly in the match above
+        let builder = if self.runtime == Runtime::ReconfigurableSemiSync {
             builder
         } else {
             // Normal handling for non-reconfigurable runtimes
