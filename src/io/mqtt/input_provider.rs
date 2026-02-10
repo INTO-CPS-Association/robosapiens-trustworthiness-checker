@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use smol::LocalExecutor;
 use std::{collections::BTreeMap, rc::Rc};
-use tracing::{Level, debug, info_span, instrument, warn};
+use tracing::{Level, debug, info, info_span, instrument, warn};
 
 use unsync::oneshot::Receiver as OSReceiver;
 use unsync::spsc::Sender as SpscSender;
@@ -50,44 +50,32 @@ impl MQTTInputProvider {
 
     async fn run_logic(
         var_topics: BTreeMap<VarName, String>,
-        mut senders: BTreeMap<VarName, SpscSender<Value>>,
+        senders: BTreeMap<VarName, SpscSender<Value>>,
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
     ) -> anyhow::Result<()> {
-        let mqtt_input_span = info_span!("MQTTInputProvider run_logic");
-        let _enter = mqtt_input_span.enter();
+        // Also handles disconnects
+        let mut stream = Self::create_run_stream(
+            var_topics,
+            senders,
+            started,
+            cancellation_token,
+            client_streams_rx,
+        )
+        .await;
 
-        let (client, mut mqtt_stream, var_topics_inverse) =
-            common::Base::initial_run_logic(var_topics, started.clone(), client_streams_rx).await?;
-
-        let result = async {
-            loop {
-                futures::select! {
-                    msg = mqtt_stream.next().fuse() => {
-                        match msg {
-                            Some(msg) => {
-                                common::Base::handle_mqtt_message(msg, &var_topics_inverse, &mut senders, None).await?;
-                            }
-                            None => {
-                                debug!("MQTT stream ended");
-                                return Ok(());
-                            }
-                        }
-                    }
-                    _ = cancellation_token.cancelled().fuse() => {
-                        debug!("MQTTInputProvider: Input monitor task cancelled");
-                        return Ok(());
-                    }
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(()) => continue,
+                Err(e) => {
+                    warn!("Error in MQTTInputProvider run stream: {}", e);
+                    return Err(e);
                 }
             }
-        }.await;
-
-        // Always disconnect the client when we're done, regardless of success or error
-        debug!("Disconnecting MQTT client");
-        let _ = client.disconnect().await;
-
-        result
+        }
+        info!("MQTTInputProvider run stream ended");
+        Ok(())
     }
 
     async fn create_run_stream(
