@@ -1,7 +1,6 @@
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
 use async_cell::unsync::AsyncCell;
+use async_stream::stream;
+use async_trait::async_trait;
 use futures::FutureExt;
 use futures::future;
 use futures::select;
@@ -9,6 +8,8 @@ use futures::stream;
 use futures::{StreamExt, future::LocalBoxFuture};
 use r2r;
 use smol::LocalExecutor;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 use tracing::debug;
 use tracing::info_span;
 use tracing::{Level, instrument};
@@ -16,6 +17,7 @@ use unsync::spsc;
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
 
+use crate::core::InputProviderNew;
 use crate::stream_utils::channel_to_output_stream;
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
@@ -329,6 +331,47 @@ impl ROSInputProvider {
         }
         .await
     }
+
+    fn create_run_stream(
+        mut ros_streams: BTreeMap<VarName, OutputStream<Value>>,
+        mut senders: BTreeMap<VarName, spsc::Sender<Value>>,
+        cancellation_token: CancellationToken,
+    ) -> OutputStream<anyhow::Result<()>> {
+        Box::pin(stream! {
+            let mqtt_input_span = info_span!("ROSInputProvider run_logic");
+            let _enter = mqtt_input_span.enter();
+            loop {
+                futures::select! {
+                    (var, val) = Self::receive_from_any_stream(&mut ros_streams).fuse() => {
+                        match val {
+                            Some(value) => {
+                                debug!("ROSInputProvider: Received value for variable {}", var);
+                                if let Err(e) = Self::handle_received_value(var, value, &mut senders).await {
+                                    debug!("ROSInputProvider: Error handling received value: {:?}", e);
+                                    yield Err(e);
+                                    return;
+                                }
+                            }
+                            None => {
+                                debug!("ROSInputProvider: Stream for variable {} ended", var);
+                                // Remove the stream from the map
+                                ros_streams.remove(&var);
+                                // If all streams have ended, exit the loop
+                                if ros_streams.is_empty() {
+                                    debug!("ROSInputProvider: All streams ended, exiting");
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    _ = cancellation_token.cancelled().fuse() => {
+                        debug!("ROSInputProvider: Input monitor task cancelled");
+                        return;
+                    }
+                }
+            }
+        })
+    }
 }
 
 impl InputProvider for ROSInputProvider {
@@ -351,6 +394,26 @@ impl InputProvider for ROSInputProvider {
     }
 
     fn vars(&self) -> Vec<VarName> {
+        self.var_map.keys().cloned().collect()
+    }
+}
+
+#[async_trait(?Send)]
+impl InputProviderNew for ROSInputProvider {
+    type Val = Value;
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+        let stream = self.available_streams.remove(var)?;
+        Some(stream)
+    }
+
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
+        let senders = std::mem::take(&mut self.senders).expect("Senders already taken");
+        let cancellation_token = self.cancellation_token.clone();
+        let ros_streams = std::mem::take(&mut self.ros_streams);
+        Self::create_run_stream(ros_streams, senders, cancellation_token)
+    }
+
+    fn vars_new(&self) -> Vec<VarName> {
         self.var_map.keys().cloned().collect()
     }
 }

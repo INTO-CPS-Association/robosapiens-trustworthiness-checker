@@ -1,11 +1,11 @@
+use async_trait::async_trait;
+use futures::future::LocalBoxFuture;
+use futures::{StreamExt, stream};
 use std::collections::BTreeSet;
 use std::future::pending;
 
-use futures::future::LocalBoxFuture;
-use futures::stream;
-
-use crate::core::Value;
 use crate::core::{InputProvider, OutputStream, VarName};
+use crate::core::{InputProviderNew, Value};
 pub use crate::lang::untimed_input::UntimedInputFileData;
 
 // Returns an iterator over the values for a given key in the UntimedInputFileData.
@@ -42,10 +42,38 @@ impl InputProvider for UntimedInputFileData {
         Box::pin(futures::future::ready(Ok(())))
     }
 
+    fn vars(&self) -> Vec<VarName> {
+        let uniques: BTreeSet<VarName> = self
+            .values()
+            .flat_map(|inner| inner.keys())
+            .cloned()
+            .collect();
+        uniques.into_iter().collect()
+    }
+}
+
+#[async_trait(?Send)]
+impl InputProviderNew for UntimedInputFileData {
+    type Val = Value;
+
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+        let input_file_data_iter = input_file_data_iter(self.clone(), var.clone());
+        Some(Box::pin(stream::iter(input_file_data_iter)))
+    }
+
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
+        let max_index = self.keys().max();
+        if let Some(max_key) = max_index {
+            stream::repeat_with(|| Ok(())).take(*max_key).boxed_local()
+        } else {
+            stream::repeat_with(|| Ok(())).boxed_local()
+        }
+    }
+
     // TODO: Technically a bug here. It returns vars seen in the input file, not the ones defined
     // in the model. If an input_stream is defined in the model but not used as an input there is a
     // discrepancy here. Requires having access to the model inside UntimedInputFileData.
-    fn vars(&self) -> Vec<VarName> {
+    fn vars_new(&self) -> Vec<VarName> {
         let uniques: BTreeSet<VarName> = self
             .values()
             .flat_map(|inner| inner.keys())

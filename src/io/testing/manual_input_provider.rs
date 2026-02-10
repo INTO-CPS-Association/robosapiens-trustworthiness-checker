@@ -1,8 +1,11 @@
+use crate::core::InputProviderNew;
 use crate::{
     InputProvider, OutputStream, VarName, semantics::AsyncConfig,
     stream_utils::channel_to_output_stream,
 };
+use async_trait::async_trait;
 use futures::future::LocalBoxFuture;
+use futures::{StreamExt, stream};
 use std::collections::BTreeMap;
 use std::future::pending;
 use unsync::spsc::Sender as SpscSender;
@@ -66,6 +69,25 @@ impl<AC: AsyncConfig> InputProvider for ManualInputProvider<AC> {
     }
 
     fn vars(&self) -> Vec<VarName> {
+        self.vars.keys().cloned().collect()
+    }
+}
+
+#[async_trait(?Send)]
+impl<AC: AsyncConfig> InputProviderNew for ManualInputProvider<AC> {
+    type Val = AC::Val;
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
+        self.vars
+            .get_mut(var)
+            .and_then(|channel| channel.receiver.take())
+    }
+
+    // TODO: Refactor such that the input_streams only forward data whenever run is called.
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
+        stream::repeat_with(|| Ok(())).boxed_local()
+    }
+
+    fn vars_new(&self) -> Vec<VarName> {
         self.vars.keys().cloned().collect()
     }
 }

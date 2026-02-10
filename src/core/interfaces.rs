@@ -44,6 +44,23 @@ pub trait InputProvider {
     fn vars(&self) -> Vec<VarName>;
 }
 
+#[async_trait(?Send)]
+pub trait InputProviderNew {
+    type Val;
+
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
+
+    /// Returns an OutputStream of Result<()> indicating if the InputProvider has encountered an
+    /// error (Err) or has successfully provided one batch of values (Ok).
+    /// Awaiting the control_stream attempts to progress the InputProvider by one step.
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
+
+    // TODO: Change into returning a set instead of a Vec
+    // TODO: Consider deleting this and making Runtimes use the Model instead so we have
+    // consistency. See e.g., bug with UntimedInputFileData
+    fn vars_new(&self) -> Vec<VarName>;
+}
+
 impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
     type Val = V;
 

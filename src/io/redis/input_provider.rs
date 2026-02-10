@@ -3,14 +3,16 @@ use std::{collections::BTreeMap, error::Error, rc::Rc};
 use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
+use async_trait::async_trait;
 use async_unsync::bounded::{self, Receiver, Sender};
 use futures::{
     StreamExt,
     future::{self, LocalBoxFuture},
+    stream,
 };
 use tracing::{info, warn};
 
-use crate::{InputProvider, OutputStream, Value, VarName};
+use crate::{InputProvider, OutputStream, Value, VarName, core::InputProviderNew};
 
 pub struct RedisInputProvider {
     pub started: Rc<AsyncCell<bool>>,
@@ -115,6 +117,56 @@ impl RedisInputProvider {
 
         Ok(())
     }
+
+    fn create_run_stream(
+        var_topics: BTreeMap<VarName, String>,
+        mut senders: BTreeMap<VarName, Sender<Value>>,
+        mut redis_stream: redis::aio::PubSubStream,
+    ) -> OutputStream<anyhow::Result<()>> {
+        let topic_vars = var_topics
+            .iter()
+            .map(|(k, v)| (v.clone(), k.clone()))
+            .collect::<BTreeMap<_, _>>();
+        Box::pin(stream! {
+                while let Some(msg) = redis_stream.next().await {
+                    let var_name = match topic_vars.get(msg.get_channel_name()) {
+                        Some(name) => name,
+                        None => {
+                            yield Err(anyhow!("Unknown channel name"));
+                            return;
+                        }
+                    };
+                    let value: Value = match msg.get_payload() {
+                        Ok(val) => val,
+                        Err(e) => {
+                            yield Err(anyhow!("Failed to get payload: {}", e));
+                            return;
+                        }
+                    };
+                    if let Some(sender) = senders.get(var_name) {
+                        if let Err(e) = sender.send(value).await {
+                            yield Err(anyhow!("Failed to send value: {}", e));
+                            return;
+                        }
+                    } else {
+                        yield Err(anyhow!("Unknown sender for var: {}", var_name));
+                        continue;
+                    }
+                    // Send `NoVal` to all other senders concurrently
+                    let futs = senders
+                        .iter_mut()
+                        .filter(|(name, _)| *name != var_name)
+                        .map(|(_, s)| s.send(Value::NoVal));
+                    // Run them all concurrently
+                    let results = future::join_all(futs).await;
+                    // Check for errors
+                    if results.iter().any(|r| r.is_err()) {
+                        yield Err(anyhow!("Failed to send NoVal"));
+                        return;
+                    }
+            }
+        })
+    }
 }
 
 impl InputProvider for RedisInputProvider {
@@ -163,6 +215,34 @@ impl InputProvider for RedisInputProvider {
     }
 
     fn vars(&self) -> Vec<VarName> {
+        self.var_topics.keys().cloned().collect()
+    }
+}
+
+#[async_trait(?Send)]
+impl InputProviderNew for RedisInputProvider {
+    type Val = Value;
+
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+        self.var_streams.remove(var)
+    }
+
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
+        let stream = self.redis_stream.take();
+
+        match stream {
+            Some(stream) => Self::create_run_stream(
+                self.var_topics.clone(),
+                std::mem::take(&mut self.senders),
+                stream,
+            ),
+            None => Box::pin(stream::once(async {
+                Err(anyhow!("Not connected to Redis yet"))
+            })),
+        }
+    }
+
+    fn vars_new(&self) -> Vec<VarName> {
         self.var_topics.keys().cloned().collect()
     }
 }
