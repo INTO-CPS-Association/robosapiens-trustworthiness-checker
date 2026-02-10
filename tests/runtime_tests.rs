@@ -61,6 +61,10 @@ fn create_builder_from_config(
     }
 }
 
+fn vec_to_stream<T: 'static>(vec: Vec<T>) -> OutputStream<T> {
+    Box::pin(futures::stream::iter(vec)) as OutputStream<T>
+}
+
 #[apply(async_test)]
 async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
@@ -71,8 +75,8 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec![0.into(), 1.into(), 2.into()];
-        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
+        let e = vec_to_stream(vec!["x + 1".into(), "x + 2".into(), "x + 3".into()]);
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -123,8 +127,8 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec![1.into(), 2.into(), 3.into()];
-        let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
+        let x = vec_to_stream(vec![1.into(), 2.into(), 3.into()]);
+        let e = vec_to_stream(vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()]);
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -175,8 +179,8 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec![1.into(), 2.into(), 3.into()];
-        let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
+        let x = vec_to_stream(vec![1.into(), 2.into(), 3.into()]);
+        let e = vec_to_stream(vec![Value::Deferred, "x + 1".into(), "x + 2".into()]);
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -227,8 +231,8 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec![0.into(), 1.into(), 2.into()];
-        let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
+        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
+        let e = vec_to_stream(vec![Value::Deferred, "x + 1".into(), Value::Deferred]);
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -279,14 +283,14 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         let mut spec_str = "in x: Int\nin y: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = x + y";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
-        let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
-        let e = vec![
+        let x = vec_to_stream(vec![1.into(), 2.into(), 3.into(), 4.into()]);
+        let y = vec_to_stream(vec![10.into(), 20.into(), 30.into(), 40.into()]);
+        let e = vec_to_stream(vec![
             Value::Deferred,
             "x + y".into(),
             "x + y".into(),
             "x + y".into(),
-        ];
+        ]);
         let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -334,8 +338,8 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
-        let x = vec!["x0".into(), "x1".into(), "x2".into()];
-        let y = vec!["y0".into(), "y1".into(), "y2".into()];
+        let x = vec_to_stream(vec!["x0".into(), "x1".into(), "x2".into()]);
+        let y = vec_to_stream(vec!["y0".into(), "y1".into(), "y2".into()]);
         let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -382,8 +386,13 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
-        let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-        let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
+        let x = vec_to_stream(vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()]);
+        let y = vec_to_stream(vec![
+            Value::Deferred,
+            "y1".into(),
+            Value::Deferred,
+            "y3".into(),
+        ]);
         let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -436,8 +445,8 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let spec_untyped =
             lola_specification(&mut "in x\nin e\nout z\nz = update(\"def\", defer(e))").unwrap();
 
-        let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-        let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
+        let x = vec_to_stream(vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()]);
+        let e = vec_to_stream(vec![Value::Deferred, "x".into(), "x".into(), "x".into()]);
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -490,13 +499,18 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let spec_untyped =
             lola_specification(&mut "in x\nin y\nout z\nz = defer(update(x, y))").unwrap();
 
-        let x = vec![Value::Deferred, "x".into(), "x_lost".into(), "x_sad".into()];
-        let y = vec![
+        let x = vec_to_stream(vec![
+            Value::Deferred,
+            "x".into(),
+            "x_lost".into(),
+            "x_sad".into(),
+        ]);
+        let y = vec_to_stream(vec![
             Value::Deferred,
             "y".into(),
             "y_won!".into(),
             "y_happy".into(),
-        ];
+        ]);
         let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -1076,7 +1090,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let input_streams = BTreeMap::from([(
             "x".into(),
-            vec![Value::Deferred, Value::Deferred, Value::Deferred],
+            vec_to_stream(vec![Value::Deferred, Value::Deferred, Value::Deferred]),
         )]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -1123,8 +1137,10 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let input_streams =
-            BTreeMap::from([("x".into(), vec![1.into(), Value::Deferred, 5.into()])]);
+        let input_streams = BTreeMap::from([(
+            "x".into(),
+            vec_to_stream(vec![1.into(), Value::Deferred, 5.into()]),
+        )]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -1449,8 +1465,8 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let mut spec_str = "in x\nin e\nout z\nz = defer(e)";
         let spec = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec![0.into(), 1.into(), 2.into()];
-        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
+        let e = vec_to_stream(vec!["x + 1".into(), "x + 2".into(), "x + 3".into()]);
         let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),

@@ -61,28 +61,6 @@ pub trait InputProviderNew {
     fn vars_new(&self) -> Vec<VarName>;
 }
 
-impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
-    type Val = V;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.iter()
-            .position(|(name, _)| name == var)
-            .map(|index| self.swap_remove(index).1)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.iter().map(|(k, _)| k.clone()).collect()
-    }
-}
-
 impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     type Val = V;
 
@@ -93,48 +71,6 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.keys().cloned().collect()
-    }
-}
-
-impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
-    type Val = V;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.remove(var)
-            .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.keys().cloned().collect()
-    }
-}
-
-impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
-    type Val = V;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.remove(var)
-            .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(futures::future::pending())
     }
 
@@ -310,41 +246,4 @@ pub trait Runnable {
 #[async_trait(?Send)]
 pub trait Monitor<M, V: StreamData>: Runnable {
     fn spec(&self) -> &M;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Value;
-    use futures::stream;
-
-    #[test]
-    fn test_vec_input_provider_input_stream() {
-        let mut provider = vec![
-            (
-                "x".into(),
-                Box::pin(stream::iter(vec![Value::Int(1), Value::Int(2)])) as OutputStream<Value>,
-            ),
-            (
-                "y".into(),
-                Box::pin(stream::iter(vec![Value::Int(3), Value::Int(4)])) as OutputStream<Value>,
-            ),
-        ];
-
-        // Test getting an existing stream
-        let x_stream = provider.input_stream(&"x".into());
-        assert!(x_stream.is_some());
-
-        // Test getting a non-existing stream
-        let z_stream = provider.input_stream(&"z".into());
-        assert!(z_stream.is_none());
-
-        // Test that the stream was removed from the provider
-        let x_stream_again = provider.input_stream(&"x".into());
-        assert!(x_stream_again.is_none());
-
-        // Test that other streams are still available
-        let y_stream = provider.input_stream(&"y".into());
-        assert!(y_stream.is_some());
-    }
 }
