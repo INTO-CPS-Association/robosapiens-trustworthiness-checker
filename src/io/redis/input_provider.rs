@@ -82,43 +82,27 @@ impl RedisInputProvider {
 
     async fn run_logic(
         var_topics: BTreeMap<VarName, String>,
-        mut senders: BTreeMap<VarName, Sender<Value>>,
-        mut redis_stream: redis::aio::PubSubStream,
+        senders: BTreeMap<VarName, Sender<Value>>,
+        redis_stream: redis::aio::PubSubStream,
     ) -> anyhow::Result<()> {
-        let topic_vars = var_topics
-            .iter()
-            .map(|(k, v)| (v.clone(), k.clone()))
-            .collect::<BTreeMap<_, _>>();
-        while let Some(msg) = redis_stream.next().await {
-            let var_name = topic_vars
-                .get(msg.get_channel_name())
-                .ok_or_else(|| anyhow!("Unknown channel name"))?;
-            let value: Value = msg.get_payload()?;
-
-            let sender = senders
-                .get(var_name)
-                .ok_or_else(|| anyhow!("Unknown sender"))?;
-            sender.send(value).await?;
-
-            // Send `NoVal` to all other senders concurrently
-            let futs = senders
-                .iter_mut()
-                .filter(|(name, _)| *name != var_name)
-                .map(|(_, s)| s.send(Value::NoVal));
-
-            // Run them all concurrently
-            let results = future::join_all(futs).await;
-
-            // Check for errors
-            if results.iter().any(|r| r.is_err()) {
-                anyhow::bail!("Failed to send NoVal");
+        let mut stream = Self::create_run_stream(var_topics, senders, redis_stream).await;
+        loop {
+            let res = stream.next().await;
+            match res {
+                Some(Ok(())) => continue,
+                Some(Err(e)) => {
+                    warn!("Error in Redis input provider run stream: {}", e);
+                    return Err(e);
+                }
+                None => {
+                    info!("Redis input provider run stream ended");
+                    return Ok(());
+                }
             }
         }
-
-        Ok(())
     }
 
-    fn create_run_stream(
+    async fn create_run_stream(
         var_topics: BTreeMap<VarName, String>,
         mut senders: BTreeMap<VarName, Sender<Value>>,
         mut redis_stream: redis::aio::PubSubStream,
@@ -231,11 +215,14 @@ impl InputProviderNew for RedisInputProvider {
         let stream = self.redis_stream.take();
 
         match stream {
-            Some(stream) => Self::create_run_stream(
-                self.var_topics.clone(),
-                std::mem::take(&mut self.senders),
-                stream,
-            ),
+            Some(stream) => {
+                Self::create_run_stream(
+                    self.var_topics.clone(),
+                    std::mem::take(&mut self.senders),
+                    stream,
+                )
+                .await
+            }
             None => Box::pin(stream::once(async {
                 Err(anyhow!("Not connected to Redis yet"))
             })),
