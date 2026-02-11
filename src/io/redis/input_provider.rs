@@ -19,6 +19,7 @@ pub struct RedisInputProvider {
     var_topics: BTreeMap<VarName, String>,
     var_streams: BTreeMap<VarName, OutputStream<Value>>,
     senders: BTreeMap<VarName, Sender<Value>>,
+    connected: bool,
 }
 
 impl RedisInputProvider {
@@ -61,6 +62,7 @@ impl RedisInputProvider {
             var_topics: var_topics,
             senders: senders,
             var_streams: var_streams,
+            connected: false,
         })
     }
 
@@ -71,6 +73,7 @@ impl RedisInputProvider {
         pubsub.subscribe(channel_names).await?;
         let stream = pubsub.into_on_message();
         self.redis_stream = Some(stream);
+        self.connected = true;
         Ok(())
     }
 
@@ -78,8 +81,10 @@ impl RedisInputProvider {
         var_topics: BTreeMap<VarName, String>,
         senders: BTreeMap<VarName, Sender<Value>>,
         redis_stream: redis::aio::PubSubStream,
+        connected: bool,
     ) -> anyhow::Result<()> {
-        let mut stream = Self::create_run_stream(var_topics, senders, redis_stream).await;
+        let mut stream =
+            Self::create_run_stream(var_topics, senders, redis_stream, connected).await;
         loop {
             let res = stream.next().await;
             match res {
@@ -100,12 +105,18 @@ impl RedisInputProvider {
         var_topics: BTreeMap<VarName, String>,
         mut senders: BTreeMap<VarName, Sender<Value>>,
         mut redis_stream: redis::aio::PubSubStream,
+        connected: bool,
     ) -> OutputStream<anyhow::Result<()>> {
         let topic_vars = var_topics
             .iter()
             .map(|(k, v)| (v.clone(), k.clone()))
             .collect::<BTreeMap<_, _>>();
         Box::pin(stream! {
+                if !connected {
+                    yield Err(anyhow!("RedisInputProvider not connected before waiting for data"));
+                    return;
+                }
+
                 while let Some(msg) = redis_stream.next().await {
                     let var_name = match topic_vars.get(msg.get_channel_name()) {
                         Some(name) => name,
@@ -163,6 +174,7 @@ impl InputProvider for RedisInputProvider {
                 self.var_topics.clone(),
                 std::mem::take(&mut self.senders),
                 stream,
+                self.connected.clone(),
             )),
             None => Box::pin(future::ready(Err(anyhow!("Not connected to Redis yet")))),
         }
@@ -177,6 +189,7 @@ impl InputProvider for RedisInputProvider {
                     self.var_topics.clone(),
                     std::mem::take(&mut self.senders),
                     stream,
+                    self.connected.clone(),
                 )
                 .await
             }

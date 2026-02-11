@@ -36,6 +36,8 @@ pub(crate) mod common {
         pub client_streams_rx: Option<OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>>,
         pub client_streams_tx: Option<OSSender<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>>,
 
+        pub connected: bool,
+
         pub drop_guard: DropGuard,
 
         // Channels used to send to the `available_streams`
@@ -75,6 +77,7 @@ pub(crate) mod common {
                     uri,
                     client_streams_tx,
                     client_streams_rx,
+                    connected: false,
                     drop_guard,
                     senders,
                 },
@@ -171,6 +174,7 @@ pub(crate) mod common {
                 "Input provider has these topics available: {:?}",
                 self.var_topics.values().collect::<Vec<_>>()
             );
+            self.connected = true;
             Ok(())
         }
 

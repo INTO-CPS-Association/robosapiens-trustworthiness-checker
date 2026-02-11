@@ -52,11 +52,17 @@ impl MQTTInputProvider {
         senders: BTreeMap<VarName, SpscSender<Value>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
+        connected: bool,
     ) -> anyhow::Result<()> {
         // Also handles disconnects
-        let mut stream =
-            Self::create_run_stream(var_topics, senders, cancellation_token, client_streams_rx)
-                .await;
+        let mut stream = Self::create_run_stream(
+            var_topics,
+            senders,
+            cancellation_token,
+            client_streams_rx,
+            connected,
+        )
+        .await;
 
         while let Some(res) = stream.next().await {
             match res {
@@ -76,10 +82,17 @@ impl MQTTInputProvider {
         mut senders: BTreeMap<VarName, SpscSender<Value>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
+        connected: bool,
     ) -> OutputStream<anyhow::Result<()>> {
         Box::pin(stream! {
             let mqtt_input_span = info_span!("MQTTInputProvider run_logic");
             let _enter = mqtt_input_span.enter();
+
+            if !connected {
+                yield Err(anyhow::anyhow!("MQTTInputProvider not connected before waiting for data"));
+                return;
+            }
+
             let (client, mut mqtt_stream, var_topics_inverse) =
                 match common::Base::initial_run_logic(var_topics, client_streams_rx).await {
                 Ok(result) => result,
@@ -139,6 +152,7 @@ impl InputProvider for MQTTInputProvider {
             self.base.take_senders(),
             self.base.drop_guard.clone_tok(),
             self.base.take_client_streams_rx(),
+            self.base.connected.clone(),
         ))
     }
 
@@ -148,6 +162,7 @@ impl InputProvider for MQTTInputProvider {
             self.base.take_senders(),
             self.base.drop_guard.clone_tok(),
             self.base.take_client_streams_rx(),
+            self.base.connected.clone(),
         )
         .await
     }
