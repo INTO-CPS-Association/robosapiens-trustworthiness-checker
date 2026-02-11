@@ -11,7 +11,7 @@ use unsync::spsc::Sender as SpscSender;
 
 use crate::{
     InputProvider, OutputStream, Value,
-    core::{InputProviderNew, VarName},
+    core::VarName,
     io::mqtt::{MqttClient, MqttFactory, MqttMessage},
     utils::cancellation_token::CancellationToken,
 };
@@ -133,10 +133,10 @@ impl MQTTInputProvider {
     }
 }
 
+#[async_trait(?Send)]
 impl InputProvider for MQTTInputProvider {
     type Val = Value;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         // Take ownership of the stream for the variable, if it exists
         self.available_streams.remove(var)
     }
@@ -151,23 +151,6 @@ impl InputProvider for MQTTInputProvider {
         ))
     }
 
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        self.base.ready()
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.base.vars()
-    }
-}
-
-#[async_trait(?Send)]
-impl InputProviderNew for MQTTInputProvider {
-    type Val = Value;
-    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
-        // Take ownership of the stream for the variable, if it exists
-        self.available_streams.remove(var)
-    }
-
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         Self::create_run_stream(
             self.base.var_topics.clone(),
@@ -179,7 +162,7 @@ impl InputProviderNew for MQTTInputProvider {
         .await
     }
 
-    fn vars_new(&self) -> Vec<VarName> {
+    fn vars(&self) -> Vec<VarName> {
         self.base.vars()
     }
 }

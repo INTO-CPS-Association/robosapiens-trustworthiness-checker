@@ -1040,7 +1040,7 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
 
         let input_streams = input_vars.iter().map(|var| {
             input_provider
-                .input_stream(var)
+                .var_stream(var)
                 .expect(format!("Input stream not found for {}", var).as_str())
         });
 

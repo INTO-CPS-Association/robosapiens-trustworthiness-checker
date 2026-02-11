@@ -263,16 +263,13 @@ mod integration_tests {
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        let input_provider_ready = input_provider.ready();
-
         executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -326,16 +323,13 @@ mod integration_tests {
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        let input_provider_ready = input_provider.ready();
-
         executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);

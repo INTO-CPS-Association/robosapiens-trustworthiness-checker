@@ -17,7 +17,6 @@ use unsync::spsc;
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
 
-use crate::core::InputProviderNew;
 use crate::stream_utils::channel_to_output_stream;
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
@@ -352,10 +351,10 @@ impl ROSInputProvider {
     }
 }
 
+#[async_trait(?Send)]
 impl InputProvider for ROSInputProvider {
     type Val = Value;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         let stream = self.available_streams.remove(var)?;
         Some(stream)
     }
@@ -367,23 +366,6 @@ impl InputProvider for ROSInputProvider {
         Box::pin(Self::run_logic(ros_streams, senders, cancellation_token))
     }
 
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.var_map.keys().cloned().collect()
-    }
-}
-
-#[async_trait(?Send)]
-impl InputProviderNew for ROSInputProvider {
-    type Val = Value;
-    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
-        let stream = self.available_streams.remove(var)?;
-        Some(stream)
-    }
-
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         let senders = std::mem::take(&mut self.senders).expect("Senders already taken");
         let cancellation_token = self.cancellation_token.clone();
@@ -391,7 +373,7 @@ impl InputProviderNew for ROSInputProvider {
         Self::create_run_stream(ros_streams, senders, cancellation_token).await
     }
 
-    fn vars_new(&self) -> Vec<VarName> {
+    fn vars(&self) -> Vec<VarName> {
         self.var_map.keys().cloned().collect()
     }
 }

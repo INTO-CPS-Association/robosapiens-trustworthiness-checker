@@ -485,7 +485,7 @@ where
             .input_vars()
             .iter()
             .map(|var| {
-                let stream = self.input_provider.input_stream(var);
+                let stream = self.input_provider.var_stream(var);
                 (
                     var.clone(),
                     stream.expect(&format!(

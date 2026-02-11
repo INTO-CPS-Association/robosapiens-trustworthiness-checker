@@ -11,7 +11,7 @@ use unsync::spsc::Sender as SpscSender;
 
 use crate::{
     InputProvider, OutputStream, Value,
-    core::{InputProviderNew, VarName},
+    core::VarName,
     io::mqtt::{MqttClient, MqttFactory, MqttMessage},
     utils::cancellation_token::CancellationToken,
 };
@@ -243,10 +243,10 @@ impl ReconfMQTTInputProvider {
     }
 }
 
+#[async_trait(?Send)]
 impl InputProvider for ReconfMQTTInputProvider {
     type Val = Value;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         // Take ownership of the stream for the variable, if it exists
         self.available_streams.borrow_mut().remove(var)
     }
@@ -265,23 +265,6 @@ impl InputProvider for ReconfMQTTInputProvider {
         ))
     }
 
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        self.base.ready()
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.base.vars()
-    }
-}
-
-#[async_trait(?Send)]
-impl InputProviderNew for ReconfMQTTInputProvider {
-    type Val = Value;
-    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
-        // Take ownership of the stream for the variable, if it exists
-        self.available_streams.borrow_mut().remove(var)
-    }
-
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         let reconfig = self.reconfig.take().expect("Reconfig stream already taken");
         Self::create_run_stream(
@@ -296,7 +279,7 @@ impl InputProviderNew for ReconfMQTTInputProvider {
         .await
     }
 
-    fn vars_new(&self) -> Vec<VarName> {
+    fn vars(&self) -> Vec<VarName> {
         self.base.vars()
     }
 }
@@ -443,16 +426,13 @@ mod integration_tests {
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        let input_provider_ready = input_provider.ready();
-
         executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -517,20 +497,17 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        let input_provider_ready = input_provider.ready();
-
         executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         // Wait for reconf request to be processed.
         // (Without this, the outcome depends on how the Executor happens to run things)
         smol::Timer::after(std::time::Duration::from_millis(200)).await;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
@@ -594,13 +571,10 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        let input_provider_ready = input_provider.ready();
-
         executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
@@ -629,7 +603,7 @@ mod integration_tests {
         smol::Timer::after(std::time::Duration::from_millis(200)).await;
 
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
         for _ in 0..ys_expected.len() {

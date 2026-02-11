@@ -22,7 +22,7 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
 
     use trustworthiness_checker::{
-        InputProvider, VarName,
+        VarName,
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
         lola_specification,
         semantics::distributed::localisation::Localisable,
@@ -214,11 +214,6 @@ mod integration_tests {
         )
         .expect("Failed to create output handler 2");
 
-        let input_provider_1_ready =
-            with_timeout_res(input_provider_1.ready(), 5, "input_provider_1.ready");
-        let input_provider_2_ready =
-            with_timeout_res(input_provider_2.ready(), 5, "input_provider_2.ready");
-
         let runner_1 = TestMonitorRunner::new(
             executor.clone(),
             model1.clone(),
@@ -226,9 +221,6 @@ mod integration_tests {
             Box::new(output_handler_1),
         );
         executor.spawn(runner_1.run()).detach();
-        input_provider_1_ready
-            .await
-            .expect("Input provider 1 should be ready");
 
         let runner_2 = TestMonitorRunner::new(
             executor.clone(),
@@ -237,9 +229,6 @@ mod integration_tests {
             Box::new(output_handler_2),
         );
         executor.spawn(runner_2.run()).detach();
-        input_provider_2_ready
-            .await
-            .expect("Input provider 2 should be ready");
 
         // Get the output stream before starting publishers to ensure subscription is ready
         let outputs_v =
@@ -337,11 +326,6 @@ mod integration_tests {
             .await
             .expect("Failed to connect to MQTT with input provider 2");
 
-        let input_provider_1_ready =
-            with_timeout_res(input_provider_1.ready(), 5, "input_provider_1.ready");
-        let input_provider_2_ready =
-            with_timeout_res(input_provider_2.ready(), 5, "input_provider_2.ready");
-
         let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
             .output_vars()
             .iter()
@@ -393,13 +377,6 @@ mod integration_tests {
 
         executor.spawn(runner_1.run()).detach();
         executor.spawn(runner_2.run()).detach();
-
-        input_provider_1_ready
-            .await
-            .expect("Input provider 1 should be ready");
-        input_provider_2_ready
-            .await
-            .expect("Input provider 2 should be ready");
 
         // Get the output stream before starting publishers to ensure subscription is ready
         let outputs_v =
@@ -497,11 +474,6 @@ mod integration_tests {
             .await
             .expect("Failed to connect to MQTT with input provider 2");
 
-        let input_provider_1_ready =
-            with_timeout_res(input_provider_1.ready(), 10, "input_provider_1.ready");
-        let input_provider_2_ready =
-            with_timeout_res(input_provider_2.ready(), 10, "input_provider_2.ready");
-
         let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
             .output_vars()
             .iter()
@@ -549,13 +521,6 @@ mod integration_tests {
 
         executor.spawn(runner_1.run()).detach();
         executor.spawn(runner_2.run()).detach();
-
-        input_provider_1_ready
-            .await
-            .expect("Input provider 1 should be ready");
-        input_provider_2_ready
-            .await
-            .expect("Input provider 2 should be ready");
 
         let outputs_v =
             get_mqtt_outputs("v".to_string(), "v_subscriber".to_string(), mqtt_port).await;

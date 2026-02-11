@@ -25,30 +25,20 @@ pub enum Runtime {
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
+#[async_trait(?Send)]
 pub trait InputProvider {
     type Val;
 
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
-
-    /// Wait until the InputProvider is ready to receive messages (may never terminate in case
-    /// of errors)
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>>;
-
-    /// Input providers should run forever, unless there is an error, in which case they halt with
-    /// an error result
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
-
-    // TODO: Change into returning a set instead of a Vec
-    // TODO: Consider deleting this and making Runtimes use the Model instead so we have
-    // consistency. See e.g., bug with UntimedInputFileData
-    fn vars(&self) -> Vec<VarName>;
-}
-
-#[async_trait(?Send)]
-pub trait InputProviderNew {
-    type Val;
-
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
+
+    /// Legacy interface for InputProviders. Prefer using `control_stream` for better control.
+    ///
+    /// Returns a task that runs the InputProvider indefinitely.
+    /// Error path: Returns an Err if something goes wrong.
+    /// Happy path: Some InputProviders terminate after providing all values (e.g., file ending)
+    /// and return Ok.
+    /// Others run indefinitely (e.g., MQTT waiting for more)
+    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
 
     /// Returns an OutputStream of Result<()> indicating if the InputProvider has encountered an
     /// error (Err) or has successfully provided one batch of values (Ok).
@@ -58,15 +48,16 @@ pub trait InputProviderNew {
     // TODO: Change into returning a set instead of a Vec
     // TODO: Consider deleting this and making Runtimes use the Model instead so we have
     // consistency. See e.g., bug with UntimedInputFileData
-    fn vars_new(&self) -> Vec<VarName>;
+    fn vars(&self) -> Vec<VarName>;
 }
 
+#[async_trait(?Send)]
 impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
     type Val = V;
 
     // We are consuming the input stream from the map when
     // we return it to ensure single ownership and static lifetime
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
         self.remove(var)
     }
 
@@ -74,12 +65,12 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
         Box::pin(futures::future::pending())
     }
 
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
     fn vars(&self) -> Vec<VarName> {
         self.keys().cloned().collect()
+    }
+
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
+        todo!("Not obvious how to implement this for a map")
     }
 }
 

@@ -3,7 +3,6 @@ pub(crate) mod common {
 
     use async_cell::unsync::AsyncCell;
     use futures::future;
-    use futures::future::LocalBoxFuture;
     use tracing::{debug, info, warn};
 
     use unsync::oneshot::Receiver as OSReceiver;
@@ -304,31 +303,6 @@ pub(crate) mod common {
             }
 
             Ok(())
-        }
-
-        pub fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-            let started = self.started.clone();
-            Box::pin(async move {
-                info!("Checking if MQTT input provider is ready");
-                let mut attempts = 0;
-                while !started.get().await {
-                    attempts += 1;
-                    info!(
-                        "MQTT input provider not ready yet, checking again (attempt #{})",
-                        attempts
-                    );
-                    smol::Timer::after(std::time::Duration::from_millis(100)).await;
-
-                    if attempts > 50 {
-                        warn!(
-                            "MQTT input provider still not ready after 5 seconds, continuing to wait"
-                        );
-                        attempts = 0;
-                    }
-                }
-                info!("MQTT input provider is ready");
-                Ok(())
-            })
         }
 
         pub fn vars(&self) -> Vec<VarName> {

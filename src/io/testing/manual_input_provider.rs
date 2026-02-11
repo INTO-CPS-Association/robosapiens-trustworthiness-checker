@@ -1,4 +1,3 @@
-use crate::core::InputProviderNew;
 use crate::{
     InputProvider, OutputStream, VarName, semantics::AsyncConfig,
     stream_utils::channel_to_output_stream,
@@ -51,30 +50,8 @@ impl<AC: AsyncConfig> ManualInputProvider<AC> {
     }
 }
 
-impl<AC: AsyncConfig> InputProvider for ManualInputProvider<AC> {
-    type Val = AC::Val;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<AC::Val>> {
-        self.vars
-            .get_mut(var)
-            .and_then(|channel| channel.receiver.take())
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.vars.keys().cloned().collect()
-    }
-}
-
 #[async_trait(?Send)]
-impl<AC: AsyncConfig> InputProviderNew for ManualInputProvider<AC> {
+impl<AC: AsyncConfig> InputProvider for ManualInputProvider<AC> {
     type Val = AC::Val;
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
         self.vars
@@ -87,7 +64,11 @@ impl<AC: AsyncConfig> InputProviderNew for ManualInputProvider<AC> {
         stream::repeat_with(|| Ok(())).boxed_local()
     }
 
-    fn vars_new(&self) -> Vec<VarName> {
+    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(pending())
+    }
+
+    fn vars(&self) -> Vec<VarName> {
         self.vars.keys().cloned().collect()
     }
 }
@@ -102,7 +83,6 @@ mod tests {
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
     use std::rc::Rc;
-    use tc_testutils::streams::with_timeout_res;
 
     #[apply(async_test)]
     async fn test_send_receive(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
@@ -112,10 +92,10 @@ mod tests {
         let var_names = vec!["x".into(), "y".into()];
         let mut input_provider = ManualInputProvider::<TestConfig>::new(var_names.clone());
         let mut x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .expect("x stream should exist");
         let mut y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .expect("y stream should exist");
         let mut x_sender = input_provider
             .sender_channel(&"x".into())
@@ -125,9 +105,7 @@ mod tests {
             .expect("y sender should exist");
 
         // For completeness:
-        let input_provider_ready = input_provider.ready();
         executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
 
         // Send values
         for i in 0..stream_len {

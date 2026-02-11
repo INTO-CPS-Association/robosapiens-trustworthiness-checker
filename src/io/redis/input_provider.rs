@@ -12,7 +12,7 @@ use futures::{
 };
 use tracing::{info, warn};
 
-use crate::{InputProvider, OutputStream, Value, VarName, core::InputProviderNew};
+use crate::{InputProvider, OutputStream, Value, VarName};
 
 pub struct RedisInputProvider {
     pub started: Rc<AsyncCell<bool>>,
@@ -153,10 +153,11 @@ impl RedisInputProvider {
     }
 }
 
+#[async_trait(?Send)]
 impl InputProvider for RedisInputProvider {
     type Val = Value;
 
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         self.var_streams.remove(var)
     }
 
@@ -171,44 +172,6 @@ impl InputProvider for RedisInputProvider {
             )),
             None => Box::pin(future::ready(Err(anyhow!("Not connected to Redis yet")))),
         }
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        let started = self.started.clone();
-        Box::pin(async move {
-            info!("Checking if Redis input provider is ready");
-            let mut attempts = 0;
-            while !started.get().await {
-                attempts += 1;
-                info!(
-                    "Redis input provider not ready yet, checking again (attempt #{})",
-                    attempts
-                );
-                smol::Timer::after(std::time::Duration::from_millis(100)).await;
-
-                if attempts > 50 {
-                    warn!(
-                        "Redis input provider still not ready after 5 seconds, continuing to wait"
-                    );
-                    attempts = 0;
-                }
-            }
-            info!("Redis input provider is ready");
-            Ok(())
-        })
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.var_topics.keys().cloned().collect()
-    }
-}
-
-#[async_trait(?Send)]
-impl InputProviderNew for RedisInputProvider {
-    type Val = Value;
-
-    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
-        self.var_streams.remove(var)
     }
 
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
@@ -229,7 +192,7 @@ impl InputProviderNew for RedisInputProvider {
         }
     }
 
-    fn vars_new(&self) -> Vec<VarName> {
+    fn vars(&self) -> Vec<VarName> {
         self.var_topics.keys().cloned().collect()
     }
 }

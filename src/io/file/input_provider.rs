@@ -4,8 +4,7 @@ use futures::{StreamExt, stream};
 use std::collections::BTreeSet;
 use std::future::pending;
 
-use crate::core::{InputProvider, OutputStream, VarName};
-use crate::core::{InputProviderNew, Value};
+use crate::core::{InputProvider, OutputStream, Value, VarName};
 pub use crate::lang::untimed_input::UntimedInputFileData;
 
 // Returns an iterator over the values for a given key in the UntimedInputFileData.
@@ -26,39 +25,17 @@ fn input_file_data_iter(
     }
 }
 
+#[async_trait(?Send)]
 impl InputProvider for UntimedInputFileData {
     type Val = Value;
 
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         let input_file_data_iter = input_file_data_iter(self.clone(), var.clone());
         Some(Box::pin(stream::iter(input_file_data_iter)))
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        let uniques: BTreeSet<VarName> = self
-            .values()
-            .flat_map(|inner| inner.keys())
-            .cloned()
-            .collect();
-        uniques.into_iter().collect()
-    }
-}
-
-#[async_trait(?Send)]
-impl InputProviderNew for UntimedInputFileData {
-    type Val = Value;
-
-    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
-        let input_file_data_iter = input_file_data_iter(self.clone(), var.clone());
-        Some(Box::pin(stream::iter(input_file_data_iter)))
     }
 
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
@@ -73,7 +50,7 @@ impl InputProviderNew for UntimedInputFileData {
     // TODO: Technically a bug here. It returns vars seen in the input file, not the ones defined
     // in the model. If an input_stream is defined in the model but not used as an input there is a
     // discrepancy here. Requires having access to the model inside UntimedInputFileData.
-    fn vars_new(&self) -> Vec<VarName> {
+    fn vars(&self) -> Vec<VarName> {
         let uniques: BTreeSet<VarName> = self
             .values()
             .flat_map(|inner| inner.keys())
@@ -137,7 +114,7 @@ mod tests {
             map
         });
 
-        let input_stream = data.input_stream(&"x".into()).unwrap();
+        let input_stream = data.var_stream(&"x".into()).unwrap();
         let input_vec = input_stream.collect::<Vec<_>>().await;
         assert_eq!(input_vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
     }
@@ -164,10 +141,10 @@ mod tests {
             map
         });
 
-        let x_stream = data.input_stream(&"x".into()).unwrap();
+        let x_stream = data.var_stream(&"x".into()).unwrap();
         let x_vec = x_stream.collect::<Vec<_>>().await;
         assert_eq!(x_vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
-        let y_stream = data.input_stream(&"y".into()).unwrap();
+        let y_stream = data.var_stream(&"y".into()).unwrap();
         let y_vec = y_stream.collect::<Vec<_>>().await;
         assert_eq!(y_vec, vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
     }
