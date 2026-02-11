@@ -136,65 +136,36 @@ impl ReconfMQTTInputProvider {
 
     async fn run_logic(
         var_topics: BTreeMap<VarName, String>,
-        mut senders: BTreeMap<VarName, SpscSender<Value>>,
+        senders: BTreeMap<VarName, SpscSender<Value>>,
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
         started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
-        mut reconfig: OutputStream<common::VarTopicMap>,
+        reconfig: OutputStream<common::VarTopicMap>,
     ) -> anyhow::Result<()> {
-        let mqtt_input_span = info_span!("ReconfMQTTInputProvider run_logic");
-        let _enter = mqtt_input_span.enter();
-        info!("run_logic started");
+        // Also handles disconnects
+        let mut stream = Self::create_run_stream(
+            var_topics,
+            senders,
+            available_streams,
+            started,
+            cancellation_token,
+            client_streams_rx,
+            reconfig,
+        )
+        .await;
 
-        let mut prev_var_topics_inverse = common::InverseVarTopicMap::new();
-        let (client, mut mqtt_stream, mut var_topics_inverse) =
-            common::Base::initial_run_logic(var_topics.clone(), started.clone(), client_streams_rx)
-                .await?;
-
-        let result = async {
-            loop {
-                // Notably: Handle new configs before receiving data
-                futures::select_biased! {
-                    new_config = reconfig.next().fuse() => {
-                        match new_config {
-                            Some(new_var_topics) => {
-                                info!(?new_var_topics, "Reconfiguring MQTTInputProvider with new variable-topic mapping");
-                                prev_var_topics_inverse = var_topics_inverse.clone();
-                                (var_topics_inverse, senders) = Self::handle_reconfiguration(
-                                    &client, new_var_topics, var_topics_inverse,
-                                    available_streams.clone()).await;
-                            },
-                            None => {
-                                debug!("Reconfiguration stream ended, stopping MQTTInputProvider");
-                                return Ok(());
-                            }
-                        }
-                    }
-                    msg = mqtt_stream.next().fuse() => {
-                        match msg {
-                            Some(msg) => {
-                                common::Base::handle_mqtt_message(msg, &var_topics_inverse, &mut senders, Some(&prev_var_topics_inverse)).await?;
-                            }
-                            None => {
-                                debug!("MQTT stream ended");
-                                return Ok(());
-                            }
-                        }
-                    }
-                    _ = cancellation_token.cancelled().fuse() => {
-                        debug!("MQTTInputProvider: Input monitor task cancelled");
-                        return Ok(());
-                    }
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(()) => continue,
+                Err(e) => {
+                    warn!("Error in ReconfMQTTInputProvider run stream: {}", e);
+                    return Err(e);
                 }
             }
-        }.await;
-
-        // Always disconnect the client when we're done, regardless of success or error
-        debug!("Disconnecting MQTT client");
-        let _ = client.disconnect().await;
-
-        result
+        }
+        info!("ReconfMQTTInputProvider run stream ended");
+        Ok(())
     }
 
     async fn create_run_stream(
