@@ -1,4 +1,3 @@
-use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -33,8 +32,6 @@ pub const CHANNEL_SIZE: usize = 10;
 
 pub struct ROSInputProvider {
     pub var_map: BTreeMap<VarName, VariableMappingData>,
-    pub result: Rc<AsyncCell<anyhow::Result<()>>>,
-    pub started: Rc<AsyncCell<bool>>,
 
     // Streams that can be taken ownership of by calling `input_stream`
     available_streams: BTreeMap<VarName, OutputStream<Value>>,
@@ -200,13 +197,8 @@ impl ROSInputProvider {
             })
             .detach();
 
-        let started = AsyncCell::new_with(false).into_shared();
-        let result = AsyncCell::shared();
-
         Ok(Self {
             var_map,
-            result,
-            started,
             ros_streams,
             available_streams,
             senders,

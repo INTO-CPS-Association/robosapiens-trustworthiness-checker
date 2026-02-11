@@ -1,6 +1,5 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
@@ -138,7 +137,6 @@ impl ReconfMQTTInputProvider {
         var_topics: BTreeMap<VarName, String>,
         senders: BTreeMap<VarName, SpscSender<Value>>,
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
-        started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
         reconfig: OutputStream<common::VarTopicMap>,
@@ -148,7 +146,6 @@ impl ReconfMQTTInputProvider {
             var_topics,
             senders,
             available_streams,
-            started,
             cancellation_token,
             client_streams_rx,
             reconfig,
@@ -172,7 +169,6 @@ impl ReconfMQTTInputProvider {
         var_topics: BTreeMap<VarName, String>,
         mut senders: BTreeMap<VarName, SpscSender<Value>>,
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
-        started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
         mut reconfig: OutputStream<common::VarTopicMap>,
@@ -183,7 +179,7 @@ impl ReconfMQTTInputProvider {
 
             let mut prev_var_topics_inverse = common::InverseVarTopicMap::new();
             let (client, mut mqtt_stream, mut var_topics_inverse) =
-                match common::Base::initial_run_logic(var_topics.clone(), started.clone(), client_streams_rx)
+                match common::Base::initial_run_logic(var_topics.clone(),  client_streams_rx)
                 .await {
                     Ok(result) => result,
                     Err(e) => {
@@ -258,7 +254,6 @@ impl InputProvider for ReconfMQTTInputProvider {
             self.base.var_topics.clone(),
             self.base.take_senders(),
             self.available_streams.clone(),
-            self.base.started.clone(),
             self.base.drop_guard.clone_tok(),
             self.base.take_client_streams_rx(),
             reconfig,
@@ -271,7 +266,6 @@ impl InputProvider for ReconfMQTTInputProvider {
             self.base.var_topics.clone(),
             self.base.take_senders(),
             self.available_streams.clone(),
-            self.base.started.clone(),
             self.base.drop_guard.clone_tok(),
             self.base.take_client_streams_rx(),
             reconfig,

@@ -1,7 +1,6 @@
-use std::{collections::BTreeMap, error::Error, rc::Rc};
+use std::{collections::BTreeMap, error::Error};
 
 use anyhow::anyhow;
-use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
 use async_unsync::bounded::{self, Receiver, Sender};
@@ -15,7 +14,6 @@ use tracing::{info, warn};
 use crate::{InputProvider, OutputStream, Value, VarName};
 
 pub struct RedisInputProvider {
-    pub started: Rc<AsyncCell<bool>>,
     client: redis::Client,
     redis_stream: Option<redis::aio::PubSubStream>,
     var_topics: BTreeMap<VarName, String>,
@@ -55,12 +53,9 @@ impl RedisInputProvider {
             })
             .collect();
 
-        let started = AsyncCell::shared();
-
         let client = redis::Client::open(url.clone())?;
 
         Ok(RedisInputProvider {
-            started,
             client: client,
             redis_stream: None,
             var_topics: var_topics,
@@ -76,7 +71,6 @@ impl RedisInputProvider {
         pubsub.subscribe(channel_names).await?;
         let stream = pubsub.into_on_message();
         self.redis_stream = Some(stream);
-        self.started.set(true);
         Ok(())
     }
 

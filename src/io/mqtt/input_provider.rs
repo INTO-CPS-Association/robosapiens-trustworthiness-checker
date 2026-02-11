@@ -1,4 +1,3 @@
-use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
@@ -51,19 +50,13 @@ impl MQTTInputProvider {
     async fn run_logic(
         var_topics: BTreeMap<VarName, String>,
         senders: BTreeMap<VarName, SpscSender<Value>>,
-        started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
     ) -> anyhow::Result<()> {
         // Also handles disconnects
-        let mut stream = Self::create_run_stream(
-            var_topics,
-            senders,
-            started,
-            cancellation_token,
-            client_streams_rx,
-        )
-        .await;
+        let mut stream =
+            Self::create_run_stream(var_topics, senders, cancellation_token, client_streams_rx)
+                .await;
 
         while let Some(res) = stream.next().await {
             match res {
@@ -81,7 +74,6 @@ impl MQTTInputProvider {
     async fn create_run_stream(
         var_topics: BTreeMap<VarName, String>,
         mut senders: BTreeMap<VarName, SpscSender<Value>>,
-        started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
     ) -> OutputStream<anyhow::Result<()>> {
@@ -89,7 +81,7 @@ impl MQTTInputProvider {
             let mqtt_input_span = info_span!("MQTTInputProvider run_logic");
             let _enter = mqtt_input_span.enter();
             let (client, mut mqtt_stream, var_topics_inverse) =
-                match common::Base::initial_run_logic(var_topics, started.clone(), client_streams_rx).await {
+                match common::Base::initial_run_logic(var_topics, client_streams_rx).await {
                 Ok(result) => result,
                 Err(e) => {
                     warn!("Error during MQTT initial run logic: {:?}", e);
@@ -145,7 +137,6 @@ impl InputProvider for MQTTInputProvider {
         Box::pin(Self::run_logic(
             self.base.var_topics.clone(),
             self.base.take_senders(),
-            self.base.started.clone(),
             self.base.drop_guard.clone_tok(),
             self.base.take_client_streams_rx(),
         ))
@@ -155,7 +146,6 @@ impl InputProvider for MQTTInputProvider {
         Self::create_run_stream(
             self.base.var_topics.clone(),
             self.base.take_senders(),
-            self.base.started.clone(),
             self.base.drop_guard.clone_tok(),
             self.base.take_client_streams_rx(),
         )
