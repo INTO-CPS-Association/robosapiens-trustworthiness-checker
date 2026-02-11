@@ -166,8 +166,4 @@ impl InputProvider for MQTTInputProvider {
         )
         .await
     }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.base.vars()
-    }
 }

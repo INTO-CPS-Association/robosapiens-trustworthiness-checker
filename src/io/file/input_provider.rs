@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use futures::future::LocalBoxFuture;
 use futures::{StreamExt, stream};
-use std::collections::BTreeSet;
 use std::future::pending;
 
 use crate::core::{InputProvider, OutputStream, Value, VarName};
@@ -45,18 +44,6 @@ impl InputProvider for UntimedInputFileData {
         } else {
             stream::repeat_with(|| Ok(())).boxed_local()
         }
-    }
-
-    // TODO: Technically a bug here. It returns vars seen in the input file, not the ones defined
-    // in the model. If an input_stream is defined in the model but not used as an input there is a
-    // discrepancy here. Requires having access to the model inside UntimedInputFileData.
-    fn vars(&self) -> Vec<VarName> {
-        let uniques: BTreeSet<VarName> = self
-            .values()
-            .flat_map(|inner| inner.keys())
-            .cloned()
-            .collect();
-        uniques.into_iter().collect()
     }
 }
 
@@ -147,29 +134,5 @@ mod tests {
         let y_stream = data.var_stream(&"y".into()).unwrap();
         let y_vec = y_stream.collect::<Vec<_>>().await;
         assert_eq!(y_vec, vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
-    }
-
-    #[apply(async_test)]
-    async fn test_input_file_vars() {
-        let mut data: UntimedInputFileData = BTreeMap::new();
-        data.insert(0, {
-            let mut map = BTreeMap::new();
-            map.insert("x".into(), Value::Int(1));
-            map.insert("y".into(), Value::Int(2));
-            map
-        });
-        data.insert(1, {
-            let mut map = BTreeMap::new();
-            map.insert("x".into(), Value::Int(2));
-            map.insert("y".into(), Value::Int(3));
-            map
-        });
-        data.insert(2, {
-            let mut map = BTreeMap::new();
-            map.insert("x".into(), Value::Int(3));
-            map.insert("y".into(), Value::Int(4));
-            map
-        });
-        assert_eq!(data.vars(), vec!["x".into(), "y".into()]);
     }
 }

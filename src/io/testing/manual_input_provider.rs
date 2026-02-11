@@ -67,10 +67,6 @@ impl<AC: AsyncConfig> InputProvider for ManualInputProvider<AC> {
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
         Box::pin(pending())
     }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.vars.keys().cloned().collect()
-    }
 }
 
 #[cfg(test)]

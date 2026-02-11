@@ -1014,10 +1014,6 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
         );
 
         let mut input_provider = self.input.expect("Input streams not supplied");
-        debug!(
-            "AsyncMonitorBuilder: Input provider variables: {:?}",
-            input_provider.vars()
-        );
 
         let output_handler = self.output.expect("Output handler not supplied");
         debug!(

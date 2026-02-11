@@ -364,8 +364,4 @@ impl InputProvider for ROSInputProvider {
         let ros_streams = std::mem::take(&mut self.ros_streams);
         Self::create_run_stream(ros_streams, senders, cancellation_token).await
     }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.var_map.keys().cloned().collect()
-    }
 }

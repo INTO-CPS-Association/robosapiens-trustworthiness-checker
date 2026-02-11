@@ -272,10 +272,6 @@ impl InputProvider for ReconfMQTTInputProvider {
         )
         .await
     }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.base.vars()
-    }
 }
 
 #[cfg(test)]

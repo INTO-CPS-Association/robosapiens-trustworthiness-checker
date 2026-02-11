@@ -44,11 +44,6 @@ pub trait InputProvider {
     /// error (Err) or has successfully provided one batch of values (Ok).
     /// Awaiting the control_stream attempts to progress the InputProvider by one step.
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
-
-    // TODO: Change into returning a set instead of a Vec
-    // TODO: Consider deleting this and making Runtimes use the Model instead so we have
-    // consistency. See e.g., bug with UntimedInputFileData
-    fn vars(&self) -> Vec<VarName>;
 }
 
 #[async_trait(?Send)]
@@ -63,10 +58,6 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
 
     fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
         Box::pin(futures::future::pending())
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.keys().cloned().collect()
     }
 
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {

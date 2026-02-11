@@ -298,10 +298,6 @@ pub(crate) mod common {
             Ok(())
         }
 
-        pub fn vars(&self) -> Vec<VarName> {
-            self.var_topics.keys().cloned().collect()
-        }
-
         pub fn take_senders(&mut self) -> BTreeMap<VarName, SpscSender<Value>> {
             std::mem::take(&mut self.senders).expect("Senders already taken")
         }

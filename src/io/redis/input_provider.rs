@@ -198,8 +198,4 @@ impl InputProvider for RedisInputProvider {
             })),
         }
     }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.var_topics.keys().cloned().collect()
-    }
 }
