@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use crate::utils::cancellation_token::CancellationToken;
+use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
@@ -19,7 +20,7 @@ use async_unsync::oneshot;
 use async_unsync::semaphore;
 use futures::future::LocalBoxFuture;
 use futures::future::join_all;
-use futures::{FutureExt, StreamExt, select};
+use futures::{FutureExt, StreamExt, join, select};
 use smol::LocalExecutor;
 use strum_macros::Display;
 use tracing::debug;
@@ -1167,12 +1168,28 @@ where
         self.output_handler.provide_streams(self.output_streams);
 
         debug!("AsyncMonitorRunner: Creating futures for input and output handlers");
-        let mut output_fut = self.output_handler.run().fuse();
+        let output_fut = self.output_handler.run().fuse();
 
         // Wrap input provider's run with cancellation support
         let cancellation_token = self.cancellation_token.clone();
-        let input_provider_future = self.input_provider.run();
-        let mut input_fut = Box::pin(async move {
+        let mut input_provider_stream = self.input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "AsyncMonitorRunner: Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                } else {
+                    debug!("AsyncMonitorRunner: Received Ok message from input provider");
+                }
+            }
+            debug!("AsyncMonitorRunner: Input provider control_stream ended");
+            Ok(())
+        });
+
+        let input_fut = Box::pin(async move {
             futures::select! {
                 result = input_provider_future.fuse() => result,
                 _ = cancellation_token.cancelled().fuse() => {
@@ -1183,33 +1200,20 @@ where
         })
         .fuse();
 
-        debug!("AsyncMonitorRunner: Entering select! to wait for input or output completion");
-        let result = select! {
-            output_res = output_fut => {
-                debug!("AsyncMonitorRunner: Output handler completed with result: {:?}", output_res);
-                if let Err(e) = output_res {
-                    debug!("AsyncMonitorRunner: Output handler failed with error: {:?}", e);
-                    return Err(e)
-                }
-                // When output completes, we're done - trigger cancellation and return
-                self.cancellation_token.cancel();
-                error!("AsyncMonitorRunner: Triggered cancellation after output completion");
-                output_res
-            },
-            input_res = input_fut => {
-                debug!("AsyncMonitorRunner: Input provider completed with result: {:?}", input_res);
-                if let Err(e) = input_res {
-                    error!("AsyncMonitorRunner: Input provider failed with error: {:?}", e);
-                    return Err(e)
-                }
-                // Input provider completion also triggers cancellation
-                self.cancellation_token.cancel();
-                debug!("AsyncMonitorRunner: Triggered cancellation after input completion");
-                input_res
-            },
+        let (output_res, input_res) = join!(output_fut, input_fut);
+        let result = match (output_res, input_res) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Err(e1), Ok(_)) => Err(anyhow!("OutputHandler failed with error: {}", e1)),
+            (Ok(_), Err(e2)) => Err(anyhow!("InputProvider failed with error: {}", e2)),
+            (Err(e1), Err(e2)) => Err(anyhow!(
+                "Both OutputHandler and InputProvider failed: output={:?}, input={:?}",
+                e1,
+                e2
+            )),
         };
 
-        debug!("AsyncMonitorRunner: Monitor execution completed");
+        self.cancellation_token.cancel();
+        debug!(?result, "AsyncMonitorRunner: Monitor execution completed");
         result
     }
 }

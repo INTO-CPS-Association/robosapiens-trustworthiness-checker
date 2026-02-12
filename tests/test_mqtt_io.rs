@@ -1,19 +1,18 @@
 #[cfg(test)]
 #[cfg(feature = "testcontainers")]
 mod integration_tests {
-    use std::vec;
-
     use async_compat::Compat as TokioCompat;
     use futures::StreamExt;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
+    use std::vec;
     use tc_testutils::mqtt::dummy_stream_mqtt_publisher;
     use tc_testutils::streams::{
         TickSender, interleave_with_constant, receive_values_serially, tick_stream, with_timeout,
         with_timeout_res,
     };
-    use tracing::info;
+    use tracing::{error, info};
     use trustworthiness_checker::InputProvider;
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::io::mqtt::MqttFactory;
@@ -269,7 +268,19 @@ mod integration_tests {
             .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        executor.spawn(input_provider.run()).detach();
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -329,7 +340,19 @@ mod integration_tests {
             .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        executor.spawn(input_provider.run()).detach();
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);

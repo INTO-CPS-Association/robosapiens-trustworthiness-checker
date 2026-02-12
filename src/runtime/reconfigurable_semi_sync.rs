@@ -355,7 +355,20 @@ where
         // Need to spawn input_provider in a separate task because of weird rule that they are
         // supposed to run forever...
         // This is especially important here as we want to turn it off sometimes.
-        self.executor.spawn(self.input_provider.run()).detach();
+        let mut input_provider_stream = self.input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "ReconfSemiSyncMonitor: Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        self.executor.spawn(input_provider_future).detach();
         // let inner_run = self.semi_sync_monitor.run().map(|res| {
         //     info!("Inner semi_sync_monitor.run() ended");
         //     res

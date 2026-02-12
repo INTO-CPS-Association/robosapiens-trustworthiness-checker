@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use async_stream::stream;
 use async_trait::async_trait;
-use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
+use futures::{FutureExt, StreamExt};
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, info_span, instrument, warn};
 use unsync::oneshot::Receiver as OSReceiver;
@@ -133,38 +133,6 @@ impl ReconfMQTTInputProvider {
         (var_topics_inverse, senders)
     }
 
-    async fn run_logic(
-        var_topics: BTreeMap<VarName, String>,
-        senders: BTreeMap<VarName, SpscSender<Value>>,
-        available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
-        cancellation_token: CancellationToken,
-        client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
-        reconfig: OutputStream<common::VarTopicMap>,
-    ) -> anyhow::Result<()> {
-        // Also handles disconnects
-        let mut stream = Self::create_run_stream(
-            var_topics,
-            senders,
-            available_streams,
-            cancellation_token,
-            client_streams_rx,
-            reconfig,
-        )
-        .await;
-
-        while let Some(res) = stream.next().await {
-            match res {
-                Ok(()) => continue,
-                Err(e) => {
-                    warn!("Error in ReconfMQTTInputProvider run stream: {}", e);
-                    return Err(e);
-                }
-            }
-        }
-        info!("ReconfMQTTInputProvider run stream ended");
-        Ok(())
-    }
-
     async fn create_run_stream(
         var_topics: BTreeMap<VarName, String>,
         mut senders: BTreeMap<VarName, SpscSender<Value>>,
@@ -247,19 +215,6 @@ impl InputProvider for ReconfMQTTInputProvider {
         self.available_streams.borrow_mut().remove(var)
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let reconfig = self.reconfig.take().expect("Reconfig stream already taken");
-
-        Box::pin(Self::run_logic(
-            self.base.var_topics.clone(),
-            self.base.take_senders(),
-            self.available_streams.clone(),
-            self.base.drop_guard.clone_tok(),
-            self.base.take_client_streams_rx(),
-            reconfig,
-        ))
-    }
-
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         let reconfig = self.reconfig.take().expect("Reconfig stream already taken");
         Self::create_run_stream(
@@ -283,6 +238,7 @@ mod integration_tests {
     use smol::LocalExecutor;
     use std::vec;
     use std::{collections::BTreeMap, rc::Rc};
+    use tracing::error;
     use tracing::info;
 
     use super::super::common_input_provider::common;
@@ -422,7 +378,19 @@ mod integration_tests {
             .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        executor.spawn(input_provider.run()).detach();
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -487,7 +455,19 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        executor.spawn(input_provider.run()).detach();
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         // Wait for reconf request to be processed.
         // (Without this, the outcome depends on how the Executor happens to run things)
@@ -561,7 +541,19 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        executor.spawn(input_provider.run()).detach();
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let x_stream = input_provider
             .var_stream(&"x".into())

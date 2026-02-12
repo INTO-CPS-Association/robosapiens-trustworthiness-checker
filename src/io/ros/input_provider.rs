@@ -1,10 +1,10 @@
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::FutureExt;
+use futures::StreamExt;
 use futures::future;
 use futures::select;
 use futures::stream;
-use futures::{StreamExt, future::LocalBoxFuture};
 use r2r;
 use smol::LocalExecutor;
 use std::collections::BTreeMap;
@@ -284,23 +284,6 @@ impl ROSInputProvider {
         Ok(())
     }
 
-    async fn run_logic(
-        ros_streams: BTreeMap<VarName, OutputStream<Value>>,
-        senders: BTreeMap<VarName, spsc::Sender<Value>>,
-        cancellation_token: CancellationToken,
-    ) -> anyhow::Result<()> {
-        let mut stream = Self::create_run_stream(ros_streams, senders, cancellation_token).await;
-        while let Some(res) = stream.next().await {
-            match res {
-                Ok(()) => continue,
-                Err(e) => {
-                    return Err(e);
-                }
-            }
-        }
-        Ok(())
-    }
-
     async fn create_run_stream(
         mut ros_streams: BTreeMap<VarName, OutputStream<Value>>,
         mut senders: BTreeMap<VarName, spsc::Sender<Value>>,
@@ -349,13 +332,6 @@ impl InputProvider for ROSInputProvider {
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         let stream = self.available_streams.remove(var)?;
         Some(stream)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let senders = std::mem::take(&mut self.senders).expect("Senders already taken");
-        let cancellation_token = self.cancellation_token.clone();
-        let ros_streams = std::mem::take(&mut self.ros_streams);
-        Box::pin(Self::run_logic(ros_streams, senders, cancellation_token))
     }
 
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {

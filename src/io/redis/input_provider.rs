@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use async_unsync::bounded::{self, Receiver, Sender};
 use futures::{
     StreamExt,
-    future::{self, LocalBoxFuture},
+    future::{self},
     stream,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::{InputProvider, OutputStream, Value, VarName};
 
@@ -77,30 +77,6 @@ impl RedisInputProvider {
         Ok(())
     }
 
-    async fn run_logic(
-        var_topics: BTreeMap<VarName, String>,
-        senders: BTreeMap<VarName, Sender<Value>>,
-        redis_stream: redis::aio::PubSubStream,
-        connected: bool,
-    ) -> anyhow::Result<()> {
-        let mut stream =
-            Self::create_run_stream(var_topics, senders, redis_stream, connected).await;
-        loop {
-            let res = stream.next().await;
-            match res {
-                Some(Ok(())) => continue,
-                Some(Err(e)) => {
-                    warn!("Error in Redis input provider run stream: {}", e);
-                    return Err(e);
-                }
-                None => {
-                    info!("Redis input provider run stream ended");
-                    return Ok(());
-                }
-            }
-        }
-    }
-
     async fn create_run_stream(
         var_topics: BTreeMap<VarName, String>,
         mut senders: BTreeMap<VarName, Sender<Value>>,
@@ -164,20 +140,6 @@ impl InputProvider for RedisInputProvider {
 
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         self.var_streams.remove(var)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let stream = self.redis_stream.take();
-
-        match stream {
-            Some(stream) => Box::pin(Self::run_logic(
-                self.var_topics.clone(),
-                std::mem::take(&mut self.senders),
-                stream,
-                self.connected.clone(),
-            )),
-            None => Box::pin(future::ready(Err(anyhow!("Not connected to Redis yet")))),
-        }
     }
 
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {

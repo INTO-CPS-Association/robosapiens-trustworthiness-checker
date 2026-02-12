@@ -1,9 +1,9 @@
 use async_stream::stream;
 use async_trait::async_trait;
-use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
+use futures::{FutureExt, StreamExt};
 use smol::LocalExecutor;
 use std::{collections::BTreeMap, rc::Rc};
-use tracing::{Level, debug, info, info_span, instrument, warn};
+use tracing::{Level, debug, info_span, instrument, warn};
 
 use unsync::oneshot::Receiver as OSReceiver;
 use unsync::spsc::Sender as SpscSender;
@@ -45,36 +45,6 @@ impl MQTTInputProvider {
 
     pub async fn connect(&mut self) -> anyhow::Result<()> {
         self.base.connect().await
-    }
-
-    async fn run_logic(
-        var_topics: BTreeMap<VarName, String>,
-        senders: BTreeMap<VarName, SpscSender<Value>>,
-        cancellation_token: CancellationToken,
-        client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
-        connected: bool,
-    ) -> anyhow::Result<()> {
-        // Also handles disconnects
-        let mut stream = Self::create_run_stream(
-            var_topics,
-            senders,
-            cancellation_token,
-            client_streams_rx,
-            connected,
-        )
-        .await;
-
-        while let Some(res) = stream.next().await {
-            match res {
-                Ok(()) => continue,
-                Err(e) => {
-                    warn!("Error in MQTTInputProvider run stream: {}", e);
-                    return Err(e);
-                }
-            }
-        }
-        info!("MQTTInputProvider run stream ended");
-        Ok(())
     }
 
     async fn create_run_stream(
@@ -144,16 +114,6 @@ impl InputProvider for MQTTInputProvider {
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         // Take ownership of the stream for the variable, if it exists
         self.available_streams.remove(var)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(Self::run_logic(
-            self.base.var_topics.clone(),
-            self.base.take_senders(),
-            self.base.drop_guard.clone_tok(),
-            self.base.take_client_streams_rx(),
-            self.base.connected.clone(),
-        ))
     }
 
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {

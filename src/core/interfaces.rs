@@ -1,3 +1,4 @@
+use async_stream::stream;
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
@@ -31,15 +32,6 @@ pub trait InputProvider {
 
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
 
-    /// Legacy interface for InputProviders. Prefer using `control_stream` for better control.
-    ///
-    /// Returns a task that runs the InputProvider indefinitely.
-    /// Error path: Returns an Err if something goes wrong.
-    /// Happy path: Some InputProviders terminate after providing all values (e.g., file ending)
-    /// and return Ok.
-    /// Others run indefinitely (e.g., MQTT waiting for more)
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
-
     /// Returns an OutputStream of Result<()> indicating if the InputProvider has encountered an
     /// error (Err) or has successfully provided one batch of values (Ok).
     /// Awaiting the control_stream attempts to progress the InputProvider by one step.
@@ -56,12 +48,19 @@ impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
         self.remove(var)
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::pending())
-    }
-
+    // TODO: Refactor such that the input_streams only forward data whenever run is awaited.
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
-        todo!("Not obvious how to implement this for a map")
+        // Note, we cannot (currently) do like the line below because the runtimes.
+        // (stream::repeat_with is is sync)
+        // stream::repeat_with(|| Ok(())).boxed_local()
+
+        Box::pin(stream! {
+            loop {
+                // Give control back:
+                yield Ok(());
+                smol::future::yield_now().await;
+            }
+        })
     }
 }
 

@@ -1,10 +1,7 @@
-use async_trait::async_trait;
-use futures::future::LocalBoxFuture;
-use futures::{StreamExt, stream};
-use std::future::pending;
-
 use crate::core::{InputProvider, OutputStream, Value, VarName};
 pub use crate::lang::untimed_input::UntimedInputFileData;
+use async_trait::async_trait;
+use futures::{StreamExt, stream};
 
 // Returns an iterator over the values for a given key in the UntimedInputFileData.
 // None if no keys are present.
@@ -33,14 +30,12 @@ impl InputProvider for UntimedInputFileData {
         Some(Box::pin(stream::iter(input_file_data_iter)))
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(pending())
-    }
-
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         let max_index = self.keys().max();
         if let Some(max_key) = max_index {
-            stream::repeat_with(|| Ok(())).take(*max_key).boxed_local()
+            stream::repeat_with(|| Ok(()))
+                .take(*max_key + 1)
+                .boxed_local()
         } else {
             stream::repeat_with(|| Ok(())).boxed_local()
         }

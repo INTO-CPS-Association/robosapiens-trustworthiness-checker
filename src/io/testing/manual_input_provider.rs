@@ -3,10 +3,8 @@ use crate::{
     stream_utils::channel_to_output_stream,
 };
 use async_trait::async_trait;
-use futures::future::LocalBoxFuture;
 use futures::{StreamExt, stream};
 use std::collections::BTreeMap;
-use std::future::pending;
 use unsync::spsc::Sender as SpscSender;
 
 const CHANNEL_SIZE: usize = 10;
@@ -59,13 +57,9 @@ impl<AC: AsyncConfig> InputProvider for ManualInputProvider<AC> {
             .and_then(|channel| channel.receiver.take())
     }
 
-    // TODO: Refactor such that the input_streams only forward data whenever run is called.
+    // TODO: Refactor such that the input_streams only forward data whenever run is awaited.
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         stream::repeat_with(|| Ok(())).boxed_local()
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(pending())
     }
 }
 
@@ -99,9 +93,6 @@ mod tests {
         let mut y_sender = input_provider
             .sender_channel(&"y".into())
             .expect("y sender should exist");
-
-        // For completeness:
-        executor.spawn(input_provider.run()).detach();
 
         // Send values
         for i in 0..stream_len {

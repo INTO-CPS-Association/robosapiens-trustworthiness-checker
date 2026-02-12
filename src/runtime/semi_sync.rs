@@ -566,7 +566,21 @@ where
         // TODO: Fix this...
         // Need to spawn input_provider in a separate task because of weird rule that they are
         // supposed to run forever...
-        self.executor.spawn(self.input_provider.run()).detach();
+        let mut input_provider_stream = self.input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "SemiSyncMonitor: Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        self.executor.spawn(input_provider_future).detach();
+
         let output_fut = log_end(self.output_handler.run(), "output_handler.run() ended");
         let work_fut = log_end(
             Box::pin(Self::work_task(context, expr_evals)),
