@@ -81,7 +81,7 @@ where
         let output = self.output.unwrap();
 
         SemiSyncMonitor {
-            executor,
+            _executor: executor,
             model,
             input_provider: input,
             output_handler: output,
@@ -337,7 +337,7 @@ where
     S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
-    executor: Rc<LocalExecutor<'static>>,
+    _executor: Rc<LocalExecutor<'static>>,
     model: S,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
@@ -563,11 +563,8 @@ where
             .fuse()
         }
 
-        // TODO: Fix this...
-        // Need to spawn input_provider in a separate task because of weird rule that they are
-        // supposed to run forever...
         let mut input_provider_stream = self.input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
+        let input_fut = Box::pin(async move {
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
                     error!(
@@ -579,7 +576,7 @@ where
             }
             Ok(())
         });
-        self.executor.spawn(input_provider_future).detach();
+        let input_fut = log_end(input_fut, "input_provider ended");
 
         let output_fut = log_end(self.output_handler.run(), "output_handler.run() ended");
         let work_fut = log_end(
@@ -587,12 +584,15 @@ where
             "work_task.run() ended",
         );
 
-        let res = futures::join!(output_fut, work_fut);
+        let res = futures::join!(output_fut, work_fut, input_fut);
         if let Err(e) = res.0 {
             error!(?e, "Output handler had an error");
         }
         if let Err(e) = res.1 {
             error!(?e, "Work task had an error");
+        }
+        if let Err(e) = res.2 {
+            error!(?e, "Input task had an error");
         }
 
         Ok(())
@@ -869,7 +869,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -909,7 +909,7 @@ mod tests {
             spec.output_vars.clone(),
         ));
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -938,7 +938,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -978,7 +978,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,

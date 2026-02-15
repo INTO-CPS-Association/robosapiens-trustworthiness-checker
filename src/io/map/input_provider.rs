@@ -73,12 +73,16 @@ impl InputProvider for MapInputProvider {
                 for name in dead {
                     senders.remove(&name);
                 }
+
+                yield Ok(());
+                if senders.is_empty() {
+                    return;
+                }
                 // Timer to avoid starvation - has been seen in tests.
                 // (smool::future::yield_now() does not do the trick)
                 // A better but more complex solution would be to add backpressure from the
                 // tick receiver.
                 smol::Timer::after(std::time::Duration::from_millis(1)).await;
-                yield Ok(());
             }
         })
     }
