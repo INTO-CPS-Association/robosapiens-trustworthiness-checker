@@ -1,5 +1,6 @@
 use crate::{
-    InputProvider, LOLASpecification, OutputStream, SExpr, Value, VarName,
+    InputProvider, LOLASpecification, SExpr, Value,
+    io::map::MapInputProvider,
     lang::dynamic_lola::{lalr_parser::LALRParser, type_checker::SExprTE},
     runtime::asynchronous::{AsyncMonitorRunner, Context},
     semantics::{
@@ -7,9 +8,7 @@ use crate::{
         untimed_untyped_lola::semantics::UntimedLolaSemantics,
     },
 };
-use futures::stream;
-use smol::stream::StreamExt;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, iter};
 
 // Dead code is allowed in this file since cargo does not correctly
 // track when functions are used in tests or with specific features.
@@ -42,112 +41,71 @@ pub type TestSemantics = UntimedLolaSemantics<LALRParser>;
 // Default monitor runner to use in tests
 pub type TestMonitorRunner = AsyncMonitorRunner<TestConfig, TestSemantics, LOLASpecification>;
 
-pub fn input_empty() -> BTreeMap<VarName, OutputStream<Value>> {
-    BTreeMap::new()
+pub fn input_empty() -> MapInputProvider {
+    MapInputProvider::new(BTreeMap::new())
 }
 
-pub fn input_streams1() -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)])) as OutputStream<Value>,
-    );
-    input_streams.insert(
-        "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)])) as OutputStream<Value>,
-    );
-    input_streams
+pub fn input_streams1() -> MapInputProvider {
+    let mut input_values = BTreeMap::new();
+    input_values.insert("x".into(), vec![Value::Int(1), Value::Int(3)]);
+    input_values.insert("y".into(), vec![Value::Int(2), Value::Int(4)]);
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
-pub fn input_streams2() -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)])) as OutputStream<Value>,
-    );
-    input_streams.insert(
-        "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)])) as OutputStream<Value>,
-    );
-    input_streams.insert(
+pub fn input_streams2() -> MapInputProvider {
+    let mut input_values = BTreeMap::new();
+    input_values.insert("x".into(), vec![Value::Int(1), Value::Int(3)]);
+    input_values.insert("y".into(), vec![Value::Int(2), Value::Int(4)]);
+    input_values.insert(
         "s".into(),
-        Box::pin(stream::iter(vec![
-            Value::Str("x+y".into()),
-            Value::Str("x+y".into()),
-        ])) as OutputStream<Value>,
+        vec![Value::Str("x+y".into()), Value::Str("x+y".into())],
     );
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
-pub fn input_streams3() -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(stream::iter(vec![Value::Int(1), Value::Int(3)])) as OutputStream<Value>,
-    );
-    input_streams.insert(
-        "y".into(),
-        Box::pin(stream::iter(vec![Value::Int(2), Value::Int(4)])),
-    );
-    input_streams
+pub fn input_streams3() -> MapInputProvider {
+    let mut input_values = BTreeMap::new();
+    input_values.insert("x".into(), vec![Value::Int(1), Value::Int(3)]);
+    input_values.insert("y".into(), vec![Value::Int(2), Value::Int(4)]);
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
-pub fn input_streams4() -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
+pub fn input_streams4() -> MapInputProvider {
+    let mut input_values = BTreeMap::new();
+    input_values.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![
-            Value::Str("a".into()),
-            Value::Str("c".into()),
-        ])) as OutputStream<Value>,
+        vec![Value::Str("a".into()), Value::Str("c".into())],
     );
-    input_streams.insert(
+    input_values.insert(
         "y".into(),
-        Box::pin(stream::iter(vec![
-            Value::Str("b".into()),
-            Value::Str("d".into()),
-        ])),
+        vec![Value::Str("b".into()), Value::Str("d".into())],
     );
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
-pub fn input_streams5() -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
+pub fn input_streams5() -> MapInputProvider {
+    let mut input_values = BTreeMap::new();
+    input_values.insert(
         "x".into(),
-        Box::pin(stream::iter(vec![
-            Value::Bool(true),
-            Value::Bool(false),
-            Value::Bool(true),
-        ])) as OutputStream<Value>,
+        vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
     );
-    input_streams.insert(
+    input_values.insert(
         "y".into(),
-        Box::pin(stream::iter(vec![
-            Value::Bool(true),
-            Value::Bool(true),
-            Value::Bool(false),
-        ])),
+        vec![Value::Bool(true), Value::Bool(true), Value::Bool(false)],
     );
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
-pub fn input_streams_float() -> BTreeMap<VarName, OutputStream<Value>> {
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(stream::iter(vec![Value::Float(1.3), Value::Float(3.4)])) as OutputStream<Value>,
-    );
-    input_streams.insert(
-        "y".into(),
-        Box::pin(stream::iter(vec![Value::Float(2.4), Value::Float(4.3)])) as OutputStream<Value>,
-    );
-    input_streams
+pub fn input_streams_float() -> MapInputProvider {
+    let mut input_values = BTreeMap::new();
+    input_values.insert("x".into(), vec![Value::Float(1.3), Value::Float(3.4)]);
+    input_values.insert("y".into(), vec![Value::Float(2.4), Value::Float(4.3)]);
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
@@ -290,72 +248,78 @@ pub fn spec_maple_sequence() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn maple_valid_input_stream(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn maple_valid_input_stream(size: usize) -> MapInputProvider {
     let size = size as i64;
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
+    let mut input_values = BTreeMap::new();
+    input_values.insert(
         "stage".into(),
-        Box::pin(stream::iter((0..size).map(|x| {
-            if x % 5 == 0 {
-                Value::Str("m".into())
-            } else if x % 5 == 1 {
-                Value::Str("a".into())
-            } else if x % 5 == 2 {
-                Value::Str("p".into())
-            } else if x % 5 == 3 {
-                Value::Str("l".into())
-            } else {
-                Value::Str("e".into())
-            }
-        }))) as OutputStream<Value>,
+        (0..size)
+            .map(|x| {
+                if x % 5 == 0 {
+                    Value::Str("m".into())
+                } else if x % 5 == 1 {
+                    Value::Str("a".into())
+                } else if x % 5 == 2 {
+                    Value::Str("p".into())
+                } else if x % 5 == 3 {
+                    Value::Str("l".into())
+                } else {
+                    Value::Str("e".into())
+                }
+            })
+            .collect(),
     );
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
-pub fn maple_invalid_input_stream_1(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn maple_invalid_input_stream_1(size: usize) -> MapInputProvider {
     let size = size as i64;
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
+    let mut input_values = BTreeMap::new();
+    input_values.insert(
         "stage".into(),
-        Box::pin(stream::iter((0..size).map(|x| {
-            if x % 5 == 0 {
-                Value::Str("m".into())
-            } else if x % 5 == 1 {
-                Value::Str("a".into())
-            } else if x % 5 == 2 {
-                Value::Str("m".into())
-            } else if x % 5 == 3 {
-                Value::Str("l".into())
-            } else {
-                Value::Str("e".into())
-            }
-        }))) as OutputStream<Value>,
+        (0..size)
+            .map(|x| {
+                if x % 5 == 0 {
+                    Value::Str("m".into())
+                } else if x % 5 == 1 {
+                    Value::Str("a".into())
+                } else if x % 5 == 2 {
+                    Value::Str("m".into())
+                } else if x % 5 == 3 {
+                    Value::Str("l".into())
+                } else {
+                    Value::Str("e".into())
+                }
+            })
+            .collect(),
     );
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
-pub fn maple_invalid_input_stream_2(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn maple_invalid_input_stream_2(size: usize) -> MapInputProvider {
     let size = size as i64;
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
+    let mut input_values = BTreeMap::new();
+    input_values.insert(
         "stage".into(),
-        Box::pin(stream::iter((0..size).map(|x| {
-            if x % 5 == 0 {
-                Value::Str("m".into())
-            } else if x % 5 == 1 {
-                Value::Str("a".into())
-            } else if x % 5 == 2 {
-                Value::Str("l".into())
-            } else if x % 5 == 3 {
-                Value::Str("p".into())
-            } else {
-                Value::Str("e".into())
-            }
-        }))) as OutputStream<Value>,
+        (0..size)
+            .map(|x| {
+                if x % 5 == 0 {
+                    Value::Str("m".into())
+                } else if x % 5 == 1 {
+                    Value::Str("a".into())
+                } else if x % 5 == 2 {
+                    Value::Str("l".into())
+                } else if x % 5 == 3 {
+                    Value::Str("p".into())
+                } else {
+                    Value::Str("e".into())
+                }
+            })
+            .collect(),
     );
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
@@ -387,103 +351,99 @@ pub fn spec_simple_add_decomposable() -> &'static str {
 
 #[allow(dead_code)]
 pub fn input_streams_defer_1() -> impl InputProvider<Val = Value> {
-    let mut input_streams = BTreeMap::new();
+    let mut input_values = BTreeMap::new();
 
     // Create x stream with values 1 through 15
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter((0..15).map(Value::Int))) as OutputStream<Value>,
-    );
+    input_values.insert("x".into(), (0..15).map(Value::Int).collect());
 
     // Create e stream with the defer expression
-    input_streams.insert(
+    input_values.insert(
         "e".into(),
-        Box::pin(futures::stream::iter((0..15).map(|i| {
-            if i == 1 {
-                Value::Str("x + 1".into())
-            } else {
-                Value::Deferred
-            }
-        }))) as OutputStream<Value>,
+        (0..15)
+            .map(|i| {
+                if i == 1 {
+                    Value::Str("x + 1".into())
+                } else {
+                    Value::Deferred
+                }
+            })
+            .collect(),
     );
 
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
 pub fn input_streams_defer_2() -> impl InputProvider<Val = Value> {
-    let mut input_streams = BTreeMap::new();
+    let mut input_values = BTreeMap::new();
 
     // Create x stream with values 1 through 15
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter((0..15).map(Value::Int))) as OutputStream<Value>,
-    );
+    input_values.insert("x".into(), (0..15).map(Value::Int).collect());
 
     // Create e stream with the defer expression
-    input_streams.insert(
+    input_values.insert(
         "e".into(),
-        Box::pin(futures::stream::iter((0..15).map(|i| {
-            if i == 3 {
-                Value::Str("x + 1".into())
-            } else {
-                Value::Deferred
-            }
-        }))) as OutputStream<Value>,
+        (0..15)
+            .map(|i| {
+                if i == 3 {
+                    Value::Str("x + 1".into())
+                } else {
+                    Value::Deferred
+                }
+            })
+            .collect(),
     );
 
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
 pub fn input_streams_defer_3() -> impl InputProvider<Val = Value> {
-    let mut input_streams = BTreeMap::new();
+    let mut input_values = BTreeMap::new();
 
     // Create x stream with values 1 through 15
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter((0..15).map(Value::Int))) as OutputStream<Value>,
-    );
+    input_values.insert("x".into(), (0..15).map(Value::Int).collect());
 
     // Create e stream with the defer expression
-    input_streams.insert(
+    input_values.insert(
         "e".into(),
-        Box::pin(futures::stream::iter((0..15).map(|i| {
-            if i == 12 {
-                Value::Str("x + 1".into())
-            } else {
-                Value::Deferred
-            }
-        }))) as OutputStream<Value>,
+        (0..15)
+            .map(|i| {
+                if i == 12 {
+                    Value::Str("x + 1".into())
+                } else {
+                    Value::Deferred
+                }
+            })
+            .collect(),
     );
 
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 // Example where defer needs to use the history
 #[allow(dead_code)]
 pub fn input_streams_defer_4() -> impl InputProvider<Val = Value> {
-    let mut input_streams = BTreeMap::new();
+    let mut input_values = BTreeMap::new();
 
     // Create x stream with values 1 through 5
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter((0..5).map(Value::Int))) as OutputStream<Value>,
-    );
+    input_values.insert("x".into(), (0..5).map(Value::Int).collect());
 
     // Create e stream with the defer expression
-    input_streams.insert(
+    input_values.insert(
         "e".into(),
-        Box::pin(futures::stream::iter((0..5).map(|i| {
-            if i == 2 {
-                Value::Str("x[1]".into())
-            } else {
-                Value::Deferred
-            }
-        }))) as OutputStream<Value>,
+        (0..5)
+            .map(|i| {
+                if i == 2 {
+                    Value::Str("x[1]".into())
+                } else {
+                    Value::Deferred
+                }
+            })
+            .collect(),
     );
 
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
@@ -522,21 +482,15 @@ pub fn spec_past_indexing() -> &'static str {
 
 #[allow(dead_code)]
 pub fn input_streams_indexing() -> impl InputProvider<Val = Value> {
-    let mut input_streams = BTreeMap::new();
+    let mut input_values = BTreeMap::new();
 
     // Create x stream with values 1 through 6
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter((0..6).map(Value::Int))) as OutputStream<Value>,
-    );
+    input_values.insert("x".into(), (0..6).map(Value::Int).collect());
 
     // Create x stream with values 1 through 6
-    input_streams.insert(
-        "y".into(),
-        Box::pin(futures::stream::iter((0..6).map(Value::Int))) as OutputStream<Value>,
-    );
+    input_values.insert("y".into(), (0..6).map(Value::Int).collect());
 
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
@@ -580,116 +534,103 @@ pub fn spec_direct_globally() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn input_streams_paper_benchmark(
-    percent: usize,
-    size: usize,
-) -> BTreeMap<VarName, OutputStream<Value>> {
-    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
-    let y: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(false)));
-    let e1 = stream::repeat(Value::Deferred).take((size * percent / 100).saturating_sub(1));
-    let e2 = stream::repeat(Value::Str("x && y".into()));
-    let e: OutputStream<Value> = if percent == 100 {
-        Box::pin(e1)
+pub fn input_streams_paper_benchmark(percent: usize, size: usize) -> MapInputProvider {
+    let x = iter::repeat(true.into()).take(size).collect();
+    let y = iter::repeat(true.into()).take(size).collect();
+
+    let e1 = iter::repeat(Value::Deferred).take((size * percent / 100).saturating_sub(1));
+    let e2 = iter::repeat(Value::Str("x && y".into())).take(size);
+    let e: Vec<Value> = if percent == 100 {
+        e1.collect()
     } else if percent == 0 {
-        Box::pin(e2)
+        e2.collect()
     } else {
-        Box::pin(e1.chain(e2))
+        e1.chain(e2).collect()
     };
-    vec![("x".into(), x), ("y".into(), y), ("e".into(), e)]
-        .into_iter()
-        .collect()
+    let inputs =
+        BTreeMap::from_iter(vec![("x".into(), x), ("y".into(), y), ("e".into(), e)].into_iter());
+    MapInputProvider::new(BTreeMap::from(inputs))
 }
 
 #[allow(dead_code)]
-pub fn input_streams_paper_benchmark_direct(
-    _size: usize,
-) -> BTreeMap<VarName, OutputStream<Value>> {
-    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
-    let y: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(false)));
-    vec![("x".into(), x), ("y".into(), y)].into_iter().collect()
+pub fn input_streams_paper_benchmark_direct(size: usize) -> MapInputProvider {
+    let x = iter::repeat(Value::Bool(true)).take(size).collect();
+    let y = iter::repeat(Value::Bool(false)).take(size).collect();
+    let map = BTreeMap::from_iter(vec![("x".into(), x), ("y".into(), y)].into_iter());
+    MapInputProvider::new(map)
 }
+
 #[allow(dead_code)]
-pub fn input_streams_paper_benchmark_globally(
-    percent: usize,
-    size: usize,
-) -> BTreeMap<VarName, OutputStream<Value>> {
-    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
-    let e1 = stream::repeat(Value::Deferred).take(size * percent / 100 - 1);
-    let e2 = stream::repeat(Value::Str("x || default(y[1], false)".into()));
-    let e: OutputStream<Value> = if percent == 100 {
-        Box::pin(e1)
+pub fn input_streams_paper_benchmark_globally(percent: usize, size: usize) -> MapInputProvider {
+    let x = iter::repeat(Value::Bool(true)).take(size).collect();
+    let e1 = iter::repeat(Value::Deferred).take(size * percent / 100 - 1);
+    let e2 = iter::repeat(Value::Str("x || default(y[1], false)".into())).take(size);
+    let e: Vec<Value> = if percent == 100 {
+        e1.collect()
     } else if percent == 0 {
-        Box::pin(e2)
+        e2.collect()
     } else {
-        Box::pin(e1.chain(e2))
+        e1.chain(e2).collect()
     };
-    vec![("x".into(), x), ("e".into(), e)].into_iter().collect()
+    let inputs = BTreeMap::from_iter(vec![("x".into(), x), ("e".into(), e)].into_iter());
+    MapInputProvider::new(inputs)
 }
 
 #[allow(dead_code)]
-pub fn input_streams_paper_benchmark_direct_globally(
-    _size: usize,
-) -> BTreeMap<VarName, OutputStream<Value>> {
-    let x: OutputStream<Value> = Box::pin(stream::repeat(Value::Bool(true)));
-    vec![("x".into(), x)].into_iter().collect()
+pub fn input_streams_paper_benchmark_direct_globally(size: usize) -> MapInputProvider {
+    let x = iter::repeat(Value::Bool(true)).take(size).collect();
+    let inputs = BTreeMap::from_iter(vec![("x".into(), x)].into_iter());
+    MapInputProvider::new(inputs)
 }
 
-pub fn input_streams_add_defer(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn input_streams_add_defer(size: usize) -> MapInputProvider {
     let size = size as i64;
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(stream::iter((0..size).map(|x| Value::Int(2 * x)))) as OutputStream<Value>,
-    );
-    input_streams.insert(
+    let mut input_values = BTreeMap::new();
+    input_values.insert("x".into(), (0..size).map(|x| Value::Int(2 * x)).collect());
+    input_values.insert(
         "y".into(),
-        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))) as OutputStream<Value>,
+        (0..size).map(|y| Value::Int(2 * y + 1)).collect(),
     );
-    let e_stream = stream::repeat(Value::Deferred)
+    let e_stream = iter::repeat(Value::Deferred)
         .take((size / 2) as usize)
-        .chain(stream::iter(
-            (0..size / 2).map(|_| Value::Str("x + y".into())),
-        ));
-    input_streams.insert("e".into(), Box::pin(e_stream) as OutputStream<Value>);
+        .chain((0..size / 2).map(|_| Value::Str("x + y".into())))
+        .collect();
+    input_values.insert("e".into(), e_stream);
 
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
-pub fn input_streams_simple_add(size: usize) -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn input_streams_simple_add(size: usize) -> MapInputProvider {
     let size = size as i64;
-    let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(stream::iter((0..size).map(|x| Value::Int(2 * x)))) as OutputStream<Value>,
-    );
-    input_streams.insert(
+    let mut input_values = BTreeMap::new();
+    input_values.insert("x".into(), (0..size).map(|x| Value::Int(2 * x)).collect());
+    input_values.insert(
         "y".into(),
-        Box::pin(stream::iter((0..size).map(|y| Value::Int(2 * y + 1)))) as OutputStream<Value>,
+        (0..size).map(|y| Value::Int(2 * y + 1)).collect(),
     );
-    input_streams
+    MapInputProvider::new(input_values)
 }
 
 #[allow(dead_code)]
 pub fn input_streams_defer_comp_dynamic() -> impl InputProvider<Val = Value> {
-    let mut input_streams = BTreeMap::new();
+    let mut input_values = BTreeMap::new();
 
     // Create x stream with values 1 through 100
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter((0..5).map(Value::Int))) as OutputStream<Value>,
-    );
+    input_values.insert("x".into(), (0..5).map(Value::Int).collect());
 
     // Create e stream with the defer expression
-    input_streams.insert(
+    input_values.insert(
         "e".into(),
-        Box::pin(futures::stream::iter((0..5).map(|i| {
-            if i == 1 {
-                Value::Str("x[2]".into())
-            } else {
-                Value::Deferred
-            }
-        }))) as OutputStream<Value>,
+        (0..5)
+            .map(|i| {
+                if i == 1 {
+                    Value::Str("x[2]".into())
+                } else {
+                    Value::Deferred
+                }
+            })
+            .collect(),
     );
 
-    input_streams
+    MapInputProvider::new(input_values)
 }

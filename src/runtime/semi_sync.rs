@@ -827,11 +827,12 @@ where
 mod tests {
 
     use crate::core::Runnable;
+    use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dynamic_lola::lalr_parser::LALRParser;
     use crate::runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor};
     use crate::semantics::{AsyncConfig, UntimedLolaSemantics};
-    use crate::{LOLASpecification, OutputStream, lola_fixtures::*};
+    use crate::{LOLASpecification, lola_fixtures::*};
     use crate::{SExpr, async_test};
     use crate::{Value, lola_specification};
     use futures::stream::StreamExt;
@@ -853,17 +854,14 @@ mod tests {
     type TestMonitor =
         SemiSyncMonitor<ValueConfig, LOLASpecification, UntimedLolaSemantics<LALRParser>>;
 
-    fn vec_to_stream<T: 'static>(vec: Vec<T>) -> OutputStream<T> {
-        Box::pin(futures::stream::iter(vec)) as OutputStream<T>
-    }
-
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
-        let y = vec_to_stream(vec![3.into(), 4.into(), 5.into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let y = vec![3.into(), 4.into(), 5.into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -902,9 +900,10 @@ mod tests {
         // (to avoid previous regressions)
         let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
-        let y = vec_to_stream(vec![3.into(), 4.into(), 5.into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let y = vec![3.into(), 4.into(), 5.into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let output_handler = Box::new(NullOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -930,8 +929,8 @@ mod tests {
         let mut spec = "in x\nout a\nout b\na = x\nb = a + 1";
         let spec = lola_specification(&mut spec).unwrap();
 
-        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
-        let input_streams = BTreeMap::from([("x".into(), x)]);
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let input_streams = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -968,9 +967,10 @@ mod tests {
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
         let spec = lola_specification(&mut spec_dynamic()).unwrap();
 
-        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
-        let e = vec_to_stream(vec!["x + 1".into(), "x + 2".into(), "x + 3".into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),

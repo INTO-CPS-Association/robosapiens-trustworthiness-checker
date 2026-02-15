@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::LOLASpecification;
-use crate::OutputStream;
 use crate::Value;
 use crate::VarName;
 use crate::core::AbstractMonitorBuilder;
@@ -13,6 +12,7 @@ use crate::core::OutputHandler;
 use crate::core::Runnable;
 use crate::core::Runtime;
 use crate::core::Semantics;
+use crate::io::map::MapInputProvider;
 use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::lang::dynamic_lola::lalr_parser::LALRParser;
 use crate::lang::dynamic_lola::type_checker::SExprTE;
@@ -29,7 +29,7 @@ pub async fn monitor_runtime_outputs(
     semantics: Semantics,
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+    input_values: BTreeMap<VarName, Vec<Value>>,
     output_limit: Option<usize>,
 ) {
     let output_handler: Box<dyn OutputHandler<Val = Value>> = match output_limit {
@@ -44,13 +44,15 @@ pub async fn monitor_runtime_outputs(
         )),
     };
 
+    let input_provider = MapInputProvider::new(input_values);
+
     let monitor = RuntimeBuilder::new()
         .runtime(runtime)
         .semantics(semantics)
         .executor(executor)
         .model(spec)
         .output(output_handler)
-        .input(Box::new(input_streams))
+        .input(Box::new(input_provider))
         .build();
     monitor.run().await.expect("Error running monitor");
 }
@@ -58,7 +60,7 @@ pub async fn monitor_runtime_outputs(
 pub async fn monitor_outputs_untyped_async_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+    input_values: BTreeMap<VarName, Vec<Value>>,
     limit: usize,
 ) {
     monitor_runtime_outputs(
@@ -66,7 +68,7 @@ pub async fn monitor_outputs_untyped_async_limited(
         Semantics::Untimed,
         executor,
         spec,
-        input_streams,
+        input_values,
         Some(limit),
     )
     .await;
@@ -75,14 +77,14 @@ pub async fn monitor_outputs_untyped_async_limited(
 pub async fn monitor_outputs_untyped_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+    input_values: BTreeMap<VarName, Vec<Value>>,
 ) {
     monitor_runtime_outputs(
         Runtime::Async,
         Semantics::Untimed,
         executor,
         spec,
-        input_streams,
+        input_values,
         None,
     )
     .await;
@@ -91,14 +93,14 @@ pub async fn monitor_outputs_untyped_async(
 pub async fn monitor_outputs_untyped_little(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+    input_values: BTreeMap<VarName, Vec<Value>>,
 ) {
     monitor_runtime_outputs(
         Runtime::SemiSync,
         Semantics::Untimed,
         executor,
         spec,
-        input_streams,
+        input_values,
         None,
     )
     .await;
@@ -116,7 +118,7 @@ impl AsyncConfig for ConfigTyped {
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: TypedLOLASpecification,
-    input_streams: BTreeMap<VarName, OutputStream<Value>>,
+    input_values: BTreeMap<VarName, Vec<Value>>,
 ) {
     // Currently cannot be deduplicated since it includes the type
     // checking
@@ -124,6 +126,7 @@ pub async fn monitor_outputs_typed_async(
         executor.clone(),
         spec.output_vars.clone(),
     ));
+    let input_provider = MapInputProvider::new(input_values);
     let async_monitor = AsyncMonitorBuilder::<
         _,
         ConfigTyped,
@@ -131,7 +134,7 @@ pub async fn monitor_outputs_typed_async(
     >::new()
     .executor(executor.clone())
     .model(spec.clone())
-    .input(Box::new(input_streams))
+    .input(Box::new(input_provider))
     .output(output_handler)
     .build();
     async_monitor.run().await.expect("Error running monitor");

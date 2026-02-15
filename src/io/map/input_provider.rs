@@ -59,10 +59,6 @@ impl InputProvider for MapInputProvider {
             .take()
             .expect("control stream can only be taken once");
 
-        // Note: There is a lurking bug here which we do not handle. If a stream is configured in
-        // MapInputProvider but nobody is consuming it (through var_stream), then the
-        // control_stream will deadlock once the spsc buffer fills up, as the sender.send() will be
-        // blocking.
         Box::pin(stream! {
             loop {
                 let mut dead = Vec::new();
@@ -77,6 +73,11 @@ impl InputProvider for MapInputProvider {
                 for name in dead {
                     senders.remove(&name);
                 }
+                // Timer to avoid starvation - has been seen in tests.
+                // (smool::future::yield_now() does not do the trick)
+                // A better but more complex solution would be to add backpressure from the
+                // tick receiver.
+                smol::Timer::after(std::time::Duration::from_millis(1)).await;
                 yield Ok(());
             }
         })
@@ -266,5 +267,30 @@ mod tests {
 
         assert_eq!(x_res, None);
         assert_eq!(y_res, None);
+    }
+
+    #[apply(async_test)]
+    async fn control_stream_without_consuming(_ex: Rc<LocalExecutor<'static>>) {
+        // Tests that the InputProvider does not hang if a Runtime does not consume all the
+        // var_streams.
+        let data = BTreeMap::from([("x".into(), (1..15).map(Value::Int).collect())]);
+        let mut provider = MapInputProvider::new(data.clone());
+        let mut control_stream = provider.control_stream().await;
+        for _ in 1..15 {
+            let _ = with_timeout(control_stream.next(), 1, "control_stream.next()")
+                .await
+                .expect("Control stream should not hang");
+        }
+
+        let mut provider = MapInputProvider::new(data);
+        let _x_stream = provider
+            .var_stream(&"x".into())
+            .expect("x stream should be available");
+        let mut control_stream = provider.control_stream().await;
+        for _ in 1..15 {
+            let _ = with_timeout(control_stream.next(), 1, "control_stream.next()")
+                .await
+                .expect("Control stream should not hang");
+        }
     }
 }

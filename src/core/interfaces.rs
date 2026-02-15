@@ -1,10 +1,9 @@
-use async_stream::stream;
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use std::fmt::Debug;
-use std::{collections::BTreeMap, rc::Rc};
+use std::rc::Rc;
 
 use crate::io::mqtt::MQTTLocalityReceiver;
 
@@ -36,32 +35,6 @@ pub trait InputProvider {
     /// error (Err) or has successfully provided one batch of values (Ok).
     /// Awaiting the control_stream attempts to progress the InputProvider by one step.
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
-}
-
-#[async_trait(?Send)]
-impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
-    type Val = V;
-
-    // We are consuming the input stream from the map when
-    // we return it to ensure single ownership and static lifetime
-    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.remove(var)
-    }
-
-    // TODO: Refactor such that the input_streams only forward data whenever run is awaited.
-    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
-        // Note, we cannot (currently) do like the line below because the runtimes.
-        // (stream::repeat_with is is sync)
-        // stream::repeat_with(|| Ok(())).boxed_local()
-
-        Box::pin(stream! {
-            loop {
-                // Give control back:
-                yield Ok(());
-                smol::future::yield_now().await;
-            }
-        })
-    }
 }
 
 pub trait Specification: Debug + Clone + 'static {

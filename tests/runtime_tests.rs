@@ -7,10 +7,11 @@ use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Runtime, Semantics};
+use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
-use trustworthiness_checker::{LOLASpecification, OutputStream, lola_fixtures::*};
-use trustworthiness_checker::{Value, VarName, lola_specification, runtime::RuntimeBuilder};
+use trustworthiness_checker::{LOLASpecification, lola_fixtures::*};
+use trustworthiness_checker::{Value, lola_specification, runtime::RuntimeBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TestConfiguration {
@@ -61,10 +62,6 @@ fn create_builder_from_config(
     }
 }
 
-fn vec_to_stream<T: 'static>(vec: Vec<T>) -> OutputStream<T> {
-    Box::pin(futures::stream::iter(vec)) as OutputStream<T>
-}
-
 #[apply(async_test)]
 async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
@@ -75,9 +72,10 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
-        let e = vec_to_stream(vec!["x + 1".into(), "x + 2".into(), "x + 3".into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -127,9 +125,10 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec_to_stream(vec![1.into(), 2.into(), 3.into()]);
-        let e = vec_to_stream(vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let x = vec![1.into(), 2.into(), 3.into()];
+        let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -179,9 +178,10 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec_to_stream(vec![1.into(), 2.into(), 3.into()]);
-        let e = vec_to_stream(vec![Value::Deferred, "x + 1".into(), "x + 2".into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let x = vec![1.into(), 2.into(), 3.into()];
+        let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -231,9 +231,10 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
-        let e = vec_to_stream(vec![Value::Deferred, "x + 1".into(), Value::Deferred]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -283,15 +284,19 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         let mut spec_str = "in x: Int\nin y: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = x + y";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec_to_stream(vec![1.into(), 2.into(), 3.into(), 4.into()]);
-        let y = vec_to_stream(vec![10.into(), 20.into(), 30.into(), 40.into()]);
-        let e = vec_to_stream(vec![
+        let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
+        let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
+        let e = vec![
             Value::Deferred,
             "x + y".into(),
             "x + y".into(),
             "x + y".into(),
-        ]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y), ("e".into(), e)]);
+        ];
+        let input_streams = MapInputProvider::new(BTreeMap::from([
+            ("x".into(), x),
+            ("y".into(), y),
+            ("e".into(), e),
+        ]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -338,9 +343,10 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
-        let x = vec_to_stream(vec!["x0".into(), "x1".into(), "x2".into()]);
-        let y = vec_to_stream(vec!["y0".into(), "y1".into(), "y2".into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let x = vec!["x0".into(), "x1".into(), "x2".into()];
+        let y = vec!["y0".into(), "y1".into(), "y2".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -386,14 +392,10 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
     for config in TestConfiguration::untyped_configurations() {
         let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
-        let x = vec_to_stream(vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()]);
-        let y = vec_to_stream(vec![
-            Value::Deferred,
-            "y1".into(),
-            Value::Deferred,
-            "y3".into(),
-        ]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+        let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -445,9 +447,10 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let spec_untyped =
             lola_specification(&mut "in x\nin e\nout z\nz = update(\"def\", defer(e))").unwrap();
 
-        let x = vec_to_stream(vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()]);
-        let e = vec_to_stream(vec![Value::Deferred, "x".into(), "x".into(), "x".into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
+        let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -499,19 +502,15 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let spec_untyped =
             lola_specification(&mut "in x\nin y\nout z\nz = defer(update(x, y))").unwrap();
 
-        let x = vec_to_stream(vec![
-            Value::Deferred,
-            "x".into(),
-            "x_lost".into(),
-            "x_sad".into(),
-        ]);
-        let y = vec_to_stream(vec![
+        let x = vec![Value::Deferred, "x".into(), "x_lost".into(), "x_sad".into()];
+        let y = vec![
             Value::Deferred,
             "y".into(),
             "y_won!".into(),
             "y_happy".into(),
-        ]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        ];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -649,25 +648,17 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 //         }
 // }
 
-pub fn input_streams_constraint() -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn input_streams_constraint() -> MapInputProvider {
     let mut input_streams = BTreeMap::new();
     input_streams.insert(
         "x".into(),
-        Box::pin(futures::stream::iter(vec![
-            Value::Int(1),
-            Value::Int(3),
-            Value::Int(5),
-        ])) as OutputStream<Value>,
+        vec![Value::Int(1), Value::Int(3), Value::Int(5)],
     );
     input_streams.insert(
         "y".into(),
-        Box::pin(futures::stream::iter(vec![
-            Value::Int(2),
-            Value::Int(4),
-            Value::Int(6),
-        ])) as OutputStream<Value>,
+        vec![Value::Int(2), Value::Int(4), Value::Int(6)],
     );
-    input_streams
+    MapInputProvider::new(input_streams)
 }
 
 #[ignore = "Cannot have empty spec or inputs"]
@@ -1088,10 +1079,10 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let input_streams = BTreeMap::from([(
+        let input_streams = MapInputProvider::new(BTreeMap::from([(
             "x".into(),
-            vec_to_stream(vec![Value::Deferred, Value::Deferred, Value::Deferred]),
-        )]);
+            vec![Value::Deferred, Value::Deferred, Value::Deferred],
+        )]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -1137,10 +1128,10 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
-        let input_streams = BTreeMap::from([(
+        let input_streams = MapInputProvider::new(BTreeMap::from([(
             "x".into(),
-            vec_to_stream(vec![1.into(), Value::Deferred, 5.into()]),
-        )]);
+            vec![1.into(), Value::Deferred, 5.into()],
+        )]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec_untyped.output_vars.clone(),
@@ -1342,38 +1333,18 @@ async fn test_simple_add_monitor_large_input(
     Ok(())
 }
 
-pub fn input_streams_simple_add() -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn input_streams_simple_add() -> MapInputProvider {
     let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter(vec![Value::Int(1), 3.into()])) as OutputStream<Value>,
-    );
-    input_streams.insert(
-        "y".into(),
-        Box::pin(futures::stream::iter(vec![Value::Int(2), 4.into()])) as OutputStream<Value>,
-    );
-    input_streams
+    input_streams.insert("x".into(), vec![Value::Int(1), 3.into()]);
+    input_streams.insert("y".into(), vec![Value::Int(2), 4.into()]);
+    MapInputProvider::new(input_streams)
 }
 
-pub fn input_streams_constraint_style() -> BTreeMap<VarName, OutputStream<Value>> {
+pub fn input_streams_constraint_style() -> MapInputProvider {
     let mut input_streams = BTreeMap::new();
-    input_streams.insert(
-        "x".into(),
-        Box::pin(futures::stream::iter(vec![
-            Value::Int(1),
-            3.into(),
-            5.into(),
-        ])) as OutputStream<Value>,
-    );
-    input_streams.insert(
-        "y".into(),
-        Box::pin(futures::stream::iter(vec![
-            Value::Int(2),
-            4.into(),
-            6.into(),
-        ])) as OutputStream<Value>,
-    );
-    input_streams
+    input_streams.insert("x".into(), vec![Value::Int(1), 3.into(), 5.into()]);
+    input_streams.insert("y".into(), vec![Value::Int(2), 4.into(), 6.into()]);
+    MapInputProvider::new(input_streams)
 }
 
 #[apply(async_test)]
@@ -1465,9 +1436,10 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let mut spec_str = "in x\nin e\nout z\nz = defer(e)";
         let spec = lola_specification(&mut spec_str).unwrap();
 
-        let x = vec_to_stream(vec![0.into(), 1.into(), 2.into()]);
-        let e = vec_to_stream(vec!["x + 1".into(), "x + 2".into(), "x + 3".into()]);
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -1633,7 +1605,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
     for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
         // First run
         {
-            let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+            let input_streams = MapInputProvider::new(BTreeMap::new());
             let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
             let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
@@ -1671,7 +1643,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
 
         // Second run - should work now with drop guard cancellation
         {
-            let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+            let input_streams = MapInputProvider::new(BTreeMap::new());
             let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
             let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
@@ -1787,7 +1759,7 @@ async fn test_drop_guard_cancellation_behavior(
 ) -> anyhow::Result<()> {
     // Test to verify that drop guard properly stops VarManagers when output streams are dropped
     for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
-        let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+        let input_streams = MapInputProvider::new(BTreeMap::new());
         let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
@@ -1833,7 +1805,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration (empty for count monitor)
-        let input_streams: BTreeMap<VarName, OutputStream<Value>> = BTreeMap::new();
+        let input_streams = MapInputProvider::new(BTreeMap::new());
 
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
