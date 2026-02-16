@@ -1,12 +1,10 @@
 // This file defines the common functions used by the benchmarks.
 // Dead code is allowed as it is only used when compiling benchmarks.
 
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::LOLASpecification;
 use crate::Value;
-use crate::VarName;
 use crate::core::AbstractMonitorBuilder;
 use crate::core::OutputHandler;
 use crate::core::Runnable;
@@ -29,7 +27,7 @@ pub async fn monitor_runtime_outputs(
     semantics: Semantics,
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_values: BTreeMap<VarName, Vec<Value>>,
+    input_provider: MapInputProvider,
     output_limit: Option<usize>,
 ) {
     let output_handler: Box<dyn OutputHandler<Val = Value>> = match output_limit {
@@ -43,8 +41,6 @@ pub async fn monitor_runtime_outputs(
             spec.output_vars.clone(),
         )),
     };
-
-    let input_provider = MapInputProvider::new(input_values);
 
     let monitor = RuntimeBuilder::new()
         .runtime(runtime)
@@ -60,7 +56,7 @@ pub async fn monitor_runtime_outputs(
 pub async fn monitor_outputs_untyped_async_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_values: BTreeMap<VarName, Vec<Value>>,
+    input_provider: MapInputProvider,
     limit: usize,
 ) {
     monitor_runtime_outputs(
@@ -68,7 +64,7 @@ pub async fn monitor_outputs_untyped_async_limited(
         Semantics::Untimed,
         executor,
         spec,
-        input_values,
+        input_provider,
         Some(limit),
     )
     .await;
@@ -77,7 +73,7 @@ pub async fn monitor_outputs_untyped_async_limited(
 pub async fn monitor_outputs_untyped_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_values: BTreeMap<VarName, Vec<Value>>,
+    input_values: MapInputProvider,
 ) {
     monitor_runtime_outputs(
         Runtime::Async,
@@ -93,14 +89,14 @@ pub async fn monitor_outputs_untyped_async(
 pub async fn monitor_outputs_untyped_little(
     executor: Rc<LocalExecutor<'static>>,
     spec: LOLASpecification,
-    input_values: BTreeMap<VarName, Vec<Value>>,
+    input_provider: MapInputProvider,
 ) {
     monitor_runtime_outputs(
         Runtime::SemiSync,
         Semantics::Untimed,
         executor,
         spec,
-        input_values,
+        input_provider,
         None,
     )
     .await;
@@ -118,7 +114,7 @@ impl AsyncConfig for ConfigTyped {
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: TypedLOLASpecification,
-    input_values: BTreeMap<VarName, Vec<Value>>,
+    input_provider: MapInputProvider,
 ) {
     // Currently cannot be deduplicated since it includes the type
     // checking
@@ -126,7 +122,6 @@ pub async fn monitor_outputs_typed_async(
         executor.clone(),
         spec.output_vars.clone(),
     ));
-    let input_provider = MapInputProvider::new(input_values);
     let async_monitor = AsyncMonitorBuilder::<
         _,
         ConfigTyped,
