@@ -16,19 +16,19 @@ testcontainers-modules = { version = "0.14.0", optional = true, features = [
     "mosquitto",
     "redis",
 ] }
-test-log = { version = "0.2.18", features = ["trace"] }
-async-compat = {version = "0.2.4", optional = true}
-tracing = { version = "0.1.41", features = [
+test-log = { version = "0.2.19", features = ["trace"] }
+async-compat = {version = "0.2.5", optional = true}
+tracing = { version = "0.1.44", features = [
     "attributes",
     "std",
     "tracing-attributes",
     "async-await",
     "release_max_level_warn",
 ] }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 trustworthiness_checker = { path = "../../" }
-futures = "0.3.31"
-serde_json = "1.0.142"
+futures = "0.3.32"
+serde_json = "1.0.149"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
@@ -38,7 +38,7 @@ paho-mqtt = { version = "0.13.3", default-features = false, features = [
 ] }
 redis = { version = "0.32.5", features = ["smol-comp"] }
 redis-macros = "0.5.6"
-anyhow = { version = "1.0.99", features = ["backtrace"] }
+anyhow = { version = "1.0.101", features = ["backtrace"] }
 # unsync = "0.1.2"
 smol = "2.0.2"
 async-unsync = "0.3.0"
