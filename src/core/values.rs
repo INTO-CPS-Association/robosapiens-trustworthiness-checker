@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::anyhow;
 use ecow::{EcoString, EcoVec};
-use redis::{FromRedisValue, RedisResult, ToRedisArgs};
+use redis::{FromRedisValue, ToRedisArgs, ToSingleRedisArg};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
@@ -51,36 +51,38 @@ impl ToRedisArgs for Value {
     }
 }
 
+// Note: Redis docs say: "This should be implemented only for types that are
+// serialized into exactly one value, otherwise the compiler can't ensure
+// the correctness of some commands."
+// This currently holds for the implementation of Value, but we should keep an eye out.
+impl ToSingleRedisArg for Value {}
+
 impl FromRedisValue for Value {
-    fn from_redis_value(v: &redis::Value) -> RedisResult<Self> {
+    fn from_redis_value(v: redis::Value) -> Result<Self, redis::ParsingError> {
         match v {
             redis::Value::BulkString(bytes) => {
-                let s = std::str::from_utf8(bytes).map_err(|_| {
-                    redis::RedisError::from((redis::ErrorKind::TypeError, "Invalid UTF-8"))
+                let s = std::str::from_utf8(&bytes).map_err(|e| {
+                    redis::ParsingError::from(format!("Invalid UTF-8 in BulkString: {:?}", e))
                 })?;
 
-                serde_json5::from_str(s).map_err(|_e| {
-                    redis::RedisError::from((
-                        redis::ErrorKind::TypeError,
-                        "Response type not deserializable to Value with serde_json5",
-                        format!(
-                            "(response was {:?})",
-                            redis::Value::BulkString(bytes.clone())
-                        ),
+                serde_json5::from_str(s).map_err(|e| {
+                    redis::ParsingError::from(format!(
+                        "BulkString not deserializable to Value with serde_json5: {}",
+                        e
                     ))
                 })
             }
             redis::Value::Array(values) => {
                 let list: Result<Vec<Value>, _> =
-                    values.iter().map(Value::from_redis_value).collect();
+                    values.iter().map(Value::from_redis_value_ref).collect();
                 Ok(Value::List(list?.into()))
             }
             redis::Value::Nil => Ok(Value::Unit),
-            redis::Value::Int(i) => Ok(Value::Int(*i)),
+            redis::Value::Int(i) => Ok(Value::Int(i)),
             redis::Value::SimpleString(s) => Ok(Value::Str(s.clone().into())),
-            _ => Err(redis::RedisError::from((
-                redis::ErrorKind::TypeError,
-                "Response type not deserializable to Value",
+            _ => Err(redis::ParsingError::from(std::format!(
+                "Unsupported Redis value type for Value deserialization: {:?}",
+                v
             ))),
         }
     }
