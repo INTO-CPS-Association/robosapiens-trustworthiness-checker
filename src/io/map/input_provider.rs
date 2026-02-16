@@ -66,6 +66,7 @@ impl InputProvider for MapInputProvider {
                 for (name, sender) in &mut senders {
                     debug!("Sending tick to var stream {}", name);
                     if let Err(e) = sender.send(()).await {
+                        // Not an error, most likely because the channel is done
                         debug!("Failed to send tick to var stream {}: {}", name, e);
                         dead.push(name.clone());
                     }
