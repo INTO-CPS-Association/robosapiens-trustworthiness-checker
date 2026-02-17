@@ -1,3 +1,9 @@
 in x
+in d
+in c
 out z
+out v
+out w
 z = x
+v = v >= 60
+w = d <= 80

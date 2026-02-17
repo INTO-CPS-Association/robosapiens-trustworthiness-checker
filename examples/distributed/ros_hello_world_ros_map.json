@@ -2,5 +2,9 @@
     "x": {
         "topic": "/RV_data",
         "msg_type": "RVData"
+    },
+    "d": {
+        "topic": "/d",
+        "msg_type": "Int32"
     }
 }
