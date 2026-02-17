@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use anyhow::{Error, anyhow};
 use ecow::EcoVec;
@@ -79,9 +80,38 @@ pub fn create_lola_spec(stmts: &EcoVec<STopDecl>) -> LOLASpecification {
     LOLASpecification::new(inputs, outputs, assignments, type_annotations, aux_info)
 }
 
+struct LineCol {
+    line: usize,
+    col: usize,
+}
+
+impl fmt::Display for LineCol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}, column {}", self.line, self.col)
+    }
+}
+
+// Converts a byte offset into a line and a column
+fn line_col(input: &str, byte: usize) -> LineCol {
+    let byte = byte.min(input.len());
+    let mut line = 1usize;
+    let mut col = 1usize;
+
+    for ch in input[..byte].chars() {
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    LineCol { line, col }
+}
+
 pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<LOLASpecification> {
     let stmts = TopDeclsParser::new().parse(&input).map_err(|e| {
-        anyhow::anyhow!(e.to_string()).context(format!("Failed to parse input {}", input))
+        let err_fixed = e.map_location(|byte| line_col(&input, byte));
+        anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse input {}", input))
     })?;
     Ok(create_lola_spec(&stmts))
 }
@@ -89,7 +119,8 @@ pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<LOLASpecification
 pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<LOLASpecification> {
     let contents = smol::fs::read_to_string(file).await?;
     let stmts = TopDeclsParser::new().parse(&contents).map_err(|e| {
-        anyhow::anyhow!(e.to_string()).context(format!("Failed to parse file {}", file))
+        let err_fixed = e.map_location(|byte| line_col(&contents, byte));
+        anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse file {}", file))
     })?;
     Ok(create_lola_spec(&stmts))
 }
