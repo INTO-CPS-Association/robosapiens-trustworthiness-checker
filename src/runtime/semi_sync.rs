@@ -171,6 +171,8 @@ where
     }
 }
 
+// TODO: Fix that we have the boolean parameter input to define an ordering. Should not be defined
+// inside the VarManager but somewhere with logic in the context.
 struct VarManager<AC>
 where
     AC: AsyncConfig,
@@ -187,6 +189,7 @@ where
     retained_history: VecDeque<AC::Val>,
     samples_forwarded: usize,
     id: usize,
+    input: bool,
 }
 
 impl<AC> VarManager<AC>
@@ -194,7 +197,7 @@ where
     AC: AsyncConfig,
     AC::Val: DeferrableStreamData,
 {
-    fn new(var_name: VarName, value_stream: OutputStream<AC::Val>) -> Self {
+    fn new(var_name: VarName, value_stream: OutputStream<AC::Val>, input: bool) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(?var_name, "Creating VarManager {}", id);
         Self {
@@ -205,12 +208,17 @@ where
             retained_history: VecDeque::new(),
             id,
             samples_forwarded: 0,
+            input,
         }
     }
 
-    fn new_from_receiver(var_name: VarName, receiver: spsc::Receiver<AC::Val>) -> Self {
+    fn new_from_receiver(
+        var_name: VarName,
+        receiver: spsc::Receiver<AC::Val>,
+        input: bool,
+    ) -> Self {
         let value_stream = stream_utils::channel_to_output_stream(receiver);
-        Self::new(var_name, value_stream)
+        Self::new(var_name, value_stream, input)
     }
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<AC::Val> {
@@ -504,7 +512,8 @@ where
             .map(|var_name| {
                 let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
                     spsc::channel(128);
-                let var_manager = VarManager::<AC>::new_from_receiver(var_name.clone(), receiver);
+                let var_manager =
+                    VarManager::<AC>::new_from_receiver(var_name.clone(), receiver, false);
                 let expr = self.model.var_expr(var_name).ok_or_else(|| {
                     anyhow!(
                         "No expression found for output variable {} when setting up Monitor",
@@ -529,7 +538,7 @@ where
             .chain(
                 input_streams
                     .into_iter()
-                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream)),
+                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream, true)),
             )
             .collect::<Vec<VarManager<_>>>();
 
@@ -702,14 +711,16 @@ where
     }
 
     async fn forward_values(&mut self) -> anyhow::Result<StreamState> {
-        let mut managers = self.var_managers.borrow_mut();
-        for (name, manager) in managers.iter_mut() {
+        // Helper func to run the logic for awaiting manager.
+        async fn forward_one<AC>(name: &VarName, manager: &mut VarManager<AC>) -> anyhow::Result<()>
+        where
+            AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+            AC::Val: DeferrableStreamData,
+        {
             match manager.forward_value().await {
                 Ok(StreamState::Pending) => {}
                 Ok(StreamState::Finished) => {
                     info!(?name, "forward_values: VarManager finished");
-                    // Need to clear them as early as possible, as this indicates
-                    // subscribers should not expect more values
                     manager.subscribers.clear();
                 }
                 Err(e) => {
@@ -717,9 +728,23 @@ where
                     return Err(e);
                 }
             }
+            Ok(())
+        }
+
+        let mut managers = self.var_managers.borrow_mut();
+        // Forward inputs first to avoid deadlocks
+        for (name, manager) in managers.iter_mut() {
+            if manager.input {
+                forward_one::<AC>(name, manager).await?;
+            }
+        }
+        // Forward rest
+        for (name, manager) in managers.iter_mut() {
+            if !manager.input {
+                forward_one::<AC>(name, manager).await?;
+            }
         }
         managers.retain(|_, manager| !manager.subscribers.is_empty());
-
         Ok(if managers.is_empty() {
             StreamState::Finished
         } else {
@@ -734,9 +759,10 @@ where
             .filter_map(|(var_name, manager)| {
                 if vs.contains(var_name) {
                     let stream = manager.subscribe(history_length);
+                    let input = manager.input;
                     Some((
                         var_name.clone(),
-                        VarManager::<AC>::new(var_name.clone(), stream),
+                        VarManager::<AC>::new(var_name.clone(), stream, input),
                     ))
                 } else {
                     None
