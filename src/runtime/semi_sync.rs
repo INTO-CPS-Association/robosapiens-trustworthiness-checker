@@ -478,7 +478,7 @@ where
     MS: MonitoringSemantics<AC>,
 {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        info!("Running SemiSyncMonitor.");
+        debug!(?self.model, "Running SemiSyncMonitor based on model:");
         // Set up input streams
         let input_streams = self
             .model

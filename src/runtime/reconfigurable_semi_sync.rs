@@ -12,10 +12,11 @@ use crate::{
     lang::core::parser::SpecParser,
     runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor, SemiSyncMonitorBuilder},
     semantics::{AsyncConfig, MonitoringSemantics},
+    utils::cancellation_token::{self, CancellationToken},
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::{StreamExt, future::LocalBoxFuture};
+use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use smol::LocalExecutor;
 use std::{collections::BTreeMap, rc::Rc};
 use tracing::{debug, error, info, warn};
@@ -139,7 +140,7 @@ where
 
             ReconfSemiSyncMonitor {
                 executor,
-                semi_sync_monitor,
+                semi_sync_monitor: Some(semi_sync_monitor),
                 input_provider,
                 self_builder: *self,
                 sender_channels,
@@ -254,7 +255,7 @@ where
     P: SpecParser<S>,
 {
     executor: Rc<LocalExecutor<'static>>,
-    semi_sync_monitor: SemiSyncMonitor<AC, S, MS>,
+    semi_sync_monitor: Option<SemiSyncMonitor<AC, S, MS>>,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     self_builder: ReconfSemiSyncMonitorBuilder<AC, S, MS, P>,
     sender_channels: BTreeMap<VarName, SpscSender<AC::Val>>,
@@ -292,6 +293,24 @@ where
             })
             .collect::<BTreeMap<VarName, OutputStream<AC::Val>>>();
         input_streams
+    }
+
+    async fn cancellable_run(
+        cancellation_token: CancellationToken,
+        monitor: SemiSyncMonitor<AC, S, MS>,
+    ) -> anyhow::Result<()> {
+        // Similar to run_boxed but also listens for cancellation signal from the executor
+        // and forwards it to the inner semi_sync_monitor.
+        futures::select_biased! {
+            _ = cancellation_token.cancelled().fuse() => {
+                debug!("ReconfSemiSyncMonitor: Inner run cancelled");
+            }
+            res = monitor.run().fuse() => {
+                debug!("ReconfSemiSyncMonitor: Inner semi_sync_monitor.run() ended");
+                return res;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -356,30 +375,41 @@ where
         // supposed to run forever...
         // This is especially important here as we want to turn it off sometimes.
         let mut input_provider_stream = self.input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!(
-                        "ReconfSemiSyncMonitor: Input provider stream returned error: {:?}",
-                        res
-                    );
-                    return res;
-                }
-            }
-            Ok(())
-        });
-        self.executor.spawn(input_provider_future).detach();
         // let inner_run = self.semi_sync_monitor.run().map(|res| {
         //     info!("Inner semi_sync_monitor.run() ended");
         //     res
         // });
         // TODO: Must not be a spawn, but it is not trivial since it requires us to define a
         // work_task function that is not using self, but still enables killing.
-        self.executor.spawn(self.semi_sync_monitor.run()).detach();
+        let inner_rt_cancel_token = cancellation_token::CancellationToken::new();
+        let monitor = self
+            .semi_sync_monitor
+            .take()
+            .expect("SemiSyncMonitor must exist");
+        self.executor
+            .spawn(Self::cancellable_run(
+                inner_rt_cancel_token.clone(),
+                monitor,
+            ))
+            .detach();
         let mut res = Ok(());
 
-        // For now just print values...
         loop {
+            let ip_res = input_provider_stream.next().await;
+            if let Some(ip_res) = ip_res {
+                if ip_res.is_err() {
+                    error!(
+                        "ReconfSemiSyncMonitor: Input provider stream returned error: {:?}",
+                        ip_res
+                    );
+                    res = ip_res;
+                    break;
+                }
+            } else {
+                debug!("Input provider stream ended, shutting down ReconfSemiSyncMonitor");
+                break;
+            }
+
             for (var, val) in input_streams.iter_mut() {
                 info!(
                     "ReconfSemiSyncMonitor waiting for input on variable: {:?}...",
@@ -425,6 +455,7 @@ where
                                             Some(input_builder.clone());
                                     }
                                     warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor - restarting inner runtime");
+                                    inner_rt_cancel_token.cancel();
                                     let new_self =
                                         Box::new(self.self_builder.clone()).async_build().await;
                                     return new_self.run().await;
@@ -469,10 +500,6 @@ where
                                 ));
                                 break;
                             }
-                            info!(
-                                "Successfully forwarded to inner RT input for variable: {:?}",
-                                var
-                            );
                         } else {
                             error!("No sender channel found for variable: {:?}", var);
                             res = Err(anyhow!("No sender channel found for variable: {:?}", var));
