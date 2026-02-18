@@ -242,6 +242,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
     pub scheduler_mode: SchedulerCommunication,
     pub parser: ParserMode,
+    pub reconf_topic: String,
 }
 
 impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
@@ -301,6 +302,13 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
     pub fn parser(self, parser: ParserMode) -> Self {
         Self { parser, ..self }
     }
+
+    pub fn reconf_topic(self, reconf_topic: String) -> Self {
+        Self {
+            reconf_topic,
+            ..self
+        }
+    }
 }
 
 impl AbstractMonitorBuilder<LOLASpecification, Value>
@@ -308,6 +316,8 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
 {
     type Mon = Box<dyn Runnable>;
 
+    // TODO: Refactor. This needs to either reuse defaults used within the CLI parser, or not allow
+    // constructing without args.
     fn new() -> Self {
         Self {
             executor: None,
@@ -322,6 +332,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             semantics: Semantics::Untimed,
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
+            reconf_topic: "reconf".to_string(),
         }
     }
 
@@ -372,6 +383,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
+                self.reconf_topic.clone(),
             );
 
         let builder = if let Some(output) = self.output {
@@ -405,6 +417,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         scheduler_mode: SchedulerCommunication,
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
+        reconf_topic: String,
     ) -> Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
@@ -441,6 +454,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     UntimedLolaSemantics<LALRParser>,
                     LALRParser,
                 >::new();
+                builder = builder.reconf_topic(reconf_topic);
                 builder =
                     builder.input_builder(input_provider_builder.expect(
                         "Input provider builder required for ReconfigurableSemiSync runtime",
@@ -573,6 +587,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
+                self.reconf_topic.clone(),
             );
 
         // Construct inputs and outputs:
@@ -617,6 +632,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             semantics: self.semantics.clone(),
             scheduler_mode: self.scheduler_mode.clone(),
             parser: self.parser.clone(),
+            reconf_topic: self.reconf_topic.clone(),
         }
     }
 }

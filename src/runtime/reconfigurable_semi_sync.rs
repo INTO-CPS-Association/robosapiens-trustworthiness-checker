@@ -39,6 +39,7 @@ where
     model: Option<S>,
     input_builder: Option<InputProviderBuilder>,
     output_builder: Option<OutputHandlerBuilder>,
+    reconf_topic: Option<String>,
     _marker: (
         std::marker::PhantomData<MS>,
         std::marker::PhantomData<AC>,
@@ -62,6 +63,7 @@ where
             model: None,
             input_builder: None,
             output_builder: None,
+            reconf_topic: None,
             _marker: (
                 std::marker::PhantomData,
                 std::marker::PhantomData,
@@ -170,6 +172,11 @@ where
             output_builder: Some(output_builder),
             ..self
         }
+    }
+
+    pub fn reconf_topic(mut self, reconf_topic: String) -> Self {
+        self.reconf_topic = Some(reconf_topic);
+        self
     }
 
     fn inject_reconf_stream(&mut self) {
