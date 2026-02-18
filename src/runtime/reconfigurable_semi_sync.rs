@@ -22,8 +22,6 @@ use std::{collections::BTreeMap, rc::Rc};
 use tracing::{debug, error, info, warn};
 use unsync::spsc::Sender as SpscSender;
 
-const RECONF_TOPIC_NAME: &str = "reconf";
-
 // TODO: Because InputProviderBuilder is hardcoded to Value, this also needs to be in some places
 
 #[derive(Clone)]
@@ -185,29 +183,34 @@ where
             .clone()
             .expect("Input builder must be set before injecting reconfiguration stream");
 
-        // Early‑return if RECONF_TOPIC_NAME is already an input var
+        // Early‑return if self.reconf_topic is already an input var
         let model = self.model.clone().expect("Input builder must have model");
-        if model.input_vars().contains(&RECONF_TOPIC_NAME.into()) {
+        let reconf_topic: VarName = self
+            .reconf_topic
+            .clone()
+            .expect("Reconf topic must be set")
+            .into();
+        if model.input_vars().contains(&reconf_topic) {
             info!(
-                ?RECONF_TOPIC_NAME,
+                ?reconf_topic,
                 "Reconfiguration variable already present in InputProviderModel, skipping injection"
             );
             return;
         }
 
-        // Compute new spec with RECONF_TOPIC_NAME injected when applicable
+        // Compute new spec with reconf_topic injected when applicable
         let new_spec = match &input_builder.spec {
             InputProviderSpec::Manual | InputProviderSpec::File(_) | InputProviderSpec::Ros(_) => {
                 warn!(
                     "Limited support for reconfiguration of file inputs, ros inputs and manual. \
                  Treating var '{:?}' as reconfiguration variable",
-                    RECONF_TOPIC_NAME
+                    reconf_topic
                 );
                 input_builder.spec.clone()
             }
             InputProviderSpec::MQTT(topics) | InputProviderSpec::Redis(topics) => {
                 info!(
-                    ?RECONF_TOPIC_NAME,
+                    ?reconf_topic,
                     "Injecting reconf variable into InputProvider"
                 );
 
@@ -218,7 +221,7 @@ where
                         .map(|v| v.to_string())
                         .collect()
                 });
-                var_topics.push(RECONF_TOPIC_NAME.into());
+                var_topics.push(reconf_topic.name());
 
                 match input_builder.spec {
                     InputProviderSpec::MQTT(_) => InputProviderSpec::MQTT(Some(var_topics)),
@@ -232,7 +235,7 @@ where
         self.model
             .as_mut()
             .expect("Input builder must have model")
-            .add_input_var(RECONF_TOPIC_NAME.into());
+            .add_input_var(reconf_topic.into());
         // Including reconf topic
         let model = self.model.clone().expect("Model must exist");
         self.input_builder = Some(
@@ -366,9 +369,12 @@ where
     // I have spent so long trying to find the bug but nothing seems to do the trick. Neither
     // pinning, fusing or boxing seems to catch this.
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        // It needs to be like a PuppetMaster around the InputProvider.
-        // Whenever an Input is received it decides whether to forward it to the Inner runtime or
-        // to reconfigure
+        let reconf_topic: VarName = self
+            .self_builder
+            .reconf_topic
+            .clone()
+            .expect("Reconf topic must be set")
+            .into();
 
         // Includes reconf stream:
         let mut input_streams = self.setup_input_provider().await;
@@ -419,7 +425,7 @@ where
                     var
                 );
                 if let Some(val) = val.next().await {
-                    if var == &RECONF_TOPIC_NAME.into() {
+                    if var == &reconf_topic {
                         match val {
                             Value::Str(eco_string) => {
                                 info!("Received reconfiguration command: {:?}", eco_string);
