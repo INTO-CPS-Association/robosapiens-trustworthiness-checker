@@ -108,11 +108,6 @@ impl DistributionModeBuilder {
         self
     }
 
-    pub fn maybe_runtime(mut self, runtime: Option<Runtime>) -> Self {
-        self.runtime = runtime;
-        self
-    }
-
     pub async fn build(self) -> anyhow::Result<BuilderDistributionMode> {
         Ok(match (self.distribution_mode, self.runtime) {
             (

@@ -116,8 +116,8 @@ impl InputProviderBuilder {
         let _async_build = debug_span!("async_build for input provider").entered();
         match self.spec {
             InputProviderSpec::File(path) => {
-                let input_file_parser = match self.lang.unwrap_or(Language::DynSRV) {
-                    Language::DynSRV => tc::lang::untimed_input::untimed_input_file,
+                let input_file_parser = match self.lang.unwrap_or(Language::DSRV) {
+                    Language::DSRV => tc::lang::untimed_input::untimed_input_file,
                     Language::Lola => tc::lang::untimed_input::untimed_input_file,
                 };
                 Box::new(

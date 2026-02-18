@@ -54,22 +54,19 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = RuntimeBuilder::new();
 
-    let parser = cli.parser.unwrap_or(ParserMode::Lalr);
-    let language = cli.language.unwrap_or(Language::DynSRV);
-
     let mqtt_port = cli.mqtt_port;
     let redis_port = cli.redis_port;
 
     let builder = builder.executor(executor.clone());
 
-    let builder = builder.maybe_semantics(cli.semantics);
+    let builder = builder.semantics(cli.semantics);
 
-    let builder = builder.maybe_runtime(cli.runtime);
+    let builder = builder.runtime(cli.runtime);
 
-    let builder = builder.parser(parser.clone());
+    let builder = builder.parser(cli.parser);
 
-    let model_parser = match language {
-        Language::DynSRV => tc::lang::dynamic_lola::parser::lola_specification,
+    let model_parser = match cli.language {
+        Language::DSRV => tc::lang::dynamic_lola::parser::lola_specification,
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
     };
 
@@ -79,15 +76,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode)
         .maybe_mqtt_port(mqtt_port)
         .maybe_local_node(cli.local_node)
-        .maybe_runtime(cli.runtime)
+        .runtime(cli.runtime)
         .maybe_dist_constraints(cli.distribution_constraints);
     debug!("Building distribution mode");
     let distribution_mode = distribution_mode_builder.build().await?;
     debug!("Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
-    // let builder = builder.distribution_mode_builder(distribution_mode_builder);
 
-    let model = match parser {
+    let model = match cli.parser {
         ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
             .await
             .context("Model file could not be parsed")?,
@@ -121,7 +117,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let input_provider_builder = InputProviderBuilder::new(cli.input_mode)
         .executor(executor.clone())
         .model(model)
-        .lang(language)
+        .lang(cli.language)
         .mqtt_port(mqtt_port)
         .redis_port(redis_port);
     let builder = builder.input_provider_builder(input_provider_builder);

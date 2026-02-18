@@ -1,4 +1,5 @@
 use clap::{Args, Parser, ValueEnum, builder::OsStr};
+use strum_macros::Display;
 
 use crate::core::{Runtime, Semantics};
 
@@ -6,15 +7,15 @@ use crate::core::{Runtime, Semantics};
 ///
 /// Different formal specification languages that can be used to define
 /// monitoring properties and system behavior constraints.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
 pub enum Language {
-    /// DynSRV runtime-verification language
+    /// DSRV runtime-verification language
     ///
     /// A stream-based specification language for runtime verification that supports
     /// temporal logic properties and dynamic spawning of new monitors
-    #[value(name = "dynsrv")]
-    DynSRV,
-    /// LOLA: a synonym for DynSRV for legacy compatibility
+    DSRV,
+    /// LOLA: a synonym for DSRV for legacy compatibility
     Lola,
 }
 
@@ -22,7 +23,8 @@ pub enum Language {
 ///
 /// Different parsing approaches available for processing specification files,
 /// each with different performance and feature characteristics.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
 pub enum ParserMode {
     /// Parser combinator implementation using the Winnow library
     ///
@@ -203,14 +205,14 @@ pub struct Cli {
     #[command(flatten)]
     pub output_mode: OutputMode,
 
-    #[arg(long, help = "Parser mode to use for model parsing")]
-    pub parser: Option<ParserMode>,
-    #[arg(long, help = "Specification language to use")]
-    pub language: Option<Language>,
-    #[arg(long, help = "Semantics engine to use for monitoring")]
-    pub semantics: Option<Semantics>,
-    #[arg(long, help = "Runtime system to use for execution")]
-    pub runtime: Option<Runtime>,
+    #[arg(long, help = "Parser mode to use for model parsing", default_value_t = ParserMode::Lalr)]
+    pub parser: ParserMode,
+    #[arg(long, help = "Specification language to use", default_value_t = Language::DSRV)]
+    pub language: Language,
+    #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::Untimed)]
+    pub semantics: Semantics,
+    #[arg(long, help = "Runtime system to use for execution", default_value_t = Runtime::Async)]
+    pub runtime: Runtime,
 
     #[command(flatten)]
     pub distribution_mode: DistributionMode,

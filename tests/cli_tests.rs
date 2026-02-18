@@ -693,14 +693,14 @@ mod integration_tests {
 
     /// Test CLI with different language modes
     #[apply(async_test)]
-    async fn test_dynsrv_language() {
+    async fn test_dsrv_language() {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.lola"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
             "--language",
-            "dynsrv",
+            "dsrv",
         ])
         .await
         .expect("Failed to run CLI");

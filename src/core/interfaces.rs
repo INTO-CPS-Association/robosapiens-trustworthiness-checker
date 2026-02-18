@@ -4,18 +4,21 @@ use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use std::fmt::Debug;
 use std::rc::Rc;
+use strum_macros::Display;
 
 use crate::io::mqtt::MQTTLocalityReceiver;
 
 use super::{StreamData, VarName};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
 pub enum Semantics {
     Untimed,
     TypedUntimed,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
 pub enum Runtime {
     Async,
     Distributed,

@@ -255,22 +255,8 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         Self { runtime, ..self }
     }
 
-    pub fn maybe_runtime(self, runtime: Option<Runtime>) -> Self {
-        match runtime {
-            Some(runtime) => self.runtime(runtime),
-            None => self,
-        }
-    }
-
     pub fn semantics(self, semantics: Semantics) -> Self {
         Self { semantics, ..self }
-    }
-
-    pub fn maybe_semantics(self, semantics: Option<Semantics>) -> Self {
-        match semantics {
-            Some(semantics) => self.semantics(semantics),
-            None => self,
-        }
     }
 
     pub fn distribution_mode(self, dist_mode: DistributionMode) -> Self {
