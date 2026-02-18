@@ -495,7 +495,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     UntimedLolaSemantics<LALRParser>,
                 >::new())
             }
-            (Runtime::ReconfigurableSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
+            (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfSemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
                     LOLASpecification,
@@ -641,7 +641,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
 
         // Construct inputs and outputs:
         // Skip this for ReconfigurableSemiSync runtime since we handle builders directly in the match above
-        let builder = if self.runtime == Runtime::ReconfigurableSemiSync {
+        let builder = if self.runtime == Runtime::ReconfSemiSync {
             builder
         } else {
             // Normal handling for non-reconfigurable runtimes

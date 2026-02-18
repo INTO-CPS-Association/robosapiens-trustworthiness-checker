@@ -633,7 +633,7 @@ mod integration_tests {
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
-            "--parser-mode",
+            "--parser",
             "combinator",
         ])
         .await

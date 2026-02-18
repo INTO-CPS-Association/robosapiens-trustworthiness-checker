@@ -204,7 +204,7 @@ pub struct Cli {
     pub output_mode: OutputMode,
 
     #[arg(long, help = "Parser mode to use for model parsing")]
-    pub parser_mode: Option<ParserMode>,
+    pub parser: Option<ParserMode>,
     #[arg(long, help = "Specification language to use")]
     pub language: Option<Language>,
     #[arg(long, help = "Semantics engine to use for monitoring")]
