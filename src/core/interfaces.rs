@@ -6,8 +6,6 @@ use std::fmt::Debug;
 use std::rc::Rc;
 use strum_macros::Display;
 
-use crate::io::mqtt::MQTTLocalityReceiver;
-
 use super::{StreamData, VarName};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
@@ -131,19 +129,6 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
     {
         if let Some(output) = output {
             self.output(output)
-        } else {
-            self
-        }
-    }
-
-    fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self;
-
-    fn maybe_mqtt_reconfig_provider(self, provider: Option<MQTTLocalityReceiver>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(provider) = provider {
-            self.mqtt_reconfig_provider(provider)
         } else {
             self
         }

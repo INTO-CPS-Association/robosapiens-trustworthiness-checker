@@ -148,10 +148,6 @@ where
             }
         })
     }
-
-    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        todo!()
-    }
 }
 
 impl<AC, S, MS, P> ReconfSemiSyncMonitorBuilder<AC, S, MS, P>

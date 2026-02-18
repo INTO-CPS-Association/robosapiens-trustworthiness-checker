@@ -92,10 +92,6 @@ where
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
         Box::pin(async move { (*self).build() })
     }
-
-    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        todo!()
-    }
 }
 
 #[derive(Debug)]

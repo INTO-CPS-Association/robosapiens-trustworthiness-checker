@@ -9,7 +9,7 @@ use crate::{
     LOLASpecification, Monitor, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
-    io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
+    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::dynamic_lola::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
@@ -54,11 +54,6 @@ pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     fn output(
         self: Box<Self>,
         output: Box<dyn OutputHandler<Val = V>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
-
-    fn mqtt_reconfig_provider(
-        self: Box<Self>,
-        provider: MQTTLocalityReceiver,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
     fn build(self: Box<Self>) -> Box<dyn Runnable>;
@@ -107,13 +102,6 @@ impl<
         Box::new(MonBuilder::output(*self, output))
     }
 
-    fn mqtt_reconfig_provider(
-        self: Box<Self>,
-        provider: MQTTLocalityReceiver,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
-        Box::new(MonBuilder::mqtt_reconfig_provider(*self, provider))
-    }
-
     fn build(self: Box<Self>) -> Box<dyn Runnable> {
         Box::new(MonBuilder::build(*self))
     }
@@ -152,10 +140,6 @@ impl<
 
     fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
         Self(self.0.output(output))
-    }
-
-    fn mqtt_reconfig_provider(self, provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        Self(self.0.mqtt_reconfig_provider(provider))
     }
 
     fn build(self) -> Self::Mon {
@@ -245,7 +229,6 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
-    pub mqtt_reconfig_provider: Option<MQTTLocalityReceiver>,
     pub scheduler_mode: SchedulerCommunication,
     pub parser: ParserMode,
 }
@@ -326,7 +309,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             distribution_mode_builder: None,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
-            mqtt_reconfig_provider: None,
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
         }
@@ -360,14 +342,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
         }
     }
 
-    fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self {
-        // Generic builder doesn't directly use the MQTT reconfiguration provider
-        Self {
-            mqtt_reconfig_provider: Some(provider),
-            ..self
-        }
-    }
-
     fn build(self) -> Self::Mon {
         if self.distribution_mode_builder.is_some()
             || self.input_provider_builder.is_some()
@@ -383,7 +357,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                 self.parser,
                 self.executor,
                 self.model,
-                self.mqtt_reconfig_provider,
                 self.distribution_mode,
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
@@ -447,7 +420,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
         model: Option<LOLASpecification>,
-        mqtt_reconfig_provider: Option<MQTTLocalityReceiver>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_provider_builder: Option<InputProviderBuilder>,
@@ -530,8 +502,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                     DistValueConfig,
                     DistributedSemantics<LALRParser>,
                 >::new();
-
-                let builder = builder.maybe_mqtt_reconfig_provider(mqtt_reconfig_provider);
 
                 let builder = builder.scheduler_mode(scheduler_mode);
                 let builder = match distribution_mode {
@@ -618,7 +588,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 self.parser,
                 self.executor,
                 self.model,
-                self.mqtt_reconfig_provider,
                 distribution_mode,
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
@@ -665,7 +634,6 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             distribution_mode_builder: self.distribution_mode_builder.clone(),
             runtime: self.runtime.clone(),
             semantics: self.semantics.clone(),
-            mqtt_reconfig_provider: None,
             scheduler_mode: self.scheduler_mode.clone(),
             parser: self.parser.clone(),
         }

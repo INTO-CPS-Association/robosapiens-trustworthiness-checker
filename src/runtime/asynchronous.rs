@@ -998,11 +998,6 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
         }
     }
 
-    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        // We don't currently use the mqtt reconfiguration provider in the standard async runtime
-        self
-    }
-
     fn build(self) -> Self::Mon {
         debug!("AsyncMonitorBuilder: Starting build process");
         let executor = self.executor.expect("Executor not supplied");
