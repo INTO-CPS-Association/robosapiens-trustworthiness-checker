@@ -13,12 +13,10 @@ use crate::core::Semantics;
 use crate::io::map::MapInputProvider;
 use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::lang::dynamic_lola::lalr_parser::LALRParser;
-use crate::lang::dynamic_lola::type_checker::SExprTE;
 use crate::lang::dynamic_lola::type_checker::TypedLOLASpecification;
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
-use crate::runtime::asynchronous::Context;
-use crate::semantics::AsyncConfig;
+use crate::runtime::builder::TypedValueConfig;
 
 use smol::LocalExecutor;
 
@@ -102,15 +100,6 @@ pub async fn monitor_outputs_untyped_little(
     .await;
 }
 
-// NOTE: Temporary only while AsyncConfig is unfinished
-#[derive(Clone)]
-struct ConfigTyped;
-impl AsyncConfig for ConfigTyped {
-    type Val = Value;
-    type Expr = SExprTE;
-    type Ctx = Context<Self>;
-}
-
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: TypedLOLASpecification,
@@ -124,7 +113,7 @@ pub async fn monitor_outputs_typed_async(
     ));
     let async_monitor = AsyncMonitorBuilder::<
         _,
-        ConfigTyped,
+        TypedValueConfig,
         crate::semantics::TypedUntimedLolaSemantics<LALRParser>,
     >::new()
     .executor(executor.clone())

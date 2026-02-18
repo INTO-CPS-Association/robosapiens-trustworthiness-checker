@@ -97,7 +97,6 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     );
 
     // Localise the model to contain only the local variables (if needed)
-    // Skip for the reconfigurable async runtime, since this is handled by the runtime
     let model = match &builder.distribution_mode {
         DistributionMode::LocalMonitor(locality_mode)
         | DistributionMode::LocalMonitorWithReceiverAndLocality(locality_mode, _) => {

@@ -9,6 +9,7 @@ use crate::{
     LOLASpecification, Monitor, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
+    define_config,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::dynamic_lola::{
         lalr_parser::LALRParser,
@@ -31,6 +32,16 @@ use super::{
 };
 
 use static_assertions::assert_obj_safe;
+
+// Various AsyncConfigs to use
+#[rustfmt::skip]
+define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context);
+#[rustfmt::skip]
+define_config!(TypedValueConfig, Val = Value, Expr = SExprTE, Ctx = Context);
+#[rustfmt::skip]
+define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedContext);
+#[rustfmt::skip]
+define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext);
 
 pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     fn executor(
@@ -380,36 +391,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
         Box::pin(async move { (*self).async_build().await })
     }
-}
-
-// NOTE: Temporary only while AsyncConfig is unfinished
-#[derive(Clone)]
-struct ValueConfig;
-impl AsyncConfig for ValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = Context<Self>;
-}
-#[derive(Clone)]
-struct TypedValueConfig;
-impl AsyncConfig for TypedValueConfig {
-    type Val = Value;
-    type Expr = SExprTE;
-    type Ctx = Context<Self>;
-}
-#[derive(Clone)]
-struct DistValueConfig;
-impl AsyncConfig for DistValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = DistributedContext<Self>;
-}
-#[derive(Clone)]
-struct SemiSyncValueConfig;
-impl AsyncConfig for SemiSyncValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = SemiSyncContext<Self>;
 }
 
 impl GenericMonitorBuilder<LOLASpecification, Value> {

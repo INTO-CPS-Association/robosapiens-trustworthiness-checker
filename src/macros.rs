@@ -6,6 +6,25 @@ macro_rules! is_enum_variant {
     };
 }
 
+// Creates a struct name with the given name, and implements AsyncConfig for it with the specified
+// associated types
+// E.g.: define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context);
+// Creates the struct ValueConfig with AsyncConfig implementation where Val = Value, Expr = SExpr,
+// and Ctx = Context<ValueConfig>
+#[macro_export]
+macro_rules! define_config {
+    ($name:ident, Val=$val:ty, Expr=$expr:ty, Ctx=$ctx:ident) => {
+        #[derive(Clone)]
+        pub struct $name;
+
+        impl AsyncConfig for $name {
+            type Val = $val;
+            type Expr = $expr;
+            type Ctx = $ctx<Self>;
+        }
+    };
+}
+
 /// A shorthand attribute for `#[test(apply(smol_test))]` used to create async
 /// tests
 ///

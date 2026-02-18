@@ -607,6 +607,7 @@ mod tests {
     use crate::core::StreamType;
 
     use crate::runtime::asynchronous::Context;
+    use crate::runtime::builder::TypedValueConfig;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -615,14 +616,7 @@ mod tests {
 
     type Parser = crate::lang::dynamic_lola::lalr_parser::LALRParser;
 
-    // Typed test configuration
-    #[derive(Clone, Copy)]
-    pub struct TypedTestConfig {}
-    impl AsyncConfig for TypedTestConfig {
-        type Val = Value;
-        type Expr = SExprTE;
-        type Ctx = Context<Self>;
-    }
+    type TypedTestConfig = TypedValueConfig;
 
     type TestCtx = Context<TypedTestConfig>;
 

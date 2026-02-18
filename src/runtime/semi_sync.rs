@@ -848,14 +848,15 @@ where
 #[cfg(test)]
 mod tests {
 
+    use crate::async_test;
     use crate::core::Runnable;
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dynamic_lola::lalr_parser::LALRParser;
-    use crate::runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor};
-    use crate::semantics::{AsyncConfig, UntimedLolaSemantics};
+    use crate::runtime::builder::SemiSyncValueConfig;
+    use crate::runtime::semi_sync::SemiSyncMonitor;
+    use crate::semantics::UntimedLolaSemantics;
     use crate::{LOLASpecification, lola_fixtures::*};
-    use crate::{SExpr, async_test};
     use crate::{Value, lola_specification};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
@@ -865,16 +866,8 @@ mod tests {
 
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
-    #[derive(Clone)]
-    struct ValueConfig;
-    impl AsyncConfig for ValueConfig {
-        type Val = Value;
-        type Expr = SExpr;
-        type Ctx = SemiSyncContext<Self>;
-    }
-
     type TestMonitor =
-        SemiSyncMonitor<ValueConfig, LOLASpecification, UntimedLolaSemantics<LALRParser>>;
+        SemiSyncMonitor<SemiSyncValueConfig, LOLASpecification, UntimedLolaSemantics<LALRParser>>;
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {

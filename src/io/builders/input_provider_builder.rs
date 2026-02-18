@@ -6,9 +6,8 @@ use tracing::debug_span;
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::mqtt::MqttFactory;
 use crate::io::testing::ManualInputProvider;
-use crate::runtime::semi_sync::SemiSyncContext;
-use crate::semantics::AsyncConfig;
-use crate::{self as tc, SExpr, Value};
+use crate::runtime::builder::ValueConfig;
+use crate::{self as tc, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
 
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
@@ -33,15 +32,6 @@ pub enum InputProviderSpec {
         Option<Vec<String>>,
     ),
     Manual,
-}
-
-// TODO: This should not be required when InputProviderBuilder becomes generic
-#[derive(Clone)]
-struct ValueConfig;
-impl AsyncConfig for ValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = SemiSyncContext<Self>;
 }
 
 #[derive(Clone, Debug)]

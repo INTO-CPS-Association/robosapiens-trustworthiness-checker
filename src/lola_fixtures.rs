@@ -1,39 +1,21 @@
 use crate::{
-    InputProvider, LOLASpecification, SExpr, Value,
+    InputProvider, LOLASpecification, Value,
     io::map::MapInputProvider,
-    lang::dynamic_lola::{lalr_parser::LALRParser, type_checker::SExprTE},
-    runtime::asynchronous::{AsyncMonitorRunner, Context},
-    semantics::{
-        AsyncConfig, distributed::contexts::DistributedContext,
-        untimed_untyped_lola::semantics::UntimedLolaSemantics,
+    lang::dynamic_lola::lalr_parser::LALRParser,
+    runtime::{
+        asynchronous::AsyncMonitorRunner,
+        builder::{DistValueConfig, TypedValueConfig, ValueConfig},
     },
+    semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics,
 };
 use std::{collections::BTreeMap, iter};
 
 // Dead code is allowed in this file since cargo does not correctly
 // track when functions are used in tests or with specific features.
 
-#[derive(Clone)]
-pub struct TestConfig {}
-impl AsyncConfig for TestConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = Context<Self>;
-}
-#[derive(Clone)]
-pub struct TestTypedConfig {}
-impl AsyncConfig for TestTypedConfig {
-    type Val = Value;
-    type Expr = SExprTE;
-    type Ctx = Context<Self>;
-}
-#[derive(Clone)]
-pub struct TestDistConfig {}
-impl AsyncConfig for TestDistConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = DistributedContext<Self>;
-}
+pub type TestConfig = ValueConfig;
+pub type TestTypedConfig = TypedValueConfig;
+pub type TestDistConfig = DistValueConfig;
 
 // Default semantics to use in tests
 pub type TestSemantics = UntimedLolaSemantics<LALRParser>;
