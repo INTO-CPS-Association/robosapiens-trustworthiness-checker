@@ -842,7 +842,35 @@ where
             );
 
             let mut var_managers = self.var_managers.borrow_mut();
-            for (var_name, var_manager) in mem::take(&mut *var_managers).into_iter() {
+            for (var_name, mut var_manager) in mem::take(&mut *var_managers).into_iter() {
+                // TODO: TW - I added this as a temporary fix because it was blocking my work.
+                // The issue is that the Async RT does not support specifications where an input
+                // variable is unused. The InputProvider expects the RT to consume the streams it
+                // sends, but the Async RT only does so if the VarManager has at least one
+                // subscriber. This causes the InputProvider to crash.
+                // It is one of those bugs that have always been lurking but the recent changes for
+                // the reconfiguration paper made it crash correctly instead of just hanging.
+                // ...
+                // PS. the bug is not visible with files. It has been seen with ROS2 and I believe
+                // it should replicate with MQTT and Redis.
+
+                // Spawn noop task for every var to avoid bug:
+                let stream = var_manager.subscribe();
+                let name = var_name.clone();
+                self.executor
+                    .spawn(async move {
+                        debug!(
+                            "Context[id={}]: Starting noop task for '{}'",
+                            var_manager.id, name
+                        );
+                        stream.for_each(|_| async {}).await;
+                        debug!(
+                            "Context[id={}]: Noop task for '{}' completed",
+                            var_manager.id, name
+                        );
+                    })
+                    .detach();
+                // Actually make it run:
                 debug!(
                     "Context[id={}]: Spawning run for var_manager '{}'",
                     self.id, var_name
