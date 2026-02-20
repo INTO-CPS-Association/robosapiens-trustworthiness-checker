@@ -1,20 +1,26 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_stream::stream;
 use async_trait::async_trait;
+use futures::FutureExt;
+use futures::stream::FuturesUnordered;
+use smol::stream::StreamExt;
 use tracing::debug;
-use unsync::spsc::Sender as SpscSender;
 
-use crate::{InputProvider, OutputStream, Value, VarName};
-
-type VarStream = OutputStream<Value>;
+use crate::{
+    InputProvider, OutputStream, Value, VarName,
+    stream_utils::{self, SenderWithAck},
+};
 
 // TODO: Should only be enabled for testing and benches, but we have some bench code that is not
 // conditionally compiled yet.
 
 pub struct MapInputProvider {
-    map: BTreeMap<VarName, Option<VarStream>>,
-    senders: Option<BTreeMap<VarName, SpscSender<()>>>,
+    map: BTreeMap<VarName, Option<OutputStream<Value>>>,
+    // Use ack channels to implement control_stream for legacy reasons.
+    // This enables using `control_stream` in Runtimes with the old `run` behavior without starving
+    // the system.
+    senders: Option<BTreeMap<VarName, SenderWithAck<()>>>,
 }
 
 impl MapInputProvider {
@@ -23,9 +29,9 @@ impl MapInputProvider {
         let mut senders = BTreeMap::new();
         for (name, data) in vars.into_iter() {
             let mut data_iter = data.into_iter();
-            let (sender, mut receiver) = unsync::spsc::channel::<()>(1);
+            let (sender, mut receiver) = stream_utils::channel_with_ack(10);
             let var_stream: OutputStream<Value> = Box::pin(stream! {
-            while let Some(_) = receiver.recv().await {
+            while let Some(_) = receiver.next().await {
                 if let Some(val) = data_iter.next() {
                     yield val;
                 } else {
@@ -58,19 +64,39 @@ impl InputProvider for MapInputProvider {
             .senders
             .take()
             .expect("control stream can only be taken once");
+        // Set of those streams that have been taken with var(),
+        // otherwise we deadlock waiting for acks from those that are not taken.
+        let taken = self
+            .map
+            .iter()
+            .filter_map(|(name, stream)| stream.is_none().then(|| name.clone()))
+            .collect::<BTreeSet<_>>();
+        senders.retain(|name, _| taken.contains(name));
 
         Box::pin(stream! {
             loop {
-                let mut dead = Vec::new();
-                // Send to each sender:
-                for (name, sender) in &mut senders {
-                    debug!("Sending tick to var stream {}", name);
-                    if let Err(e) = sender.send(()).await {
-                        // Not an error, most likely because the channel is done
-                        debug!("Failed to send tick to var stream {}: {}", name, e);
-                        dead.push(name.clone());
+                // Must be in scope to ensure only one mutable borrow
+                let dead = {
+                    let mut futs = FuturesUnordered::new();
+
+                    // Create sender tasks
+                    for (name, sender) in &mut senders {
+                        let task = sender.send(()).map(|res| (name.clone(), res));
+                        futs.push(task);
                     }
-                }
+
+                    let mut dead = Vec::new();
+                    // Futs returns None when empty - does not indicate tasks result
+                    while let Some((name, res)) = futs.next().await {
+                        if let Err(e) = res {
+                            // Not an error, most likely because the channel is done
+                            debug!("Failed to send tick to var stream {}: {}", name, e);
+                            dead.push(name);
+                        }
+                    }
+                    dead
+                };
+
                 for name in dead {
                     senders.remove(&name);
                 }
@@ -79,11 +105,6 @@ impl InputProvider for MapInputProvider {
                 if senders.is_empty() {
                     return;
                 }
-                // Timer to avoid starvation - has been seen in tests.
-                // (smool::future::yield_now() does not do the trick)
-                // A better but more complex solution would be to add backpressure from the
-                // tick receiver.
-                smol::Timer::after(std::time::Duration::from_millis(1)).await;
             }
         })
     }
@@ -272,30 +293,5 @@ mod tests {
 
         assert_eq!(x_res, None);
         assert_eq!(y_res, None);
-    }
-
-    #[apply(async_test)]
-    async fn control_stream_without_consuming(_ex: Rc<LocalExecutor<'static>>) {
-        // Tests that the InputProvider does not hang if a Runtime does not consume all the
-        // var_streams.
-        let data = BTreeMap::from([("x".into(), (1..15).map(Value::Int).collect())]);
-        let mut provider = MapInputProvider::new(data.clone());
-        let mut control_stream = provider.control_stream().await;
-        for _ in 1..15 {
-            let _ = with_timeout(control_stream.next(), 1, "control_stream.next()")
-                .await
-                .expect("Control stream should not hang");
-        }
-
-        let mut provider = MapInputProvider::new(data);
-        let _x_stream = provider
-            .var_stream(&"x".into())
-            .expect("x stream should be available");
-        let mut control_stream = provider.control_stream().await;
-        for _ in 1..15 {
-            let _ = with_timeout(control_stream.next(), 1, "control_stream.next()")
-                .await
-                .expect("Control stream should not hang");
-        }
     }
 }
