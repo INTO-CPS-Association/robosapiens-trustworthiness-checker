@@ -114,7 +114,7 @@ impl InputProvider for MapInputProvider {
 mod tests {
     use std::{rc::Rc, time::Duration};
 
-    use crate::async_test;
+    use crate::{async_test, lola_fixtures::input_streams_add_defer};
 
     use super::*;
     use futures::{FutureExt, StreamExt};
@@ -293,5 +293,62 @@ mod tests {
 
         assert_eq!(x_res, None);
         assert_eq!(y_res, None);
+    }
+
+    #[apply(async_test)]
+    async fn var_stream_large_regression(_ex: Rc<LocalExecutor<'static>>) {
+        // Test that checks that MapInputProvider can handle a large number of ticks without
+        // deadlocking or running out of memory.
+        // Introduced after regression with runtime test
+
+        const SIZE: usize = 10000;
+        let mut provider = input_streams_add_defer(SIZE);
+
+        let mut x_stream = provider
+            .var_stream(&"x".into())
+            .expect("x stream should be available");
+        let mut y_stream = provider
+            .var_stream(&"y".into())
+            .expect("y stream should be available");
+        let mut e_stream = provider
+            .var_stream(&"e".into())
+            .expect("e stream should be available");
+
+        let mut control_stream = provider.control_stream().await;
+
+        for _ in 0..SIZE {
+            let _ = with_timeout(control_stream.next(), 1, "control_stream.next()")
+                .await
+                .expect("control stream should yield a value");
+            let _ = with_timeout(x_stream.next(), 1, "x_stream.next()")
+                .await
+                .expect("x stream should yield a value");
+            let _ = with_timeout(y_stream.next(), 1, "y_stream.next()")
+                .await
+                .expect("y stream should yield a value");
+            let _ = with_timeout(e_stream.next(), 1, "e_stream.next()")
+                .await
+                .expect("e stream should yield a value");
+        }
+
+        let _ = control_stream
+            .next()
+            .await
+            .expect("control stream should yield Ok");
+
+        let x_res = with_timeout(x_stream.next(), 1, "x_stream.next()")
+            .await
+            .expect("x stream should yield a value");
+        let y_res = with_timeout(y_stream.next(), 1, "y_stream.next()")
+            .await
+            .expect("y stream should yield a value");
+        let e_res = with_timeout(e_stream.next(), 1, "e_stream.next()")
+            .await
+            .expect("e stream should yield a value");
+
+        // All are exhausted:
+        assert_eq!(x_res, None);
+        assert_eq!(y_res, None);
+        assert_eq!(e_res, None);
     }
 }
