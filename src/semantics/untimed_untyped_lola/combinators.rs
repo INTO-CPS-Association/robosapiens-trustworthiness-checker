@@ -598,6 +598,7 @@ where
 pub fn defer<AC, Parser>(
     ctx: &AC::Ctx,
     mut prop_stream: OutputStream<AC::Val>,
+    vs: EcoVec<VarName>,
     history_length: usize,
 ) -> OutputStream<AC::Val>
 where
@@ -1196,7 +1197,7 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 2);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 2);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 3.into()];
@@ -1210,7 +1211,7 @@ mod combinator_tests {
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -1223,7 +1224,7 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, "x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, 4.into()];
@@ -1241,7 +1242,7 @@ mod combinator_tests {
         ])) as OutputStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, 3.into(), 4.into(), 5.into()];
@@ -1254,7 +1255,7 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, Value::Deferred]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, Value::Deferred];
@@ -1938,6 +1939,7 @@ mod noval_tests {
     use crate::core::Value;
     use crate::lola_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
+    use ecow::eco_vec;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -2053,7 +2055,7 @@ mod noval_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 1);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
@@ -2066,7 +2068,7 @@ mod noval_tests {
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 1);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x + 1
@@ -2094,7 +2096,7 @@ mod noval_tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 1);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![

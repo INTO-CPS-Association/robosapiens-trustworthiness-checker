@@ -82,9 +82,9 @@ where
             let e2 = to_async_stream_int::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprInt::Defer(e, type_ctx, _) => {
+        SExprInt::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, i64>(ctx, e, 1, &type_ctx)
+            mc::defer::<AC, Parser, i64>(ctx, e, vs, 1, &type_ctx)
         }
         SExprInt::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
@@ -143,9 +143,9 @@ where
             let e2 = to_async_stream_float::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprFloat::Defer(e, type_ctx, _) => {
+        SExprFloat::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, f64>(ctx, e, 1, &type_ctx)
+            mc::defer::<AC, Parser, f64>(ctx, e, vs, 1, &type_ctx)
         }
         SExprFloat::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
@@ -220,9 +220,9 @@ where
             let e2 = to_async_stream_str::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprStr::Defer(e, type_ctx, _) => {
+        SExprStr::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, String>(ctx, e, 1, &type_ctx)
+            mc::defer::<AC, Parser, String>(ctx, e, vs, 1, &type_ctx)
         }
         SExprStr::Init(e1, e2) => {
             let e1 = to_async_stream_str::<AC, Parser>(*e1, ctx);
@@ -356,9 +356,9 @@ where
             let e2 = to_async_stream_bool::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprBool::Defer(e, type_ctx, _) => {
+        SExprBool::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, bool>(ctx, e, 1, &type_ctx)
+            mc::defer::<AC, Parser, bool>(ctx, e, vs, 1, &type_ctx)
         }
         SExprBool::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
@@ -442,9 +442,9 @@ where
             let e2 = to_async_stream_unit::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprUnit::Defer(e, type_ctx, _) => {
+        SExprUnit::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, ()>(ctx, e, 1, &type_ctx)
+            mc::defer::<AC, Parser, ()>(ctx, e, vs, 1, &type_ctx)
         }
         SExprUnit::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
