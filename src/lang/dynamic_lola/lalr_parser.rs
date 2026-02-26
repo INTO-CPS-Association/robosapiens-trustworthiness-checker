@@ -787,7 +787,7 @@ mod tests {
     fn test_parse_defer() {
         assert_eq!(
             presult_to_string(&parse_sexpr(r#"defer(x)"#)),
-            r#"Ok(Defer(Var(VarName::new("x")), Unascribed))"#
+            r#"Ok(Defer(Var(VarName::new("x")), Unascribed, []))"#
         )
     }
 

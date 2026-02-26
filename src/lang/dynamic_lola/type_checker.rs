@@ -234,7 +234,7 @@ pub enum SExprBool {
     WhenUnit(SExprUnit),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
@@ -267,7 +267,7 @@ pub enum SExprInt {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
@@ -303,7 +303,7 @@ pub enum SExprFloat {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
@@ -332,7 +332,7 @@ pub enum SExprUnit {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
@@ -362,7 +362,7 @@ pub enum SExprStr {
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
 }
@@ -880,7 +880,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     ))),
                 }
             }
-            SExpr::Defer(e, type_ascription) => {
+            SExpr::Defer(e, type_ascription, vs) => {
                 let e_check = e.type_check_raw(ctx, errs)?;
 
                 // Ascriptions are required for defer in strictly-typed expressions
@@ -908,23 +908,30 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
 
                 // Use the type ascription to determine the output type
                 match &type_ascription {
-                    StreamType::Int => {
-                        Ok(SExprTE::Int(SExprInt::Defer(Box::new(e_str), ctx.clone())))
-                    }
+                    StreamType::Int => Ok(SExprTE::Int(SExprInt::Defer(
+                        Box::new(e_str),
+                        ctx.clone(),
+                        vs.clone(),
+                    ))),
                     StreamType::Float => Ok(SExprTE::Float(SExprFloat::Defer(
                         Box::new(e_str),
                         ctx.clone(),
+                        vs.clone(),
                     ))),
-                    StreamType::Str => {
-                        Ok(SExprTE::Str(SExprStr::Defer(Box::new(e_str), ctx.clone())))
-                    }
+                    StreamType::Str => Ok(SExprTE::Str(SExprStr::Defer(
+                        Box::new(e_str),
+                        ctx.clone(),
+                        vs.clone(),
+                    ))),
                     StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Defer(
                         Box::new(e_str),
                         ctx.clone(),
+                        vs.clone(),
                     ))),
                     StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Defer(
                         Box::new(e_str),
                         ctx.clone(),
+                        vs.clone(),
                     ))),
                 }
             }
@@ -1072,6 +1079,7 @@ mod tests {
     use super::{SemanticResult, TypeCheckable, TypeInfo};
 
     use super::*;
+    use ecow::eco_vec;
     use test_log::test;
 
     type SExprV = SExpr;
@@ -1566,6 +1574,7 @@ mod tests {
             Box::new(SExprV::Defer(
                 Box::new(SExprV::Var("x".into())),
                 StreamTypeAscription::Ascribed(StreamType::Int),
+                eco_vec!["x".into()],
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
@@ -1579,6 +1588,7 @@ mod tests {
             Box::new(SExprInt::Defer(
                 Box::new(SExprStr::Var("x".into())),
                 expected_ctx.clone(),
+                eco_vec!["x".into()],
             )),
             IntBinOp::Add,
         )));
@@ -1592,6 +1602,7 @@ mod tests {
             Box::new(SExprV::Defer(
                 Box::new(SExprV::Var("x".into())),
                 StreamTypeAscription::Ascribed(StreamType::Int),
+                eco_vec!["x".into()],
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
@@ -1605,6 +1616,7 @@ mod tests {
             Box::new(SExprInt::Defer(
                 Box::new(SExprStr::Var("x".into())),
                 expected_ctx.clone(),
+                eco_vec!["x".into()],
             )),
             IntBinOp::Add,
         )));
@@ -1618,6 +1630,7 @@ mod tests {
             Box::new(SExprV::Defer(
                 Box::new(SExprV::Var("x".into())),
                 StreamTypeAscription::Ascribed(StreamType::Int),
+                eco_vec!["x".into()],
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
@@ -1634,6 +1647,7 @@ mod tests {
             Box::new(SExprV::Defer(
                 Box::new(SExprV::Var("x".into())),
                 StreamTypeAscription::Ascribed(StreamType::Bool),
+                eco_vec!["x".into()],
             )),
             SBinOp::BOp(BoolBinOp::And),
         );
@@ -1647,6 +1661,7 @@ mod tests {
             Box::new(SExprBool::Defer(
                 Box::new(SExprStr::Var("x".into())),
                 expected_ctx.clone(),
+                eco_vec!["x".into()],
             )),
             BoolBinOp::And,
         )));
@@ -1660,6 +1675,7 @@ mod tests {
             Box::new(SExprV::Defer(
                 Box::new(SExprV::Var("x".into())),
                 StreamTypeAscription::Ascribed(StreamType::Bool),
+                eco_vec!["x".into()],
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );
@@ -1676,6 +1692,7 @@ mod tests {
             Box::new(SExprV::Defer(
                 Box::new(SExprV::Var("x".into())),
                 StreamTypeAscription::Unascribed,
+                eco_vec!["x".into()],
             )),
             SBinOp::NOp(NumericalBinOp::Add),
         );

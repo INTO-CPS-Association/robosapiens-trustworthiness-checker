@@ -82,7 +82,7 @@ where
             let e2 = to_async_stream_int::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprInt::Defer(e, type_ctx) => {
+        SExprInt::Defer(e, type_ctx, _) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
             mc::defer::<AC, Parser, i64>(ctx, e, 1, &type_ctx)
         }
@@ -143,7 +143,7 @@ where
             let e2 = to_async_stream_float::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprFloat::Defer(e, type_ctx) => {
+        SExprFloat::Defer(e, type_ctx, _) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
             mc::defer::<AC, Parser, f64>(ctx, e, 1, &type_ctx)
         }
@@ -220,7 +220,7 @@ where
             let e2 = to_async_stream_str::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprStr::Defer(e, type_ctx) => {
+        SExprStr::Defer(e, type_ctx, _) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
             mc::defer::<AC, Parser, String>(ctx, e, 1, &type_ctx)
         }
@@ -356,7 +356,7 @@ where
             let e2 = to_async_stream_bool::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprBool::Defer(e, type_ctx) => {
+        SExprBool::Defer(e, type_ctx, _) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
             mc::defer::<AC, Parser, bool>(ctx, e, 1, &type_ctx)
         }
@@ -442,7 +442,7 @@ where
             let e2 = to_async_stream_unit::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprUnit::Defer(e, type_ctx) => {
+        SExprUnit::Defer(e, type_ctx, _) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
             mc::defer::<AC, Parser, ()>(ctx, e, 1, &type_ctx)
         }
@@ -470,6 +470,7 @@ mod tests {
     use crate::lola_fixtures::TestTypedConfig;
     use crate::runtime::asynchronous::Context;
     use crate::{async_test, lang::dynamic_lola::lalr_parser::LALRParser};
+    use ecow::eco_vec;
     use futures::stream::{self, StreamExt};
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -477,14 +478,22 @@ mod tests {
 
     type TestCtx = Context<TestTypedConfig>;
 
-    fn type_ctx(vars: &[(&str, StreamType)]) -> TypeInfo {
+    fn type_info(vars: &[(&str, StreamType)]) -> TypeInfo {
         vars.iter().map(|(v, t)| ((*v).into(), t.clone())).collect()
     }
+
+    // TODO: TW - in some of these tests, particularly with defer, you provide "e" as type_info
+    // while in others you do not. Which is correct? Please update it. Also, as we discussed at
+    // some point, I think some of these tests are a bit redundant to our existing suite.
 
     #[apply(async_test)]
     async fn test_defer_int_runtime(executor: Rc<LocalExecutor<'static>>) {
         let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x + 1".into())));
-        let defer_expr = SExprInt::Defer(e_str, type_ctx(&[("x", StreamType::Int)]));
+        let defer_expr = SExprInt::Defer(
+            e_str,
+            type_info(&[("x", StreamType::Int)]),
+            eco_vec!["x".into()],
+        );
 
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
@@ -501,7 +510,11 @@ mod tests {
     #[apply(async_test)]
     async fn test_defer_int_x_squared_runtime(executor: Rc<LocalExecutor<'static>>) {
         let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x * x".into())));
-        let defer_expr = SExprInt::Defer(e_str, type_ctx(&[("x", StreamType::Int)]));
+        let defer_expr = SExprInt::Defer(
+            e_str,
+            type_info(&[("x", StreamType::Int)]),
+            eco_vec!["x".into()],
+        );
 
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
@@ -520,7 +533,8 @@ mod tests {
         let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x && y".into())));
         let defer_expr = SExprBool::Defer(
             e_str,
-            type_ctx(&[("x", StreamType::Bool), ("y", StreamType::Bool)]),
+            type_info(&[("x", StreamType::Bool), ("y", StreamType::Bool)]),
+            eco_vec!["x".into(), "y".into()],
         );
 
         let x = Box::pin(stream::iter(vec![Value::Bool(true), Value::Bool(false)]));
@@ -550,7 +564,8 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let defer_expr = SExprInt::Defer(
             e_str,
-            type_ctx(&[("e", StreamType::Str), ("x", StreamType::Int)]),
+            type_info(&[("e", StreamType::Str), ("x", StreamType::Int)]),
+            eco_vec!["x".into(), "e".into()],
         );
 
         let e = Box::pin(stream::iter(vec![Value::Deferred]));
@@ -575,7 +590,7 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let dynamic_expr = SExprInt::Dynamic(
             e_str,
-            type_ctx(&[("e", StreamType::Str), ("x", StreamType::Int)]),
+            type_info(&[("e", StreamType::Str), ("x", StreamType::Int)]),
         );
 
         let e = Box::pin(stream::iter(vec![
@@ -604,7 +619,7 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let dynamic_expr = SExprInt::Dynamic(
             e_str,
-            type_ctx(&[("e", StreamType::Str), ("x", StreamType::Int)]),
+            type_info(&[("e", StreamType::Str), ("x", StreamType::Int)]),
         );
 
         let e = Box::pin(stream::iter(vec![
@@ -633,7 +648,7 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let dynamic_expr = SExprInt::Dynamic(
             e_str,
-            type_ctx(&[("e", StreamType::Str), ("x", StreamType::Int)]),
+            type_info(&[("e", StreamType::Str), ("x", StreamType::Int)]),
         );
 
         let e = Box::pin(stream::iter(vec![
@@ -662,7 +677,7 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let dynamic_expr = SExprInt::Dynamic(
             e_str,
-            type_ctx(&[("e", StreamType::Str), ("x", StreamType::Int)]),
+            type_info(&[("e", StreamType::Str), ("x", StreamType::Int)]),
         );
 
         let e = Box::pin(stream::iter(vec![
@@ -695,7 +710,7 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let dynamic_expr = SExprBool::Dynamic(
             e_str,
-            type_ctx(&[
+            type_info(&[
                 ("e", StreamType::Str),
                 ("x", StreamType::Bool),
                 ("y", StreamType::Bool),
@@ -729,7 +744,11 @@ mod tests {
     #[apply(async_test)]
     async fn test_defer_float_runtime(executor: Rc<LocalExecutor<'static>>) {
         let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x + 1.5".into())));
-        let defer_expr = SExprFloat::Defer(e_str, type_ctx(&[("x", StreamType::Float)]));
+        let defer_expr = SExprFloat::Defer(
+            e_str,
+            type_info(&[("x", StreamType::Float)]),
+            eco_vec!["x".into(), "e".into()],
+        );
 
         let x = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Float(2.0)]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
@@ -750,7 +769,8 @@ mod tests {
         let e_str = Box::new(SExprStr::Val(PartialStreamValue::Known("x ++ y".into())));
         let defer_expr = SExprStr::Defer(
             e_str,
-            type_ctx(&[("x", StreamType::Str), ("y", StreamType::Str)]),
+            type_info(&[("x", StreamType::Str), ("y", StreamType::Str)]),
+            eco_vec!["x".into(), "y".into()],
         );
 
         let x = Box::pin(stream::iter(vec![
@@ -784,7 +804,7 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let dynamic_expr = SExprStr::Dynamic(
             e_str,
-            type_ctx(&[
+            type_info(&[
                 ("e", StreamType::Str),
                 ("x", StreamType::Str),
                 ("y", StreamType::Str),
@@ -826,7 +846,7 @@ mod tests {
         let e_str = Box::new(SExprStr::Var("e".into()));
         let dynamic_expr = SExprFloat::Dynamic(
             e_str,
-            type_ctx(&[("e", StreamType::Str), ("x", StreamType::Float)]),
+            type_info(&[("e", StreamType::Str), ("x", StreamType::Float)]),
         );
 
         let e = Box::pin(stream::iter(vec![

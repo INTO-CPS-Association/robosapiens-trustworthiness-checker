@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use ecow::EcoString;
 use ecow::EcoVec;
+use ecow::eco_vec;
 use tracing::debug;
 use winnow::Parser;
 use winnow::Result;
@@ -141,7 +142,7 @@ fn defer(s: &mut &str) -> Result<SExpr> {
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
-        .map(|(e,)| SExpr::Defer(Box::new(e), StreamTypeAscription::Unascribed)),
+        .map(|(e,)| SExpr::Defer(Box::new(e), StreamTypeAscription::Unascribed, eco_vec![])),
         seq!((
             _: whitespace,
             _: literal("defer"),
@@ -153,7 +154,7 @@ fn defer(s: &mut &str) -> Result<SExpr> {
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
-        .map(|(e, st)| SExpr::Defer(Box::new(e), StreamTypeAscription::Ascribed(st))),
+        .map(|(e, st)| SExpr::Defer(Box::new(e), StreamTypeAscription::Ascribed(st), eco_vec![])),
     ))
     .parse_next(s)
 }
@@ -1641,7 +1642,7 @@ mod tests {
     fn test_parse_defer() {
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"defer(x)"#)),
-            r#"Ok(Defer(Var(VarName::new("x")), Unascribed))"#
+            r#"Ok(Defer(Var(VarName::new("x")), Unascribed, []))"#
         )
     }
 

@@ -34,7 +34,7 @@ pub enum DistSExpr {
     Dynamic(Box<Self>),
     RestrictedDynamic(Box<Self>, EcoVec<VarName>),
     // Deferred properties
-    Defer(Box<Self>),
+    Defer(Box<Self>, EcoVec<VarName>),
     // Update between properties
     Update(Box<Self>, Box<Self>),
     // Default value for properties (replaces Deferred with an alternative
@@ -85,7 +85,7 @@ impl DistSExpr {
             // TODO: is this correct?
             Dynamic(e) => e.inputs(),
             RestrictedDynamic(_, vs) => vs.iter().cloned().collect(),
-            Defer(e) => e.inputs(),
+            Defer(e, _) => e.inputs(),
             Update(e1, e2) => {
                 let mut inputs = e1.inputs();
                 inputs.extend(e2.inputs());
@@ -235,7 +235,7 @@ impl Display for DistSExpr {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Defer(e) => write!(f, "defer({})", e),
+            Defer(e, _) => write!(f, "defer({})", e),
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
             Default(e, v) => write!(f, "default({}, {})", e, v),
             IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),

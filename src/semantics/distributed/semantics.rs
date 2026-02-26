@@ -61,7 +61,7 @@ where
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::dynamic::<AC, Parser>(ctx, e, Some(vs), 10)
             }
-            SExpr::Defer(e, _) => {
+            SExpr::Defer(e, _, _) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::defer::<AC, Parser>(ctx, e, 10)
             }

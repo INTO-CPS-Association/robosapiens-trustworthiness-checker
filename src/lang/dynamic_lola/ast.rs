@@ -168,7 +168,7 @@ pub enum SExpr {
     Dynamic(Box<Self>, StreamTypeAscription),
     RestrictedDynamic(Box<Self>, StreamTypeAscription, EcoVec<VarName>),
     // Deferred properties
-    Defer(Box<Self>, StreamTypeAscription),
+    Defer(Box<Self>, StreamTypeAscription, EcoVec<VarName>),
     // Update between properties
     Update(Box<Self>, Box<Self>),
     // Default value for properties (replaces Deferred with an alternative
@@ -242,7 +242,7 @@ impl SExpr {
             Not(b) => b.inputs(),
             Dynamic(e, _) => e.inputs(),
             RestrictedDynamic(_, _, vs) => vs.iter().cloned().collect(),
-            Defer(e, _) => e.inputs(),
+            Defer(e, _, _) => e.inputs(),
             Update(e1, e2) => {
                 let mut inputs = e1.inputs();
                 inputs.extend(e2.inputs());
@@ -347,6 +347,7 @@ impl LOLASpecification {
         // Helper function to do the changes...
         fn traverse_expr(expr: SExpr, vars: &EcoVec<VarName>) -> SExpr {
             match expr {
+                // Transform Dynamic into RestrictedDynamic without the lhs of the assignment
                 SExpr::Dynamic(sexpr, sta) => SExpr::RestrictedDynamic(
                     Box::new(traverse_expr(*sexpr, vars)),
                     sta,
@@ -365,6 +366,10 @@ impl LOLASpecification {
                         new_restricted,
                     )
                 }
+                SExpr::Defer(sexpr, sta, _) => {
+                    // Disallow Defer to use the lhs of the assignment
+                    SExpr::Defer(Box::new(traverse_expr(*sexpr, vars)), sta, vars.clone())
+                }
                 SExpr::Var(v) => SExpr::Var(v.clone()),
                 SExpr::Val(v) => SExpr::Val(v.clone()),
                 SExpr::When(sexpr) => SExpr::When(Box::new(traverse_expr(*sexpr, vars))),
@@ -379,9 +384,6 @@ impl LOLASpecification {
                 SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::LHead(sexpr) => SExpr::LHead(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::LLen(sexpr) => SExpr::LLen(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::Defer(sexpr, sta) => {
-                    SExpr::Defer(Box::new(traverse_expr(*sexpr, vars)), sta)
-                }
                 SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::BinOp(sexpr, sexpr1, sbin_op) => SExpr::BinOp(
                     Box::new(traverse_expr(*sexpr, vars)),
@@ -563,7 +565,7 @@ impl Display for SExpr {
                     }
                 }
             }
-            Defer(e, sta) => match sta {
+            Defer(e, sta, _) => match sta {
                 StreamTypeAscription::Unascribed => write!(f, "defer({})", e),
                 StreamTypeAscription::Ascribed(sta) => write!(f, "defer({}, {})", e, sta),
             },

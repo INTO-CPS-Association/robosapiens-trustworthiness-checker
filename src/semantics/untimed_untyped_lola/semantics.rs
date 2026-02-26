@@ -111,7 +111,7 @@ where
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::dynamic::<AC, Parser>(ctx, e, Some(vs), 1)
             }
-            SExpr::Defer(e, _) => {
+            SExpr::Defer(e, _, _) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::defer::<AC, Parser>(ctx, e, 1)
             }
@@ -252,6 +252,7 @@ mod tests {
     use crate::lola_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use crate::semantics::StreamContext;
+    use ecow::eco_vec;
     use futures::stream::{self, StreamExt};
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -273,6 +274,7 @@ mod tests {
         let expr = SExpr::Defer(
             Box::new(SExpr::Val("x + 1".into())),
             StreamTypeAscription::Unascribed,
+            eco_vec!["x".into()],
         );
 
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
@@ -291,6 +293,7 @@ mod tests {
         let expr = SExpr::Defer(
             Box::new(SExpr::Val("x * x".into())),
             StreamTypeAscription::Unascribed,
+            eco_vec!["x".into()],
         );
 
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
@@ -309,6 +312,7 @@ mod tests {
         let expr = SExpr::Defer(
             Box::new(SExpr::Val("x && y".into())),
             StreamTypeAscription::Unascribed,
+            eco_vec!["x".into(), "y".into()],
         );
 
         let x = Box::pin(stream::iter(vec![Value::Bool(true), Value::Bool(false)]));
@@ -335,6 +339,7 @@ mod tests {
         let expr = SExpr::Defer(
             Box::new(SExpr::Var("e".into())),
             StreamTypeAscription::Unascribed,
+            eco_vec!["e".into(), "x".into()],
         );
 
         let e = Box::pin(stream::iter(vec![Value::Deferred]));
@@ -359,6 +364,7 @@ mod tests {
         let expr = SExpr::Defer(
             Box::new(SExpr::Val("x + 1.5".into())),
             StreamTypeAscription::Unascribed,
+            eco_vec!["x".into()],
         );
 
         let x = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Float(2.0)]));
@@ -377,6 +383,7 @@ mod tests {
         let expr = SExpr::Defer(
             Box::new(SExpr::Val("x ++ y".into())),
             StreamTypeAscription::Unascribed,
+            eco_vec!["x".into(), "y".into()],
         );
 
         let x = Box::pin(stream::iter(vec![
