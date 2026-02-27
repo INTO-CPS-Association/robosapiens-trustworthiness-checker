@@ -442,17 +442,17 @@ where
             let e2 = to_async_stream_unit::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
-        SExprUnit::Defer(e, type_ctx, vs) => {
+        SExprUnit::Defer(e, type_info, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, ()>(ctx, e, vs, 1, &type_ctx)
+            mc::defer::<AC, Parser, ()>(ctx, e, vs, 1, &type_info)
         }
-        SExprUnit::Dynamic(e, type_ctx) => {
+        SExprUnit::Dynamic(e, type_info) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, ()>(ctx, e, None, 1, &type_ctx)
+            mc::dynamic::<AC, Parser, ()>(ctx, e, None, 1, &type_info)
         }
-        SExprUnit::RestrictedDynamic(e, vs, type_ctx) => {
+        SExprUnit::RestrictedDynamic(e, vs, type_info) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, ()>(ctx, e, Some(vs), 1, &type_ctx)
+            mc::dynamic::<AC, Parser, ()>(ctx, e, Some(vs), 1, &type_info)
         }
         SExprUnit::Init(e1, e2) => {
             let e1 = to_async_stream_unit::<AC, Parser>(*e1, ctx);
@@ -747,7 +747,7 @@ mod tests {
         let defer_expr = SExprFloat::Defer(
             e_str,
             type_info(&[("x", StreamType::Float)]),
-            eco_vec!["x".into(), "e".into()],
+            eco_vec!["x".into()],
         );
 
         let x = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Float(2.0)]));

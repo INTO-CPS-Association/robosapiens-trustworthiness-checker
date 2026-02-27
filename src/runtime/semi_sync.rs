@@ -1017,4 +1017,84 @@ mod tests {
             ],
         );
     }
+
+    #[apply(async_test)]
+    async fn test_defer_single(executor: Rc<LocalExecutor<'static>>) {
+        let spec = lola_specification(&mut spec_defer()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), Value::Deferred, Value::Deferred];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_multiple(executor: Rc<LocalExecutor<'static>>) {
+        let spec = lola_specification(&mut spec_defer()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+            ],
+        );
+    }
 }

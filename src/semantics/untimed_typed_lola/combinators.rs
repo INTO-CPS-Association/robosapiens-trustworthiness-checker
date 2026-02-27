@@ -510,11 +510,15 @@ where
 // Defer for an UntimedLolaExpression using the lola_expression parser
 // TODO: this currently has unnecessary potentially-panicing casts since the types in the untyped
 // semantics are not granular enough
+// TODO: TW: I don't think the combinators in this file are implementing NoVal/Defer semantics
+// correctly for typed streams. I did not change this when updating the defer combinator as it
+// would be a lot of work (and might conflict with yours). Would also remove the need for
+// `prev_received_deferred`. See outcommented stream_lift_base calls
 // #[instrument(skip(ctx, prop_stream))]
 pub fn defer<AC, Parser, T>(
     ctx: &AC::Ctx,
-    mut prop_stream: OutputStream<PartialStreamValue<String>>,
-    _: EcoVec<VarName>,
+    mut eval_stream: OutputStream<PartialStreamValue<String>>,
+    vs: EcoVec<VarName>,
     history_length: usize,
     type_info: &TypeInfo,
 ) -> OutputStream<PartialStreamValue<T>>
@@ -523,51 +527,26 @@ where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     T: TypedStreamData + TryFrom<Value, Error = ()>,
 {
-    let mut subcontext = ctx.subcontext(history_length);
+    // Create a subcontext with a history window length
+    let mut subcontext = ctx.restricted_subcontext(vs, history_length);
+    // let mut eval_stream = stream_lift_base(eval_stream);
+    let mut eval_output_stream: Option<OutputStream<PartialStreamValue<T>>> = None;
     let type_info = type_info.clone();
-    Box::pin(stream! {
-        let mut eval_output_stream: Option<OutputStream<PartialStreamValue<T>>> = None;
-        let mut i = 0;
-        let mut prev_received_deferred = false;
+    let mut prev_received_deferred = false;
 
-        // Yield Deferred until we have a value to evaluate, then evaluate it
-        while let Some(current) = prop_stream.next().await {
-            debug!(?i, ?current, "Defer");
+    // Build an output stream for dynamic of x over the subcontext
+    Box::pin(stream! {
+        while let Some(current) = eval_stream.next().await {
             match current {
-                PartialStreamValue::Known(defer_s) => {
-                    // We have a string to evaluate so do so
-                    let expr = Parser::parse(&mut defer_s.as_ref())
-                        .expect("Invalid dynamic str");
-                    // Create a typed version of the expression
-                    let mut type_info_local = type_info.clone();
-                    let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
-                        .expect("Type error");
-                    let untyped_eval_output_stream: OutputStream<Value> = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
-                    eval_output_stream = Some(to_typed_partial_stream::<T>(untyped_eval_output_stream));
-                    // debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
-                    subcontext.run().await;
-                    break;
-                }
                 PartialStreamValue::Deferred => {
                     // Consume a sample from the subcontext but return Deferred
-                    debug!("defer combinator received Deferred");
-                    if i >= history_length {
-                        debug!(?i, ?history_length, "Advancing subcontext to clean history");
-                        subcontext.tick().await;
-                    }
-                    i += 1;
+                    subcontext.tick().await;
                     prev_received_deferred = true;
                     yield PartialStreamValue::Deferred;
                 }
                 PartialStreamValue::NoVal => {
                     // Consume a sample from the subcontext but return NoVal
-                    debug!("defer combinator received NoVal");
-                    if i >= history_length {
-                        debug!(?i, ?history_length, "Advancing subcontext to clean history");
-                        subcontext.tick().await;
-                    }
-                    i += 1;
-
+                    subcontext.tick().await;
                     // Deferred is sticky compared to NoVal, since Deferred indicates that we have
                     // a pending property that cannot be evaluated yet with the given context.
                     if prev_received_deferred {
@@ -576,23 +555,116 @@ where
                         yield PartialStreamValue::NoVal;
                     }
                 }
-
+                PartialStreamValue::Known(defer_s) => {
+                    let expr = Parser::parse(&mut defer_s.as_ref())
+                        .expect("Invalid defer str");
+                    debug!("Defer evaluated to expression {:?}", expr);
+                    // Create a typed version of the expression
+                    let mut type_info_local = type_info.clone();
+                    let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
+                        .expect("Type error");
+                    let tmp_stream = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
+                    // let tmp_stream = stream_lift_base(tmp_stream);
+                    let mut tmp_stream = to_typed_partial_stream::<T>(tmp_stream);
+                    // Advance the subcontext to make a new set of input values
+                    // available for the dynamic stream
+                    subcontext.tick().await;
+                    if let Some(eval_res) = tmp_stream.next().await {
+                        eval_output_stream = Some(tmp_stream);
+                        yield eval_res;
+                    } else {
+                        return;
+                    }
+                    break;
+                }
             }
         }
+        if eval_output_stream.is_none() {
+            return;
+        }
+        let mut eval_output_stream = eval_output_stream.unwrap();
 
-        // This is None if the prop_stream is done but we never received a property
-        if let Some(eval_output_stream) = eval_output_stream {
-            // Wind forward the stream to the current time
-            let time_progressed = i.min(history_length);
-            debug!(?i, ?time_progressed, ?history_length, "Time progressed");
-            let mut eval_output_stream = eval_output_stream.skip(time_progressed);
-
-            // Yield the saved value until the inner stream is done
-            while let Some(eval_res) = eval_output_stream.next().await {
+        // Use eval_stream as controller for when to tick subcontext. Yield from
+        // eval_output_stream.
+        while let Some(_) = eval_stream.next().await {
+            subcontext.tick().await;
+            if let Some(eval_res) = eval_output_stream.next().await {
                 yield eval_res;
+            } else {
+                return;
             }
         }
     })
+    // let mut subcontext = ctx.subcontext(history_length);
+    // let type_info = type_info.clone();
+    // Box::pin(stream! {
+    //     let mut eval_output_stream: Option<OutputStream<PartialStreamValue<T>>> = None;
+    //     let mut i = 0;
+    //     let mut prev_received_deferred = false;
+    //
+    //     // Yield Deferred until we have a value to evaluate, then evaluate it
+    //     while let Some(current) = prop_stream.next().await {
+    //         debug!(?i, ?current, "Defer");
+    //         match current {
+    //             PartialStreamValue::Known(defer_s) => {
+    //                 // We have a string to evaluate so do so
+    //                 let expr = Parser::parse(&mut defer_s.as_ref())
+    //                     .expect("Invalid dynamic str");
+    //                 // Create a typed version of the expression
+    //                 let mut type_info_local = type_info.clone();
+    //                 let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
+    //                     .expect("Type error");
+    //                 let untyped_eval_output_stream: OutputStream<Value> = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
+    //                 eval_output_stream = Some(to_typed_partial_stream::<T>(untyped_eval_output_stream));
+    //                 // debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
+    //                 subcontext.run().await;
+    //                 break;
+    //             }
+    //             PartialStreamValue::Deferred => {
+    //                 // Consume a sample from the subcontext but return Deferred
+    //                 debug!("defer combinator received Deferred");
+    //                 if i >= history_length {
+    //                     debug!(?i, ?history_length, "Advancing subcontext to clean history");
+    //                     subcontext.tick().await;
+    //                 }
+    //                 i += 1;
+    //                 prev_received_deferred = true;
+    //                 yield PartialStreamValue::Deferred;
+    //             }
+    //             PartialStreamValue::NoVal => {
+    //                 // Consume a sample from the subcontext but return NoVal
+    //                 debug!("defer combinator received NoVal");
+    //                 if i >= history_length {
+    //                     debug!(?i, ?history_length, "Advancing subcontext to clean history");
+    //                     subcontext.tick().await;
+    //                 }
+    //                 i += 1;
+    //
+    //                 // Deferred is sticky compared to NoVal, since Deferred indicates that we have
+    //                 // a pending property that cannot be evaluated yet with the given context.
+    //                 if prev_received_deferred {
+    //                     yield PartialStreamValue::Deferred;
+    //                 } else {
+    //                     yield PartialStreamValue::NoVal;
+    //                 }
+    //             }
+    //
+    //         }
+    //     }
+    //
+    //     // This is None if the prop_stream is done but we never received a property
+    //     if let Some(eval_output_stream) = eval_output_stream {
+    //         // Wind forward the stream to the current time
+    //         let time_progressed = i.min(history_length);
+    //         debug!(?i, ?time_progressed, ?history_length, "Time progressed");
+    //         let mut eval_output_stream = eval_output_stream.skip(time_progressed);
+    //
+    //         // Yield the saved value until the inner stream is done
+    //         while let Some(eval_res) = eval_output_stream.next().await {
+    //             yield eval_res;
+    //         }
+    //     }
+    // })
 }
 
 #[cfg(test)]

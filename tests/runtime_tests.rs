@@ -2391,10 +2391,9 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let expected_outputs = vec![
             (0, vec![Value::Deferred]),
             (1, vec![Value::Deferred]),
-            (2, vec![Value::Int(1)]),
+            (2, vec![Value::Deferred]),
             (3, vec![Value::Int(2)]),
             (4, vec![Value::Int(3)]),
-            (5, vec![Value::Int(4)]),
         ];
         assert_eq!(
             result, expected_outputs,
@@ -2406,13 +2405,13 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 }
 
 #[apply(async_test)]
-#[ignore = "Bug in Defer here. It should not have enough context to resolve the variable at T=2."]
+#[ignore = "Bug with DUPs here exposed by recent changes to defer impl. \
+    Subcontexts have deadlock scenario with multiple defer/dynamic streams. \
+    Before, this was not exposed because defer's usage of subcontexts was significantly different \
+    from dynamic. So before the defer patch, the bug would only happen with multiple dynamic streams, \
+    which we do not have a test for..."]
 async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
-            // Bugs in defer that this runtime does not like
-            continue;
-        }
         let mut spec_str = "in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = dynamic(e : Int)";
         let spec_untyped = lola_specification(&mut spec_str).unwrap();
 
@@ -2440,8 +2439,12 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
-            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
+        let result: Vec<(usize, Vec<Value>)> = with_timeout(
+            outputs.enumerate().collect(),
+            1,
+            format!("outputs.collect with config: {:?}", config).as_str(),
+        )
+        .await?;
 
         for (time, values) in &result {
             assert_eq!(
