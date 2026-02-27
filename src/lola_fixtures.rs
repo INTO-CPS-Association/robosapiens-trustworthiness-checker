@@ -573,9 +573,10 @@ pub fn input_streams_add_defer(size: usize) -> MapInputProvider {
         "y".into(),
         (0..size).map(|y| Value::Int(2 * y + 1)).collect(),
     );
+    let add = if size % 2 == 0 { 0 } else { 1 };
     let e_stream = iter::repeat(Value::Deferred)
         .take((size / 2) as usize)
-        .chain((0..size / 2).map(|_| Value::Str("x + y".into())))
+        .chain((0..(size / 2) + add).map(|_| Value::Str("x + y".into())))
         .collect();
     input_values.insert("e".into(), e_stream);
 

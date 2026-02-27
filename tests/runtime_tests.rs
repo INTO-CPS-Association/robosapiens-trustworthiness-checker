@@ -2466,3 +2466,50 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
     }
     Ok(())
 }
+
+// TODO: TW there is a bug here with the typed async configuration - hence why I used the
+// untyped only
+#[apply(async_test)]
+async fn test_benchmark_regression_long_add_defer(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // Specifically we used to fail with size >= 2007
+    const SIZE: usize = 5000;
+    for config in TestConfiguration::untyped_configurations() {
+        let spec = lola_specification(&mut spec_add_defer()).unwrap();
+
+        let input_streams = input_streams_add_defer(SIZE);
+
+        // Create output handler based on configuration
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        // Build base monitor with common settings
+        let builder = RuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+
+        // Apply configuration-specific settings
+        let builder = create_builder_from_config(builder, config);
+
+        let monitor = builder.build();
+
+        // Run monitor and collect results
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<(usize, Vec<Value>)> = with_timeout(
+            outputs.take(SIZE).enumerate().collect(),
+            3,
+            format!("outputs.collect with config: {:?}", config).as_str(),
+        )
+        .await?;
+
+        // This test is just about not hanging
+        assert_eq!(result.len(), SIZE);
+    }
+    Ok(())
+}
