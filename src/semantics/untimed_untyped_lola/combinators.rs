@@ -20,8 +20,6 @@ use futures::{
 use std::collections::BTreeMap;
 use tracing::debug;
 use tracing::info;
-use tracing::instrument;
-use tracing::warn;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
@@ -595,7 +593,6 @@ where
 }
 
 // Defer for an UntimedLolaExpression using the lola_expression parser
-#[instrument(skip(ctx, eval_stream))]
 pub fn defer<AC, Parser>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
@@ -1260,6 +1257,37 @@ mod combinator_tests {
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, Value::Deferred];
         assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_long_regression(executor: Rc<LocalExecutor<'static>>) {
+        // Test that checks that defer combinator can handle a large number of ticks without
+        // deadlocking or running out of memory.
+        // Introduced after regression with runtime test
+
+        const SIZE: i64 = 10000;
+        let x: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|x| (2 * x).into())));
+        let y: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|y| (2 * y + 1).into())));
+        let e: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|i| {
+            if i < SIZE / 2 {
+                Value::Deferred
+            } else {
+                Value::Str("x + y".into())
+            }
+        })));
+        // Note: Diff here between RT test and Comb test -- e is not given to the context
+        let mut ctx = TestCtx::new(
+            executor.clone(),
+            vec!["x".into(), "y".into()],
+            vec![x, y],
+            10,
+        );
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into(), "y".into()], 10);
+        ctx.run().await;
+        let res: Vec<Value> = with_timeout(res_stream.collect(), 3, "res_stream.collect")
+            .await
+            .expect("Result timed out");
+        assert_eq!(res.len(), SIZE as usize);
     }
 
     #[apply(async_test)]

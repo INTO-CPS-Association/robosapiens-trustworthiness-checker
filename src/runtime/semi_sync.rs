@@ -94,7 +94,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum StreamState {
     Pending,
     Finished,
@@ -664,12 +664,18 @@ where
     }
 
     fn build(self) -> <Self::AC as AsyncConfig>::Ctx {
-        SemiSyncContext::new(
+        let ctx = SemiSyncContext::new(
             Rc::new(RefCell::new(self.var_managers.expect(
                 "VarManagers must be set before building SemiSyncContext",
             ))),
             self.history_length.unwrap_or(0),
-        )
+        );
+        info!(
+            "SemiSyncContextBuilder: Built SemiSyncContext with id {:?} and VarManagers: {:?}",
+            ctx.id,
+            ctx.var_managers.borrow().keys()
+        );
+        return ctx;
     }
 }
 
@@ -698,7 +704,11 @@ where
         history_length: usize,
     ) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        debug!("Creating SemiSyncContext {}", id);
+        debug!(
+            "Creating SemiSyncContext {:?} with vars: {:?}",
+            id,
+            var_managers.borrow().keys()
+        );
         Self {
             var_managers,
             history_length,
@@ -708,40 +718,54 @@ where
 
     async fn forward_values(&mut self) -> anyhow::Result<StreamState> {
         // Helper func to run the logic for awaiting manager.
-        async fn forward_one<AC>(name: &VarName, manager: &mut VarManager<AC>) -> anyhow::Result<()>
+        async fn forward_one<AC>(
+            name: &VarName,
+            manager: &mut VarManager<AC>,
+        ) -> anyhow::Result<StreamState>
         where
             AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
             AC::Val: DeferrableStreamData,
         {
             match manager.forward_value().await {
-                Ok(StreamState::Pending) => {}
+                Ok(StreamState::Pending) => Ok(StreamState::Pending),
                 Ok(StreamState::Finished) => {
                     info!(?name, "forward_values: VarManager finished");
                     manager.subscribers.clear();
+                    Ok(StreamState::Finished)
                 }
                 Err(e) => {
                     error!(?name, ?e, "forward_values: Error in VarManager");
-                    return Err(e);
+                    Err(e)
                 }
             }
-            Ok(())
         }
 
         let mut managers = self.var_managers.borrow_mut();
+        let mut to_remove = vec![];
         // Forward inputs first to avoid deadlocks
         for (name, manager) in managers.iter_mut() {
             if manager.input {
-                forward_one::<AC>(name, manager).await?;
+                let state = forward_one::<AC>(name, manager).await?;
+                if state == StreamState::Finished {
+                    to_remove.push(name.clone());
+                }
             }
         }
         // Forward rest
         for (name, manager) in managers.iter_mut() {
             if !manager.input {
-                forward_one::<AC>(name, manager).await?;
+                let state = forward_one::<AC>(name, manager).await?;
+                if state == StreamState::Finished {
+                    to_remove.push(name.clone());
+                }
             }
         }
-        managers.retain(|_, manager| !manager.subscribers.is_empty());
+        managers.retain(|name, _| !to_remove.contains(name));
         Ok(if managers.is_empty() {
+            warn!(
+                "SemiSyncContext ID: {:?}: All VarManagers finished",
+                self.id
+            );
             StreamState::Finished
         } else {
             StreamState::Pending
@@ -765,6 +789,11 @@ where
                 }
             })
             .collect::<BTreeMap<_, _>>();
+        debug!(
+            "SemiSyncContext ID {:?}: Subcontext var_managers: {:?}",
+            self.id,
+            new_managers.keys()
+        );
         let builder = SemiSyncContextBuilder::new()
             .var_managers(new_managers)
             .history_length(history_length);
@@ -782,7 +811,16 @@ where
     type Builder = SemiSyncContextBuilder<AC>;
 
     fn var(&self, x: &VarName) -> Option<OutputStream<AC::Val>> {
+        debug!(
+            "SemiSyncContext ID {:?}: Requesting variable {}",
+            self.id, x
+        );
         let mut manager = self.var_managers.borrow_mut();
+        debug!(
+            "SemiSyncContext ID {:?}: VarManagers available {:?}",
+            self.id,
+            manager.keys()
+        );
         let stream = manager.get_mut(x)?.subscribe(self.history_length);
         info!(
             self.id,
@@ -1094,6 +1132,46 @@ mod tests {
                 (0, vec![1.into()]),
                 (1, vec![2.into()]),
                 (2, vec![3.into()]),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_delayed(executor: Rc<LocalExecutor<'static>>) {
+        let spec = lola_specification(&mut spec_defer()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec![Value::Deferred, Value::Deferred, "x + 3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Deferred]),
+                (1, vec![Value::Deferred]),
+                (2, vec![5.into()]),
             ],
         );
     }
