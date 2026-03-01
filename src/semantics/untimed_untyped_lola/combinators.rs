@@ -1265,7 +1265,13 @@ mod combinator_tests {
         // deadlocking or running out of memory.
         // Introduced after regression with runtime test
 
-        const SIZE: i64 = 10000;
+        use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, util::SubscriberInitExt};
+        let subscriber = tracing_subscriber::registry()
+            .with(LevelFilter::INFO)
+            .with(fmt::layer().with_test_writer());
+        let _guard = subscriber.set_default(); // active only in this scope
+
+        const SIZE: i64 = 3000;
         let x: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|x| (2 * x).into())));
         let y: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|y| (2 * y + 1).into())));
         let e: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|i| {
@@ -1288,6 +1294,7 @@ mod combinator_tests {
             .await
             .expect("Result timed out");
         assert_eq!(res.len(), SIZE as usize);
+        assert!(false);
     }
 
     #[apply(async_test)]

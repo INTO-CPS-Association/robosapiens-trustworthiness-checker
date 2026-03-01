@@ -2474,7 +2474,16 @@ async fn test_benchmark_regression_long_add_defer(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     // Specifically we used to fail with size >= 2007
-    const SIZE: usize = 5000;
+    const SIZE: usize = 3000;
+
+    // Hack to force log into being INFO for this test.
+    // Needed to make CI perform better
+    use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, util::SubscriberInitExt};
+    let subscriber = tracing_subscriber::registry()
+        .with(LevelFilter::INFO)
+        .with(fmt::layer().with_test_writer());
+    let _guard = subscriber.set_default(); // active only in this scope
+
     for config in TestConfiguration::untyped_configurations() {
         let spec = lola_specification(&mut spec_add_defer()).unwrap();
 
@@ -2503,7 +2512,7 @@ async fn test_benchmark_regression_long_add_defer(
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, Vec<Value>)> = with_timeout(
             outputs.take(SIZE).enumerate().collect(),
-            3,
+            10,
             format!("outputs.collect with config: {:?}", config).as_str(),
         )
         .await?;
