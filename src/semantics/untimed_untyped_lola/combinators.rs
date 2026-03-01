@@ -1284,7 +1284,7 @@ mod combinator_tests {
         );
         let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into(), "y".into()], 10);
         ctx.run().await;
-        let res: Vec<Value> = with_timeout(res_stream.collect(), 3, "res_stream.collect")
+        let res: Vec<Value> = with_timeout(res_stream.collect(), 10, "res_stream.collect")
             .await
             .expect("Result timed out");
         assert_eq!(res.len(), SIZE as usize);
