@@ -1265,6 +1265,8 @@ mod combinator_tests {
         // deadlocking or running out of memory.
         // Introduced after regression with runtime test
 
+        // Hack to force log into being INFO for this test.
+        // Needed to make CI perform better
         use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, util::SubscriberInitExt};
         let subscriber = tracing_subscriber::registry()
             .with(LevelFilter::INFO)
@@ -1294,7 +1296,6 @@ mod combinator_tests {
             .await
             .expect("Result timed out");
         assert_eq!(res.len(), SIZE as usize);
-        assert!(false);
     }
 
     #[apply(async_test)]
