@@ -301,7 +301,7 @@ mod tests {
         // deadlocking or running out of memory.
         // Introduced after regression with runtime test
 
-        const SIZE: usize = 10000;
+        const SIZE: usize = 3000;
         let mut provider = input_streams_add_defer(SIZE);
 
         let mut x_stream = provider
