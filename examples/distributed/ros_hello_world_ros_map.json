@@ -6,5 +6,9 @@
     "d": {
         "topic": "/d",
         "msg_type": "Int32"
+    },
+    "c": {
+        "topic": "/cc",
+        "msg_type": "Int32"
     }
 }

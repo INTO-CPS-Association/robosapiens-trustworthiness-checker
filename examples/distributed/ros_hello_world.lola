@@ -5,5 +5,5 @@ out z
 out v
 out w
 z = x
-v = v >= 60
-w = d <= 80
+v = c <= 200
+w = d <= 100
