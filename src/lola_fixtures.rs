@@ -104,6 +104,14 @@ pub fn spec_simple_add_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_simple_add_monitor_plus_one() -> &'static str {
+    "in x\n\
+     in y\n\
+     out z\n\
+     z = x + y + 1"
+}
+
+#[allow(dead_code)]
 pub fn spec_simple_add_aux_monitor() -> &'static str {
     "in x\n\
      in y\n\
