@@ -9,7 +9,7 @@ use crate::io::mqtt::{MQTTOutputHandler, MqttFactory};
 use crate::io::redis::RedisOutputHandler;
 use crate::{Value, VarName, core::OutputHandler};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct OutputHandlerBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     output_var_names: Option<Vec<VarName>>,

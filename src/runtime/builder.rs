@@ -9,14 +9,15 @@ use crate::{
     LOLASpecification, Monitor, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
-    io::{InputProviderBuilder, builders::OutputHandlerBuilder, mqtt::MQTTLocalityReceiver},
+    define_config,
+    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::dynamic_lola::{
-        lalr_parser::LALRExprParser,
+        lalr_parser::LALRParser,
         parser::CombExprParser,
         type_checker::{SExprTE, TypedLOLASpecification, type_check},
     },
     runtime::{
-        reconfigurable_async::ReconfAsyncMonitorBuilder,
+        reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder,
         semi_sync::{SemiSyncContext, SemiSyncMonitorBuilder},
     },
     semantics::{
@@ -31,6 +32,16 @@ use super::{
 };
 
 use static_assertions::assert_obj_safe;
+
+// Various AsyncConfigs to use
+#[rustfmt::skip]
+define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context);
+#[rustfmt::skip]
+define_config!(TypedValueConfig, Val = Value, Expr = SExprTE, Ctx = Context);
+#[rustfmt::skip]
+define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedContext);
+#[rustfmt::skip]
+define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext);
 
 pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     fn executor(
@@ -54,11 +65,6 @@ pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     fn output(
         self: Box<Self>,
         output: Box<dyn OutputHandler<Val = V>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
-
-    fn mqtt_reconfig_provider(
-        self: Box<Self>,
-        provider: MQTTLocalityReceiver,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
     fn build(self: Box<Self>) -> Box<dyn Runnable>;
@@ -107,13 +113,6 @@ impl<
         Box::new(MonBuilder::output(*self, output))
     }
 
-    fn mqtt_reconfig_provider(
-        self: Box<Self>,
-        provider: MQTTLocalityReceiver,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
-        Box::new(MonBuilder::mqtt_reconfig_provider(*self, provider))
-    }
-
     fn build(self: Box<Self>) -> Box<dyn Runnable> {
         Box::new(MonBuilder::build(*self))
     }
@@ -154,14 +153,8 @@ impl<
         Self(self.0.output(output))
     }
 
-    fn mqtt_reconfig_provider(self, provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        Self(self.0.mqtt_reconfig_provider(provider))
-    }
-
     fn build(self) -> Self::Mon {
-        let builder = self.0.build();
-        // Perform type checking here
-        builder
+        self.0.build()
     }
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
@@ -247,9 +240,9 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
-    pub mqtt_reconfig_provider: Option<MQTTLocalityReceiver>,
     pub scheduler_mode: SchedulerCommunication,
     pub parser: ParserMode,
+    pub reconf_topic: String,
 }
 
 impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
@@ -257,22 +250,8 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         Self { runtime, ..self }
     }
 
-    pub fn maybe_runtime(self, runtime: Option<Runtime>) -> Self {
-        match runtime {
-            Some(runtime) => self.runtime(runtime),
-            None => self,
-        }
-    }
-
     pub fn semantics(self, semantics: Semantics) -> Self {
         Self { semantics, ..self }
-    }
-
-    pub fn maybe_semantics(self, semantics: Option<Semantics>) -> Self {
-        match semantics {
-            Some(semantics) => self.semantics(semantics),
-            None => self,
-        }
     }
 
     pub fn distribution_mode(self, dist_mode: DistributionMode) -> Self {
@@ -323,6 +302,13 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
     pub fn parser(self, parser: ParserMode) -> Self {
         Self { parser, ..self }
     }
+
+    pub fn reconf_topic(self, reconf_topic: String) -> Self {
+        Self {
+            reconf_topic,
+            ..self
+        }
+    }
 }
 
 impl AbstractMonitorBuilder<LOLASpecification, Value>
@@ -330,6 +316,8 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
 {
     type Mon = Box<dyn Runnable>;
 
+    // TODO: Refactor. This needs to either reuse defaults used within the CLI parser, or not allow
+    // constructing without args.
     fn new() -> Self {
         Self {
             executor: None,
@@ -342,9 +330,9 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             distribution_mode_builder: None,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
-            mqtt_reconfig_provider: None,
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
+            reconf_topic: "reconf".to_string(),
         }
     }
 
@@ -376,14 +364,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
         }
     }
 
-    fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self {
-        // Generic builder doesn't directly use the MQTT reconfiguration provider
-        Self {
-            mqtt_reconfig_provider: Some(provider),
-            ..self
-        }
-    }
-
     fn build(self) -> Self::Mon {
         if self.distribution_mode_builder.is_some()
             || self.input_provider_builder.is_some()
@@ -399,11 +379,11 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
                 self.parser,
                 self.executor,
                 self.model,
-                self.mqtt_reconfig_provider,
                 self.distribution_mode,
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
+                self.reconf_topic.clone(),
             );
 
         let builder = if let Some(output) = self.output {
@@ -425,32 +405,6 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     }
 }
 
-// NOTE: Temporary only while AsyncConfig is unfinished
-struct ValueConfig;
-impl AsyncConfig for ValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = Context<Self>;
-}
-struct TypedValueConfig;
-impl AsyncConfig for TypedValueConfig {
-    type Val = Value;
-    type Expr = SExprTE;
-    type Ctx = Context<Self>;
-}
-struct DistValueConfig;
-impl AsyncConfig for DistValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = DistributedContext<Self>;
-}
-struct SemiSyncValueConfig;
-impl AsyncConfig for SemiSyncValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = SemiSyncContext<Self>;
-}
-
 impl GenericMonitorBuilder<LOLASpecification, Value> {
     // Creates the common parts of the builder
     fn create_common_builder(
@@ -459,11 +413,11 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
         parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
         model: Option<LOLASpecification>,
-        mqtt_reconfig_provider: Option<MQTTLocalityReceiver>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
+        reconf_topic: String,
     ) -> Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
@@ -476,7 +430,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 Box::new(AsyncMonitorBuilder::<
                     LOLASpecification,
                     ValueConfig,
-                    UntimedLolaSemantics<LALRExprParser>,
+                    UntimedLolaSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
@@ -490,101 +444,40 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 Box::new(SemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
                     LOLASpecification,
-                    UntimedLolaSemantics<LALRExprParser>,
+                    UntimedLolaSemantics<LALRParser>,
                 >::new())
             }
-            (Runtime::Async, Semantics::TypedUntimed, _) => {
+            (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
+                let mut builder = ReconfSemiSyncMonitorBuilder::<
+                    SemiSyncValueConfig,
+                    LOLASpecification,
+                    UntimedLolaSemantics<LALRParser>,
+                    LALRParser,
+                >::new();
+                builder = builder.reconf_topic(reconf_topic);
+                builder =
+                    builder.input_builder(input_provider_builder.expect(
+                        "Input provider builder required for ReconfigurableSemiSync runtime",
+                    ));
+                builder =
+                    builder.output_builder(output_handler_builder.expect(
+                        "Output handler builder required for ReconfigurableSemiSync runtime",
+                    ));
+                Box::new(builder)
+            }
+            (Runtime::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
                     TypedLOLASpecification,
                     TypedValueConfig,
-                    TypedUntimedLolaSemantics,
+                    TypedUntimedLolaSemantics<LALRParser>,
                 >::new()))
             }
-            (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Lalr) => {
-                let mut builder = ReconfAsyncMonitorBuilder::<
-                    LOLASpecification,
-                    // Reconfigurable async runtime does not work with DistributedContext
-                    // or DistributedSemantics as it has no way of proving the graph stream for the
-                    // network topology
-                    ValueConfig,
-                    UntimedLolaSemantics<LALRExprParser>,
-                >::new();
-
-                debug!(
-                    "Checking runtime distribution mode: {:?}",
-                    distribution_mode
-                );
-                if let DistributionMode::LocalMonitorWithReceiverAndLocality(_, receiver) =
-                    &distribution_mode
-                {
-                    debug!("Building runtime with LocalMonitorWithReceiverAndLocality");
-                    // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
-                    builder = builder.reconf_provider(receiver.clone());
-                } else if let DistributionMode::ReconfigurableLocalMonitor(receiver) =
-                    &distribution_mode
-                {
-                    debug!("Building runtime with ReconfigurableLocalMonitor");
-                    // If we have a ReconfigurableLocalMonitor, pass the receiver to the builder
-                    builder = builder.reconf_provider(receiver.clone());
-                } else {
-                    debug!(
-                        "No matching distribution mode found for MQTT receiver, mode was: {:?}",
-                        distribution_mode
-                    );
-                }
-
-                // For reconfigurable runtime, pass builders instead of built providers
-                if let Some(input_provider_builder) = input_provider_builder {
-                    builder = builder.input_builder(input_provider_builder);
-                }
-                if let Some(output_handler_builder) = output_handler_builder {
-                    builder = builder.output_builder(output_handler_builder);
-                }
-
-                Box::new(builder)
-            }
-            (Runtime::ReconfigurableAsync, Semantics::Untimed, ParserMode::Combinator) => {
-                let mut builder = ReconfAsyncMonitorBuilder::<
-                    LOLASpecification,
-                    // Reconfigurable async runtime does not work with DistributedContext
-                    // as it has no way of proving the graph stream for the network topology
-                    ValueConfig,
-                    UntimedLolaSemantics<CombExprParser>,
-                >::new();
-
-                // If we have a LocalMonitorWithReceiver, pass the receiver to the builder
-                debug!(
-                    "Checking Combinator runtime distribution mode: {:?}",
-                    distribution_mode
-                );
-                if let DistributionMode::LocalMonitorWithReceiverAndLocality(_, receiver) =
-                    &distribution_mode
-                {
-                    debug!("Combinator: Building runtime with LocalMonitorWithReceiverAndLocality");
-                    builder = builder.reconf_provider(receiver.clone());
-                } else if let DistributionMode::ReconfigurableLocalMonitor(receiver) =
-                    &distribution_mode
-                {
-                    debug!("Combinator: Building runtime with ReconfigurableLocalMonitor");
-                    builder = builder.reconf_provider(receiver.clone());
-                } else {
-                    debug!(
-                        "Combinator: No matching distribution mode for MQTT receiver, mode was: {:?}",
-                        distribution_mode
-                    );
-                }
-
-                builder = builder.maybe_mqtt_reconfig_provider(mqtt_reconfig_provider);
-
-                // For reconfigurable runtime, pass builders instead of built providers
-                if let Some(input_provider_builder) = input_provider_builder {
-                    builder = builder.input_builder(input_provider_builder);
-                }
-                if let Some(output_handler_builder) = output_handler_builder {
-                    builder = builder.output_builder(output_handler_builder);
-                }
-
-                Box::new(builder)
+            (Runtime::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
+                Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
+                    TypedLOLASpecification,
+                    TypedValueConfig,
+                    TypedUntimedLolaSemantics<CombExprParser>,
+                >::new()))
             }
             (Runtime::Distributed, Semantics::Untimed, _) => {
                 debug!(
@@ -602,10 +495,8 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 let builder = DistAsyncMonitorBuilder::<
                     LOLASpecification,
                     DistValueConfig,
-                    DistributedSemantics<LALRExprParser>,
+                    DistributedSemantics<LALRParser>,
                 >::new();
-
-                let builder = builder.maybe_mqtt_reconfig_provider(mqtt_reconfig_provider);
 
                 let builder = builder.scheduler_mode(scheduler_mode);
                 let builder = match distribution_mode {
@@ -692,16 +583,16 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 self.parser,
                 self.executor,
                 self.model,
-                self.mqtt_reconfig_provider,
                 distribution_mode,
                 self.scheduler_mode,
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
+                self.reconf_topic.clone(),
             );
 
         // Construct inputs and outputs:
-        // Skip this for ReconfigurableAsync runtime since we handle builders directly in the match above
-        let builder = if self.runtime == Runtime::ReconfigurableAsync {
+        // Skip this for ReconfigurableSemiSync runtime since we handle builders directly in the match above
+        let builder = if self.runtime == Runtime::ReconfSemiSync {
             builder
         } else {
             // Normal handling for non-reconfigurable runtimes
@@ -739,9 +630,9 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             distribution_mode_builder: self.distribution_mode_builder.clone(),
             runtime: self.runtime.clone(),
             semantics: self.semantics.clone(),
-            mqtt_reconfig_provider: None,
             scheduler_mode: self.scheduler_mode.clone(),
             parser: self.parser.clone(),
+            reconf_topic: self.reconf_topic.clone(),
         }
     }
 }

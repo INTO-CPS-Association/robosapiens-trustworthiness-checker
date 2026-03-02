@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use crate::utils::cancellation_token::CancellationToken;
+use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
@@ -19,7 +20,7 @@ use async_unsync::oneshot;
 use async_unsync::semaphore;
 use futures::future::LocalBoxFuture;
 use futures::future::join_all;
-use futures::{FutureExt, StreamExt, select};
+use futures::{FutureExt, StreamExt, join, select};
 use smol::LocalExecutor;
 use strum_macros::Display;
 use tracing::debug;
@@ -841,7 +842,35 @@ where
             );
 
             let mut var_managers = self.var_managers.borrow_mut();
-            for (var_name, var_manager) in mem::take(&mut *var_managers).into_iter() {
+            for (var_name, mut var_manager) in mem::take(&mut *var_managers).into_iter() {
+                // TODO: TW - I added this as a temporary fix because it was blocking my work.
+                // The issue is that the Async RT does not support specifications where an input
+                // variable is unused. The InputProvider expects the RT to consume the streams it
+                // sends, but the Async RT only does so if the VarManager has at least one
+                // subscriber. This causes the InputProvider to crash.
+                // It is one of those bugs that have always been lurking but the recent changes for
+                // the reconfiguration paper made it crash correctly instead of just hanging.
+                // ...
+                // PS. the bug is not visible with files. It has been seen with ROS2 and I believe
+                // it should replicate with MQTT and Redis.
+
+                // Spawn noop task for every var to avoid bug:
+                let stream = var_manager.subscribe();
+                let name = var_name.clone();
+                self.executor
+                    .spawn(async move {
+                        debug!(
+                            "Context[id={}]: Starting noop task for '{}'",
+                            var_manager.id, name
+                        );
+                        stream.for_each(|_| async {}).await;
+                        debug!(
+                            "Context[id={}]: Noop task for '{}' completed",
+                            var_manager.id, name
+                        );
+                    })
+                    .detach();
+                // Actually make it run:
                 debug!(
                     "Context[id={}]: Spawning run for var_manager '{}'",
                     self.id, var_name
@@ -997,11 +1026,6 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
         }
     }
 
-    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        // We don't currently use the mqtt reconfiguration provider in the standard async runtime
-        self
-    }
-
     fn build(self) -> Self::Mon {
         debug!("AsyncMonitorBuilder: Starting build process");
         let executor = self.executor.expect("Executor not supplied");
@@ -1014,10 +1038,6 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
         );
 
         let mut input_provider = self.input.expect("Input streams not supplied");
-        debug!(
-            "AsyncMonitorBuilder: Input provider variables: {:?}",
-            input_provider.vars()
-        );
 
         let output_handler = self.output.expect("Output handler not supplied");
         debug!(
@@ -1040,7 +1060,7 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
 
         let input_streams = input_vars.iter().map(|var| {
             input_provider
-                .input_stream(var)
+                .var_stream(var)
                 .expect(format!("Input stream not found for {}", var).as_str())
         });
 
@@ -1171,12 +1191,28 @@ where
         self.output_handler.provide_streams(self.output_streams);
 
         debug!("AsyncMonitorRunner: Creating futures for input and output handlers");
-        let mut output_fut = self.output_handler.run().fuse();
+        let output_fut = self.output_handler.run().fuse();
 
         // Wrap input provider's run with cancellation support
         let cancellation_token = self.cancellation_token.clone();
-        let input_provider_future = self.input_provider.run();
-        let mut input_fut = Box::pin(async move {
+        let mut input_provider_stream = self.input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "AsyncMonitorRunner: Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                } else {
+                    debug!("AsyncMonitorRunner: Received Ok message from input provider");
+                }
+            }
+            debug!("AsyncMonitorRunner: Input provider control_stream ended");
+            Ok(())
+        });
+
+        let input_fut = Box::pin(async move {
             futures::select! {
                 result = input_provider_future.fuse() => result,
                 _ = cancellation_token.cancelled().fuse() => {
@@ -1187,33 +1223,20 @@ where
         })
         .fuse();
 
-        debug!("AsyncMonitorRunner: Entering select! to wait for input or output completion");
-        let result = select! {
-            output_res = output_fut => {
-                debug!("AsyncMonitorRunner: Output handler completed with result: {:?}", output_res);
-                if let Err(e) = output_res {
-                    debug!("AsyncMonitorRunner: Output handler failed with error: {:?}", e);
-                    return Err(e)
-                }
-                // When output completes, we're done - trigger cancellation and return
-                self.cancellation_token.cancel();
-                error!("AsyncMonitorRunner: Triggered cancellation after output completion");
-                output_res
-            },
-            input_res = input_fut => {
-                debug!("AsyncMonitorRunner: Input provider completed with result: {:?}", input_res);
-                if let Err(e) = input_res {
-                    error!("AsyncMonitorRunner: Input provider failed with error: {:?}", e);
-                    return Err(e)
-                }
-                // Input provider completion also triggers cancellation
-                self.cancellation_token.cancel();
-                debug!("AsyncMonitorRunner: Triggered cancellation after input completion");
-                input_res
-            },
+        let (output_res, input_res) = join!(output_fut, input_fut);
+        let result = match (output_res, input_res) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Err(e1), Ok(_)) => Err(anyhow!("OutputHandler failed with error: {}", e1)),
+            (Ok(_), Err(e2)) => Err(anyhow!("InputProvider failed with error: {}", e2)),
+            (Err(e1), Err(e2)) => Err(anyhow!(
+                "Both OutputHandler and InputProvider failed: output={:?}, input={:?}",
+                e1,
+                e2
+            )),
         };
 
-        debug!("AsyncMonitorRunner: Monitor execution completed");
+        self.cancellation_token.cancel();
+        debug!(?result, "AsyncMonitorRunner: Monitor execution completed");
         result
     }
 }

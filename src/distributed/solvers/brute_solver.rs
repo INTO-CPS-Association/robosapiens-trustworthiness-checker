@@ -13,7 +13,7 @@ use crate::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
         possible_labelled_dist_graphs,
     },
-    io::testing::ManualOutputHandler,
+    io::{map::MapInputProvider, testing::ManualOutputHandler},
     runtime::{asynchronous::AbstractAsyncMonitorBuilder, distributed::DistAsyncMonitorBuilder},
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics,
@@ -55,7 +55,7 @@ where
             self.input_vars, self.output_vars
         );
         let input_provider: Box<dyn InputProvider<Val = Value>> =
-            Box::new(BTreeMap::<VarName, OutputStream<Value>>::new());
+            Box::new(MapInputProvider::new(BTreeMap::new()));
         let mut output_handler =
             ManualOutputHandler::new(self.executor.clone(), self.dist_constraints.clone());
         let output_stream: OutputStream<Vec<Value>> = Box::pin(output_handler.get_output());

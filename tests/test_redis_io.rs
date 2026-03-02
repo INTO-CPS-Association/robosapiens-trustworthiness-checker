@@ -33,6 +33,7 @@ mod integration_tests {
     use tc_testutils::streams::receive_values_serially;
     use tc_testutils::streams::tick_stream;
     use tc_testutils::streams::with_timeout_res;
+    use tracing::error;
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
@@ -160,25 +161,34 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        let mut input_provider =
+            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
+                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        input_provider.connect().await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        let input_provider_ready = input_provider.ready();
-
-        executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
@@ -228,25 +238,34 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        let mut input_provider =
+            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
+                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        input_provider.connect().await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        let input_provider_ready = input_provider.ready();
-
-        executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
@@ -293,25 +312,34 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = RedisInputProvider::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(redis_port),
-            var_topics,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        let mut input_provider =
+            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
+                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
+        input_provider.connect().await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        let input_provider_ready = input_provider.ready();
-
-        executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());

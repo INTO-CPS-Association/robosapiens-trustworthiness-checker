@@ -1,11 +1,7 @@
-use std::future::pending;
-
-use futures::future::LocalBoxFuture;
-use futures::stream;
-
-use crate::core::Value;
-use crate::core::{InputProvider, OutputStream, VarName};
+use crate::core::{InputProvider, OutputStream, Value, VarName};
 pub use crate::lang::untimed_input::UntimedInputFileData;
+use async_trait::async_trait;
+use futures::{StreamExt, stream};
 
 // Returns an iterator over the values for a given key in the UntimedInputFileData.
 // None if no keys are present.
@@ -25,34 +21,24 @@ fn input_file_data_iter(
     }
 }
 
+#[async_trait(?Send)]
 impl InputProvider for UntimedInputFileData {
     type Val = Value;
 
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         let input_file_data_iter = input_file_data_iter(self.clone(), var.clone());
         Some(Box::pin(stream::iter(input_file_data_iter)))
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        fn union(xs: Vec<VarName>, ys: Vec<VarName>) -> Vec<VarName> {
-            xs.iter()
-                .cloned()
-                .chain(ys.into_iter().filter(|y| xs.iter().any(|x| y == x)))
-                .collect()
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
+        let max_index = self.keys().max();
+        if let Some(max_key) = max_index {
+            stream::repeat_with(|| Ok(()))
+                .take(*max_key + 1)
+                .boxed_local()
+        } else {
+            stream::repeat_with(|| Ok(())).boxed_local()
         }
-
-        self.values()
-            .fold(vec![], |acc, m| union(acc, m.keys().cloned().collect()))
-            .into_iter()
-            .collect()
     }
 }
 
@@ -110,8 +96,38 @@ mod tests {
             map
         });
 
-        let input_stream = data.input_stream(&"x".into()).unwrap();
+        let input_stream = data.var_stream(&"x".into()).unwrap();
         let input_vec = input_stream.collect::<Vec<_>>().await;
         assert_eq!(input_vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    }
+
+    #[apply(async_test)]
+    async fn test_input_file_as_stream_multi_var() {
+        let mut data: UntimedInputFileData = BTreeMap::new();
+        data.insert(0, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(1));
+            map.insert("y".into(), Value::Int(2));
+            map
+        });
+        data.insert(1, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(2));
+            map.insert("y".into(), Value::Int(3));
+            map
+        });
+        data.insert(2, {
+            let mut map = BTreeMap::new();
+            map.insert("x".into(), Value::Int(3));
+            map.insert("y".into(), Value::Int(4));
+            map
+        });
+
+        let x_stream = data.var_stream(&"x".into()).unwrap();
+        let x_vec = x_stream.collect::<Vec<_>>().await;
+        assert_eq!(x_vec, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let y_stream = data.var_stream(&"y".into()).unwrap();
+        let y_vec = y_stream.collect::<Vec<_>>().await;
+        assert_eq!(y_vec, vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
     }
 }

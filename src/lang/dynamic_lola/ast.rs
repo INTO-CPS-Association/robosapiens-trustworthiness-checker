@@ -1,6 +1,6 @@
 use ecow::{EcoString, EcoVec};
 
-use crate::core::{Specification, VarName};
+use crate::core::{Specification, StreamTypeAscription, VarName};
 use crate::core::{StreamType, Value};
 use crate::distributed::distribution_graphs::NodeName;
 use std::{
@@ -165,10 +165,10 @@ pub enum SExpr {
     Var(VarName),
 
     // Dynamic, continuously updatable properties
-    Dynamic(Box<Self>),
-    RestrictedDynamic(Box<Self>, EcoVec<VarName>),
+    Dynamic(Box<Self>, StreamTypeAscription),
+    RestrictedDynamic(Box<Self>, StreamTypeAscription, EcoVec<VarName>),
     // Deferred properties
-    Defer(Box<Self>),
+    Defer(Box<Self>, StreamTypeAscription, EcoVec<VarName>),
     // Update between properties
     Update(Box<Self>, Box<Self>),
     // Default value for properties (replaces Deferred with an alternative
@@ -240,9 +240,9 @@ impl SExpr {
             }
             Var(v) => vec![v.clone()],
             Not(b) => b.inputs(),
-            Dynamic(e) => e.inputs(),
-            RestrictedDynamic(_, vs) => vs.iter().cloned().collect(),
-            Defer(e) => e.inputs(),
+            Dynamic(e, _) => e.inputs(),
+            RestrictedDynamic(_, _, vs) => vs.iter().cloned().collect(),
+            Defer(e, _, _) => e.inputs(),
             Update(e1, e2) => {
                 let mut inputs = e1.inputs();
                 inputs.extend(e2.inputs());
@@ -347,17 +347,28 @@ impl LOLASpecification {
         // Helper function to do the changes...
         fn traverse_expr(expr: SExpr, vars: &EcoVec<VarName>) -> SExpr {
             match expr {
-                SExpr::Dynamic(sexpr) => {
-                    SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), vars.clone())
-                }
-                SExpr::RestrictedDynamic(sexpr, eco_vec) => {
+                // Transform Dynamic into RestrictedDynamic without the lhs of the assignment
+                SExpr::Dynamic(sexpr, sta) => SExpr::RestrictedDynamic(
+                    Box::new(traverse_expr(*sexpr, vars)),
+                    sta,
+                    vars.clone(),
+                ),
+                SExpr::RestrictedDynamic(sexpr, sta, eco_vec) => {
                     // Cannot contain anything that is not inside `vars`
                     let new_restricted = eco_vec
                         .iter()
                         .filter(|&var| vars.contains(var))
                         .cloned()
                         .collect();
-                    SExpr::RestrictedDynamic(Box::new(traverse_expr(*sexpr, vars)), new_restricted)
+                    SExpr::RestrictedDynamic(
+                        Box::new(traverse_expr(*sexpr, vars)),
+                        sta,
+                        new_restricted,
+                    )
+                }
+                SExpr::Defer(sexpr, sta, _) => {
+                    // Disallow Defer to use the lhs of the assignment
+                    SExpr::Defer(Box::new(traverse_expr(*sexpr, vars)), sta, vars.clone())
                 }
                 SExpr::Var(v) => SExpr::Var(v.clone()),
                 SExpr::Val(v) => SExpr::Val(v.clone()),
@@ -373,7 +384,6 @@ impl LOLASpecification {
                 SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::LHead(sexpr) => SExpr::LHead(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::LLen(sexpr) => SExpr::LLen(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::Defer(sexpr) => SExpr::Defer(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::BinOp(sexpr, sexpr1, sbin_op) => SExpr::BinOp(
                     Box::new(traverse_expr(*sexpr, vars)),
@@ -489,6 +499,23 @@ impl Specification for LOLASpecification {
     fn var_expr(&self, var: &VarName) -> Option<SExpr> {
         Some(self.exprs.get(var)?.clone())
     }
+
+    fn add_input_var(&mut self, var: VarName) {
+        let input_vars = self
+            .input_vars
+            .iter()
+            .cloned()
+            .chain(std::iter::once(var))
+            .collect();
+        // Call new so we make sure that fix_dynamic is also called
+        *self = LOLASpecification::new(
+            input_vars,
+            self.output_vars.clone(),
+            self.exprs.clone(),
+            self.type_annotations.clone(),
+            self.aux_info.clone(),
+        );
+    }
 }
 
 impl Display for SExpr {
@@ -521,17 +548,27 @@ impl Display for SExpr {
             Dist(u, v) => {
                 write!(f, "dist({}, {})", u, v)
             }
-            Dynamic(e) => write!(f, "dynamic({})", e),
-            RestrictedDynamic(e, vs) => write!(
-                f,
-                "dynamic({}, {{{}}})",
-                e,
-                vs.iter()
+            Dynamic(e, sta) => match sta {
+                StreamTypeAscription::Unascribed => write!(f, "dynamic({})", e),
+                StreamTypeAscription::Ascribed(st) => write!(f, "dynamic({}, {})", e, st),
+            },
+            RestrictedDynamic(e, sta, vs) => {
+                let env = vs
+                    .iter()
                     .map(|v| format!("{}", v))
                     .collect::<Vec<String>>()
-                    .join(", ")
-            ),
-            Defer(e) => write!(f, "defer({})", e),
+                    .join(", ");
+                match sta {
+                    StreamTypeAscription::Unascribed => write!(f, "dynamic({}, {{{}}})", e, env,),
+                    StreamTypeAscription::Ascribed(sta) => {
+                        write!(f, "dynamic({}, {}, {{{}}})", e, sta, env)
+                    }
+                }
+            }
+            Defer(e, sta, _) => match sta {
+                StreamTypeAscription::Unascribed => write!(f, "defer({})", e),
+                StreamTypeAscription::Ascribed(sta) => write!(f, "defer({}, {})", e, sta),
+            },
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
             Default(e, v) => write!(f, "default({}, {})", e, v),
             IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),

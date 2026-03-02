@@ -2,7 +2,6 @@ use std::fmt::Debug;
 
 use anyhow::{self};
 
-// use tokio::{fs::File, io::AsyncReadExt};
 use tracing::debug;
 use winnow::{Parser, error::ContextError};
 
@@ -16,10 +15,11 @@ pub async fn parse_file<O: Clone + Debug>(
     file: &str,
 ) -> anyhow::Result<O> {
     let contents = smol::fs::read_to_string(file).await?;
-    debug!(contents=?parser.parse_next(&mut contents.as_str()).unwrap(), "Parsing file");
-    parser.parse(contents.as_str()).map_err(|e| {
+    let result = parser.parse(contents.as_str()).map_err(|e| {
         anyhow::anyhow!(e.to_string()).context(format!("Failed to parse file {}", file))
-    })
+    });
+    debug!(result=?result, "Parsed file with result");
+    result
 }
 
 #[cfg(test)]
@@ -38,7 +38,7 @@ mod tests {
         let file = "fixtures/simple_add.input";
         let mut data = parse_file(parser, file).await.unwrap();
         let x_vals = data
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -51,7 +51,7 @@ mod tests {
         let file = "fixtures/maple_sequence_true.input";
         let mut data = parse_file(parser, file).await.unwrap();
         let m_vals = data
-            .input_stream(&"m".into())
+            .var_stream(&"m".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -66,7 +66,7 @@ mod tests {
             ],
         );
         let a_vals = data
-            .input_stream(&"a".into())
+            .var_stream(&"a".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -81,7 +81,7 @@ mod tests {
             ],
         );
         let p_vals = data
-            .input_stream(&"p".into())
+            .var_stream(&"p".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -96,7 +96,7 @@ mod tests {
             ],
         );
         let l_vals = data
-            .input_stream(&"l".into())
+            .var_stream(&"l".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;
@@ -111,7 +111,7 @@ mod tests {
             ],
         );
         let e_vals = data
-            .input_stream(&"e".into())
+            .var_stream(&"e".into())
             .unwrap()
             .collect::<Vec<_>>()
             .await;

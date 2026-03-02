@@ -139,6 +139,11 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
 
             // The logic behind the output stream
             let output_logic = stream! {
+                if streams.is_empty() {
+                    debug!("ManualOutputHandler: No streams provided, output stream will be empty");
+                    let _ = result_tx.send(Ok(()));
+                    return;
+                }
                 loop {
                     let num_streams = streams.len();
                     debug!("ManualOutputHandler: Stream generator loop iteration, {} streams", num_streams);

@@ -20,8 +20,6 @@ use futures::{
 use std::collections::BTreeMap;
 use tracing::debug;
 use tracing::info;
-use tracing::instrument;
-use tracing::warn;
 
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
@@ -482,6 +480,8 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
     )
 }
 
+// WARNING: this currently mirrors the code of the typed combinator so both should be updated in
+// tandom
 pub fn dynamic<AC, Parser>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
@@ -520,6 +520,7 @@ where
         }
         let mut prev_data: Option<PrevData> = None;
         while let Some(current) = eval_stream.next().await {
+            debug!("Received new dynamic property value: {:?}", current);
             // If we have a previous value and it is the same as the current value (no need to
             // repeat evaluation), then continue using the existing stream as our output
             if let Some(prev_data) = &mut prev_data {
@@ -592,77 +593,71 @@ where
 }
 
 // Defer for an UntimedLolaExpression using the lola_expression parser
-#[instrument(skip(ctx, prop_stream))]
 pub fn defer<AC, Parser>(
     ctx: &AC::Ctx,
-    mut prop_stream: OutputStream<AC::Val>,
+    eval_stream: OutputStream<AC::Val>,
+    vs: EcoVec<VarName>,
     history_length: usize,
 ) -> OutputStream<AC::Val>
 where
     Parser: ExprParser<SExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExpr>,
 {
-    let mut subcontext = ctx.subcontext(history_length);
-    Box::pin(stream! {
-        let mut eval_output_stream: Option<OutputStream<Value>> = None;
-        let mut i = 0;
-        let mut prev_received_deferred = false;
+    // Create a subcontext with a history window length
+    let mut subcontext = ctx.restricted_subcontext(vs, history_length);
+    let mut eval_stream = stream_lift_base(eval_stream);
+    let mut eval_output_stream: Option<OutputStream<Value>> = None;
 
-        // Yield Deferred until we have a value to evaluate, then evaluate it
-        while let Some(current) = prop_stream.next().await {
-            debug!(?i, ?current, "Defer");
+    // Build an output stream for dynamic of x over the subcontext
+    Box::pin(stream! {
+        while let Some(current) = eval_stream.next().await {
+            debug!("Received new defer property value: {:?}", current);
             match current {
-                Value::Str(defer_s) => {
-                    // We have a string to evaluate so do so
-                    let expr = Parser::parse(&mut defer_s.as_ref())
-                        .expect("Invalid dynamic str");
-                    eval_output_stream = Some(<UntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext));
-                    debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
-                    subcontext.run().await;
-                    break;
-                }
                 Value::Deferred => {
                     // Consume a sample from the subcontext but return Deferred
-                    info!("defer combinator receieved Deferred");
-                    if i >= history_length {
-                        info!(?i, ?history_length, "Advancing subcontext to clean history");
-                        subcontext.tick().await;
-                    }
-                    i += 1;
-                    prev_received_deferred = true;
+                    subcontext.tick().await;
                     yield Value::Deferred;
                 }
                 Value::NoVal => {
                     // Consume a sample from the subcontext but return NoVal
-                    info!("defer combinator receieved NoVal");
-                    if i >= history_length {
-                        info!(?i, ?history_length, "Advancing subcontext to clean history");
-                        subcontext.tick().await;
-                    }
-                    i += 1;
-
-                    // Deferred is sticky compared to NoVal, since Deferred indicates that we have
-                    // a pending property that cannot be evaluated yet with the given context.
-                    if prev_received_deferred {
-                        yield Value::Deferred;
-                    } else {
-                        yield Value::NoVal;
-                    }
+                    subcontext.tick().await;
+                    yield Value::NoVal;
                 }
-                _ => panic!("Invalid defer property type {:?}", current)
+                Value::Str(s) => {
+                    let expr = Parser::parse(&mut s.as_ref())
+                        .expect("Invalid defer str");
+                    debug!("Defer evaluated to expression {:?}", expr);
+                    let tmp_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
+                    let mut tmp_stream = stream_lift_base(tmp_stream);
+                    // Advance the subcontext to make a new set of input values
+                    // available for the dynamic stream
+                    subcontext.tick().await;
+                    if let Some(eval_res) = tmp_stream.next().await {
+                        eval_output_stream = Some(tmp_stream);
+                        yield eval_res;
+                    } else {
+                        return;
+                    }
+                    break;
+                }
+                cur => panic!("Invalid defer property type {:?}", cur)
             }
         }
+        if eval_output_stream.is_none() {
+            info!("Eval stream ended without a valid property to defer on");
+            return;
+        }
+        let mut eval_output_stream = eval_output_stream.unwrap();
 
-        // This is None if the prop_stream is done but we never received a property
-        if let Some(eval_output_stream) = eval_output_stream {
-            // Wind forward the stream to the current time
-            let time_progressed = i.min(history_length);
-            debug!(?i, ?time_progressed, ?history_length, "Time progressed");
-            let mut eval_output_stream = eval_output_stream.skip(time_progressed);
-
-            // Yield the saved value until the inner stream is done
-            while let Some(eval_res) = eval_output_stream.next().await {
+        // Use eval_stream as controller for when to tick subcontext. Yield from
+        // eval_output_stream.
+        debug!("Starting defer output loop");
+        while let Some(_) = eval_stream.next().await {
+            subcontext.tick().await;
+            if let Some(eval_res) = eval_output_stream.next().await {
                 yield eval_res;
+            } else {
+                return;
             }
         }
     })
@@ -1062,8 +1057,9 @@ mod combinator_tests {
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
     use std::rc::Rc;
+    use tc_testutils::streams::with_timeout;
 
-    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRParser;
     // Using this instead of fixture version to in case fixture version changed
     type TestCtx = Context<TestConfig>;
 
@@ -1189,14 +1185,18 @@ mod combinator_tests {
     }
 
     #[apply(async_test)]
-    async fn test_defer(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_defer1(executor: Rc<LocalExecutor<'static>>) {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 2);
-        ctx.run().await;
-        let res: Vec<Value> = res_stream.collect().await;
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 2);
+        let _ = with_timeout(ctx.run(), 1, "ctx.run()")
+            .await
+            .expect("ctx.run() timed out");
+        let res: Vec<Value> = with_timeout(res_stream.collect(), 1, "res_stream.collect()")
+            .await
+            .expect("res_stream.collect() timed out");
         let exp: Vec<Value> = vec![2.into(), 3.into()];
         assert_eq!(res, exp)
     }
@@ -1208,7 +1208,7 @@ mod combinator_tests {
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -1221,7 +1221,7 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, "x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, 4.into()];
@@ -1239,7 +1239,7 @@ mod combinator_tests {
         ])) as OutputStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, 3.into(), 4.into(), 5.into()];
@@ -1252,11 +1252,50 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, Value::Deferred]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 10);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, Value::Deferred];
         assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_long_regression(executor: Rc<LocalExecutor<'static>>) {
+        // Test that checks that defer combinator can handle a large number of ticks without
+        // deadlocking or running out of memory.
+        // Introduced after regression with runtime test
+
+        // Hack to force log into being INFO for this test.
+        // Needed to make CI perform better
+        use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, util::SubscriberInitExt};
+        let subscriber = tracing_subscriber::registry()
+            .with(LevelFilter::INFO)
+            .with(fmt::layer().with_test_writer());
+        let _guard = subscriber.set_default(); // active only in this scope
+
+        const SIZE: i64 = 3000;
+        let x: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|x| (2 * x).into())));
+        let y: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|y| (2 * y + 1).into())));
+        let e: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|i| {
+            if i < SIZE / 2 {
+                Value::Deferred
+            } else {
+                Value::Str("x + y".into())
+            }
+        })));
+        // Note: Diff here between RT test and Comb test -- e is not given to the context
+        let mut ctx = TestCtx::new(
+            executor.clone(),
+            vec!["x".into(), "y".into()],
+            vec![x, y],
+            10,
+        );
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into(), "y".into()], 10);
+        ctx.run().await;
+        let res: Vec<Value> = with_timeout(res_stream.collect(), 10, "res_stream.collect")
+            .await
+            .expect("Result timed out");
+        assert_eq!(res.len(), SIZE as usize);
     }
 
     #[apply(async_test)]
@@ -1786,6 +1825,145 @@ mod combinator_tests {
         assert_eq!(res1, exp1);
         assert_eq!(res2, exp2);
     }
+
+    #[apply(async_test)]
+    async fn test_sindex_delay_1() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![Value::Deferred, Value::Int(1), Value::Int(2), Value::Int(3)];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_delay_2() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ]));
+        let res: Vec<Value> = sindex(x, 2).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Deferred,
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_noval_at_start() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::NoVal,
+            Value::Int(1),
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Deferred, // NoVal after Deferred repeats Deferred
+            Value::Int(1),
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_noval_in_middle() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::NoVal,
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Int(1),
+            Value::Int(1), // NoVal repeats the last known value
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_multiple_noval() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::NoVal,
+            Value::NoVal,
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred,
+            Value::Int(1),
+            Value::Int(1), // First NoVal repeats Int(1)
+            Value::Int(1), // Second NoVal also repeats Int(1)
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_with_deferred_in_stream() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::Deferred,
+            Value::Int(2),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred, // Added by sindex
+            Value::Int(1),
+            Value::Deferred, // Deferred from stream
+            Value::Int(2),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_noval_after_deferred() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Deferred,
+            Value::NoVal,
+            Value::Int(1),
+        ]));
+        let res: Vec<Value> = sindex(x, 1).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred, // Added by sindex
+            Value::Deferred, // From stream
+            Value::Deferred, // NoVal repeats last value which was Deferred
+            Value::Int(1),
+        ];
+        assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_sindex_complex_pattern() {
+        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::NoVal,
+            Value::Deferred,
+            Value::Int(2),
+            Value::NoVal,
+        ]));
+        let res: Vec<Value> = sindex(x, 2).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Deferred, // Added by sindex
+            Value::Deferred, // Added by sindex
+            Value::Int(1),
+            Value::Int(1),   // NoVal repeats Int(1)
+            Value::Deferred, // Deferred from stream
+            Value::Int(2),
+            Value::Int(2), // NoVal repeats Int(2)
+        ];
+        assert_eq!(res, exp)
+    }
 }
 
 #[cfg(test)]
@@ -1797,11 +1975,12 @@ mod noval_tests {
     use crate::core::Value;
     use crate::lola_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
+    use ecow::eco_vec;
     use futures::stream;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
 
-    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRParser;
     // Using this instead of fixture version to in case fixture version changed
     type TestCtx = Context<TestConfig>;
 
@@ -1912,7 +2091,7 @@ mod noval_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 1);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
@@ -1925,7 +2104,7 @@ mod noval_tests {
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 1);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x + 1
@@ -1953,7 +2132,7 @@ mod noval_tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig, Parser>(&ctx, e, 1);
+        let res_stream = defer::<TestConfig, Parser>(&ctx, e, eco_vec!["x".into()], 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![

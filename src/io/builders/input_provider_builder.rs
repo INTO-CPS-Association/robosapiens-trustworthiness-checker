@@ -6,9 +6,8 @@ use tracing::debug_span;
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::mqtt::MqttFactory;
 use crate::io::testing::ManualInputProvider;
-use crate::runtime::semi_sync::SemiSyncContext;
-use crate::semantics::AsyncConfig;
-use crate::{self as tc, SExpr, Value};
+use crate::runtime::builder::ValueConfig;
+use crate::{self as tc, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
 
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
@@ -35,17 +34,9 @@ pub enum InputProviderSpec {
     Manual,
 }
 
-// TODO: This should not be required when InputProviderBuilder becomes generic
-struct ValueConfig;
-impl AsyncConfig for ValueConfig {
-    type Val = Value;
-    type Expr = SExpr;
-    type Ctx = SemiSyncContext<Self>;
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InputProviderBuilder {
-    spec: InputProviderSpec,
+    pub spec: InputProviderSpec,
     lang: Option<Language>,
     input_vars: Option<Vec<VarName>>,
     executor: Option<Rc<LocalExecutor<'static>>>,
@@ -106,12 +97,17 @@ impl InputProviderBuilder {
         self
     }
 
+    pub fn spec(mut self, spec: InputProviderSpec) -> Self {
+        self.spec = spec;
+        self
+    }
+
     pub async fn async_build(self) -> Box<dyn InputProvider<Val = Value>> {
         let _async_build = debug_span!("async_build for input provider").entered();
         match self.spec {
             InputProviderSpec::File(path) => {
-                let input_file_parser = match self.lang.unwrap_or(Language::DynSRV) {
-                    Language::DynSRV => tc::lang::untimed_input::untimed_input_file,
+                let input_file_parser = match self.lang.unwrap_or(Language::DSRV) {
+                    Language::DSRV => tc::lang::untimed_input::untimed_input_file,
                     Language::Lola => tc::lang::untimed_input::untimed_input_file,
                 };
                 Box::new(
@@ -180,17 +176,18 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let redis_input_provider = tc::io::redis::RedisInputProvider::new(
-                    self.executor.unwrap().clone(),
+                let mut redis_input_provider = tc::io::redis::RedisInputProvider::new(
                     REDIS_HOSTNAME,
                     self.redis_port,
                     var_topics,
                 )
                 .expect("Redis input provider could not be created");
+
                 redis_input_provider
-                    .ready()
+                    .connect()
                     .await
-                    .expect("Redis input provider failed to start");
+                    .expect("Redis input provider failed to connect");
+
                 Box::new(redis_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::Manual => {

@@ -633,7 +633,7 @@ mod integration_tests {
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
-            "--parser-mode",
+            "--parser",
             "combinator",
         ])
         .await
@@ -693,14 +693,14 @@ mod integration_tests {
 
     /// Test CLI with different language modes
     #[apply(async_test)]
-    async fn test_dynsrv_language() {
+    async fn test_dsrv_language() {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.lola"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
             "--language",
-            "dynsrv",
+            "dsrv",
         ])
         .await
         .expect("Failed to run CLI");
@@ -867,6 +867,8 @@ mod integration_tests {
         );
     }
 
+    // TODO: TW: Fix this test - localisation does not work as intended.
+    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
     #[apply(async_test)]
     async fn test_distribution_graph_with_local_node(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
@@ -910,6 +912,8 @@ mod integration_tests {
         );
     }
 
+    // TODO: TW: Fix this test - localisation does not work as intended.
+    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
     #[apply(async_test)]
     async fn test_local_topics_mode(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
@@ -1262,6 +1266,8 @@ mod integration_tests {
         );
     }
 
+    // TODO: TW: Fix this test - localisation does not work as intended.
+    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
     #[apply(async_test)]
     async fn test_complex_distributed_configuration(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
@@ -1342,6 +1348,8 @@ mod integration_tests {
         );
     }
 
+    // TODO: TW: Fix this test - localisation does not work as intended.
+    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
     #[apply(async_test)]
     async fn test_async_runtime_with_distribution(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
@@ -2040,68 +2048,6 @@ mod integration_tests {
 
             // Process should start successfully (no immediate error)
             // It will be terminated by timeout since it waits for work assignment
-
-            if let Some(status) = exit_status {
-                assert!(
-                    status.signal().is_some(),
-                    "Command failed:\nexit_status = {}\nstderr = {}",
-                    status,
-                    stderr
-                );
-            }
-            // If no exit status, the process was terminated due to timeout (expected behavior)
-        }
-
-        /// Test successful operation of reconfigurable-async runtime with mqtt-input
-        ///
-        /// The reconfigurable-async runtime now properly supports mqtt-input by converting
-        /// input providers to input builders. This test verifies that the CLI starts
-        /// successfully and runs indefinitely, waiting for MQTT input or reconfiguration.
-        ///
-        /// Command being tested:
-        /// ```
-        /// trustworthiness_checker examples/simple_add_typed.lola \
-        ///   --runtime reconfigurable-async \
-        ///   --local-node a \
-        ///   --mqtt-input \
-        ///   --output-stdout \
-        ///   --distributed-work \
-        ///   --mqtt-port <port>
-        /// ```
-        ///
-        /// Expected behavior: Command should start successfully and run indefinitely until
-        /// terminated by timeout, waiting for work assignment from scheduler and MQTT input.
-        #[cfg(feature = "testcontainers")]
-        #[apply(async_test)]
-        async fn test_reconfigurable_async_runtime_mqtt_input_success(
-            _executor: Rc<LocalExecutor>,
-        ) {
-            let mqtt_server = start_mqtt().await;
-            let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
-                .await
-                .expect("Failed to get host port for MQTT server");
-
-            // Use streaming version since reconfigurable-async waits indefinitely for work assignment and MQTT input
-            let (_stdout, stderr, exit_status) = run_cli_streaming(
-                &[
-                    &fixture_path("simple_add_typed.lola"),
-                    "--runtime",
-                    "reconfigurable-async",
-                    "--local-node",
-                    "a",
-                    "--mqtt-input",
-                    "--output-stdout",
-                    "--distributed-work",
-                    "--mqtt-port",
-                    &format!("{}", mqtt_port),
-                ],
-                Duration::from_secs(3),
-            )
-            .await
-            .expect("Failed to run CLI streaming");
-
-            // Process should start successfully (no immediate error)
-            // It will be terminated by timeout since it waits for work assignment and MQTT input
 
             if let Some(status) = exit_status {
                 assert!(

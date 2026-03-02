@@ -53,17 +53,17 @@ where
                 mc::not(e)
             }
             SExpr::Var(v) => mc::var::<AC>(ctx, v),
-            SExpr::Dynamic(e) => {
+            SExpr::Dynamic(e, _) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::dynamic::<AC, Parser>(ctx, e, None, 10)
             }
-            SExpr::RestrictedDynamic(e, vs) => {
+            SExpr::RestrictedDynamic(e, _, vs) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::dynamic::<AC, Parser>(ctx, e, Some(vs), 10)
             }
-            SExpr::Defer(e) => {
+            SExpr::Defer(e, _, vs) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::defer::<AC, Parser>(ctx, e, 10)
+                mc::defer::<AC, Parser>(ctx, e, vs, 10)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);

@@ -1,133 +1,44 @@
-use std::{collections::BTreeMap, rc::Rc};
-
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
-
-use crate::io::mqtt::MQTTLocalityReceiver;
+use std::fmt::Debug;
+use std::rc::Rc;
+use strum_macros::Display;
 
 use super::{StreamData, VarName};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
 pub enum Semantics {
     Untimed,
     TypedUntimed,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
 pub enum Runtime {
     Async,
     Distributed,
-    ReconfigurableAsync,
     SemiSync,
+    ReconfSemiSync,
 }
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
+#[async_trait(?Send)]
 pub trait InputProvider {
     type Val;
 
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
 
-    /// Wait until the InputProvider is ready to receive messages (may never terminate in case
-    /// of errors)
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>>;
-
-    /// Input providers should run forever, unless there is an error, in which case they halt with
-    /// an error result
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>>;
-
-    fn vars(&self) -> Vec<VarName>;
+    /// Returns an OutputStream of Result<()> indicating if the InputProvider has encountered an
+    /// error (Err) or has successfully provided one batch of values (Ok).
+    /// Awaiting the control_stream attempts to progress the InputProvider by one step.
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
 }
 
-impl<V> InputProvider for Vec<(VarName, OutputStream<V>)> {
-    type Val = V;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.iter()
-            .position(|(name, _)| name == var)
-            .map(|index| self.swap_remove(index).1)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.iter().map(|(k, _)| k.clone()).collect()
-    }
-}
-
-impl<V> InputProvider for BTreeMap<VarName, OutputStream<V>> {
-    type Val = V;
-
-    // We are consuming the input stream from the map when
-    // we return it to ensure single ownership and static lifetime
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.remove(var)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.keys().cloned().collect()
-    }
-}
-
-impl<V: 'static> InputProvider for BTreeMap<VarName, Vec<V>> {
-    type Val = V;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.remove(var)
-            .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.keys().cloned().collect()
-    }
-}
-
-impl<V: 'static> InputProvider for std::collections::HashMap<VarName, Vec<V>> {
-    type Val = V;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>> {
-        self.remove(var)
-            .map(|values| Box::pin(futures::stream::iter(values.into_iter())) as OutputStream<V>)
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(futures::future::ready(Ok(())))
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.keys().cloned().collect()
-    }
-}
-
-pub trait Specification: Clone + 'static {
+pub trait Specification: Debug + Clone + 'static {
     type Expr;
 
     fn input_vars(&self) -> Vec<VarName>;
@@ -142,6 +53,8 @@ pub trait Specification: Clone + 'static {
     }
 
     fn var_expr(&self, var: &VarName) -> Option<Self::Expr>;
+
+    fn add_input_var(&mut self, var: VarName);
 }
 
 // This could alternatively implement Sink
@@ -221,19 +134,6 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
         }
     }
 
-    fn mqtt_reconfig_provider(self, provider: MQTTLocalityReceiver) -> Self;
-
-    fn maybe_mqtt_reconfig_provider(self, provider: Option<MQTTLocalityReceiver>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(provider) = provider {
-            self.mqtt_reconfig_provider(provider)
-        } else {
-            self
-        }
-    }
-
     fn build(self) -> Self::Mon;
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon>;
@@ -288,41 +188,4 @@ pub trait Runnable {
 #[async_trait(?Send)]
 pub trait Monitor<M, V: StreamData>: Runnable {
     fn spec(&self) -> &M;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Value;
-    use futures::stream;
-
-    #[test]
-    fn test_vec_input_provider_input_stream() {
-        let mut provider = vec![
-            (
-                "x".into(),
-                Box::pin(stream::iter(vec![Value::Int(1), Value::Int(2)])) as OutputStream<Value>,
-            ),
-            (
-                "y".into(),
-                Box::pin(stream::iter(vec![Value::Int(3), Value::Int(4)])) as OutputStream<Value>,
-            ),
-        ];
-
-        // Test getting an existing stream
-        let x_stream = provider.input_stream(&"x".into());
-        assert!(x_stream.is_some());
-
-        // Test getting a non-existing stream
-        let z_stream = provider.input_stream(&"z".into());
-        assert!(z_stream.is_none());
-
-        // Test that the stream was removed from the provider
-        let x_stream_again = provider.input_stream(&"x".into());
-        assert!(x_stream_again.is_none());
-
-        // Test that other streams are still available
-        let y_stream = provider.input_stream(&"y".into());
-        assert!(y_stream.is_some());
-    }
 }

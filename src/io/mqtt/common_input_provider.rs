@@ -1,9 +1,7 @@
 pub(crate) mod common {
-    use std::{collections::BTreeMap, rc::Rc};
+    use std::collections::BTreeMap;
 
-    use async_cell::unsync::AsyncCell;
     use futures::future;
-    use futures::future::LocalBoxFuture;
     use tracing::{debug, info, warn};
 
     use unsync::oneshot::Receiver as OSReceiver;
@@ -38,9 +36,9 @@ pub(crate) mod common {
         pub client_streams_rx: Option<OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>>,
         pub client_streams_tx: Option<OSSender<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>>,
 
+        pub connected: bool,
+
         pub drop_guard: DropGuard,
-        // Mainly used for debugging purposes
-        pub started: Rc<AsyncCell<bool>>,
 
         // Channels used to send to the `available_streams`
         pub senders: Option<BTreeMap<VarName, SpscSender<Value>>>,
@@ -59,7 +57,6 @@ pub(crate) mod common {
             let (senders, available_streams) = Self::create_senders_receiver(var_topics.iter());
             let senders = Some(senders);
 
-            let started = AsyncCell::new_with(false).into_shared();
             let drop_guard = CancellationToken::new().drop_guard();
 
             let uri = match port {
@@ -77,10 +74,10 @@ pub(crate) mod common {
                     factory,
                     var_topics,
                     max_reconnect_attempts,
-                    started,
                     uri,
                     client_streams_tx,
                     client_streams_rx,
+                    connected: false,
                     drop_guard,
                     senders,
                 },
@@ -167,10 +164,6 @@ pub(crate) mod common {
             }
             info!(?self.uri, ?topics, "Connected and subscribed to MQTT broker");
 
-            // Mark as ready as soon as we're connected and subscribed
-            self.started.set(true);
-            info!("Set MQTT input provider to ready state");
-
             info!("Sending client and stream to run logic");
             client_streams_tx
                 .send((client, mqtt_stream))
@@ -181,12 +174,12 @@ pub(crate) mod common {
                 "Input provider has these topics available: {:?}",
                 self.var_topics.values().collect::<Vec<_>>()
             );
+            self.connected = true;
             Ok(())
         }
 
         pub async fn initial_run_logic(
             var_topics: BTreeMap<VarName, String>,
-            _started: Rc<AsyncCell<bool>>,
             client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
         ) -> anyhow::Result<(
             Box<dyn MqttClient>,
@@ -226,7 +219,6 @@ pub(crate) mod common {
                 .ok_or_else(|| anyhow::anyhow!("Failed to receive MQTT client and stream"))?;
             info!("Successfully received MQTT client and stream");
 
-            // Started flag is set in connect(), not here
             info!("MQTT input provider run_logic initialization complete");
             Ok((client, mqtt_stream, var_topics_inverse))
         }
@@ -304,35 +296,6 @@ pub(crate) mod common {
             }
 
             Ok(())
-        }
-
-        pub fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-            let started = self.started.clone();
-            Box::pin(async move {
-                info!("Checking if MQTT input provider is ready");
-                let mut attempts = 0;
-                while !started.get().await {
-                    attempts += 1;
-                    info!(
-                        "MQTT input provider not ready yet, checking again (attempt #{})",
-                        attempts
-                    );
-                    smol::Timer::after(std::time::Duration::from_millis(100)).await;
-
-                    if attempts > 50 {
-                        warn!(
-                            "MQTT input provider still not ready after 5 seconds, continuing to wait"
-                        );
-                        attempts = 0;
-                    }
-                }
-                info!("MQTT input provider is ready");
-                Ok(())
-            })
-        }
-
-        pub fn vars(&self) -> Vec<VarName> {
-            self.var_topics.keys().cloned().collect()
         }
 
         pub fn take_senders(&mut self) -> BTreeMap<VarName, SpscSender<Value>> {

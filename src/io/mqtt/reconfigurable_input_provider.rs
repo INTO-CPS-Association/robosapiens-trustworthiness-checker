@@ -1,7 +1,8 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use async_cell::unsync::AsyncCell;
-use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
+use async_stream::stream;
+use async_trait::async_trait;
+use futures::{FutureExt, StreamExt};
 use smol::LocalExecutor;
 use tracing::{Level, debug, info, info_span, instrument, warn};
 use unsync::oneshot::Receiver as OSReceiver;
@@ -132,27 +133,31 @@ impl ReconfMQTTInputProvider {
         (var_topics_inverse, senders)
     }
 
-    async fn run_logic(
+    async fn create_run_stream(
         var_topics: BTreeMap<VarName, String>,
         mut senders: BTreeMap<VarName, SpscSender<Value>>,
         available_streams: Rc<RefCell<BTreeMap<VarName, OutputStream<Value>>>>,
-        started: Rc<AsyncCell<bool>>,
         cancellation_token: CancellationToken,
         client_streams_rx: OSReceiver<(Box<dyn MqttClient>, OutputStream<MqttMessage>)>,
         mut reconfig: OutputStream<common::VarTopicMap>,
-    ) -> anyhow::Result<()> {
-        let mqtt_input_span = info_span!("ReconfMQTTInputProvider run_logic");
-        let _enter = mqtt_input_span.enter();
-        info!("run_logic started");
+    ) -> OutputStream<anyhow::Result<()>> {
+        Box::pin(stream! {
+            let mqtt_input_span = info_span!("ReconfMQTTInputProvider run_logic");
+            let _enter = mqtt_input_span.enter();
 
-        let mut prev_var_topics_inverse = common::InverseVarTopicMap::new();
-        let (client, mut mqtt_stream, mut var_topics_inverse) =
-            common::Base::initial_run_logic(var_topics.clone(), started.clone(), client_streams_rx)
-                .await?;
+            let mut prev_var_topics_inverse = common::InverseVarTopicMap::new();
+            let (client, mut mqtt_stream, mut var_topics_inverse) =
+                match common::Base::initial_run_logic(var_topics.clone(),  client_streams_rx)
+                .await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        warn!("Error during MQTT initial run logic: {:?}", e);
+                        yield Err(e);
+                        return;
+                    }
+                };
 
-        let result = async {
             loop {
-                // Notably: Handle new configs before receiving data
                 futures::select_biased! {
                     new_config = reconfig.next().fuse() => {
                         match new_config {
@@ -165,65 +170,62 @@ impl ReconfMQTTInputProvider {
                             },
                             None => {
                                 debug!("Reconfiguration stream ended, stopping MQTTInputProvider");
-                                return Ok(());
+                                break;
                             }
                         }
                     }
                     msg = mqtt_stream.next().fuse() => {
                         match msg {
                             Some(msg) => {
-                                common::Base::handle_mqtt_message(msg, &var_topics_inverse, &mut senders, Some(&prev_var_topics_inverse)).await?;
+                                match common::Base::handle_mqtt_message(msg, &var_topics_inverse, &mut senders, Some(&prev_var_topics_inverse)).await {
+                                    Ok(()) => yield Ok(()),
+                                    Err(e) => {
+                                        warn!("Error handling MQTT message: {:?}", e);
+                                        yield Err(e);
+                                        break;
+                                    }
+                                }
                             }
                             None => {
                                 debug!("MQTT stream ended");
-                                return Ok(());
+                                break;
                             }
                         }
                     }
                     _ = cancellation_token.cancelled().fuse() => {
                         debug!("MQTTInputProvider: Input monitor task cancelled");
-                        return Ok(());
+                        break;
                     }
                 }
             }
-        }.await;
 
-        // Always disconnect the client when we're done, regardless of success or error
-        debug!("Disconnecting MQTT client");
-        let _ = client.disconnect().await;
-
-        result
+            // TODO: Implement this as drop instead
+            // Always disconnect the client when we're done, regardless of success or error
+            debug!("Disconnecting MQTT client");
+            let _ = client.disconnect().await;
+        })
     }
 }
 
+#[async_trait(?Send)]
 impl InputProvider for ReconfMQTTInputProvider {
     type Val = Value;
-
-    fn input_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
+    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         // Take ownership of the stream for the variable, if it exists
         self.available_streams.borrow_mut().remove(var)
     }
 
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         let reconfig = self.reconfig.take().expect("Reconfig stream already taken");
-
-        Box::pin(Self::run_logic(
+        Self::create_run_stream(
             self.base.var_topics.clone(),
             self.base.take_senders(),
             self.available_streams.clone(),
-            self.base.started.clone(),
             self.base.drop_guard.clone_tok(),
             self.base.take_client_streams_rx(),
             reconfig,
-        ))
-    }
-
-    fn ready(&self) -> LocalBoxFuture<'static, Result<(), anyhow::Error>> {
-        self.base.ready()
-    }
-
-    fn vars(&self) -> Vec<VarName> {
-        self.base.vars()
+        )
+        .await
     }
 }
 
@@ -236,6 +238,7 @@ mod integration_tests {
     use smol::LocalExecutor;
     use std::vec;
     use std::{collections::BTreeMap, rc::Rc};
+    use tracing::error;
     use tracing::info;
 
     use super::super::common_input_provider::common;
@@ -369,16 +372,25 @@ mod integration_tests {
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
-        let input_provider_ready = input_provider.ready();
-
-        executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -443,20 +455,29 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        let input_provider_ready = input_provider.ready();
-
-        executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         // Wait for reconf request to be processed.
         // (Without this, the outcome depends on how the Executor happens to run things)
         smol::Timer::after(std::time::Duration::from_millis(200)).await;
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
@@ -520,13 +541,22 @@ mod integration_tests {
         );
         with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
 
-        let input_provider_ready = input_provider.ready();
-
-        executor.spawn(input_provider.run()).detach();
-        with_timeout_res(input_provider_ready, 5, "input_provider_ready").await?;
+        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
+        // behavior.
+        let mut input_provider_stream = input_provider.control_stream().await;
+        let input_provider_future = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!("Input provider stream returned error: {:?}", res);
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        executor.spawn(input_provider_future).detach();
 
         let x_stream = input_provider
-            .input_stream(&"x".into())
+            .var_stream(&"x".into())
             .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
@@ -555,7 +585,7 @@ mod integration_tests {
         smol::Timer::after(std::time::Duration::from_millis(200)).await;
 
         let y_stream = input_provider
-            .input_stream(&"y".into())
+            .var_stream(&"y".into())
             .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
 
         for _ in 0..ys_expected.len() {

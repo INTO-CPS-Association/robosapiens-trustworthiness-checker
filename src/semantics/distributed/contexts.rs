@@ -15,6 +15,7 @@ use crate::{
 };
 
 // An AsyncConfig used internally to map into AsyncCtx from DistributedContext
+#[derive(Clone)]
 pub struct InnerAC<AC>
 where
     AC: AsyncConfig<Ctx = DistributedContext<AC>>,

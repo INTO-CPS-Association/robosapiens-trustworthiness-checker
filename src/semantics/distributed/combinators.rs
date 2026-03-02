@@ -59,7 +59,7 @@ mod tests {
 
     use super::*;
     use crate::async_test;
-    use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
+    use crate::lang::dynamic_lola::lalr_parser::LALRParser;
     use crate::lola_fixtures::TestDistConfig;
     use crate::{
         core::Value,
@@ -94,7 +94,7 @@ mod tests {
         let exp = vec![Value::Int(2), Value::Int(4)];
         let res_stream = crate::semantics::untimed_untyped_lola::combinators::dynamic::<
             TestDistConfig,
-            LALRExprParser,
+            LALRParser,
         >(&ctx, e, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;

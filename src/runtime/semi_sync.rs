@@ -81,7 +81,7 @@ where
         let output = self.output.unwrap();
 
         SemiSyncMonitor {
-            executor,
+            _executor: executor,
             model,
             input_provider: input,
             output_handler: output,
@@ -92,13 +92,9 @@ where
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
         Box::pin(async move { (*self).build() })
     }
-
-    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        todo!()
-    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum StreamState {
     Pending,
     Finished,
@@ -171,6 +167,8 @@ where
     }
 }
 
+// TODO: Fix that we have the boolean parameter input to define an ordering. Should not be defined
+// inside the VarManager but somewhere with logic in the context.
 struct VarManager<AC>
 where
     AC: AsyncConfig,
@@ -187,6 +185,7 @@ where
     retained_history: VecDeque<AC::Val>,
     samples_forwarded: usize,
     id: usize,
+    input: bool,
 }
 
 impl<AC> VarManager<AC>
@@ -194,7 +193,7 @@ where
     AC: AsyncConfig,
     AC::Val: DeferrableStreamData,
 {
-    fn new(var_name: VarName, value_stream: OutputStream<AC::Val>) -> Self {
+    fn new(var_name: VarName, value_stream: OutputStream<AC::Val>, input: bool) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(?var_name, "Creating VarManager {}", id);
         Self {
@@ -205,12 +204,17 @@ where
             retained_history: VecDeque::new(),
             id,
             samples_forwarded: 0,
+            input,
         }
     }
 
-    fn new_from_receiver(var_name: VarName, receiver: spsc::Receiver<AC::Val>) -> Self {
+    fn new_from_receiver(
+        var_name: VarName,
+        receiver: spsc::Receiver<AC::Val>,
+        input: bool,
+    ) -> Self {
         let value_stream = stream_utils::channel_to_output_stream(receiver);
-        Self::new(var_name, value_stream)
+        Self::new(var_name, value_stream, input)
     }
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<AC::Val> {
@@ -337,7 +341,7 @@ where
     S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
-    executor: Rc<LocalExecutor<'static>>,
+    _executor: Rc<LocalExecutor<'static>>,
     model: S,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
@@ -478,14 +482,14 @@ where
     MS: MonitoringSemantics<AC>,
 {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        info!("Running SemiSyncMonitor.");
+        debug!(?self.model, "Running SemiSyncMonitor based on model:");
         // Set up input streams
         let input_streams = self
             .model
             .input_vars()
             .iter()
             .map(|var| {
-                let stream = self.input_provider.input_stream(var);
+                let stream = self.input_provider.var_stream(var);
                 (
                     var.clone(),
                     stream.expect(&format!(
@@ -504,7 +508,8 @@ where
             .map(|var_name| {
                 let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
                     spsc::channel(128);
-                let var_manager = VarManager::<AC>::new_from_receiver(var_name.clone(), receiver);
+                let var_manager =
+                    VarManager::<AC>::new_from_receiver(var_name.clone(), receiver, false);
                 let expr = self.model.var_expr(var_name).ok_or_else(|| {
                     anyhow!(
                         "No expression found for output variable {} when setting up Monitor",
@@ -529,7 +534,7 @@ where
             .chain(
                 input_streams
                     .into_iter()
-                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream)),
+                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream, true)),
             )
             .collect::<Vec<VarManager<_>>>();
 
@@ -563,22 +568,36 @@ where
             .fuse()
         }
 
-        // TODO: Fix this...
-        // Need to spawn input_provider in a separate task because of weird rule that they are
-        // supposed to run forever...
-        self.executor.spawn(self.input_provider.run()).detach();
+        let mut input_provider_stream = self.input_provider.control_stream().await;
+        let input_fut = Box::pin(async move {
+            while let Some(res) = input_provider_stream.next().await {
+                if res.is_err() {
+                    error!(
+                        "SemiSyncMonitor: Input provider stream returned error: {:?}",
+                        res
+                    );
+                    return res;
+                }
+            }
+            Ok(())
+        });
+        let input_fut = log_end(input_fut, "input_provider ended");
+
         let output_fut = log_end(self.output_handler.run(), "output_handler.run() ended");
         let work_fut = log_end(
             Box::pin(Self::work_task(context, expr_evals)),
             "work_task.run() ended",
         );
 
-        let res = futures::join!(output_fut, work_fut);
+        let res = futures::join!(output_fut, work_fut, input_fut);
         if let Err(e) = res.0 {
             error!(?e, "Output handler had an error");
         }
         if let Err(e) = res.1 {
             error!(?e, "Work task had an error");
+        }
+        if let Err(e) = res.2 {
+            error!(?e, "Input task had an error");
         }
 
         Ok(())
@@ -645,12 +664,18 @@ where
     }
 
     fn build(self) -> <Self::AC as AsyncConfig>::Ctx {
-        SemiSyncContext::new(
+        let ctx = SemiSyncContext::new(
             Rc::new(RefCell::new(self.var_managers.expect(
                 "VarManagers must be set before building SemiSyncContext",
             ))),
             self.history_length.unwrap_or(0),
-        )
+        );
+        info!(
+            "SemiSyncContextBuilder: Built SemiSyncContext with id {:?} and VarManagers: {:?}",
+            ctx.id,
+            ctx.var_managers.borrow().keys()
+        );
+        return ctx;
     }
 }
 
@@ -679,7 +704,11 @@ where
         history_length: usize,
     ) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        debug!("Creating SemiSyncContext {}", id);
+        debug!(
+            "Creating SemiSyncContext {:?} with vars: {:?}",
+            id,
+            var_managers.borrow().keys()
+        );
         Self {
             var_managers,
             history_length,
@@ -688,25 +717,55 @@ where
     }
 
     async fn forward_values(&mut self) -> anyhow::Result<StreamState> {
-        let mut managers = self.var_managers.borrow_mut();
-        for (name, manager) in managers.iter_mut() {
+        // Helper func to run the logic for awaiting manager.
+        async fn forward_one<AC>(
+            name: &VarName,
+            manager: &mut VarManager<AC>,
+        ) -> anyhow::Result<StreamState>
+        where
+            AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+            AC::Val: DeferrableStreamData,
+        {
             match manager.forward_value().await {
-                Ok(StreamState::Pending) => {}
+                Ok(StreamState::Pending) => Ok(StreamState::Pending),
                 Ok(StreamState::Finished) => {
                     info!(?name, "forward_values: VarManager finished");
-                    // Need to clear them as early as possible, as this indicates
-                    // subscribers should not expect more values
                     manager.subscribers.clear();
+                    Ok(StreamState::Finished)
                 }
                 Err(e) => {
                     error!(?name, ?e, "forward_values: Error in VarManager");
-                    return Err(e);
+                    Err(e)
                 }
             }
         }
-        managers.retain(|_, manager| !manager.subscribers.is_empty());
 
+        let mut managers = self.var_managers.borrow_mut();
+        let mut to_remove = vec![];
+        // Forward inputs first to avoid deadlocks
+        for (name, manager) in managers.iter_mut() {
+            if manager.input {
+                let state = forward_one::<AC>(name, manager).await?;
+                if state == StreamState::Finished {
+                    to_remove.push(name.clone());
+                }
+            }
+        }
+        // Forward rest
+        for (name, manager) in managers.iter_mut() {
+            if !manager.input {
+                let state = forward_one::<AC>(name, manager).await?;
+                if state == StreamState::Finished {
+                    to_remove.push(name.clone());
+                }
+            }
+        }
+        managers.retain(|name, _| !to_remove.contains(name));
         Ok(if managers.is_empty() {
+            warn!(
+                "SemiSyncContext ID: {:?}: All VarManagers finished",
+                self.id
+            );
             StreamState::Finished
         } else {
             StreamState::Pending
@@ -720,15 +779,21 @@ where
             .filter_map(|(var_name, manager)| {
                 if vs.contains(var_name) {
                     let stream = manager.subscribe(history_length);
+                    let input = manager.input;
                     Some((
                         var_name.clone(),
-                        VarManager::<AC>::new(var_name.clone(), stream),
+                        VarManager::<AC>::new(var_name.clone(), stream, input),
                     ))
                 } else {
                     None
                 }
             })
             .collect::<BTreeMap<_, _>>();
+        debug!(
+            "SemiSyncContext ID {:?}: Subcontext var_managers: {:?}",
+            self.id,
+            new_managers.keys()
+        );
         let builder = SemiSyncContextBuilder::new()
             .var_managers(new_managers)
             .history_length(history_length);
@@ -746,7 +811,16 @@ where
     type Builder = SemiSyncContextBuilder<AC>;
 
     fn var(&self, x: &VarName) -> Option<OutputStream<AC::Val>> {
+        debug!(
+            "SemiSyncContext ID {:?}: Requesting variable {}",
+            self.id, x
+        );
         let mut manager = self.var_managers.borrow_mut();
+        debug!(
+            "SemiSyncContext ID {:?}: VarManagers available {:?}",
+            self.id,
+            manager.keys()
+        );
         let stream = manager.get_mut(x)?.subscribe(self.history_length);
         info!(
             self.id,
@@ -812,13 +886,15 @@ where
 #[cfg(test)]
 mod tests {
 
+    use crate::async_test;
     use crate::core::Runnable;
+    use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
-    use crate::lang::dynamic_lola::lalr_parser::LALRExprParser;
-    use crate::runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor};
-    use crate::semantics::{AsyncConfig, UntimedLolaSemantics};
+    use crate::lang::dynamic_lola::lalr_parser::LALRParser;
+    use crate::runtime::builder::SemiSyncValueConfig;
+    use crate::runtime::semi_sync::SemiSyncMonitor;
+    use crate::semantics::UntimedLolaSemantics;
     use crate::{LOLASpecification, lola_fixtures::*};
-    use crate::{SExpr, async_test};
     use crate::{Value, lola_specification};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
@@ -828,15 +904,8 @@ mod tests {
 
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
-    struct ValueConfig;
-    impl AsyncConfig for ValueConfig {
-        type Val = Value;
-        type Expr = SExpr;
-        type Ctx = SemiSyncContext<Self>;
-    }
-
     type TestMonitor =
-        SemiSyncMonitor<ValueConfig, LOLASpecification, UntimedLolaSemantics<LALRExprParser>>;
+        SemiSyncMonitor<SemiSyncValueConfig, LOLASpecification, UntimedLolaSemantics<LALRParser>>;
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
@@ -844,7 +913,8 @@ mod tests {
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -852,7 +922,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -885,13 +955,14 @@ mod tests {
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
-        let input_streams = BTreeMap::from([("x".into(), x), ("y".into(), y)]);
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let output_handler = Box::new(NullOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
         ));
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -912,7 +983,7 @@ mod tests {
         let spec = lola_specification(&mut spec).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
-        let input_streams = BTreeMap::from([("x".into(), x)]);
+        let input_streams = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -920,7 +991,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -951,7 +1022,8 @@ mod tests {
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
-        let input_streams = BTreeMap::from([("x".into(), x), ("e".into(), e)]);
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -959,7 +1031,7 @@ mod tests {
         let outputs = output_handler.get_output();
 
         let monitor = TestMonitor {
-            executor: executor.clone(),
+            _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
@@ -979,6 +1051,126 @@ mod tests {
             vec![
                 (0, vec![1.into()]),
                 (1, vec![3.into()]),
+                (2, vec![5.into()]),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_single(executor: Rc<LocalExecutor<'static>>) {
+        let spec = lola_specification(&mut spec_defer()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), Value::Deferred, Value::Deferred];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_multiple(executor: Rc<LocalExecutor<'static>>) {
+        let spec = lola_specification(&mut spec_defer()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![1.into()]),
+                (1, vec![2.into()]),
+                (2, vec![3.into()]),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_delayed(executor: Rc<LocalExecutor<'static>>) {
+        let spec = lola_specification(&mut spec_defer()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let e = vec![Value::Deferred, Value::Deferred, "x + 3".into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Deferred]),
+                (1, vec![Value::Deferred]),
                 (2, vec![5.into()]),
             ],
         );

@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::anyhow;
 use ecow::{EcoString, EcoVec};
-use redis::{FromRedisValue, RedisResult, ToRedisArgs};
+use redis::{FromRedisValue, ToRedisArgs, ToSingleRedisArg};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
@@ -51,36 +51,38 @@ impl ToRedisArgs for Value {
     }
 }
 
+// Note: Redis docs say: "This should be implemented only for types that are
+// serialized into exactly one value, otherwise the compiler can't ensure
+// the correctness of some commands."
+// This currently holds for the implementation of Value, but we should keep an eye out.
+impl ToSingleRedisArg for Value {}
+
 impl FromRedisValue for Value {
-    fn from_redis_value(v: &redis::Value) -> RedisResult<Self> {
+    fn from_redis_value(v: redis::Value) -> Result<Self, redis::ParsingError> {
         match v {
             redis::Value::BulkString(bytes) => {
-                let s = std::str::from_utf8(bytes).map_err(|_| {
-                    redis::RedisError::from((redis::ErrorKind::TypeError, "Invalid UTF-8"))
+                let s = std::str::from_utf8(&bytes).map_err(|e| {
+                    redis::ParsingError::from(format!("Invalid UTF-8 in BulkString: {:?}", e))
                 })?;
 
-                serde_json5::from_str(s).map_err(|_e| {
-                    redis::RedisError::from((
-                        redis::ErrorKind::TypeError,
-                        "Response type not deserializable to Value with serde_json5",
-                        format!(
-                            "(response was {:?})",
-                            redis::Value::BulkString(bytes.clone())
-                        ),
+                serde_json5::from_str(s).map_err(|e| {
+                    redis::ParsingError::from(format!(
+                        "BulkString not deserializable to Value with serde_json5: {}",
+                        e
                     ))
                 })
             }
             redis::Value::Array(values) => {
                 let list: Result<Vec<Value>, _> =
-                    values.iter().map(Value::from_redis_value).collect();
+                    values.iter().map(Value::from_redis_value_ref).collect();
                 Ok(Value::List(list?.into()))
             }
             redis::Value::Nil => Ok(Value::Unit),
-            redis::Value::Int(i) => Ok(Value::Int(*i)),
+            redis::Value::Int(i) => Ok(Value::Int(i)),
             redis::Value::SimpleString(s) => Ok(Value::Str(s.clone().into())),
-            _ => Err(redis::RedisError::from((
-                redis::ErrorKind::TypeError,
-                "Response type not deserializable to Value",
+            _ => Err(redis::ParsingError::from(std::format!(
+                "Unsupported Redis value type for Value deserialization: {:?}",
+                v
             ))),
         }
     }
@@ -265,6 +267,11 @@ impl Display for Value {
  * values used. */
 pub trait StreamData: Clone + Debug + 'static {}
 
+/* Trait for stream data with a statically known stream type */
+pub trait TypedStreamData: StreamData {
+    fn stream_data_type() -> StreamType;
+}
+
 /* Trait for stream data types that can represent deferred values as a placeholder
 * for when an expression cannot be computed due to a lack of context */
 pub trait DeferrableStreamData: StreamData {
@@ -288,6 +295,60 @@ pub enum StreamType {
     Str,
     Bool,
     Unit,
+}
+
+impl Display for StreamType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamType::Int => write!(f, "int"),
+            StreamType::Float => write!(f, "float"),
+            StreamType::Str => write!(f, "str"),
+            StreamType::Bool => write!(f, "bool"),
+            StreamType::Unit => write!(f, "unit"),
+        }
+    }
+}
+
+impl TypedStreamData for i64 {
+    fn stream_data_type() -> StreamType {
+        StreamType::Int
+    }
+}
+
+impl TypedStreamData for u64 {
+    fn stream_data_type() -> StreamType {
+        StreamType::Int
+    }
+}
+
+impl TypedStreamData for f64 {
+    fn stream_data_type() -> StreamType {
+        StreamType::Float
+    }
+}
+
+impl TypedStreamData for String {
+    fn stream_data_type() -> StreamType {
+        StreamType::Str
+    }
+}
+
+impl TypedStreamData for bool {
+    fn stream_data_type() -> StreamType {
+        StreamType::Bool
+    }
+}
+
+impl TypedStreamData for () {
+    fn stream_data_type() -> StreamType {
+        StreamType::Unit
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum StreamTypeAscription {
+    Ascribed(StreamType),
+    Unascribed,
 }
 
 impl Serialize for Value {

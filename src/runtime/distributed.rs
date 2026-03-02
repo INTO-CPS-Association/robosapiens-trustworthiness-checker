@@ -196,11 +196,6 @@ where
         self
     }
 
-    fn mqtt_reconfig_provider(self, _provider: crate::io::mqtt::MQTTLocalityReceiver) -> Self {
-        // We don't currently use the mqtt reconfiguration provider in the distributed runtime
-        self
-    }
-
     fn build(self) -> Self::Mon {
         let dist_graph_mode = self
             .dist_graph_mode

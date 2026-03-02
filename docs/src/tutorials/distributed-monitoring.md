@@ -4,7 +4,7 @@ This tutorial explains how to run RoboSAPIENS Trustworthiness Checker on multipl
 
 ## Overview
 
-Distributed monitoring splits a single DynSRV specification into multiple *localised* specifications which monitor the part of a specification relevant to a local network node.
+Distributed monitoring splits a single DSRV specification into multiple *localised* specifications which monitor the part of a specification relevant to a local network node.
 
 ## Architecture
 
