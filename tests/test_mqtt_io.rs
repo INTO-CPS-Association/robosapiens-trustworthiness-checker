@@ -427,3 +427,219 @@ mod integration_tests {
         Ok(())
     }
 }
+
+#[cfg(feature = "testcontainers")]
+#[cfg(test)]
+mod reconf_tests {
+
+    use async_compat::Compat as TokioCompat;
+    use futures::{StreamExt, stream};
+    use macro_rules_attribute::apply;
+    use smol::LocalExecutor;
+    use std::rc::Rc;
+    use tc_testutils::mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt};
+    use tc_testutils::streams::{TickSender, tick_stream, with_timeout, with_timeout_res};
+    use trustworthiness_checker::async_test;
+    use trustworthiness_checker::cli::args::OutputMode;
+    use trustworthiness_checker::core::values::Value;
+    use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
+    use trustworthiness_checker::io::builders::{
+        InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
+    };
+    use trustworthiness_checker::lang::dynamic_lola::ast::LOLASpecification;
+    use trustworthiness_checker::lang::dynamic_lola::lalr_parser::LALRParser;
+    use trustworthiness_checker::lola_fixtures::*;
+    use trustworthiness_checker::lola_specification;
+    use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
+    use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder;
+    use trustworthiness_checker::semantics::UntimedLolaSemantics;
+
+    type TestMonitorBuilder = ReconfSemiSyncMonitorBuilder<
+        SemiSyncValueConfig,
+        LOLASpecification,
+        UntimedLolaSemantics<LALRParser>,
+        LALRParser,
+    >;
+
+    // TODO: Thomas suggested implement a type of OutputHandler for these tests that uses mpsc channels because
+    // this is possible while still being clonable
+
+    const X_TOPIC: &str = "x";
+    const Y_TOPIC: &str = "y";
+    const Z_TOPIC: &str = "z";
+    const RECONF_TOPIC: &str = "RECONF_ME";
+
+    fn generate_test_publisher_tasks(
+        executor: Rc<LocalExecutor<'static>>,
+        xs: Vec<Value>,
+        ys: Vec<Value>,
+        mqtt_port: u16,
+    ) -> (
+        (TickSender, smol::Task<anyhow::Result<()>>),
+        (TickSender, smol::Task<anyhow::Result<()>>),
+    ) {
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+
+        // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
+        let x_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "x_publisher".to_string(),
+                X_TOPIC.to_string(),
+                x_pub_stream,
+                xs.len(),
+                mqtt_port,
+            ),
+            5,
+            "x_publisher_task",
+        ));
+
+        let y_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "y_publisher".to_string(),
+                Y_TOPIC.to_string(),
+                y_pub_stream,
+                ys.len(),
+                mqtt_port,
+            ),
+            5,
+            "y_publisher_task",
+        ));
+
+        ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_simple_add_no_reconf(executor: Rc<LocalExecutor<'static>>) {
+        // Tests the ReconfSemiSyncMonitor with the simple add monitor, without actually sending a
+        // reconfiguration, to check that the basic MQTT input/output works as expected.
+
+        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let xs = vec![Value::Int(1), Value::Int(3)];
+        let ys = vec![Value::Int(2), Value::Int(4)];
+        let expected = vec![Value::Int(3), Value::Int(5), Value::Int(7)];
+
+        let mqtt_server = start_mqtt().await;
+        let mqtt_port = with_timeout_res(
+            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
+            5,
+            "get_host_port",
+        )
+        .await
+        .expect("Failed to get host port for MQTT server");
+
+        // InputProvider is MQTT server:
+        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into(), Y_TOPIC.into()]));
+        let input_builder = InputProviderBuilder::new(input_spec)
+            .model(spec.clone())
+            .executor(executor.clone())
+            .mqtt_port(Some(mqtt_port));
+
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
+
+        let output_mode = OutputMode {
+            output_stdout: false,
+            output_mqtt_topics: Some(vec![Z_TOPIC.into()]),
+            mqtt_output: true,
+            output_redis_topics: None,
+            redis_output: false,
+            output_ros_topics: None,
+        };
+
+        let output_builder = OutputHandlerBuilder::new(output_mode)
+            .executor(executor.clone())
+            .output_var_names(vec!["z".into()])
+            .mqtt_port(Some(mqtt_port))
+            .aux_info(vec![]);
+        let monitor_builder = Box::new(
+            TestMonitorBuilder::new()
+                .executor(executor.clone())
+                .model(spec.clone())
+                .input_builder(input_builder)
+                .output_builder(output_builder)
+                .reconf_topic(RECONF_TOPIC.into()),
+        );
+        let monitor = monitor_builder.async_build().await;
+        executor.spawn(monitor.run()).detach();
+
+        let mut x_sub = with_timeout(
+            get_mqtt_outputs(X_TOPIC.to_string(), "x_subscriber".to_string(), mqtt_port),
+            5,
+            "x_subscriber",
+        )
+        .await
+        .unwrap();
+        let mut y_sub = with_timeout(
+            get_mqtt_outputs(Y_TOPIC.to_string(), "y_subscriber".to_string(), mqtt_port),
+            5,
+            "y_subscriber",
+        )
+        .await
+        .unwrap();
+        let mut z_sub = with_timeout(
+            get_mqtt_outputs(Z_TOPIC.to_string(), "z_subscriber".to_string(), mqtt_port),
+            5,
+            "z_subscriber",
+        )
+        .await
+        .unwrap();
+
+        let mut x_iter = xs.into_iter();
+        let mut y_iter = ys.into_iter();
+        let mut z_iter = expected.into_iter();
+
+        // Initial send/receive only yields one z-value:
+        x_tick.send(()).await.expect("Failed to send tick");
+        let x_res = with_timeout(x_sub.next(), 5, "x_sub.next()")
+            .await
+            .expect("Failed to get x result");
+        assert_eq!(x_res, x_iter.next());
+        y_tick.send(()).await.expect("Failed to send tick");
+        let y_res = with_timeout(y_sub.next(), 5, "y_sub.next()")
+            .await
+            .expect("Failed to get y result");
+        assert_eq!(y_res, y_iter.next());
+        let z_res = with_timeout(z_sub.next(), 5, "z_sub.next()")
+            .await
+            .expect("Failed to get z result");
+        let z_exp = z_iter.next();
+        assert_eq!(z_res, z_exp);
+
+        // Afterwards we receive one on each tick:
+        for (x_exp, y_exp) in x_iter.zip(y_iter) {
+            x_tick.send(()).await.expect("Failed to send tick");
+            let x_res = with_timeout(x_sub.next(), 5, "x_sub.next()")
+                .await
+                .expect("Failed to get x result");
+            assert_eq!(x_res, Some(x_exp));
+
+            let z_res = with_timeout(z_sub.next(), 5, "z_sub.next()")
+                .await
+                .expect("Failed to get z result");
+            let z_exp = z_iter.next();
+            assert_eq!(z_res, z_exp);
+
+            y_tick.send(()).await.expect("Failed to send tick");
+            let y_res = with_timeout(y_sub.next(), 5, "y_sub.next()")
+                .await
+                .expect("Failed to get y result");
+            assert_eq!(y_res, Some(y_exp));
+
+            let z_res = with_timeout(z_sub.next(), 5, "z_sub.next()")
+                .await
+                .expect("Failed to get z result");
+            let z_exp = z_iter.next();
+            assert_eq!(z_res, z_exp);
+        }
+
+        x_tick.send(()).await.expect("Failed to send tick");
+        y_tick.send(()).await.expect("Failed to send tick");
+        with_timeout_res(x_publisher_task, 5, "x_publisher_task")
+            .await
+            .expect("x publisher task should finish");
+        with_timeout_res(y_publisher_task, 5, "y_publisher_task")
+            .await
+            .expect("y publisher task should finish");
+    }
+}
