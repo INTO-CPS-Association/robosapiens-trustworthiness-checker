@@ -112,6 +112,13 @@ pub fn spec_simple_add_monitor_plus_one() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_acc_monitor() -> &'static str {
+    "in x\n\
+     out z\n\
+     z = default(z[1], 0) + x"
+}
+
+#[allow(dead_code)]
 pub fn spec_simple_add_aux_monitor() -> &'static str {
     "in x\n\
      in y\n\
