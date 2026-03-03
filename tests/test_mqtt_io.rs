@@ -433,7 +433,7 @@ mod integration_tests {
 mod reconf_tests {
 
     use async_compat::Compat as TokioCompat;
-    use futures::{StreamExt, stream};
+    use futures::{FutureExt, StreamExt, stream};
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
     use std::rc::Rc;
@@ -468,6 +468,8 @@ mod reconf_tests {
     const X_TOPIC: &str = "x";
     const Y_TOPIC: &str = "y";
     const Z_TOPIC: &str = "z";
+    const V_TOPIC: &str = "v";
+    const W_TOPIC: &str = "w";
     const RECONF_TOPIC: &str = "RECONF_ME";
 
     fn generate_test_publisher_tasks(
@@ -1092,6 +1094,7 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
+        // NOTE: No way of giving new Y_TOPIC after reconf - defaults to /y
         let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into()]));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
@@ -1254,5 +1257,170 @@ mod reconf_tests {
         with_timeout_res(y_publisher_task, 5, "y_publisher_task")
             .await
             .expect("y publisher task should finish");
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_delete_output_stream(executor: Rc<LocalExecutor<'static>>) {
+        // Tests the ReconfSemiSyncMonitor with the where we initally have two output streams,
+        // and reconfigure into having one
+
+        let spec = lola_specification(&mut spec_assignment2_monitor()).unwrap();
+        let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
+        let vs = xs.clone();
+        let ws = vec![Value::Int(2), Value::Int(3)];
+        let ws_len = ws.len();
+
+        let mqtt_server = start_mqtt().await;
+        let mqtt_port = with_timeout_res(
+            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
+            5,
+            "get_host_port",
+        )
+        .await
+        .expect("Failed to get host port for MQTT server");
+
+        // InputProvider is MQTT server:
+        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into()]));
+        let input_builder = InputProviderBuilder::new(input_spec)
+            .model(spec.clone())
+            .executor(executor.clone())
+            .mqtt_port(Some(mqtt_port));
+
+        let ((mut x_tick, x_publisher_task), (_, _)) =
+            generate_test_publisher_tasks(executor.clone(), xs.clone(), vec![], mqtt_port);
+
+        let output_mode = OutputMode {
+            output_stdout: false,
+            output_mqtt_topics: Some(vec![V_TOPIC.into(), W_TOPIC.into()]),
+            mqtt_output: true,
+            output_redis_topics: None,
+            redis_output: false,
+            output_ros_topics: None,
+        };
+
+        let output_builder = OutputHandlerBuilder::new(output_mode)
+            .executor(executor.clone())
+            .output_var_names(vec!["v".into(), "w".into()])
+            .mqtt_port(Some(mqtt_port))
+            .aux_info(vec![]);
+        let monitor_builder = Box::new(
+            TestMonitorBuilder::new()
+                .executor(executor.clone())
+                .model(spec.clone())
+                .input_builder(input_builder)
+                .output_builder(output_builder)
+                .reconf_topic(RECONF_TOPIC.into()),
+        );
+        let monitor = monitor_builder.async_build().await;
+        executor.spawn(monitor.run()).detach();
+
+        let mut x_sub = with_timeout(
+            get_mqtt_outputs(X_TOPIC.to_string(), "x_subscriber".to_string(), mqtt_port),
+            5,
+            "x_subscriber",
+        )
+        .await
+        .unwrap();
+        let mut v_sub = with_timeout(
+            get_mqtt_outputs(V_TOPIC.to_string(), "v_subscriber".to_string(), mqtt_port),
+            5,
+            "v_subscriber",
+        )
+        .await
+        .unwrap();
+        let mut w_sub = with_timeout(
+            get_mqtt_outputs(W_TOPIC.to_string(), "w_subscriber".to_string(), mqtt_port),
+            5,
+            "w_subscriber",
+        )
+        .await
+        .unwrap();
+
+        let x_iter1 = xs.clone().into_iter().take(ws_len);
+        let x_iter2 = xs.into_iter().skip(ws_len);
+        let mut v_iter = vs.into_iter();
+        let mut w_iter = ws.into_iter();
+
+        // Take the first half of the batch
+        for x_exp in x_iter1 {
+            x_tick.send(()).await.expect("Failed to send tick");
+            let x_res = with_timeout(x_sub.next(), 5, "x_sub.next()")
+                .await
+                .expect("Failed to get x result");
+            assert_eq!(x_res, Some(x_exp));
+
+            let v_res = with_timeout(v_sub.next(), 5, "v_sub.next()")
+                .await
+                .expect("Failed to get v result");
+            let v_exp = v_iter.next();
+            assert_eq!(v_res, v_exp);
+
+            let w_res = with_timeout(w_sub.next(), 5, "w_sub.next()")
+                .await
+                .expect("Failed to get w result");
+            let w_exp = w_iter.next();
+            assert_eq!(w_res, w_exp);
+        }
+
+        // Reconfigure:
+        let mut reconf_sub = with_timeout(
+            get_mqtt_outputs(
+                RECONF_TOPIC.to_string(),
+                "reconf_subscriber".to_string(),
+                mqtt_port,
+            ),
+            5,
+            "reconf_subscriber",
+        )
+        .await
+        .unwrap();
+
+        let reconf_stream = futures::stream::once(async { spec_assignment_monitor() }).boxed();
+        let _reconf_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "reconf_publisher".to_string(),
+                RECONF_TOPIC.to_string(),
+                reconf_stream,
+                1,
+                mqtt_port,
+            ),
+            5,
+            "reconf_publisher_task",
+        ));
+        reconf_sub
+            .next()
+            .await
+            .expect("Failed to get reconf message");
+
+        // TODO: Should not be needed in the future when reconf is more stable
+        smol::Timer::after(std::time::Duration::from_millis(100)).await; // Wait a bit for the reconf
+
+        // Run the rest of the assignment1 spec:
+        for x_exp in x_iter2 {
+            x_tick.send(()).await.expect("Failed to send tick");
+            let x_res = with_timeout(x_sub.next(), 5, "x_sub.next()")
+                .await
+                .expect("Failed to get x result");
+            assert_eq!(x_res, Some(x_exp));
+
+            let v_res = with_timeout(v_sub.next(), 5, "v_sub.next()")
+                .await
+                .expect("Failed to get v result");
+            let v_exp = v_iter.next();
+            assert_eq!(v_res, v_exp);
+
+            // Give w some time to potentially produce a value (it should not after reconf)
+            smol::Timer::after(std::time::Duration::from_millis(10)).await;
+            let w_res = w_sub.next().now_or_never();
+            assert!(
+                w_res.is_none() || w_res.unwrap().is_none(),
+                "w stream should not produce values after reconf"
+            );
+        }
+
+        x_tick.send(()).await.expect("Failed to send tick");
+        with_timeout_res(x_publisher_task, 5, "x_publisher_task")
+            .await
+            .expect("x publisher task should finish");
     }
 }
