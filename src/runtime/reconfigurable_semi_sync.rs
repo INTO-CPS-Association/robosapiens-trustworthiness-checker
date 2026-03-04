@@ -1,5 +1,6 @@
 use crate::{
     OutputStream, Value, VarName,
+    cli::args::OutputMode,
     core::{
         AbstractMonitorBuilder, DeferrableStreamData, InputProvider, Monitor, OutputHandler,
         Runnable, Specification,
@@ -436,8 +437,8 @@ where
                                     // fresh...
                                     self.self_builder = self.self_builder.model(parsed.clone());
 
-                                    // Update InputProvder spec
-                                    let spec = match self
+                                    // Update InputProvider spec
+                                    let input_spec = match self
                                         .self_builder
                                         .input_builder
                                         .clone()
@@ -459,9 +460,52 @@ where
                                     if let Some(ref mut input_builder) =
                                         self.self_builder.input_builder
                                     {
-                                        input_builder.spec = spec;
+                                        input_builder.spec = input_spec;
                                         self.self_builder.input_builder =
                                             Some(input_builder.clone());
+                                    }
+                                    // Update OutputMode
+                                    // TODO: does not respect _topics...
+                                    let output_mode = match self
+                                        .self_builder
+                                        .output_builder
+                                        .clone()
+                                        .unwrap()
+                                        .output_mode
+                                    {
+                                        // Auto assign topics on rebuild instead
+                                        // this is only a problem if manual topics were configured
+                                        // TODO: does not respect _topics...
+                                        mode if mode.output_mqtt_topics.is_some() => OutputMode {
+                                            output_stdout: false,
+                                            output_mqtt_topics: None,
+                                            mqtt_output: true,
+                                            output_redis_topics: None,
+                                            redis_output: false,
+                                            output_ros_topics: None,
+                                        },
+                                        mode if mode.output_redis_topics.is_some() => OutputMode {
+                                            output_stdout: false,
+                                            output_mqtt_topics: None,
+                                            mqtt_output: false,
+                                            output_redis_topics: None,
+                                            redis_output: true,
+                                            output_ros_topics: None,
+                                        },
+                                        _ => {
+                                            self.self_builder
+                                                .output_builder
+                                                .clone()
+                                                .unwrap()
+                                                .output_mode
+                                        }
+                                    };
+                                    if let Some(ref mut output_builder) =
+                                        self.self_builder.output_builder
+                                    {
+                                        output_builder.output_mode = output_mode;
+                                        self.self_builder.output_builder =
+                                            Some(output_builder.clone());
                                     }
                                     warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor - restarting inner runtime");
                                     inner_rt_cancel_token.cancel();

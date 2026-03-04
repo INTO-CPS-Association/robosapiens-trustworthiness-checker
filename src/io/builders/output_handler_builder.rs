@@ -13,7 +13,7 @@ use crate::{Value, VarName, core::OutputHandler};
 pub struct OutputHandlerBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     output_var_names: Option<Vec<VarName>>,
-    output_mode: OutputMode,
+    pub output_mode: OutputMode,
     aux_info: Option<Vec<VarName>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
