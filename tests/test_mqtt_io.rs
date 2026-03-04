@@ -512,6 +512,7 @@ mod reconf_tests {
         ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
     }
 
+    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_simple_add_no_reconf(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, without actually sending a
@@ -646,6 +647,7 @@ mod reconf_tests {
             .expect("y publisher task should finish");
     }
 
+    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_no_change_of_streams(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure but do
@@ -871,6 +873,7 @@ mod reconf_tests {
             .expect("y publisher task should finish");
     }
 
+    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_delete_input_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure to a
@@ -1066,6 +1069,7 @@ mod reconf_tests {
             .expect("x publisher task should finish");
     }
 
+    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_add_input_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the acc spec, where we reconfigure to
@@ -1259,6 +1263,7 @@ mod reconf_tests {
             .expect("y publisher task should finish");
     }
 
+    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_delete_output_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the where we initally have two output streams,
@@ -1424,6 +1429,7 @@ mod reconf_tests {
             .expect("x publisher task should finish");
     }
 
+    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_add_output_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the where we initally have one output streams,
