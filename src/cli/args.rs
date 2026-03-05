@@ -61,8 +61,11 @@ pub struct InputMode {
     pub redis_input: bool,
 
     // #[cfg(feature = "ros")]
-    #[clap(long, help = "ROS topics configuration file for input")]
-    pub input_ros_topics: Option<String>,
+    #[clap(
+        long,
+        help = "ROS topics configuration file for input (requires running with `--features ros` or similar)"
+    )]
+    pub input_ros_file: Option<String>,
 }
 
 /// Output handler configuration for monitoring results

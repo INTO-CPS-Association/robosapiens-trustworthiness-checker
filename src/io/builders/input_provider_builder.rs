@@ -18,7 +18,7 @@ pub enum InputProviderSpec {
     File(String),
     /// ROS topics input provider
     Ros(
-        /// Topics
+        /// JSON string with topics and types
         String,
     ),
     /// MQTT topics input provider
@@ -60,8 +60,8 @@ impl InputProviderBuilder {
         Self::new(InputProviderSpec::File(path))
     }
 
-    pub fn ros(topics: String) -> Self {
-        Self::new(InputProviderSpec::Ros(topics))
+    pub fn ros(json_info: String) -> Self {
+        Self::new(InputProviderSpec::Ros(json_info))
     }
 
     pub fn mqtt(topics: Option<Vec<String>>) -> Self {
@@ -116,14 +116,12 @@ impl InputProviderBuilder {
                         .expect("Input file could not be parsed"),
                 ) as Box<dyn InputProvider<Val = Value>>
             }
-            InputProviderSpec::Ros(_input_ros_topics) => {
+            InputProviderSpec::Ros(_json_string) => {
                 #[cfg(feature = "ros")]
                 {
                     use crate::io::ros::input_provider::ROSInputProvider;
                     use crate::io::ros::ros_topic_stream_mapping::json_to_mapping;
-                    let input_mapping_str = std::fs::read_to_string(&_input_ros_topics)
-                        .expect("Input mapping file could not be read");
-                    let input_mapping = json_to_mapping(&input_mapping_str)
+                    let input_mapping = json_to_mapping(&_json_string)
                         .expect("Input mapping file could not be parsed");
                     Box::new(
                         ROSInputProvider::new(self.executor.clone().expect(""), input_mapping)

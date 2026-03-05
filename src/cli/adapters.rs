@@ -22,9 +22,13 @@ impl From<InputMode> for InputProviderSpec {
                 ..
             } => InputProviderSpec::File(input_file),
             InputMode {
-                input_ros_topics: Some(input_ros_topics),
+                input_ros_file: Some(input_ros_file),
                 ..
-            } => InputProviderSpec::Ros(input_ros_topics),
+            } => {
+                let json_string = std::fs::read_to_string(&input_ros_file)
+                    .expect("Input mapping file could not be read");
+                InputProviderSpec::Ros(json_string)
+            }
             InputMode {
                 input_mqtt_topics: Some(input_mqtt_topics),
                 ..
