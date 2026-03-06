@@ -10,3 +10,4 @@ scripts/env/*
 build
 log
 install
+package.json

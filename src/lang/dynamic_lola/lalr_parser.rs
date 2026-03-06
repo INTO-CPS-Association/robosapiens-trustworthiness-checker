@@ -252,7 +252,7 @@ mod tests {
             aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
+                SpannedExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
                     Box::new(SExpr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
@@ -275,7 +275,7 @@ mod tests {
             aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
+                SpannedExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
                     Box::new(SExpr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
@@ -302,7 +302,7 @@ mod tests {
             aux_info: vec![],
             exprs: BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
+                SpannedExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
                     Box::new(SExpr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
@@ -331,9 +331,9 @@ mod tests {
             aux_info: vec![],
             exprs: BTreeMap::from([(
                 "x".into(),
-                SExpr::BinOp(
+                SpannedExpr::BinOp(
                     Box::new(SExpr::Val(1.into())),
-                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1)),
+                    Box::new(SExpr::SIndex(Box::new(SpannedExpr::Var("x".into())), 1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -361,7 +361,7 @@ mod tests {
             BTreeMap::from([
                 (
                     "z".into(),
-                    SExpr::BinOp(
+                    SpannedExpr::BinOp(
                         Box::new(SExpr::Var("x".into())),
                         Box::new(SExpr::Var("y".into())),
                         SBinOp::NOp(NumericalBinOp::Add),
@@ -369,7 +369,7 @@ mod tests {
                 ),
                 (
                     "w".into(),
-                    SExpr::Dynamic(
+                    SpannedExpr::Dynamic(
                         Box::new(SExpr::Var("s".into())),
                         StreamTypeAscription::Unascribed,
                     ),

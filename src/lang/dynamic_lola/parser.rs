@@ -15,30 +15,32 @@ use crate::core::StreamType;
 use crate::core::StreamTypeAscription;
 use crate::core::VarName;
 use crate::distributed::distribution_graphs::NodeName;
+use crate::lang::dynamic_lola::span::*; // For the span_wrapper_winnow function that wraps a parser result in a SpannedExpr with the correct span information
 pub use winnow::ascii::dec_uint as uint;
 
 #[derive(Clone)]
 pub struct CombExprParser;
 
-impl ExprParser<SExpr> for CombExprParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
+//Main expression parser that combines all the different expression types
+impl ExprParser<SpannedExpr> for CombExprParser {
+    fn parse(input: &mut &str) -> Result<SpannedExpr> {
         debug!("Parsing expr: {}", input);
-        lola_expression(input).map_err(|e| anyhow::anyhow!(e))
+        lola_expression(input)
     }
 }
 
 // This is the top-level parser for LOLA expressions
-pub fn lola_expression(s: &mut &str) -> Result<SExpr> {
+pub fn lola_expression(s: &mut &str) -> Result<SpannedExpr> {
     sexpr.parse_next(s)
 }
 
-fn paren(s: &mut &str) -> Result<SExpr> {
+fn paren(s: &mut &str) -> Result<SpannedExpr> {
     delimited('(', sexpr, ')').parse_next(s)
 }
 
 // Used for Lists in output streams
-fn sexpr_list(s: &mut &str) -> Result<SExpr> {
-    let res: Result<Vec<SExpr>, _> = delimited(
+fn sexpr_list(s: &mut &str) -> Result<SpannedExpr> {
+    let res: Result<Vec<SpannedExpr>, _> = delimited(
         seq!("List", loop_ms_or_lb_or_lc, '('),
         separated(
             0..,
@@ -49,20 +51,20 @@ fn sexpr_list(s: &mut &str) -> Result<SExpr> {
     )
     .parse_next(s);
     match res {
-        Ok(exprs) => Ok(SExpr::List(exprs.into())),
+        Ok(exprs) => Ok(span_wrapper_winnow(SExpr::List(exprs.into()))),
         Err(e) => Err(e),
     }
 }
 
-pub fn key_sexpr(s: &mut &str) -> Result<(EcoString, SExpr)> {
+pub fn key_sexpr(s: &mut &str) -> Result<(EcoString, SpannedExpr)> {
     seq!(_: loop_ms_or_lb_or_lc, string, _: ':', _: loop_ms_or_lb_or_lc, sexpr,)
         .map(|(key, value)| (key.into(), value))
         .parse_next(s)
 }
 
 // Used for Maps in output streams
-fn sexpr_map(s: &mut &str) -> Result<SExpr> {
-    let res: Result<Vec<(EcoString, SExpr)>> = delimited(
+fn sexpr_map(s: &mut &str) -> Result<SpannedExpr> {
+    let res: Result<Vec<(EcoString, SpannedExpr)>> = delimited(
         seq!("Map", loop_ms_or_lb_or_lc, '('),
         separated(
             0..,
@@ -73,13 +75,18 @@ fn sexpr_map(s: &mut &str) -> Result<SExpr> {
     )
     .parse_next(s);
     match res {
-        Ok(exprs) => Ok(SExpr::Map(BTreeMap::from_iter(exprs.into_iter()))),
+        Ok(exprs) => Ok(span_wrapper_winnow(SExpr::Map(BTreeMap::from_iter(
+            exprs.into_iter(),
+        )))),
         Err(e) => Err(e),
     }
 }
 
-fn var(s: &mut &str) -> Result<SExpr> {
-    var_name.map(SExpr::Var).parse_next(s)
+fn var(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start = *s;
+    let v = var_name.parse_next(s)?;
+    let end = *s;
+    Ok(span_wrapper_winnow(source, start, end, SExpr::Var(v)))
 }
 
 fn var_name(s: &mut &str) -> Result<VarName> {
@@ -91,75 +98,135 @@ fn node_name(s: &mut &str) -> Result<NodeName> {
 }
 
 // Same as `val` but returns SExpr::Val
-fn sval(s: &mut &str) -> Result<SExpr> {
-    val.map(SExpr::Val).parse_next(s)
+fn sval(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start = *s;
+    let v = val.parse_next(s)?;
+    let end = *s;
+    Ok(span_wrapper_winnow(source, start, end, SExpr::Val(v)))
 }
 
-fn sindex(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn sindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, idx) = seq!((
         _: whitespace,
-        alt((sval, var, paren)),
+        alt((
+          |i: &mut &str| sval(source, i),
+          |i: &mut &str| var(source, i),
+          |i: &mut &str| paren(i),
+        )),
         _: loop_ms_or_lb_or_lc,
         _: '[',
         _: loop_ms_or_lb_or_lc,
         uint,
         _: loop_ms_or_lb_or_lc,
-        _: ']'
-    )
-    .map(|(e, i)| SExpr::SIndex(Box::new(e), i))
-    .parse_next(s)
+        _: ']',
+    ))
+    .parse_next(s)?;
+
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::SIndex(Box::new(e), idx),
+    ))
+    // .map(|(e, i)| span_wrapper_winnow(SExpr::SIndex(Box::new(e), i)))
+    // .parse_next(s)
 }
 
-fn ifelse(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn ifelse(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (b, s1, s2) = seq!((
         _: whitespace,
         _: "if",
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr(source, i),
         _: loop_ms_or_lb_or_lc,
         _: "then",
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr(source, i),
         _: loop_ms_or_lb_or_lc,
         _: "else",
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr(source, i),
         _: whitespace,
     ))
-    .map(|(b, s1, s2)| SExpr::If(Box::new(b), Box::new(s1), Box::new(s2)))
-    .parse_next(s)
-}
+    .parse_next(s)?;
 
-fn defer(s: &mut &str) -> Result<SExpr> {
-    alt((
-        seq!((
-            _: whitespace,
-            _: literal("defer"),
-            _: loop_ms_or_lb_or_lc,
-            _: '(',
-            _: loop_ms_or_lb_or_lc,
-            sexpr,
-            _: loop_ms_or_lb_or_lc,
-            _: ')',
-        ))
-        .map(|(e,)| SExpr::Defer(Box::new(e), StreamTypeAscription::Unascribed, eco_vec![])),
-        seq!((
-            _: whitespace,
-            _: literal("defer"),
-            _: loop_ms_or_lb_or_lc,
-            _: '(',
-            _: loop_ms_or_lb_or_lc,
-            sexpr,
-            type_annotation,
-            _: loop_ms_or_lb_or_lc,
-            _: ')',
-        ))
-        .map(|(e, st)| SExpr::Defer(Box::new(e), StreamTypeAscription::Ascribed(st), eco_vec![])),
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::If(Box::new(b), Box::new(s1), Box::new(s2)),
     ))
-    .parse_next(s)
 }
 
-fn update(s: &mut &str) -> Result<SExpr> {
+fn defer(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, st) = seq!((
+        _: whitespace,
+        _: literal("defer"),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        sexpr,
+        opt(type_annotation),
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    ))
+    .parse_next(s)?;
+
+    let end_rest = *s;
+
+    let ascription = match st {
+        Some(st) => StreamTypeAscription::Ascribed(st),
+        None => StreamTypeAscription::Unascribed,
+    };
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        Expr::Defer(Box::new(e), ascription, eco_vec![]),
+    ))
+    // alt(((
+    //   let start_rest = *s;
+    //   let (e, st) = seq!((
+    //           _: whitespace,
+    //           _: literal("defer"),
+    //           _: loop_ms_or_lb_or_lc,
+    //           _: '(',
+    //           _: loop_ms_or_lb_or_lc,
+    //           sexpr,
+    //           _: loop_ms_or_lb_or_lc,
+    //           _: ')',
+    //       )).parse_next(s)?;
+    //       let end_rest = *s;
+    //       Ok(span_wrapper_winnow(source, start_rest, end_rest, SExpr::Defer(Box::new(e), StreamTypeAscription::Unascribed, eco_vec![]))
+    //       )),
+    // seq!((
+    //     _: whitespace,
+    //     _: literal("defer"),
+    //     _: loop_ms_or_lb_or_lc,
+    //     _: '(',
+    //     _: loop_ms_or_lb_or_lc,
+    //     sexpr,
+    //     type_annotation,
+    //     _: loop_ms_or_lb_or_lc,
+    //     _: ')',
+    // )).parse_next(s)?;
+    // let end_rest =
+
+    // .map(|(e, st)| {
+    //     span_wrapper_winnow(SExpr::Defer(
+    //         Box::new(e),
+    //         StreamTypeAscription::Ascribed(st),
+    //         eco_vec![],
+    //     ))
+    // }),
+}
+
+fn update(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: literal("update"),
@@ -173,11 +240,11 @@ fn update(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Update(Box::new(lhs), Box::new(rhs)))
+    .map(|(lhs, rhs)| span_wrapper_winnow(SExpr::Update(Box::new(lhs), Box::new(rhs))))
     .parse_next(s)
 }
 
-fn is_defined(s: &mut &str) -> Result<SExpr> {
+fn is_defined(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: literal("is_defined"),
@@ -188,11 +255,11 @@ fn is_defined(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(e,)| SExpr::IsDefined(Box::new(e)))
+    .map(|(e,)| span_wrapper_winnow(SExpr::IsDefined(Box::new(e))))
     .parse_next(s)
 }
 
-fn when(s: &mut &str) -> Result<SExpr> {
+fn when(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: literal("when"),
@@ -203,11 +270,11 @@ fn when(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(e,)| SExpr::When(Box::new(e)))
+    .map(|(e,)| span_wrapper_winnow(SExpr::When(Box::new(e))))
     .parse_next(s)
 }
 
-fn latch(s: &mut &str) -> Result<SExpr> {
+fn latch(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: literal("latch"),
@@ -221,11 +288,11 @@ fn latch(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Latch(Box::new(lhs), Box::new(rhs)))
+    .map(|(lhs, rhs)| span_wrapper_winnow(SExpr::Latch(Box::new(lhs), Box::new(rhs))))
     .parse_next(s)
 }
 
-fn init(s: &mut &str) -> Result<SExpr> {
+fn init(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: literal("init"),
@@ -239,11 +306,11 @@ fn init(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Init(Box::new(lhs), Box::new(rhs)))
+    .map(|(lhs, rhs)| span_wrapper_winnow(SExpr::Init(Box::new(lhs), Box::new(rhs))))
     .parse_next(s)
 }
 
-fn dynamic(s: &mut &str) -> Result<SExpr> {
+fn dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     alt((
         seq!((
             _: whitespace,
@@ -255,7 +322,12 @@ fn dynamic(s: &mut &str) -> Result<SExpr> {
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
-        .map(|(e,)| SExpr::Dynamic(Box::new(e), StreamTypeAscription::Unascribed)),
+        .map(|(e,)| {
+            span_wrapper_winnow(SExpr::Dynamic(
+                Box::new(e),
+                StreamTypeAscription::Unascribed,
+            ))
+        }),
         seq!((
             _: whitespace,
             _: alt(("dynamic", "eval")),
@@ -267,12 +339,17 @@ fn dynamic(s: &mut &str) -> Result<SExpr> {
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
-        .map(|(e, st)| SExpr::Dynamic(Box::new(e), StreamTypeAscription::Ascribed(st))),
+        .map(|(e, st)| {
+            span_wrapper_winnow(SExpr::Dynamic(
+                Box::new(e),
+                StreamTypeAscription::Ascribed(st),
+            ))
+        }),
     ))
     .parse_next(s)
 }
 
-fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
+fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     alt((
         seq!((
             _: whitespace,
@@ -289,7 +366,11 @@ fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
             _: ')',
         ))
         .map(|(e, var_set)| {
-            SExpr::RestrictedDynamic(Box::new(e), StreamTypeAscription::Unascribed, var_set)
+            span_wrapper_winnow(SExpr::RestrictedDynamic(
+                Box::new(e),
+                StreamTypeAscription::Unascribed,
+                var_set,
+            ))
         }),
         seq!((
             _: whitespace,
@@ -307,13 +388,17 @@ fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
             _: ')',
         ))
         .map(|(e, st, var_set)| {
-            SExpr::RestrictedDynamic(Box::new(e), StreamTypeAscription::Ascribed(st), var_set)
+            span_wrapper_winnow(SExpr::RestrictedDynamic(
+                Box::new(e),
+                StreamTypeAscription::Ascribed(st),
+                var_set,
+            ))
         }),
     ))
     .parse_next(s)
 }
 
-fn var_set(s: &mut &str) -> Result<EcoVec<VarName>> {
+fn var_set(source: &str, s: &mut &str) -> Result<EcoVec<VarName>> {
     seq!((
         _: whitespace,
         _: '{',
@@ -332,8 +417,9 @@ fn var_set(s: &mut &str) -> Result<EcoVec<VarName>> {
     .parse_next(s)
 }
 
-fn default(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn default(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start = *s;
+    let (lhs, rhs) = seq!((
         _: whitespace,
         _: literal("default"),
         _: '(',
@@ -346,11 +432,17 @@ fn default(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Default(Box::new(lhs), Box::new(rhs)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start,
+        end,
+        SExpr::Default(Box::new(lhs), Box::new(rhs)),
+    ))
 }
 
-fn not(s: &mut &str) -> Result<SExpr> {
+fn not(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "!",
@@ -358,11 +450,11 @@ fn not(s: &mut &str) -> Result<SExpr> {
         atom,
         _: whitespace,
     ))
-    .map(|(e,)| SExpr::Not(Box::new(e)))
+    .map(|(e,)| span_wrapper_winnow(SExpr::Not(Box::new(e))))
     .parse_next(s)
 }
 
-fn lindex(s: &mut &str) -> Result<SExpr> {
+fn lindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!(
         _: whitespace,
         _: "List.get",
@@ -377,11 +469,11 @@ fn lindex(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, i)| SExpr::LIndex(Box::new(e), Box::new(i)))
+    .map(|(e, i)| span_wrapper_winnow(SExpr::LIndex(Box::new(e), Box::new(i))))
     .parse_next(s)
 }
 
-fn lappend(s: &mut &str) -> Result<SExpr> {
+fn lappend(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!(
         _: whitespace,
         _: "List.append",
@@ -396,11 +488,11 @@ fn lappend(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(lst, el)| SExpr::LAppend(Box::new(lst), Box::new(el)))
+    .map(|(lst, el)| span_wrapper_winnow(SExpr::LAppend(Box::new(lst), Box::new(el))))
     .parse_next(s)
 }
 
-fn lconcat(s: &mut &str) -> Result<SExpr> {
+fn lconcat(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!(
         _: whitespace,
         _: "List.concat",
@@ -415,11 +507,11 @@ fn lconcat(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(lst1, lst2)| SExpr::LConcat(Box::new(lst1), Box::new(lst2)))
+    .map(|(lst1, lst2)| span_wrapper_winnow(SExpr::LConcat(Box::new(lst1), Box::new(lst2))))
     .parse_next(s)
 }
 
-fn lhead(s: &mut &str) -> Result<SExpr> {
+fn lhead(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "List.head",
@@ -431,11 +523,11 @@ fn lhead(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| SExpr::LHead(Box::new(lst)))
+    .map(|(lst,)| span_wrapper_winnow(SExpr::LHead(Box::new(lst))))
     .parse_next(s)
 }
 
-fn ltail(s: &mut &str) -> Result<SExpr> {
+fn ltail(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "List.tail",
@@ -447,11 +539,11 @@ fn ltail(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| SExpr::LTail(Box::new(lst)))
+    .map(|(lst,)| span_wrapper_winnow(SExpr::LTail(Box::new(lst))))
     .parse_next(s)
 }
 
-fn llen(s: &mut &str) -> Result<SExpr> {
+fn llen(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "List.len",
@@ -463,11 +555,11 @@ fn llen(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| SExpr::LLen(Box::new(lst)))
+    .map(|(lst,)| span_wrapper_winnow(SExpr::LLen(Box::new(lst))))
     .parse_next(s)
 }
 
-fn mget(s: &mut &str) -> Result<SExpr> {
+fn mget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!(
         _: whitespace,
         _: "Map.get",
@@ -482,11 +574,11 @@ fn mget(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k)| SExpr::MGet(Box::new(e), k.into()))
+    .map(|(e, k)| span_wrapper_winnow(SExpr::MGet(Box::new(e), k.into())))
     .parse_next(s)
 }
 
-fn minsert(s: &mut &str) -> Result<SExpr> {
+fn minsert(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!(
         _: whitespace,
         _: "Map.insert",
@@ -505,11 +597,11 @@ fn minsert(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k, v)| SExpr::MInsert(Box::new(e), k.into(), Box::new(v)))
+    .map(|(e, k, v)| span_wrapper_winnow(SExpr::MInsert(Box::new(e), k.into(), Box::new(v))))
     .parse_next(s)
 }
 
-fn mremove(s: &mut &str) -> Result<SExpr> {
+fn mremove(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!(
         _: whitespace,
         _: "Map.remove",
@@ -524,11 +616,11 @@ fn mremove(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k)| SExpr::MRemove(Box::new(e), k.into()))
+    .map(|(e, k)| span_wrapper_winnow(SExpr::MRemove(Box::new(e), k.into())))
     .parse_next(s)
 }
 
-fn mhas_key(s: &mut &str) -> Result<SExpr> {
+fn mhas_key(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!(
         _: whitespace,
         _: "Map.has_key",
@@ -543,7 +635,7 @@ fn mhas_key(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k)| SExpr::MHasKey(Box::new(e), k.into()))
+    .map(|(e, k)| span_wrapper_winnow(SExpr::MHasKey(Box::new(e), k.into())))
     .parse_next(s)
 }
 
@@ -551,7 +643,7 @@ fn var_or_nodename(s: &mut &str) -> Result<VarOrNodeName> {
     ident.map(|w: &str| VarOrNodeName(w.into())).parse_next(s)
 }
 
-fn monitored_at(s: &mut &str) -> Result<SExpr> {
+fn monitored_at(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "monitored_at",
@@ -567,11 +659,11 @@ fn monitored_at(s: &mut &str) -> Result<SExpr> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(u, v)| SExpr::MonitoredAt(u, v))
+    .map(|(u, v)| span_wrapper_winnow(SExpr::MonitoredAt(u, v)))
     .parse_next(s)
 }
 
-fn dist(s: &mut &str) -> Result<SExpr> {
+fn dist(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "dist",
@@ -587,12 +679,12 @@ fn dist(s: &mut &str) -> Result<SExpr> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(u, v)| SExpr::Dist(u, v))
+    .map(|(u, v)| span_wrapper_winnow(SExpr::Dist(u, v)))
     .parse_next(s)
 }
 
 /// Trigonometric functions
-fn sin(s: &mut &str) -> Result<SExpr> {
+fn sin(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "sin",
@@ -604,10 +696,11 @@ fn sin(s: &mut &str) -> Result<SExpr> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Sin(Box::new(v)))
+    .map(|(v,)| span_wrapper_winnow(SExpr::Sin(Box::new(v))))
     .parse_next(s)
 }
-fn cos(s: &mut &str) -> Result<SExpr> {
+
+fn cos(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "cos",
@@ -619,10 +712,11 @@ fn cos(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Cos(Box::new(v)))
+    .map(|(v,)| span_wrapper_winnow(SExpr::Cos(Box::new(v))))
     .parse_next(s)
 }
-fn tan(s: &mut &str) -> Result<SExpr> {
+
+fn tan(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "tan",
@@ -634,10 +728,11 @@ fn tan(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Tan(Box::new(v)))
+    .map(|(v,)| span_wrapper_winnow(SExpr::Tan(Box::new(v))))
     .parse_next(s)
 }
-fn abs(s: &mut &str) -> Result<SExpr> {
+
+fn abs(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     seq!((
         _: whitespace,
         _: "abs",
@@ -649,12 +744,12 @@ fn abs(s: &mut &str) -> Result<SExpr> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Abs(Box::new(v)))
+    .map(|(v,)| span_wrapper_winnow(SExpr::Abs(Box::new(v))))
     .parse_next(s)
 }
 
 /// Fundamental expressions of the language
-fn atom(s: &mut &str) -> Result<SExpr> {
+fn atom(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     // Break up the large alt into smaller groups to avoid exceeding the trait implementation limit
     delimited(
         whitespace,
@@ -706,6 +801,7 @@ enum BinaryPrecedences {
     Div,
     Mod,
 }
+
 impl BinaryPrecedences {
     pub fn next(&self) -> Option<Self> {
         use BinaryPrecedences::*;
@@ -785,26 +881,38 @@ impl BinaryPrecedences {
 /// @param current_op: The current precedence level
 ///
 /// (Inspired by https://github.com/winnow-rs/winnow/blob/main/examples/arithmetic/parser_ast.rs)
-fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<SExpr> {
+fn binary_op(
+    source: &str,
+    current_op: BinaryPrecedences,
+) -> impl FnMut(&mut &str) -> Result<SpannedExpr> {
     move |s: &mut &str| {
-        let next_parser_op = current_op.next();
-        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<SExpr>> = match next_parser_op {
-            Some(next_parser) => Box::new(binary_op(next_parser)),
-            None => Box::new(|i: &mut &str| atom.parse_next(i)),
-        };
-        let lit = current_op.get_lit();
+        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<SpannedExpr> + '_> =
+            match current_op.next() {
+                Some(next) => Box::new(binary_op(source, next)),
+                None => Box::new(|i: &mut &str| atom(source, i)),
+            };
+        let op_lit = current_op.get_lit();
+        let op = current_op.get_binop();
 
-        separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
-            SExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
+        separated_foldl1(&mut next_parser, literal(op_lit), move |left, _, right| {
+            Spanned {
+                node: SExpr::BinOp(Box::new(left.clone()), Box::new(right.clone()), op.clone()),
+                span: Span::new(left.span.start, right.span.end),
+            }
         })
         .parse_next(s)
     }
 }
 
-pub fn sexpr(s: &mut &str) -> Result<SExpr> {
+pub fn sexpr(s: &mut &str) -> Result<SpannedExpr> {
+    let source = *s;
+    sexpr_with_source(source, s)
+}
+
+pub fn sexpr_with_source(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     delimited(
         whitespace,
-        binary_op(BinaryPrecedences::lowest_precedence()),
+        binary_op(source, BinaryPrecedences::lowest_precedence()),
         whitespace,
     )
     .parse_next(s)
@@ -880,7 +988,7 @@ pub(crate) fn aux_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>
     separated(0.., aux_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-pub(crate) fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
+pub(crate) fn assignment_decl(s: &mut &str) -> Result<(VarName, SpannedExpr)> {
     seq!((
         _: whitespace,
         ident,
@@ -894,7 +1002,7 @@ pub(crate) fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     .parse_next(s)
 }
 
-pub(crate) fn assignment_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
+pub(crate) fn assignment_decls(s: &mut &str) -> Result<Vec<(VarName, SpannedExpr)>> {
     separated(0.., assignment_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
