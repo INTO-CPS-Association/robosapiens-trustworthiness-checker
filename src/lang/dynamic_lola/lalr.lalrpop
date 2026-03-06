@@ -2,10 +2,19 @@ use std::str::FromStr;
 use std::collections::BTreeMap;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp};
+use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp, SpannedExpr};
 use crate::core::{Value, VarName, StreamType, StreamTypeAscription};
+use crate::lang::dynamic_lola::span::{Spanned, Span};
 
 grammar;
+
+// Macro to automatically wrap parsed nodes with their span information
+MakeSpanned<T>: Spanned<T> = {
+    <l:@L> <node:T> <r:@R> => Spanned {
+        node, 
+        span: Span::new(l as u32, r as u32),
+    }
+};
 
 // -----------------------------------------------------------------------------
 // Tokens
@@ -71,78 +80,120 @@ LiteralVal: Value = {
 }
 
 // Literal expression wrapper
+SpannedLiteral: SpannedExpr = MakeSpanned<Literal>;
 Literal: SExpr = {
     LiteralVal => SExpr::Val(<>),
 };
 
 // Parenthesized expression
+SpannedParen: SpannedExpr = MakeSpanned<Paren>;
 Paren: SExpr = {
-    "(" <Expr> ")"
+    "(" <e:Expr> ")" => e.node
 };
 
 // Identifier as an SExpr (variable reference)
+SpannedIdentSExpr: SpannedExpr = MakeSpanned<IdentSExpr>;
 IdentSExpr : SExpr = {
     Ident => SExpr::Var(<>),
 };
 
 // Helpers for indexing base (literal, ident, or paren)
 SIndexHelp: Box<SExpr> = {
-    Box<Literal>,
-    Box<IdentSExpr>,
-    Box<Paren>
+    Box<SpannedLiteral>,
+    Box<SpannedIdentSExpr>,
+    Box<SpannedParen>
 };
 
 // Indexing expression e[idx]
-SIndex: SExpr = {
-    <expr: SIndexHelp> "[" <idx: Uint> "]" => {
-        SExpr::SIndex(expr, idx)
+SIndex: SpannedExpr = {
+  <l:@L> <expr: SIndexHelp> "[" <idx: Uint> "]" <r:@R> => {
+        Spanned {
+            node: SExpr::SIndex(expr, idx),
+            span: Span::new(l as u32, r as u32),
+        }
     },
 };
 
 // Container constructors
-ContainerExpr: SExpr = {
-    "List" "(" <SepListOpt<Expr, ",">> ")" => SExpr::List(<>),
-    "Map" "(" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> ")" => SExpr::Map(BTreeMap::from_iter(kv_pairs.into_iter()))
+ContainerExpr: SpannedExpr = {
+  <l:@L> "List" "(" <v:SepListOpt<Expr, ",">> ")" <r:@R> => {
+        Spanned {
+            node: SExpr::List(v),,
+            span: Span::new(l as u32, r as u32),
+        }
+    },
+  <l:@L> "Map" "(" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> ")" <r:@R> => {
+        Spanned {
+            node: SExpr::Map(BTreeMap::from_iter(kv_pairs.into_iter())),
+            span: Span::new(l as u32, r as u32),
+        }
+    } 
 }
 
 // -----------------------------------------------------------------------------
 // Special keywords / builtins (function-like forms)
 // -----------------------------------------------------------------------------
 
-SpecialKeywords: SExpr = {
-    "dynamic" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e, StreamTypeAscription::Unascribed),
-    "dynamic" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" => SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)),
-    "eval" "(" <e: Box<Expr>> ")" => SExpr::Dynamic(e, StreamTypeAscription::Unascribed),
-    "eval" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" => SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)),
-    "defer" "(" <e: Box<Expr>> ")" => SExpr::Defer(e, StreamTypeAscription::Unascribed, EcoVec::new()),
-    "defer" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" => SExpr::Defer(e, StreamTypeAscription::Ascribed(t), EcoVec::new()),
-    "update" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Update(e1, e2),
-    "default" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Default(e1, e2),
-    "is_defined" "(" <Box<Expr>> ")" => SExpr::IsDefined(<>),
-    "when" "(" <Box<Expr>> ")" => SExpr::When(<>),
-    "latch" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Latch(e1, e2),
-    "init" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::Init(e1, e2),
-    "List.get" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LIndex(e1, e2),
-    "List.concat" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LConcat(e1, e2),
-    "List.append" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" => SExpr::LAppend(e1, e2),
-    "List.head" "(" <Box<Expr>> ")" => SExpr::LHead(<>),
-    "List.tail" "(" <Box<Expr>> ")" => SExpr::LTail(<>),
-    "List.len" "(" <Box<Expr>> ")" => SExpr::LLen(<>),
-    "Map.get" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MGet(e, k),
-    "Map.remove" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MRemove(e, k),
-    "Map.has_key" "(" <e: Box<Expr>> "," <k: String> ")" => SExpr::MHasKey(e, k),
-    "Map.insert" "(" <e1: Box<Expr>> "," <k: String> "," <e2: Box<Expr>> ")" => SExpr::MInsert(e1, k, e2),
-    "sin" "(" <Box<Expr>> ")" => SExpr::Sin(<>),
-    "cos" "(" <Box<Expr>> ")" => SExpr::Cos(<>),
-    "tan" "(" <Box<Expr>> ")" => SExpr::Tan(<>),
-    "abs" "(" <Box<Expr>> ")" => SExpr::Abs(<>),
+SpecialKeywords: SpannedExpr = {
+  <l:@L> "dynamic" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Unascribed), span: Span::new(l as u32, r as u32)},
+  <l:@L> "dynamic" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" <r:@R> => 
+       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)), span: Span::new(l as u32, r as u32)},
+  <l:@L> "eval" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Unascribed), span: Span::new(l as u32, r as u32)},
+  <l:@L> "eval" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" <r:@R> => 
+       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)), span: Span::new(l as u32, r as u32)},
+  <l:@L> "defer" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Defer(e, StreamTypeAscription::Unascribed, EcoVec::new()), span: Span::new(l as u32, r as u32)},
+  <l:@L> "defer" "(" <e: Box<Expr>> "," <t: StreamTyp> ")" <r:@R> => 
+       Spanned { node: SExpr::Defer(e, StreamTypeAscription::Ascribed(t), EcoVec::new()), span: Span::new(l as u32, r as u32)},
+  <l:@L> "update" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Update(e1, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "default" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Default(e1, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "is_defined" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::IsDefined(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "when" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::When(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "latch" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Latch(e1, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "init" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Init(e1, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.get" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::LIndex(e1, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.concat" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::LConcat(e1, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.append" "(" <e1: Box<Expr>> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::LAppend(e1, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.head" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::LHead(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.tail" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::LTail(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.len" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::LLen(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "Map.get" "(" <e: Box<Expr>> "," <k: String> ")" <r:@R> => 
+       Spanned { node: SExpr::MGet(e, k), span: Span::new(l as u32, r as u32)},
+  <l:@L> "Map.remove" "(" <e: Box<Expr>> "," <k: String> ")" <r:@R> => 
+       Spanned { node: SExpr::MRemove(e, k), span: Span::new(l as u32, r as u32)},
+  <l:@L> "Map.has_key" "(" <e: Box<Expr>> "," <k: String> ")" <r:@R> => 
+       Spanned { node: SExpr::MHasKey(e, k), span: Span::new(l as u32, r as u32)},
+  <l:@L> "Map.insert" "(" <e1: Box<Expr>> "," <k: String> "," <e2: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::MInsert(e1, k, e2), span: Span::new(l as u32, r as u32)},
+  <l:@L> "sin" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Sin(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "cos" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Cos(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "tan" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Tan(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "abs" "(" <e: Box<Expr>> ")" <r:@R> => 
+       Spanned { node: SExpr::Abs(e), span: Span::new(l as u32, r as u32)},
 }
 
 // -----------------------------------------------------------------------------
 // Atom (base expressions with same precedence)
 // -----------------------------------------------------------------------------
 
-Atom: SExpr = {
+Atom: SpannedExpr = {
     SIndex,
     SpecialKeywords,
     Literal,
@@ -158,13 +209,31 @@ Atom: SExpr = {
 UnaryMinusHelper: SExpr = {
     <n: Int> => SExpr::Val(Value::Int(-n)),
     <n: Float> => SExpr::Val(Value::Float(-n)),
-    <x: Box<IdentSExpr>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
-    <x: Box<Paren>> => SExpr::BinOp(Box::new(SExpr::Val(Value::Int(0))), x, SBinOp::NOp(NumericalBinOp::Sub)),
+    <x: Box<IdentSExpr>> => SExpr::BinOp(
+        Box::new(Spanned { node: SExpr::Val(Value::Int(0)), span: Span::default() }), 
+        x, 
+        SBinOp::NOp(NumericalBinOp::Sub)
+    ),
+    <x: Box<Paren>> => SExpr::BinOp(
+        Box::new(Spanned { node: SExpr::Val(Value::Int(0)), span: Span::default() }), 
+        x, 
+        SBinOp::NOp(NumericalBinOp::Sub)
+    ),
 };
 
-UnaryExpr<Next>: SExpr = {
-    "-" <n: UnaryMinusHelper> => n,
-    "!" <b: Box<UnaryExpr<Next>>> => SExpr::Not(b),
+UnaryExpr<Next>: SpannedExpr = {
+   <l:@L> "-" <n: UnaryMinusHelper> <r:@R> => {
+        Spanned { 
+            node: n, 
+            span: Span::new(l as u32, r as u32),
+        }
+   },
+   <l:@L> "!" <b: Box<UnaryExpr<Next>>> <r:@R> => {
+        Spanned {
+            node: SExpr::Not(b),
+            span: Span::new(l as u32, r as u32),
+        }
+    },
     Next
 };
 
@@ -179,9 +248,12 @@ MultExprHelp: SBinOp  = {
     "%" => SBinOp::NOp(NumericalBinOp::Mod),
 };
 
-MultExpr<Next>: SExpr = {
-    <lhs: Box<MultExpr<Next>>> <op: MultExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
+MultExpr<Next>: SpannedExpr = {
+  <l:@L>  <lhs: Box<MultExpr<Next>>> <op: MultExprHelp> <rhs: Box<Next>> <r:@R> => {
+    Spanned {
+        node: SExpr::BinOp(lhs, rhs, op),
+        span: Span::new(l as u32, r as u32),
+    }
     },
     Next
 };
@@ -192,9 +264,12 @@ AddExprHelp: SBinOp  = {
     "-" => SBinOp::NOp(NumericalBinOp::Sub),
 };
 
-AddExpr<Next>: SExpr = {
-    <lhs: Box<AddExpr<Next>>> <op: AddExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
+AddExpr<Next>: SpannedExpr = {
+   <l:@L> <lhs: Box<AddExpr<Next>>> <op: AddExprHelp> <rhs: Box<Next>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(lhs, rhs, op),
+            span: Span::new(l as u32, r as u32),
+        }
     },
     Next
 };
@@ -207,9 +282,12 @@ RelExprHelp: SBinOp = {
     ">" => SBinOp::COp(CompBinOp::Gt),
 }
 
-RelExpr<Next>: SExpr = {
-    <lhs: Box<RelExpr<Next>>> <op: RelExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
+RelExpr<Next>: SpannedExpr ={
+  <l:@L>  <lhs: Box<RelExpr<Next>>> <op: RelExprHelp> <rhs: Box<Next>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(lhs, rhs, op),
+            span: Span::new(l as u32, r as u32),
+        }
     },
     Next
 };
@@ -220,39 +298,54 @@ CompExprHelp: SBinOp = {
     // "!=" => SBinOp::COp(CompBinOp::Ne), // Not implemented yet
 }
 
-CompExpr<Next>: SExpr = {
-    <lhs: Box<CompExpr<Next>>> <op: CompExprHelp> <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, op)
+CompExpr<Next>: SpannedExpr = {
+   <l:@L> <lhs: Box<CompExpr<Next>>> <op: CompExprHelp> <rhs: Box<Next>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(lhs, rhs, op),
+            span: Span::new(l as u32, r as u32),
+        }
     },
     Next
 };
 
 // Boolean
-AndExpr<Next>: SExpr = {
-    <lhs: Box<AndExpr<Next>>> "&&" <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And))
+AndExpr<Next>: SpannedExpr = {
+  <l:@L>  <lhs: Box<AndExpr<Next>>> "&&" <rhs: Box<Next>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And)),
+            span: Span::new(l as u32, r as u32),
+        }
     },
     Next
 };
 
-OrExpr<Next>: SExpr = {
-    <lhs: Box<OrExpr<Next>>> "||" <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or))
+OrExpr<Next>: SpannedExpr = {
+   <l:@L> <lhs: Box<OrExpr<Next>>> "||" <rhs: Box<Next>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or)),
+            span: Span::new(l as u32, r as u32),
+        }
     },
     Next
 };
 
-ImplExpr<Next>: SExpr = {
-    <lhs: Box<ImplExpr<Next>>> "=>" <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Impl))
+ImplExpr<Next>: SpannedExpr = {
+   <l:@L> <lhs: Box<ImplExpr<Next>>> "=>" <rhs: Box<Next>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Impl)),
+            span: Span::new(l as u32, r as u32),
+        }
     },
     Next
 };
 
 // String concat
-ConcatExpr<Next>: SExpr = {
-    <lhs: Box<ConcatExpr<Next>>> "++" <rhs: Box<Next>> => {
-        SExpr::BinOp(lhs, rhs, SBinOp::SOp(StrBinOp::Concat))
+ConcatExpr<Next>: SpannedExpr = {
+   <l:@L> <lhs: Box<ConcatExpr<Next>>> "++" <rhs: Box<Next>> <r:@R> => {
+                Spanned {
+            node: SExpr::BinOp(lhs, rhs, SBinOp::SOp(StrBinOp::Concat)),
+            span: Span::new(l as u32, r as u32),
+        }
     },
     Next
 }
@@ -261,8 +354,13 @@ ConcatExpr<Next>: SExpr = {
 // If-then-else (binds weaker than the precedence chain)
 // -----------------------------------------------------------------------------
 
-Ifelse: SExpr = {
-    "if" <c: Box<Expr>> "then" <i: Box<Expr>> "else" <e: Box<Expr>> => SExpr::If(c, i, e)
+Ifelse: SpannedExpr = {
+   <l:@L>  "if" <c: Box<Expr>> "then" <i: Box<Expr>> "else" <e: Box<Expr>> <r:@R> => {
+    Spanned {
+        node: SExpr::If(c, i, e),
+        span: Span::new(l as u32, r as u32),
+    }
+   }
 }
 
 // -----------------------------------------------------------------------------
@@ -286,12 +384,12 @@ TypeAnno: StreamType = {
 // -----------------------------------------------------------------------------
 
 // Operator precedence chain with Final having highest precedence
-PrecChain<Final>: SExpr = {
+PrecChain<Final>: SpannedExpr = {
     ConcatExpr<ImplExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>>>,
 }
 
 // The top-level expression
-pub Expr: SExpr = {
+pub Expr: SpannedExpr = {
     Ifelse, // If-else binds weaker than the PrecChain chain to handle dangling else, i.e., if a then b else c + d is parsed as if a then b else (c + d)
     PrecChain<Atom>
 };

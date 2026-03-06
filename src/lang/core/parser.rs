@@ -17,6 +17,8 @@ pub use winnow::ascii::space0 as whitespace;
 
 pub trait ExprParser<Expr>: Clone {
     fn parse(input: &mut &str) -> anyhow::Result<Expr>;
+    type Error;
+    fn raw_parse_error(input: &mut &str) -> Result<Expr, Self::Error>;
 }
 pub trait SpecParser<Spec: Specification>: Clone + 'static {
     fn parse(input: &mut &str) -> anyhow::Result<Spec>;
