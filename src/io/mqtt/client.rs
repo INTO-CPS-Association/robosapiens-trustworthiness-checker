@@ -5,7 +5,7 @@ use futures::{FutureExt, StreamExt, stream::BoxStream};
 use paho_mqtt::{self as mqtt};
 use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{Level, debug, info, instrument, warn};
+use tracing::{Level, debug, info, instrument};
 use uuid::Uuid;
 
 /* An interface for creating the MQTT client that can be used
@@ -171,7 +171,8 @@ mod paho {
 
         let opts = mqtt::ConnectOptionsBuilder::new_v3()
             .keep_alive_interval(Duration::from_secs(30))
-            .clean_session(true)
+            .clean_session(false)
+            .automatic_reconnect(Duration::from_millis(500), Duration::from_secs(60))
             .finalize();
 
         // Error means requester has gone away - we don't care in that case
@@ -184,85 +185,32 @@ mod paho {
     #[instrument(level=Level::INFO, skip(client))]
     fn message_stream(
         mut client: mqtt::AsyncClient,
-        max_reconnect_attempts: u32,
+        _max_reconnect_attempts: u32,
     ) -> BoxStream<'static, MqttMessage> {
         // Note: Important that we call get_stream before the async block, otherwise
         // we risk MQTT client receiving messages before stream is registered
         let stream = client.get_stream(10);
         Box::pin(stream! {
-            let mut reconnect_attempts = 0;
             let mut stream = stream;
-
-            loop {
-                // Inner loop to read from current stream
-                loop {
-                    match stream.next().await {
-                        Some(msg) => {
-                            match msg {
-                                Some(message) => {
-                                    debug!(?message, topic = message.topic(), "Received MQTT message");
-                                    let message = MqttMessage::new(
-                                        message.topic().to_string(),
-                                        message.payload_str().to_string(),
-                                        message.qos() as i32,
-                                    );
-                                    yield message;
-                                    reconnect_attempts = 0; // Reset counter on successful message
-                                }
-                                None => {
-                                    debug!("MQTT connection lost, will attempt reconnect");
-                                    break; // Break inner loop, try reconnect
-                                }
-                            }
-                        }
-                        None => {
-                            break; // Break inner loop, try reconnect
-                        }
+            while let Some(msg) = stream.next().await {
+                match msg {
+                    Some(message) => {
+                        debug!(?message, topic = message.topic(), "Received MQTT message");
+                        let message = MqttMessage::new(
+                            message.topic().to_string(),
+                            message.payload_str().to_string(),
+                            message.qos() as i32,
+                        );
+                        yield message;
                     }
-                }
-
-                // Stream exhausted, check if we should reconnect
-                if max_reconnect_attempts == 0 {
-                    warn!("Connection lost. Reconnection disabled (max_reconnect_attempts=0), stopping MQTT stream");
-                    break;
-                }
-
-                warn!("Connection lost. Attempting reconnect...");
-                reconnect_attempts += 1;
-
-                if reconnect_attempts > max_reconnect_attempts {
-                    warn!("Max reconnection attempts ({}) reached, stopping MQTT stream", max_reconnect_attempts);
-                    break;
-                }
-
-                // Add timeout to reconnection attempt (shorter timeout to prevent hanging)
-                let reconnect_future = client.reconnect();
-                let timeout_future = smol::Timer::after(Duration::from_millis(500));
-
-                futures::select! {
-                    result = FutureExt::fuse(reconnect_future) => {
-                        match result {
-                            Ok(_) => {
-                                info!("MQTT client reconnected successfully after {} attempts", reconnect_attempts);
-                                stream = client.get_stream(10);
-                                continue; // Continue outer loop with new connection
-                            }
-                            Err(err) => {
-                                warn!(?err, attempt = reconnect_attempts, "MQTT client reconnection failed");
-                                // Add small delay before next attempt or termination
-                                smol::Timer::after(Duration::from_millis(100)).await;
-                                break; // Break outer loop, terminate stream
-                            }
-                        }
-                    }
-                    _ = FutureExt::fuse(timeout_future) => {
-                        warn!("MQTT reconnection timeout after 500ms, attempt {}/{}", reconnect_attempts, max_reconnect_attempts);
-                        // Add small delay before next attempt or termination
-                        smol::Timer::after(Duration::from_millis(100)).await;
-                        break; // Break outer loop, terminate stream
+                    None => {
+                        debug!("MQTT connection lost, waiting for auto-reconnect");
+                        smol::Timer::after(Duration::from_millis(200)).await;
+                        stream = client.get_stream(10);
                     }
                 }
             }
+            debug!("MQTT stream ended permanently. Disconnecting.");
         })
     }
 
