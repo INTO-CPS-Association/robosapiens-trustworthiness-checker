@@ -179,10 +179,7 @@ mod integration_tests {
         let input_provider_future = Box::pin(async move {
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
-                    error!(
-                        "Input provider stream returned error: {:?}",
-                        res
-                    );
+                    error!("Input provider stream returned error: {:?}", res);
                     return res;
                 }
             }
@@ -256,10 +253,7 @@ mod integration_tests {
         let input_provider_future = Box::pin(async move {
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
-                    error!(
-                        "Input provider stream returned error: {:?}",
-                        res
-                    );
+                    error!("Input provider stream returned error: {:?}", res);
                     return res;
                 }
             }
@@ -330,10 +324,7 @@ mod integration_tests {
         let input_provider_future = Box::pin(async move {
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
-                    error!(
-                        "Input provider stream returned error: {:?}",
-                        res
-                    );
+                    error!("Input provider stream returned error: {:?}", res);
                     return res;
                 }
             }
@@ -829,6 +820,7 @@ mod integration_tests {
             var_topics,
             vec![],
         )?;
+        handler.connect().await?;
 
         // Create test output streams
         let stream1 = create_test_output_stream(vec![Value::Int(42), Value::Str("hello".into())]);
@@ -912,6 +904,7 @@ mod integration_tests {
             var_topics,
             vec![],
         )?;
+        handler.connect().await?;
 
         // Create test output stream with various data types
         let stream = create_test_output_stream(vec![
@@ -985,6 +978,7 @@ mod integration_tests {
             var_topics,
             vec![],
         )?;
+        handler.connect().await?;
 
         // Create empty output stream
         let stream = create_test_output_stream(vec![]);
@@ -1052,6 +1046,7 @@ mod integration_tests {
             var_topics,
             vec![],
         )?;
+        handler.connect().await?;
 
         // Create test output streams
         let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2)]);
@@ -1182,6 +1177,7 @@ mod integration_tests {
             var_topics,
             vec![],
         )?;
+        handler.connect().await?;
 
         // Create test output stream with complex data
         let stream = create_test_output_stream(vec![
@@ -1265,6 +1261,7 @@ mod integration_tests {
             var_topics,
             vec![],
         )?;
+        handler.connect().await?;
 
         // Create output streams with timing delays to test concurrency
         let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);

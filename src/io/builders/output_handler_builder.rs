@@ -110,17 +110,20 @@ impl OutputHandlerBuilder {
                     .iter()
                     .map(|var| (var.clone(), var.into()))
                     .collect();
-                Box::new(
-                    RedisOutputHandler::new(
-                        executor.clone(),
-                        output_var_names,
-                        REDIS_HOSTNAME,
-                        self.redis_port,
-                        topics,
-                        aux_info,
-                    )
-                    .expect("Redis output handler could not be created"),
+                let mut handler = RedisOutputHandler::new(
+                    executor.clone(),
+                    output_var_names,
+                    REDIS_HOSTNAME,
+                    self.redis_port,
+                    topics,
+                    aux_info,
                 )
+                .expect("Redis output handler could not be created");
+                handler
+                    .connect()
+                    .await
+                    .expect("Redis output handler failed to connect");
+                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
             }
             OutputMode {
                 output_redis_topics: Some(topics),
@@ -133,17 +136,20 @@ impl OutputHandlerBuilder {
                     .filter(|topic| output_var_names.contains(&VarName::new(topic.as_str())))
                     .map(|topic| (topic.clone().into(), topic))
                     .collect();
-                Box::new(
-                    RedisOutputHandler::new(
-                        executor.clone(),
-                        output_var_names,
-                        REDIS_HOSTNAME,
-                        self.redis_port,
-                        topics,
-                        aux_info,
-                    )
-                    .expect("Redis output handler could not be created"),
+                let mut handler = RedisOutputHandler::new(
+                    executor.clone(),
+                    output_var_names,
+                    REDIS_HOSTNAME,
+                    self.redis_port,
+                    topics,
+                    aux_info,
                 )
+                .expect("Redis output handler could not be created");
+                handler
+                    .connect()
+                    .await
+                    .expect("Redis output handler failed to connect");
+                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
             }
             OutputMode {
                 mqtt_output: true, ..

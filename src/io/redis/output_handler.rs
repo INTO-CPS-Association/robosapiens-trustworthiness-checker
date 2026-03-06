@@ -8,6 +8,7 @@ use futures::{
 use redis::{AsyncTypedCommands, aio::MultiplexedConnection};
 use smol::LocalExecutor;
 use tracing::{debug, info};
+use unsync::oneshot::{Receiver as OSReceiver, Sender as OSSender};
 
 use crate::{OutputStream, Value, VarName, core::OutputHandler};
 
@@ -46,6 +47,10 @@ pub struct RedisOutputHandler {
     pub hostname: String,
     pub port: Option<u16>,
     pub aux_info: Vec<VarName>,
+    pub uri: String,
+    client_tx: Option<OSSender<redis::Client>>,
+    client_rx: Option<OSReceiver<redis::Client>>,
+    connected: bool,
 }
 
 impl OutputHandler for RedisOutputHandler {
@@ -72,11 +77,23 @@ impl OutputHandler for RedisOutputHandler {
                 (channel_name, stream)
             })
             .collect::<Vec<_>>();
-        let hostname = self.hostname.clone();
-        let port = self.port;
-        info!(?hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
+        let client_rx = mem::take(&mut self.client_rx)
+            .expect("Redis output handler client receiver already taken");
+        let connected = self.connected;
+        info!(?self.hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
 
-        Box::pin(RedisOutputHandler::inner_handler(hostname, port, streams))
+        Box::pin(async move {
+            if !connected {
+                return Err(anyhow::anyhow!(
+                    "RedisOutputHandler not connected before run"
+                ));
+            }
+
+            let client = client_rx.await.ok_or_else(|| {
+                anyhow::anyhow!("Failed to receive Redis client for output handler")
+            })?;
+            RedisOutputHandler::inner_handler(client, streams).await
+        })
     }
 }
 
@@ -90,6 +107,11 @@ impl RedisOutputHandler {
         aux_info: Vec<VarName>,
     ) -> Result<Self, anyhow::Error> {
         let hostname = hostname.to_string();
+        let uri = match port {
+            Some(p) => format!("redis://{}:{}", hostname, p),
+            None => format!("redis://{}", hostname),
+        };
+        let (client_tx, client_rx) = unsync::oneshot::channel();
 
         let var_map = var_topics
             .into_iter()
@@ -111,22 +133,29 @@ impl RedisOutputHandler {
             hostname,
             port,
             aux_info,
+            uri,
+            client_tx: Some(client_tx),
+            client_rx: Some(client_rx),
+            connected: false,
         })
     }
 
+    pub async fn connect(&mut self) -> anyhow::Result<()> {
+        info!(?self.uri, "Starting Redis output handler connection");
+        let client_tx = mem::take(&mut self.client_tx)
+            .expect("Redis output handler client sender already taken");
+        let client = redis::Client::open(self.uri.clone())?;
+        client_tx
+            .send(client)
+            .map_err(|_| anyhow::anyhow!("Failed to send Redis client to output handler run"))?;
+        self.connected = true;
+        Ok(())
+    }
+
     async fn inner_handler(
-        hostname: String,
-        port: Option<u16>,
+        client: redis::Client,
         streams: Vec<(String, OutputStream<Value>)>,
     ) -> anyhow::Result<()> {
-        debug!("Awaiting client creation");
-        debug!("Client created");
-        let url = match port {
-            Some(p) => format!("redis://{}:{}", hostname, p),
-            None => format!("redis://{}", hostname),
-        };
-        let client = redis::Client::open(url)?;
-
         join_all(streams.into_iter().map(|(channel_name, stream)| async {
             let con = client.get_multiplexed_async_connection().await.unwrap();
             // TODO: Only call `publish_stream` if the var_name is not in aux_info. Else call
