@@ -512,7 +512,6 @@ mod reconf_tests {
         ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
     }
 
-    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_simple_add_no_reconf(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, without actually sending a
@@ -647,7 +646,6 @@ mod reconf_tests {
             .expect("y publisher task should finish");
     }
 
-    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_no_change_of_streams(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure but do
@@ -873,7 +871,6 @@ mod reconf_tests {
             .expect("y publisher task should finish");
     }
 
-    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_delete_input_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure to a
@@ -1069,7 +1066,6 @@ mod reconf_tests {
             .expect("x publisher task should finish");
     }
 
-    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_add_input_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the acc spec, where we reconfigure to
@@ -1263,7 +1259,6 @@ mod reconf_tests {
             .expect("y publisher task should finish");
     }
 
-    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_delete_output_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the where we initally have two output streams,
@@ -1429,7 +1424,6 @@ mod reconf_tests {
             .expect("x publisher task should finish");
     }
 
-    #[ignore = "Ignore while using Paho MQTT client. This does not go well with creating multiple MQTT clients making test too flaky."]
     #[apply(async_test)]
     async fn test_reconf_add_output_stream(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor with the where we initally have one output streams,
@@ -1586,95 +1580,5 @@ mod reconf_tests {
         with_timeout_res(x_publisher_task, 5, "x_publisher_task")
             .await
             .expect("x publisher task should finish");
-    }
-
-    #[ignore = "Read the note"]
-    #[apply(async_test)]
-    async fn test_paho_bench(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-        // NOTE: This is not really a test but doing a Criterion test with the exact same code of the paho client does not
-        // work.
-        //
-        // This benchmarks the hypothesis that generating publishers and subscribers
-        // disproportionally slow down performance. Note that size only changes number of
-        // pubs/subs.
-        // There is still the possibility that it is due to us doing something wrong in either
-        // get_mqtt_outputs (and in the call to connect_and_receive) or dummy_stream_mqtt_publisher.
-        //
-        // Unignore to run locally - but it takes a while to run. I recommend running with
-        // nocapture.
-        //
-        // Results:
-        // bench_paho_clients(1) completed in 2.275242525s
-        // bench_paho_clients(2) completed in 3.264509601s
-        // bench_paho_clients(3) completed in 70.210330716s
-        // bench_paho_clients(4) completed in 105.445208314s
-        // bench_paho_clients(5) completed in 141.807053791s
-        // bench_paho_clients(6) completed in 174.717985402s
-
-        const MQTT_PORT: u16 = 1883;
-        const PUBLISH_VALUES: [i64; 4] = [1, 2, 3, 4];
-
-        async fn bench_paho_clients(
-            executor: Rc<LocalExecutor<'static>>,
-            size: usize,
-        ) -> anyhow::Result<()> {
-            let topics: Vec<String> = (0..size)
-                .map(|idx| format!("bench/paho/topic/x{}", idx))
-                .collect();
-
-            let mut subscribers: Vec<trustworthiness_checker::OutputStream<Value>> = Vec::new();
-            let mut publishers = Vec::new();
-            let mut ticks: Vec<TickSender> = Vec::new();
-
-            let values: Vec<Value> = PUBLISH_VALUES.iter().copied().map(Value::Int).collect();
-            for (idx, topic) in topics.iter().enumerate() {
-                let subscriber = get_mqtt_outputs(
-                    topic.clone(),
-                    format!("bench_subscriber_{}", idx),
-                    MQTT_PORT,
-                )
-                .await;
-                subscribers.push(subscriber);
-                let (mut tick, pub_stream) = tick_stream(stream::iter(values.clone()).boxed());
-                let publisher_task = executor.spawn(dummy_stream_mqtt_publisher(
-                    format!("bench_publisher_{}", idx),
-                    topic.clone(),
-                    pub_stream,
-                    values.len(),
-                    MQTT_PORT,
-                ));
-                publishers.push(publisher_task);
-                ticks.push(tick);
-            }
-
-            for value in values {
-                for tick in ticks.iter_mut() {
-                    with_timeout_res(tick.send(()), 3, "tick.send").await?;
-                }
-                for (idx, topic) in topics.iter().enumerate() {
-                    let subscriber = subscribers.get_mut(idx).expect("Subscriber not found");
-                    let received = with_timeout(subscriber.next(), 120, "subscriber.next").await?;
-                    let received = received.expect("Subscriber stream ended");
-
-                    assert_eq!(received, value);
-                }
-            }
-
-            Ok(())
-        }
-
-        let mut times = std::collections::HashMap::new();
-        for i in 1..=5 {
-            let start = std::time::Instant::now();
-            bench_paho_clients(executor.clone(), i)
-                .await
-                .expect(&format!("Bench with {} clients failed", i));
-            let elapsed = start.elapsed();
-            println!("bench_paho_clients({}) completed in {:?}", i, elapsed);
-            times.insert(i, elapsed);
-        }
-        let start = std::time::Instant::now();
-        assert!(false);
-        Ok(())
     }
 }
