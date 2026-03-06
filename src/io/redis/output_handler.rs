@@ -7,7 +7,7 @@ use futures::{
 };
 use redis::{AsyncTypedCommands, aio::MultiplexedConnection};
 use smol::LocalExecutor;
-use tracing::{debug, info};
+use tracing::info;
 use unsync::oneshot::{Receiver as OSReceiver, Sender as OSSender};
 
 use crate::{OutputStream, Value, VarName, core::OutputHandler};
