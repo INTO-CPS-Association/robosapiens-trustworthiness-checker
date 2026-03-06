@@ -32,6 +32,7 @@ mod integration_tests {
     use tc_testutils::streams::interleave_with_constant;
     use tc_testutils::streams::receive_values_serially;
     use tc_testutils::streams::tick_stream;
+    use tc_testutils::streams::with_timeout_res;
     use tracing::error;
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
@@ -58,19 +59,26 @@ mod integration_tests {
         let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
-        // Note: Without timeout as this fails silently due to spawn
-        let x_publisher_task = executor.spawn(dummy_redis_stream_sender(
-            REDIS_HOSTNAME,
-            Some(port),
-            X_TOPIC.to_string(),
-            x_pub_stream,
+        let x_publisher_task = executor.spawn(with_timeout_res(
+            dummy_redis_stream_sender(
+                REDIS_HOSTNAME,
+                Some(port),
+                X_TOPIC.to_string(),
+                x_pub_stream,
+            ),
+            5,
+            "x_publisher_task",
         ));
 
-        let y_publisher_task = executor.spawn(dummy_redis_stream_sender(
-            REDIS_HOSTNAME,
-            Some(port),
-            Y_TOPIC.to_string(),
-            y_pub_stream,
+        let y_publisher_task = executor.spawn(with_timeout_res(
+            dummy_redis_stream_sender(
+                REDIS_HOSTNAME,
+                Some(port),
+                Y_TOPIC.to_string(),
+                y_pub_stream,
+            ),
+            5,
+            "y_publisher_task",
         ));
 
         ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
@@ -171,7 +179,10 @@ mod integration_tests {
         let input_provider_future = Box::pin(async move {
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
+                    error!(
+                        "Input provider stream returned error: {:?}",
+                        res
+                    );
                     return res;
                 }
             }
@@ -245,7 +256,10 @@ mod integration_tests {
         let input_provider_future = Box::pin(async move {
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
+                    error!(
+                        "Input provider stream returned error: {:?}",
+                        res
+                    );
                     return res;
                 }
             }
@@ -316,7 +330,10 @@ mod integration_tests {
         let input_provider_future = Box::pin(async move {
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
+                    error!(
+                        "Input provider stream returned error: {:?}",
+                        res
+                    );
                     return res;
                 }
             }
