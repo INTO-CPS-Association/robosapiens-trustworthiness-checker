@@ -186,12 +186,14 @@ mod paho {
         mut client: mqtt::AsyncClient,
         max_reconnect_attempts: u32,
     ) -> BoxStream<'static, MqttMessage> {
+        // Note: Important that we call get_stream before the async block, otherwise
+        // we risk MQTT client receiving messages before stream is registered
+        let stream = client.get_stream(10);
         Box::pin(stream! {
             let mut reconnect_attempts = 0;
+            let mut stream = stream;
 
             loop {
-                let mut stream = client.get_stream(10);
-
                 // Inner loop to read from current stream
                 loop {
                     match stream.next().await {
@@ -242,6 +244,7 @@ mod paho {
                         match result {
                             Ok(_) => {
                                 info!("MQTT client reconnected successfully after {} attempts", reconnect_attempts);
+                                stream = client.get_stream(10);
                                 continue; // Continue outer loop with new connection
                             }
                             Err(err) => {
