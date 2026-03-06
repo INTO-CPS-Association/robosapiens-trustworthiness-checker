@@ -149,18 +149,18 @@ mod integration_tests {
         .await
         .unwrap();
 
-        let output_handler = Box::new(
-            MQTTOutputHandler::new(
-                executor.clone(),
-                MQTT_FACTORY,
-                vec!["z".into()],
-                mqtt_host,
-                Some(mqtt_port),
-                mqtt_topic,
-                vec![],
-            )
-            .unwrap(),
-        );
+        let mut output_handler = MQTTOutputHandler::new(
+            executor.clone(),
+            MQTT_FACTORY,
+            vec!["z".into()],
+            mqtt_host,
+            Some(mqtt_port),
+            mqtt_topic,
+            vec![],
+        )
+        .unwrap();
+        output_handler.connect().await.unwrap();
+        let output_handler = Box::new(output_handler);
         let async_monitor = TestMonitorRunner::new(
             executor.clone(),
             spec.clone(),
@@ -202,18 +202,18 @@ mod integration_tests {
         .await
         .unwrap();
 
-        let output_handler = Box::new(
-            MQTTOutputHandler::new(
-                executor.clone(),
-                MQTT_FACTORY,
-                vec!["z".into()],
-                mqtt_host,
-                Some(mqtt_port),
-                mqtt_topics,
-                vec![],
-            )
-            .unwrap(),
-        );
+        let mut output_handler = MQTTOutputHandler::new(
+            executor.clone(),
+            MQTT_FACTORY,
+            vec!["z".into()],
+            mqtt_host,
+            Some(mqtt_port),
+            mqtt_topics,
+            vec![],
+        )
+        .unwrap();
+        output_handler.connect().await.unwrap();
+        let output_handler = Box::new(output_handler);
         let async_monitor = TestMonitorRunner::new(
             executor.clone(),
             spec.clone(),
@@ -493,7 +493,7 @@ mod reconf_tests {
                 xs.len(),
                 mqtt_port,
             ),
-            5,
+            60,
             "x_publisher_task",
         ));
 
@@ -505,7 +505,7 @@ mod reconf_tests {
                 ys.len(),
                 mqtt_port,
             ),
-            5,
+            60,
             "y_publisher_task",
         ));
 
@@ -815,7 +815,11 @@ mod reconf_tests {
             .expect("Failed to get reconf message");
 
         // TODO: Should not be needed in the future when reconf is more stable
-        smol::Timer::after(std::time::Duration::from_millis(100)).await; // Wait a bit for the reconf
+        //
+        // Wait a while. Needed because the OutputHandler needs to reconnect to the MQTT server,
+        // but we have no way of knowing when this is done since runtime is being spawned...
+        // Effects visible mainly when running single-threaded either with `-j 1 -- --test-threads 1` or on test runner.
+        smol::Timer::after(std::time::Duration::from_millis(2000)).await;
 
         // Take the rest (again initially just one z value)
         x_tick.send(()).await.expect("Failed to send tick");
@@ -1037,7 +1041,11 @@ mod reconf_tests {
             .expect("Failed to get reconf message");
 
         // TODO: Should not be needed in the future when reconf is more stable
-        smol::Timer::after(std::time::Duration::from_millis(100)).await; // Wait a bit for the reconf
+        //
+        // Wait a while. Needed because the OutputHandler needs to reconnect to the MQTT server,
+        // but we have no way of knowing when this is done since runtime is being spawned...
+        // Effects visible mainly when running single-threaded either with `-j 1 -- --test-threads 1` or on test runner.
+        smol::Timer::after(std::time::Duration::from_millis(2000)).await;
 
         // Let y_tick end:
         y_tick.send(()).await.expect("Failed to send tick");
@@ -1203,7 +1211,11 @@ mod reconf_tests {
             .expect("Failed to get reconf message");
 
         // TODO: Should not be needed in the future when reconf is more stable
-        smol::Timer::after(std::time::Duration::from_millis(100)).await; // Wait a bit for the reconf
+        //
+        // Wait a while. Needed because the OutputHandler needs to reconnect to the MQTT server,
+        // but we have no way of knowing when this is done since runtime is being spawned...
+        // Effects visible mainly when running single-threaded either with `-j 1 -- --test-threads 1` or on test runner.
+        smol::Timer::after(std::time::Duration::from_millis(2000)).await;
 
         // Take the rest (now with 2 input streams)
         x_tick.send(()).await.expect("Failed to send tick");
@@ -1393,7 +1405,11 @@ mod reconf_tests {
             .expect("Failed to get reconf message");
 
         // TODO: Should not be needed in the future when reconf is more stable
-        smol::Timer::after(std::time::Duration::from_millis(100)).await; // Wait a bit for the reconf
+        //
+        // Wait a while. Needed because the OutputHandler needs to reconnect to the MQTT server,
+        // but we have no way of knowing when this is done since runtime is being spawned...
+        // Effects visible mainly when running single-threaded either with `-j 1 -- --test-threads 1` or on test runner.
+        smol::Timer::after(std::time::Duration::from_millis(2000)).await;
 
         // Run the rest of the assignment1 spec:
         for x_exp in x_iter2 {
@@ -1553,7 +1569,11 @@ mod reconf_tests {
             .expect("Failed to get reconf message");
 
         // TODO: Should not be needed in the future when reconf is more stable
-        smol::Timer::after(std::time::Duration::from_millis(100)).await; // Wait a bit for the reconf
+        //
+        // Wait a while. Needed because the OutputHandler needs to reconnect to the MQTT server,
+        // but we have no way of knowing when this is done since runtime is being spawned...
+        // Effects visible mainly when running single-threaded either with `-j 1 -- --test-threads 1` or on test runner.
+        smol::Timer::after(std::time::Duration::from_millis(2000)).await;
 
         // Run the rest of the assignment1 spec:
         for x_exp in x_iter2 {

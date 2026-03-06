@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 use std::mem;
 use std::rc::Rc;
 
+use anyhow::anyhow;
 use futures::StreamExt;
 use futures::future::{Either, LocalBoxFuture};
 use smol::LocalExecutor;
 use tracing::{Level, debug, error, info, instrument, warn};
+use unsync::oneshot::{Receiver as OSReceiver, Sender as OSSender};
 // TODO: should we use a cancellation token to cleanup the background task
 // or does it go away when anyway the receivers of our outputs go away?
 // use crate::utils::cancellation_token::CancellationToken;
@@ -32,6 +34,10 @@ pub struct MQTTOutputHandler {
     pub hostname: String,
     pub port: Option<u16>,
     pub aux_info: Vec<VarName>,
+    pub uri: String,
+    client_tx: Option<OSSender<Box<dyn MqttClient>>>,
+    client_rx: Option<OSReceiver<Box<dyn MqttClient>>>,
+    connected: bool,
 }
 
 #[instrument(level = Level::INFO, skip(stream, client))]
@@ -198,18 +204,23 @@ impl OutputHandler for MQTTOutputHandler {
             debug!("Will publish variable '{}' to topic '{}'", var, topic);
         }
 
-        let hostname = self.hostname.clone();
-        let port = self.port.clone();
-        info!(?hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
+        let aux_info = self.aux_info.clone();
+        let client_rx = mem::take(&mut self.client_rx)
+            .expect("MQTT output handler client receiver already taken");
+        let connected = self.connected;
+        info!(?self.hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
         debug!("Auxiliary info variables: {:?}", self.aux_info);
 
-        Box::pin(MQTTOutputHandler::inner_handler(
-            self.factory.clone(),
-            hostname,
-            port,
-            streams,
-            self.aux_info.clone(),
-        ))
+        Box::pin(async move {
+            if !connected {
+                return Err(anyhow!("MQTTOutputHandler not connected before run"));
+            }
+
+            let client = client_rx
+                .await
+                .ok_or_else(|| anyhow!("Failed to receive MQTT client for output handler"))?;
+            MQTTOutputHandler::inner_handler(client, streams, aux_info).await
+        })
     }
 }
 
@@ -238,6 +249,11 @@ impl MQTTOutputHandler {
         );
 
         let hostname = host.to_string();
+        let uri = match port {
+            Some(port) => format!("tcp://{}:{}", hostname, port),
+            None => format!("tcp://{}", hostname),
+        };
+        let (client_tx, client_rx) = unsync::oneshot::channel();
 
         let var_map = var_topics
             .into_iter()
@@ -279,66 +295,63 @@ impl MQTTOutputHandler {
             hostname,
             port,
             aux_info,
+            uri,
+            client_tx: Some(client_tx),
+            client_rx: Some(client_rx),
+            connected: false,
         })
     }
 
+    pub async fn connect(&mut self) -> anyhow::Result<()> {
+        info!(?self.uri, "Starting MQTT output handler connection");
+        let client_tx = mem::take(&mut self.client_tx)
+            .expect("MQTT output handler client sender already taken");
+        let client = self.factory.connect(&self.uri).await?;
+        client_tx
+            .send(client)
+            .map_err(|_| anyhow!("Failed to send MQTT client to output handler run"))?;
+        self.connected = true;
+        Ok(())
+    }
+
     async fn inner_handler(
-        factory: MqttFactory,
-        host: String,
-        port: Option<u16>,
+        client: Box<dyn MqttClient>,
         streams: Vec<(VarName, String, OutputStream<Value>)>,
         aux_info: Vec<VarName>,
     ) -> anyhow::Result<()> {
         debug!("Starting MQTT inner handler for {} streams", streams.len());
 
-        let uri = match port {
-            Some(port) => format!("tcp://{}:{}", host, port),
-            None => format!("tcp://{}", host),
-        };
+        let stream_futures = streams
+            .into_iter()
+            .map(|(var_name, channel_name, stream)| {
+                if aux_info.contains(&var_name) {
+                    debug!(
+                        "Variable '{}' is auxiliary, not publishing to MQTT",
+                        var_name
+                    );
+                    Either::Left(await_stream(stream))
+                } else {
+                    debug!(
+                        "Setting up publishing for variable '{}' to topic '{}'",
+                        var_name, channel_name
+                    );
+                    let client = client.clone();
+                    Either::Right(publish_stream(channel_name, stream, client))
+                }
+            })
+            .collect::<Vec<_>>();
 
-        debug!("Connecting to MQTT broker at URI: {}", uri);
+        debug!(
+            "Awaiting completion of {} stream handlers ({} aux, {} publishing)",
+            stream_futures.len(),
+            aux_info.len(),
+            stream_futures.len() - aux_info.len()
+        );
 
-        match factory.connect(&uri).await {
-            Ok(client) => {
-                debug!("Successfully connected to MQTT broker at {}", uri);
+        // Join all futures and wait for completion
+        futures::future::join_all(stream_futures).await;
 
-                let stream_futures = streams
-                    .into_iter()
-                    .map(|(var_name, channel_name, stream)| {
-                        if aux_info.contains(&var_name) {
-                            debug!(
-                                "Variable '{}' is auxiliary, not publishing to MQTT",
-                                var_name
-                            );
-                            Either::Left(await_stream(stream))
-                        } else {
-                            debug!(
-                                "Setting up publishing for variable '{}' to topic '{}'",
-                                var_name, channel_name
-                            );
-                            let client = client.clone();
-                            Either::Right(publish_stream(channel_name, stream, client))
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                debug!(
-                    "Awaiting completion of {} stream handlers ({} aux, {} publishing)",
-                    stream_futures.len(),
-                    aux_info.len(),
-                    stream_futures.len() - aux_info.len()
-                );
-
-                // Join all futures and wait for completion
-                futures::future::join_all(stream_futures).await;
-
-                debug!("All MQTT output stream processors have completed");
-                Ok(())
-            }
-            Err(e) => {
-                error!("Failed to connect to MQTT broker at {}: {:?}", uri, e);
-                Err(e)
-            }
-        }
+        debug!("All MQTT output stream processors have completed");
+        Ok(())
     }
 }

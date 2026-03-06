@@ -87,18 +87,21 @@ impl OutputHandlerBuilder {
                     .filter(|topic| output_var_names.contains(&VarName::new(topic.as_str())))
                     .map(|topic| (topic.clone().into(), topic))
                     .collect();
-                Box::new(
-                    MQTTOutputHandler::new(
-                        executor.clone(),
-                        MQTT_FACTORY,
-                        output_var_names,
-                        MQTT_HOSTNAME,
-                        self.mqtt_port,
-                        topics,
-                        aux_info,
-                    )
-                    .expect("MQTT output handler could not be created"),
+                let mut handler = MQTTOutputHandler::new(
+                    executor.clone(),
+                    MQTT_FACTORY,
+                    output_var_names,
+                    MQTT_HOSTNAME,
+                    self.mqtt_port,
+                    topics,
+                    aux_info,
                 )
+                .expect("MQTT output handler could not be created");
+                handler
+                    .connect()
+                    .await
+                    .expect("MQTT output handler failed to connect");
+                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
             }
             OutputMode {
                 redis_output: true, ..
@@ -149,18 +152,21 @@ impl OutputHandlerBuilder {
                     .iter()
                     .map(|var| (var.clone(), var.into()))
                     .collect();
-                Box::new(
-                    MQTTOutputHandler::new(
-                        executor,
-                        MQTT_FACTORY,
-                        output_var_names,
-                        MQTT_HOSTNAME,
-                        self.mqtt_port,
-                        topics,
-                        aux_info,
-                    )
-                    .expect("MQTT output handler could not be created"),
+                let mut handler = MQTTOutputHandler::new(
+                    executor,
+                    MQTT_FACTORY,
+                    output_var_names,
+                    MQTT_HOSTNAME,
+                    self.mqtt_port,
+                    topics,
+                    aux_info,
                 )
+                .expect("MQTT output handler could not be created");
+                handler
+                    .connect()
+                    .await
+                    .expect("MQTT output handler failed to connect");
+                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
             }
             OutputMode {
                 output_ros_topics: Some(_),

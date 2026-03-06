@@ -180,7 +180,7 @@ mod integration_tests {
             .await
             .expect("Failed to connect to MQTT with input provider 1");
 
-        let output_handler_1 = MQTTOutputHandler::new(
+        let mut output_handler_1 = MQTTOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["w".into()],
@@ -190,6 +190,10 @@ mod integration_tests {
             vec![],
         )
         .expect("Failed to create output handler 1");
+        output_handler_1
+            .connect()
+            .await
+            .expect("Failed to connect output handler 1");
 
         let mut input_provider_2 = MQTTInputProvider::new(
             executor.clone(),
@@ -203,7 +207,7 @@ mod integration_tests {
             .await
             .expect("Failed to connect to MQTT with input provider 2");
 
-        let output_handler_2 = MQTTOutputHandler::new(
+        let mut output_handler_2 = MQTTOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["v".into()],
@@ -213,6 +217,10 @@ mod integration_tests {
             vec![],
         )
         .expect("Failed to create output handler 2");
+        output_handler_2
+            .connect()
+            .await
+            .expect("Failed to connect output handler 2");
 
         let runner_1 = TestMonitorRunner::new(
             executor.clone(),
@@ -333,7 +341,7 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_1, "Var out topics 1");
 
-        let output_handler_1 = MQTTOutputHandler::new(
+        let mut output_handler_1 = MQTTOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["w".into()],
@@ -343,6 +351,10 @@ mod integration_tests {
             vec![],
         )
         .expect("Failed to create output handler 1");
+        output_handler_1
+            .connect()
+            .await
+            .expect("Failed to connect output handler 1");
         let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
             .output_vars()
             .iter()
@@ -350,7 +362,7 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_2, "Var out topics 2");
 
-        let output_handler_2 = MQTTOutputHandler::new(
+        let mut output_handler_2 = MQTTOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["v".into()],
@@ -360,6 +372,10 @@ mod integration_tests {
             vec![],
         )
         .expect("Failed to create output handler 2");
+        output_handler_2
+            .connect()
+            .await
+            .expect("Failed to connect output handler 2");
 
         let runner_1 = TestMonitorRunner::new(
             executor.clone(),
@@ -479,7 +495,7 @@ mod integration_tests {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let output_handler_1 = MQTTOutputHandler::new(
+        let mut output_handler_1 = MQTTOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["w".into()],
@@ -489,12 +505,16 @@ mod integration_tests {
             vec![],
         )
         .expect("Failed to create output handler 1");
+        output_handler_1
+            .connect()
+            .await
+            .expect("Failed to connect output handler 1");
         let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
             .output_vars()
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let output_handler_2 = MQTTOutputHandler::new(
+        let mut output_handler_2 = MQTTOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["v".into()],
@@ -504,6 +524,10 @@ mod integration_tests {
             vec![],
         )
         .expect("Failed to create output handler 2");
+        output_handler_2
+            .connect()
+            .await
+            .expect("Failed to connect output handler 2");
 
         let runner_1 = TestMonitorRunner::new(
             executor.clone(),
