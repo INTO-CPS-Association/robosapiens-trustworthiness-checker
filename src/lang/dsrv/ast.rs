@@ -10,6 +10,10 @@ use std::{
     fmt::{Debug, Display},
 };
 
+use crate::lang::dsrv::span::Spanned;
+
+pub type SpannedExpr = Spanned<SExpr>;
+
 // Numerical Binary Operations
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum NumericalBinOp {

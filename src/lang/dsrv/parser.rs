@@ -25,6 +25,12 @@ impl ExprParser<SExpr> for CombExprParser {
         debug!("Parsing expr: {}", input);
         dsrv_expression(input).map_err(|e| anyhow::anyhow!(e))
     }
+
+    type Error = anyhow::Error;
+
+    fn raw_parse_error(input: &mut &str) -> std::result::Result<SExpr, Self::Error> {
+        dsrv_expression(input).map_err(|e| anyhow::anyhow!(e))
+    }
 }
 
 // This is the top-level parser for LOLA expressions

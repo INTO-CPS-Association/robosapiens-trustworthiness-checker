@@ -3,21 +3,41 @@ use std::fmt;
 
 use anyhow::{Error, anyhow};
 use ecow::EcoVec;
+// use lalrpop_util::ParseError;
 use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
 use crate::lang::core::parser::{ExprParser as EParserTrait, SpecParser as SParserTrait};
-use crate::{SExpr, UntypedDsrvSpecification, lang::dsrv::ast::STopDecl};
+use crate::{
+    SExpr, UntypedDsrvSpecification,
+    lang::dsrv::ast::{STopDecl, SpannedExpr},
+};
 
 #[derive(Clone)]
 pub struct LALRParser;
 
-impl EParserTrait<SExpr> for LALRParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
+impl EParserTrait<SpannedExpr> for LALRParser {
+    fn parse(input: &mut &str) -> anyhow::Result<SpannedExpr> {
         debug!("Parsing expr: {}", input);
         parse_sexpr(input)
     }
+    type Error = anyhow::Error;
+    fn raw_parse_error(input: &mut &str) -> Result<SpannedExpr, Self::Error> {
+        parse_sexpr(input)
+    }
 }
+
+impl EParserTrait<SExpr> for LALRParser {
+    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
+        debug!("Parsing expr: {}", input);
+        parse_sexpr(input).map(|expr| expr.node)
+    }
+    type Error = anyhow::Error;
+    fn raw_parse_error(input: &mut &str) -> Result<SExpr, Self::Error> {
+        parse_sexpr(input).map(|expr| expr.node)
+    }
+}
+
 impl SParserTrait<UntypedDsrvSpecification> for LALRParser {
     fn parse(input: &mut &str) -> anyhow::Result<UntypedDsrvSpecification> {
         debug!("Parsing expr: {}", input);
@@ -25,7 +45,7 @@ impl SParserTrait<UntypedDsrvSpecification> for LALRParser {
     }
 }
 
-pub fn parse_sexpr<'input>(input: &'input str) -> Result<SExpr, Error> {
+pub fn parse_sexpr<'input>(input: &'input str) -> Result<SpannedExpr, Error> {
     ExprParser::new()
         .parse(input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))
