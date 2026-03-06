@@ -97,28 +97,21 @@ mod integration_tests {
         let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
-        let x_publisher_task = executor.spawn(with_timeout_res(
-            dummy_stream_mqtt_publisher(
-                "x_publisher".to_string(),
-                X_TOPIC.to_string(),
-                x_pub_stream,
-                xs.len(),
-                mqtt_port,
-            ),
-            5,
-            "x_publisher_task",
+        // Note: Without timeout as this fails silently due to spawn
+        let x_publisher_task = executor.spawn(dummy_stream_mqtt_publisher(
+            "x_publisher".to_string(),
+            X_TOPIC.to_string(),
+            x_pub_stream,
+            xs.len(),
+            mqtt_port,
         ));
 
-        let y_publisher_task = executor.spawn(with_timeout_res(
-            dummy_stream_mqtt_publisher(
-                "y_publisher".to_string(),
-                Y_TOPIC.to_string(),
-                y_pub_stream,
-                ys.len(),
-                mqtt_port,
-            ),
-            5,
-            "y_publisher_task",
+        let y_publisher_task = executor.spawn(dummy_stream_mqtt_publisher(
+            "y_publisher".to_string(),
+            Y_TOPIC.to_string(),
+            y_pub_stream,
+            ys.len(),
+            mqtt_port,
         ));
 
         ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
@@ -485,28 +478,21 @@ mod reconf_tests {
         let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
-        let x_publisher_task = executor.spawn(with_timeout_res(
-            dummy_stream_mqtt_publisher(
-                "x_publisher".to_string(),
-                X_TOPIC.to_string(),
-                x_pub_stream,
-                xs.len(),
-                mqtt_port,
-            ),
-            5,
-            "x_publisher_task",
+        // Note: Without timeout as this fails silently due to spawn
+        let x_publisher_task = executor.spawn(dummy_stream_mqtt_publisher(
+            "x_publisher".to_string(),
+            X_TOPIC.to_string(),
+            x_pub_stream,
+            xs.len(),
+            mqtt_port,
         ));
 
-        let y_publisher_task = executor.spawn(with_timeout_res(
-            dummy_stream_mqtt_publisher(
-                "y_publisher".to_string(),
-                Y_TOPIC.to_string(),
-                y_pub_stream,
-                ys.len(),
-                mqtt_port,
-            ),
-            5,
-            "y_publisher_task",
+        let y_publisher_task = executor.spawn(dummy_stream_mqtt_publisher(
+            "y_publisher".to_string(),
+            Y_TOPIC.to_string(),
+            y_pub_stream,
+            ys.len(),
+            mqtt_port,
         ));
 
         ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
