@@ -15,6 +15,7 @@ use crate::core::StreamType;
 use crate::core::StreamTypeAscription;
 use crate::core::VarName;
 use crate::distributed::distribution_graphs::NodeName;
+use crate::lang::dsrv::span::Span;
 pub use winnow::ascii::dec_uint as uint;
 
 #[derive(Clone)]
@@ -33,9 +34,33 @@ impl ExprParser<SExpr> for CombExprParser {
     }
 }
 
+impl ExprParser<SpannedExpr> for CombExprParser {
+    fn parse(input: &mut &str) -> anyhow::Result<SpannedExpr> {
+        debug!("Parsing expr: {}", input);
+        parse_spanned_expression(input).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    type Error = anyhow::Error;
+
+    fn raw_parse_error(input: &mut &str) -> std::result::Result<SpannedExpr, Self::Error> {
+        parse_spanned_expression(input).map_err(|e| anyhow::anyhow!(e))
+    }
+}
+
 // This is the top-level parser for LOLA expressions
 pub fn dsrv_expression(s: &mut &str) -> Result<SExpr> {
     sexpr.parse_next(s)
+}
+
+fn parse_spanned_expression(s: &mut &str) -> Result<SpannedExpr> {
+    let source = *s;
+    let start_len = s.len();
+    let node = dsrv_expression(s)?;
+    let end_len = s.len();
+    Ok(SpannedExpr {
+        node,
+        span: Span::new(0, (start_len - end_len).min(source.len()) as u32),
+    })
 }
 
 fn paren(s: &mut &str) -> Result<SExpr> {
