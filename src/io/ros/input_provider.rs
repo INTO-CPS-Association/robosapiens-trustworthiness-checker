@@ -290,8 +290,8 @@ impl ROSInputProvider {
         cancellation_token: CancellationToken,
     ) -> OutputStream<anyhow::Result<()>> {
         Box::pin(stream! {
-            let mqtt_input_span = info_span!("ROSInputProvider run_logic");
-            let _enter = mqtt_input_span.enter();
+            let ros_input_span = info_span!("ROSInputProvider run_logic");
+            let _enter = ros_input_span.enter();
             loop {
                 futures::select! {
                     (var, val) = Self::receive_from_any_stream(&mut ros_streams).fuse() => {
@@ -302,6 +302,9 @@ impl ROSInputProvider {
                                     debug!("ROSInputProvider: Error handling received value: {:?}", e);
                                     yield Err(e);
                                     return;
+                                }
+                                else {
+                                    yield Ok(());
                                 }
                             }
                             None => {
