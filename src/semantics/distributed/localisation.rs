@@ -92,7 +92,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::vec;
 
-    use crate::lang::dynamic_lola::ast::SExpr;
+    use crate::lang::dynamic_lola::ast::SpannedExpr;
     use crate::lola_fixtures::spec_simple_add_decomposable;
     use crate::lola_specification;
     use proptest::prelude::*;
@@ -102,7 +102,8 @@ mod tests {
     use crate::lang::dynamic_lola::ast::generation::arb_boolean_lola_spec;
 
     use super::*;
-
+    type SExpr = SpannedExpr;
+    
     #[test]
     fn test_localise_specification_1() {
         let spec = LOLASpecification::new(

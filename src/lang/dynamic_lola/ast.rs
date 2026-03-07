@@ -149,6 +149,93 @@ impl Into<String> for VarOrNodeName {
 
 pub type SpannedExpr = Spanned<SExpr>;
 
+// Helper function to convert SExpr into SpannedExpr with a default span for the files that need use spans
+impl From<SExpr> for SpannedExpr {
+    fn from(node: SExpr) -> Self {
+        Spanned {
+            node,
+            span: Span::default(),
+        }
+    }
+}
+// Helper functions to create SpannedExprs without having to specify the span every time
+// for quicker migration to the spans
+#[allow(non_snake_case)]
+impl SpannedExpr {
+    pub fn Val(v: impl Into<Value>) -> Self {
+        SExpr::Val(v.into()).into()
+    }
+
+    pub fn Var(v: VarName) -> Self {
+        SExpr::Var(v).into()
+    }
+
+    pub fn BinOp<L, R>(lhs: Box<L>, rhs: Box<R>, op: SBinOp) -> Self
+    where
+        L: Into<SpannedExpr>,
+        R: Into<SpannedExpr>,
+    {
+        SExpr::BinOp(Box::new((*lhs).into()), Box::new((*rhs).into()), op).into()
+    }
+
+    pub fn If<C, T, E>(c: Box<C>, t: Box<T>, e: Box<E>) -> Self
+    where
+        C: Into<SpannedExpr>,
+        T: Into<SpannedExpr>,
+        E: Into<SpannedExpr>,
+    {
+        SExpr::If(
+            Box::new((*c).into()),
+            Box::new((*t).into()),
+            Box::new((*e).into()),
+        )
+        .into()
+    }
+
+    pub fn SIndex<E>(e: Box<E>, idx: u64) -> Self
+    where
+        E: Into<SpannedExpr>,
+    {
+        SExpr::SIndex(Box::new((*e).into()), idx).into()
+    }
+
+    pub fn Dynamic<E>(e: Box<E>, t: StreamTypeAscription) -> Self
+    where
+        E: Into<SpannedExpr>,
+    {
+        SExpr::Dynamic(Box::new((*e).into()), t).into()
+    }
+
+    pub fn RestrictedDynamic<E>(e: Box<E>, t: StreamTypeAscription, vs: EcoVec<VarName>) -> Self
+    where
+        E: Into<SpannedExpr>,
+    {
+        SExpr::RestrictedDynamic(Box::new((*e).into()), t, vs).into()
+    }
+
+    pub fn Defer<E>(e: Box<E>, t: StreamTypeAscription, vs: EcoVec<VarName>) -> Self
+    where
+        E: Into<SpannedExpr>,
+    {
+        SExpr::Defer(Box::new((*e).into()), t, vs).into()
+    }
+
+    pub fn Not<E>(e: Box<E>) -> Self
+    where
+        E: Into<SpannedExpr>,
+    {
+        SExpr::Not(Box::new((*e).into())).into()
+    }
+
+    pub fn Map(map: BTreeMap<EcoString, SpannedExpr>) -> Self {
+        SExpr::Map(map).into()
+    }
+    
+    pub fn List(items: EcoVec<SpannedExpr>) -> Self {
+        SExpr::List(items).into()
+    }
+}
+
 #[derive(Clone, PartialEq, Debug, serde::Serialize)]
 pub enum SExpr {
     // if-then-else
@@ -445,7 +532,7 @@ impl LOLASpecification {
                         .map(|(k, v)| (k, traverse_expr(v, vars)))
                         .collect();
                     SExpr::Map(new_map)
-                } 
+                }
                 SExpr::MGet(map, k) => SExpr::MGet(Box::new(traverse_expr(*map.clone(), vars)), k),
                 SExpr::MInsert(map, k, v) => SExpr::MInsert(
                     Box::new(traverse_expr(*map, vars)),
@@ -499,7 +586,7 @@ impl LOLASpecification {
 }
 
 impl Specification for LOLASpecification {
-    type Expr = SExpr;
+    type Expr = SpannedExpr;
 
     fn input_vars(&self) -> Vec<VarName> {
         self.input_vars.clone()
@@ -509,8 +596,8 @@ impl Specification for LOLASpecification {
         self.output_vars.clone()
     }
 
-    fn var_expr(&self, var: &VarName) -> Option<SExpr> {
-        Some(self.exprs.get(var)?.node.clone())
+    fn var_expr(&self, var: &VarName) -> Option<SpannedExpr> {
+        self.exprs.get(var).cloned()
     }
 
     fn add_input_var(&mut self, var: VarName) {
@@ -622,28 +709,30 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        LOLASpecification, SpannedExpr, VarName,
-        lang::dynamic_lola::ast::{BoolBinOp, SBinOp},
+        LOLASpecification, VarName,
+        lang::dynamic_lola::ast::{BoolBinOp, SBinOp, SpannedExpr},
     };
 
-    pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SpannedExpr> {
+    type SExpr = SpannedExpr;
+
+    pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
         let leaf = prop_oneof![
-            any::<bool>().prop_map(|x| SpannedExpr::Val(x.into())),
-            proptest::sample::select(vars.clone()).prop_map(|x| SpannedExpr::Var(x.clone())),
+            any::<bool>().prop_map(|x| SExpr::Val(x)),
+            proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
         ];
         leaf.prop_recursive(5, 50, 10, |inner| {
             prop_oneof![
-                (inner.clone(), inner.clone()).prop_map(|(a, b)| SpannedExpr::BinOp(
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
                     Box::new(a),
                     Box::new(b),
                     SBinOp::BOp(BoolBinOp::Or)
                 )),
-                (inner.clone(), inner.clone()).prop_map(|(a, b)| SpannedExpr::BinOp(
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
                     Box::new(a),
                     Box::new(b),
                     SBinOp::BOp(BoolBinOp::And)
                 )),
-                (inner.clone(), inner.clone()).prop_map(|(a, b)| SpannedExpr::BinOp(
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
                     Box::new(a),
                     Box::new(b),
                     SBinOp::BOp(BoolBinOp::And)

@@ -3,13 +3,14 @@ use crate::core::to_typed_partial_stream;
 use crate::core::values::StreamTypeAscription;
 use crate::core::{StreamData, TypedStreamData};
 use crate::lang::core::parser::ExprParser;
+use crate::lang::dynamic_lola::ast::SpannedExpr;
 use crate::lang::dynamic_lola::type_checker::PartialStreamValue;
 use crate::lang::dynamic_lola::type_checker::{SExprTE, TypeCheckable, TypeInfo};
 use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
 use crate::semantics::{
     AsyncConfig, MonitoringSemantics, StreamContext, TypedUntimedLolaSemantics,
 };
-use crate::{SExpr, Value, VarName};
+use crate::{Value, VarName};
 use async_stream::stream;
 use ecow::EcoVec;
 use futures::stream::LocalBoxStream;
@@ -395,7 +396,7 @@ pub fn dynamic<AC, Parser, T>(
     type_info: &TypeInfo,
 ) -> OutputStream<PartialStreamValue<T>>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     T: TypedStreamData + TryFrom<Value, Error = ()>,
 {
@@ -464,8 +465,8 @@ where
                     debug!("Dynamic evaluated to expression {:?}", expr);
                     // Create a typed version of the expression
                     let mut type_info_local = type_info.clone();
-                    let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
-                        .expect("Type error");
+                    let ascription = StreamTypeAscription::Ascribed(T::stream_data_type());
+                    let expr = (&expr, &ascription).type_check(&mut type_info_local).expect("Type error");
                     let eval_output_stream_raw: OutputStream<Value> = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     // Apply stream lift to handle NoVal by repeating last value
                     let mut eval_output_stream = Box::pin(stream! {
@@ -523,7 +524,7 @@ pub fn defer<AC, Parser, T>(
     type_info: &TypeInfo,
 ) -> OutputStream<PartialStreamValue<T>>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     T: TypedStreamData + TryFrom<Value, Error = ()>,
 {
@@ -561,8 +562,8 @@ where
                     debug!("Defer evaluated to expression {:?}", expr);
                     // Create a typed version of the expression
                     let mut type_info_local = type_info.clone();
-                    let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
-                        .expect("Type error");
+                    let ascription = StreamTypeAscription::Ascribed(T::stream_data_type());
+                    let expr = (&expr, &ascription).type_check(&mut type_info_local).expect("Type error");
                     let tmp_stream = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     // let tmp_stream = stream_lift_base(tmp_stream);
                     let mut tmp_stream = to_typed_partial_stream::<T>(tmp_stream);

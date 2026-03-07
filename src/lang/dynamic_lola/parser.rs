@@ -48,7 +48,7 @@ fn paren(source: &str, s: &mut &str) -> Result<SpannedExpr> {
 fn sexpr_list(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     let start_rest = *s;
 
-    let res: Result<Vec<SpannedExpr>, _> = delimited(
+    let exprs: Vec<SpannedExpr> = delimited(
         seq!("List", loop_ms_or_lb_or_lc, '('),
         separated(
             0..,
@@ -57,23 +57,17 @@ fn sexpr_list(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         ),
         ')',
     )
-    .parse_next(s);
-    match res {
-        Ok(exprs) => {
-            let end_rest = *s;
-            Ok(span_wrapper_winnow(
-                source,
-                start_rest,
-                end_rest,
-                SExpr::List(exprs.into()),
-            ))
-        }
-        Err(e) => Err(e),
-    }
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::List(exprs.into()),
+    ))
 }
 
 pub fn key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, SpannedExpr)> {
-    let start_rest = *s;
     seq!(
         _: loop_ms_or_lb_or_lc, string,
         _: ':',
@@ -1240,7 +1234,10 @@ mod tests {
     use winnow::error::ContextError;
 
     use super::*;
+    use crate::lang::dynamic_lola::ast::SpannedExpr;
     use test_log::test;
+
+    type SExpr = SpannedExpr;
 
     #[test]
     fn test_streamdata() {
@@ -1308,7 +1305,7 @@ mod tests {
         assert_eq!(
             sexpr(&mut (*"if true then 1 else 2".to_string()).into())?,
             SExpr::If(
-                Box::new(SExpr::Val(true.into())),
+                Box::new(SExpr::Val(true)),
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::Val(Value::Int(2))),
             ),
@@ -1344,7 +1341,7 @@ mod tests {
             sexpr(&mut (*"(stage == \"m\")").into())?,
             SExpr::BinOp(
                 Box::new(SExpr::Var("stage".into())),
-                Box::new(SExpr::Val("m".into())),
+                Box::new(SExpr::Val("m")),
                 SBinOp::COp(CompBinOp::Eq),
             )
         );

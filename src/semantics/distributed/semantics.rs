@@ -4,7 +4,9 @@ use crate::SExpr;
 use crate::core::OutputStream;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dynamic_lola::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
+use crate::lang::dynamic_lola::ast::{
+    BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SpannedExpr, StrBinOp,
+};
 use crate::semantics::AsyncConfig;
 use crate::semantics::MonitoringSemantics;
 use crate::semantics::distributed::combinators as dist_mc;
@@ -15,18 +17,18 @@ use super::contexts::DistributedContext;
 #[derive(Clone)]
 pub struct DistributedSemantics<Parser>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     _parser: std::marker::PhantomData<Parser>,
 }
 
 impl<Parser, AC> MonitoringSemantics<AC> for DistributedSemantics<Parser>
 where
-    Parser: ExprParser<SExpr> + 'static,
-    AC: AsyncConfig<Val = Value, Expr = SExpr, Ctx = DistributedContext<AC>>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr, Ctx = DistributedContext<AC>>,
 {
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<AC::Val> {
-        match expr {
+        match expr.node {
             SExpr::Val(v) => mc::val(v),
             SExpr::BinOp(e1, e2, op) => {
                 let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);

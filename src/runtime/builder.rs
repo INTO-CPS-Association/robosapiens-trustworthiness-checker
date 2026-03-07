@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use tracing::{debug, warn};
 
 use crate::{
-    LOLASpecification, Monitor, SExpr, Value, VarName,
+    LOLASpecification, Monitor, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     define_config,
@@ -15,6 +15,7 @@ use crate::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
         type_checker::{SExprTE, TypedLOLASpecification, type_check},
+        ast::SpannedExpr,
     },
     runtime::{
         reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder,
@@ -35,13 +36,13 @@ use static_assertions::assert_obj_safe;
 
 // Various AsyncConfigs to use
 #[rustfmt::skip]
-define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context);
+define_config!(ValueConfig, Val = Value, Expr = SpannedExpr, Ctx = Context);
 #[rustfmt::skip]
 define_config!(TypedValueConfig, Val = Value, Expr = SExprTE, Ctx = Context);
 #[rustfmt::skip]
-define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedContext);
+define_config!(DistValueConfig, Val = Value, Expr = SpannedExpr, Ctx = DistributedContext);
 #[rustfmt::skip]
-define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext);
+define_config!(SemiSyncValueConfig, Val = Value, Expr = SpannedExpr, Ctx = SemiSyncContext);
 
 pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
     fn executor(

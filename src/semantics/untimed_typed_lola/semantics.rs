@@ -3,7 +3,8 @@ use crate::core::OutputStream;
 use crate::core::Value;
 use crate::core::stream_casting::{from_typed_stream, to_typed_stream};
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dynamic_lola::ast::SExpr;
+
+use crate::lang::dynamic_lola::ast::SpannedExpr;
 use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dynamic_lola::type_checker::{
     PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
@@ -13,14 +14,14 @@ use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 #[derive(Clone)]
 pub struct TypedUntimedLolaSemantics<Parser>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     _parser: std::marker::PhantomData<Parser>,
 }
 
 impl<Parser, AC> MonitoringSemantics<AC> for TypedUntimedLolaSemantics<Parser>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
 {
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<Value> {
@@ -51,7 +52,7 @@ fn to_async_stream_int<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<i64>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprInt::Val(v) => mc::val(v),
@@ -112,7 +113,7 @@ fn to_async_stream_float<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<f64>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprFloat::Val(v) => mc::val(v),
@@ -185,7 +186,7 @@ fn to_async_stream_str<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<String>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprStr::Val(v) => mc::val(v),
@@ -238,7 +239,7 @@ fn to_async_stream_bool<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprBool::Val(b) => mc::val(b),
@@ -422,7 +423,7 @@ fn to_async_stream_unit<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<()>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprUnit::Val(v) => mc::val(v),

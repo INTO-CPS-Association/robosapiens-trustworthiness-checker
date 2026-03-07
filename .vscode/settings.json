@@ -1,3 +1,4 @@
 {
-    "rust-analyzer.cargo.noDefaultFeatures": true
+    "rust-analyzer.cargo.noDefaultFeatures": true,
+    "cmake.ignoreCMakeListsMissing": true
 }

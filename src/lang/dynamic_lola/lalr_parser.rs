@@ -8,7 +8,10 @@ use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
 use crate::lang::core::parser::{ExprParser as EParserTrait, SpecParser as SParserTrait};
-use crate::{LOLASpecification, lang::dynamic_lola::ast::{STopDecl, SpannedExpr}};
+use crate::{
+    LOLASpecification,
+    lang::dynamic_lola::ast::{STopDecl, SpannedExpr},
+};
 
 #[derive(Clone)]
 pub struct LALRParser;
@@ -138,13 +141,14 @@ mod tests {
     use crate::lang::core::parser::presult_to_string;
 
     use crate::VarName;
-    use crate::lang::dynamic_lola::ast::NumericalBinOp;
-    use crate::lang::dynamic_lola::ast::SBinOp;
+    use crate::lang::dynamic_lola::ast::{NumericalBinOp, SBinOp, SpannedExpr};
 
     use crate::core::StreamTypeAscription;
 
     use super::*;
     use test_log::test;
+
+    type SExpr = SpannedExpr;
 
     #[test]
     fn test_streamdata() {
@@ -339,7 +343,7 @@ mod tests {
             exprs: BTreeMap::from([(
                 "x".into(),
                 SpannedExpr::BinOp(
-                    Box::new(SExpr::Val(1.into())),
+                    Box::new(SExpr::Val(1)),
                     Box::new(SExpr::SIndex(Box::new(SpannedExpr::Var("x".into())), 1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),

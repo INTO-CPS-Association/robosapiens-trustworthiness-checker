@@ -1,4 +1,4 @@
-use crate::SExpr;
+use crate::lang::dynamic_lola::ast::SpannedExpr;
 use crate::core::StreamData;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
@@ -489,8 +489,8 @@ pub fn dynamic<AC, Parser>(
     history_length: usize,
 ) -> OutputStream<AC::Val>
 where
-    Parser: ExprParser<SExpr> + 'static,
-    AC: AsyncConfig<Val = Value, Expr = SExpr>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
 {
     // Note: Slight change in dynamic's behavior after language became async and we introduced
     // NoVal. Consider the following behavior:
@@ -553,7 +553,7 @@ where
                 Value::Str(s) => {
                     let expr = Parser::parse(&mut s.as_ref())
                         .expect("Invalid dynamic str");
-                    debug!("Dynamic evaluated to expression {:?}", expr);
+                    debug!("Dynamic evaluated to expression {:?}", expr.span);
                     let eval_output_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
@@ -600,8 +600,8 @@ pub fn defer<AC, Parser>(
     history_length: usize,
 ) -> OutputStream<AC::Val>
 where
-    Parser: ExprParser<SExpr> + 'static,
-    AC: AsyncConfig<Val = Value, Expr = SExpr>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
 {
     // Create a subcontext with a history window length
     let mut subcontext = ctx.restricted_subcontext(vs, history_length);

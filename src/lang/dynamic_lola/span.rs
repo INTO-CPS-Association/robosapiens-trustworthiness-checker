@@ -86,8 +86,8 @@ pub fn span_wrapper_winnow(
 // Helper function to calculate the offset for the span
 #[inline]
 pub fn offset(source: &str, rest_start: &str, rest_end: &str) -> Span {
-    let start = (source.len() - rest_start.len());
-    let end = (source.len() - rest_end.len());
+    let start = source.len() - rest_start.len();
+    let end = source.len() - rest_end.len();
 
     Span::new(start as u32, end as u32)
 }
