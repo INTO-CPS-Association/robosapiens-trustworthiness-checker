@@ -235,27 +235,3 @@ pub struct Cli {
     #[arg(long, help = "Port number for Redis server connection")]
     pub redis_port: Option<u16>,
 }
-
-/// ROS-specific Trustworthiness Checker configuration
-///
-/// Specialized version for Robot Operating System (ROS) environments with
-/// ROS topic mapping and integration capabilities.
-#[derive(Parser)]
-#[command(name = "trustworthiness-checker-ros")]
-#[command(about = "ROS-specific runtime verification tool")]
-#[command(
-    long_about = "ROS-specific version of the Trustworthiness Checker with native ROS topic integration and mapping capabilities."
-)]
-pub struct CliROS {
-    #[arg(help = "Path to the model specification file")]
-    pub model: String,
-    #[arg(help = "Path to ROS input mapping configuration file")]
-    pub ros_input_mapping_file: String,
-
-    #[arg(long, help = "Specification language to use")]
-    pub language: Option<Language>,
-    #[arg(long, help = "Semantics engine to use for monitoring")]
-    pub semantics: Option<Semantics>,
-    #[arg(long, help = "Runtime system to use for execution")]
-    pub runtime: Option<Runtime>,
-}
