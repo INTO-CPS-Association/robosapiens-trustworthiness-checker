@@ -27,10 +27,10 @@ impl ExprParser<SExpr> for CombExprParser {
         dsrv_expression(input).map_err(|e| anyhow::anyhow!(e))
     }
 
-    type Error = anyhow::Error;
+    type Error = winnow::error::ContextError;
 
-    fn raw_parse_error(input: &mut &str) -> std::result::Result<SExpr, Self::Error> {
-        dsrv_expression(input).map_err(|e| anyhow::anyhow!(e))
+    fn raw_parse_error(input: &mut &str) -> Result<UntypedDsrvSpecification, Self::Error> {
+        dsrv_specification(input)
     }
 }
 
@@ -40,10 +40,10 @@ impl ExprParser<SpannedExpr> for CombExprParser {
         parse_spanned_expression(input).map_err(|e| anyhow::anyhow!(e))
     }
 
-    type Error = anyhow::Error;
+    type Error = winnow::error::ContextError;
 
-    fn raw_parse_error(input: &mut &str) -> std::result::Result<SpannedExpr, Self::Error> {
-        parse_spanned_expression(input).map_err(|e| anyhow::anyhow!(e))
+    fn raw_parse_error(input: &mut &str) -> Result<UntypedDsrvSpecification, Self::Error> {
+        dsrv_specification(input)
     }
 }
 

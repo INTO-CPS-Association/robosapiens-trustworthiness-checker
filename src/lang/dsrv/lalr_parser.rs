@@ -22,8 +22,8 @@ impl EParserTrait<SpannedExpr> for LALRParser {
         parse_sexpr(input)
     }
     type Error = anyhow::Error;
-    fn raw_parse_error(input: &mut &str) -> Result<SpannedExpr, Self::Error> {
-        parse_sexpr(input)
+    fn raw_parse_error(input: &mut &str) -> Result<UntypedDsrvSpecification, Self::Error> {
+        parse_str(input)
     }
 }
 
@@ -33,8 +33,8 @@ impl EParserTrait<SExpr> for LALRParser {
         parse_sexpr(input).map(|expr| expr.node)
     }
     type Error = anyhow::Error;
-    fn raw_parse_error(input: &mut &str) -> Result<SExpr, Self::Error> {
-        parse_sexpr(input).map(|expr| expr.node)
+    fn raw_parse_error(input: &mut &str) -> Result<UntypedDsrvSpecification, Self::Error> {
+        parse_str(input)
     }
 }
 
