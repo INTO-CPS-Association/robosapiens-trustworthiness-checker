@@ -617,22 +617,4 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
 
         builder.async_build().await
     }
-
-    pub fn partial_clone(self) -> Self {
-        Self {
-            executor: self.executor.clone(),
-            model: self.model.clone(),
-            input: None, // Not clonable. TODO: We should make all builders clonable
-            input_provider_builder: self.input_provider_builder.clone(),
-            output: None, // Not clonable. TODO: We should make all builders clonable
-            output_handler_builder: self.output_handler_builder.clone(),
-            distribution_mode: DistributionMode::CentralMonitor, // Not clonable. TODO: We should make all builders clonable
-            distribution_mode_builder: self.distribution_mode_builder.clone(),
-            runtime: self.runtime.clone(),
-            semantics: self.semantics.clone(),
-            scheduler_mode: self.scheduler_mode.clone(),
-            parser: self.parser.clone(),
-            reconf_topic: self.reconf_topic.clone(),
-        }
-    }
 }
