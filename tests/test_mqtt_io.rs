@@ -37,47 +37,19 @@ mod integration_tests {
         lola_specification,
     };
 
-    const MQTT_FACTORY: MqttFactory = if cfg!(feature = "testcontainers") {
-        MqttFactory::Paho
-    } else {
-        MqttFactory::Mock
-    };
+    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
     async fn start_mqtt_get_port() -> (Box<dyn std::any::Any>, u16) {
-        #[cfg(feature = "testcontainers")]
-        {
-            use async_compat::Compat as TokioCompat;
-            use tc_testutils::mqtt::start_mqtt;
+        let mqtt_server = start_mqtt().await;
+        let port = with_timeout_res(
+            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
+            5,
+            "get_host_port",
+        )
+        .await
+        .expect("Failed to get host port for MQTT server");
 
-            let mqtt_server = start_mqtt().await;
-            let port = with_timeout_res(
-                TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
-                5,
-                "get_host_port",
-            )
-            .await
-            .expect("Failed to get host port for MQTT server");
-
-            (Box::new(mqtt_server), port)
-        }
-        #[cfg(not(feature = "testcontainers"))]
-        {
-            // Mock tests do not care about a client, but they need to run serially,
-            // forced with this lock. (Due to file writing)
-            async fn lock_test() -> futures::lock::MutexGuard<'static, ()> {
-                static TEST_MUTEX: std::sync::OnceLock<futures::lock::Mutex<()>> =
-                    std::sync::OnceLock::new();
-                TEST_MUTEX
-                    .get_or_init(|| futures::lock::Mutex::new(()))
-                    .lock()
-                    .await
-            }
-
-            use rand::Rng;
-            let port = rand::rng().random();
-            let lock = lock_test().await;
-            (Box::new(lock), port)
-        }
+        (Box::new(mqtt_server), port)
     }
 
     const X_TOPIC: &str = "x";
