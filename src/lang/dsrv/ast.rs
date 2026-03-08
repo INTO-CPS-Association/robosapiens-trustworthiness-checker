@@ -10,7 +10,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
-use crate::lang::dsrv::span::Spanned;
+use crate::lang::dsrv::span::{Span, Spanned};
 
 pub type SpannedExpr = Spanned<SExpr>;
 
@@ -224,10 +224,10 @@ pub enum SExpr {
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize)]
 pub enum STopDecl {
-    Input(VarName, Option<StreamType>),
-    Output(VarName, Option<StreamType>),
-    Aux(VarName, Option<StreamType>),
-    Assignment(VarName, SExpr),
+    Input(VarName, Option<StreamType>, Span),
+    Output(VarName, Option<StreamType>, Span),
+    Aux(VarName, Option<StreamType>, Span),
+    Assignment(VarName, SpannedExpr, Span),
 }
 
 impl SExpr {

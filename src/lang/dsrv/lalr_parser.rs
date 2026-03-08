@@ -72,25 +72,25 @@ pub fn create_dsrv_spec(stmts: &EcoVec<STopDecl>) -> UntypedDsrvSpecification {
 
     for stmt in stmts {
         match stmt {
-            STopDecl::Input(var, typ) => {
+            STopDecl::Input(var, typ, _) => {
                 inputs.insert(var.clone());
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ.clone());
                 }
             }
-            STopDecl::Output(var, typ) => {
+            STopDecl::Output(var, typ, _) => {
                 outputs.insert(var.clone());
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ.clone());
                 }
             }
-            STopDecl::Aux(var, typ) => {
+            STopDecl::Aux(var, typ, _) => {
                 aux_vars.push(var.clone());
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ.clone());
                 }
             }
-            STopDecl::Assignment(var, sexpr) => {
+            STopDecl::Assignment(var, sexpr, _) => {
                 assignments.insert(var.clone(), sexpr.clone());
             }
         }
@@ -152,6 +152,7 @@ mod tests {
     use crate::VarName;
     use crate::lang::dsrv::ast::NumericalBinOp;
     use crate::lang::dsrv::ast::SBinOp;
+    use crate::lang::dsrv::span::Span;
 
     use crate::core::StreamTypeAscription;
 
@@ -237,7 +238,7 @@ mod tests {
     #[test]
     fn test_input_decl() {
         let parsed = parse_stopdecl(&mut "in x");
-        let exp = r#"Ok(Input(VarName::new("x"), None))"#;
+        let exp = r#"Ok(Input(VarName::new("x"), None, Span { start: 0, end: 4 }))"#;
         assert_eq!(presult_to_string(&parsed), exp);
 
         // Not sure if we should allow this, but this is how it currently works. As long as we
@@ -251,33 +252,38 @@ mod tests {
     #[test]
     fn test_typed_input_decl() {
         let parsed = parse_stopdecl("in x: Int");
-        let exp = r#"Ok(Input(VarName::new("x"), Some(Int)))"#;
+        let exp = r#"Ok(Input(VarName::new("x"), Some(Int), Span { start: 0, end: 9 }))"#;
         assert_eq!(presult_to_string(&parsed), exp);
 
         let parsed = parse_stopdecl("in x: Float");
-        let exp = r#"Ok(Input(VarName::new("x"), Some(Float)))"#;
+        let exp = r#"Ok(Input(VarName::new("x"), Some(Float), Span { start: 0, end: 11 }))"#;
         assert_eq!(presult_to_string(&parsed), exp);
 
+        let input = "in xs: List<Int>";
         assert_eq!(
-            parse_stopdecl("in xs: List<Int>").unwrap(),
+            parse_stopdecl(input).unwrap(),
             STopDecl::Input(
                 "xs".into(),
-                Some(StreamType::List(Box::new(StreamType::Int)))
+                Some(StreamType::List(Box::new(StreamType::Int))),
+                Span::new(0, input.len() as u32),
             )
         );
 
+        let input = "in m: Map<List<Bool>>";
         assert_eq!(
-            parse_stopdecl("in m: Map<List<Bool>>").unwrap(),
+            parse_stopdecl(input).unwrap(),
             STopDecl::Input(
                 "m".into(),
                 Some(StreamType::Map(Box::new(StreamType::List(Box::new(
                     StreamType::Bool
-                )))))
+                ))))),
+                Span::new(0, input.len() as u32),
             )
         );
 
+        let input = "in robot: Struct<id: Int, label: Str>";
         assert_eq!(
-            parse_stopdecl("in robot: Struct<id: Int, label: Str>").unwrap(),
+            parse_stopdecl(input).unwrap(),
             STopDecl::Input(
                 "robot".into(),
                 Some(StreamType::Struct(
@@ -287,18 +293,21 @@ mod tests {
                     ]
                     .into(),
                     false,
-                ))
+                )),
+                Span::new(0, input.len() as u32),
             )
         );
 
+        let input = "in robot: Struct<id: Int, ...>";
         assert_eq!(
-            parse_stopdecl("in robot: Struct<id: Int, ...>").unwrap(),
+            parse_stopdecl(input).unwrap(),
             STopDecl::Input(
                 "robot".into(),
                 Some(StreamType::Struct(
                     vec![("id".into(), StreamType::Int)].into(),
                     true,
-                ))
+                )),
+                Span::new(0, input.len() as u32),
             )
         );
 
@@ -773,19 +782,19 @@ mod tests {
     fn test_assignment_decl() {
         assert_eq!(
             presult_to_string(&parse_stopdecl("x = 0")),
-            r#"Ok(Assignment(VarName::new("x"), Val(Int(0))))"#
+            r#"Ok(Assignment(VarName::new("x"), Val(Int(0)), Span { start: 0, end: 5 }))"#
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl(r#"x = "hello""#)),
-            r#"Ok(Assignment(VarName::new("x"), Val(Str("hello"))))"#
+            r#"Ok(Assignment(VarName::new("x"), Val(Str("hello")), Span { start: 0, end: 11 }))"#
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl("x = true")),
-            r#"Ok(Assignment(VarName::new("x"), Val(Bool(true))))"#
+            r#"Ok(Assignment(VarName::new("x"), Val(Bool(true)), Span { start: 0, end: 8 }))"#
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl("x = false")),
-            r#"Ok(Assignment(VarName::new("x"), Val(Bool(false))))"#
+            r#"Ok(Assignment(VarName::new("x"), Val(Bool(false)), Span { start: 0, end: 9 }))"#
         );
     }
 
@@ -941,7 +950,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl("y = List()")),
-            r#"Ok(Assignment(VarName::new("y"), List([])))"#
+            r#"Ok(Assignment(VarName::new("y"), List([]), Span { start: 0, end: 10 }))"#
         )
     }
 
@@ -1068,7 +1077,7 @@ mod tests {
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl("y = Map()")),
-            r#"Ok(Assignment(VarName::new("y"), Map({})))"#
+            r#"Ok(Assignment(VarName::new("y"), Map({}), Span { start: 0, end: 9 }))"#
         )
     }
 
@@ -1291,19 +1300,19 @@ mod tests {
     fn test_capital_varname() {
         assert_eq!(
             presult_to_string(&parse_stopdecl("in G")),
-            r#"Ok(Input(VarName::new("G"), None))"#
+            r#"Ok(Input(VarName::new("G"), None, Span { start: 0, end: 4 }))"#
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl("out F")),
-            r#"Ok(Output(VarName::new("F"), None))"#
+            r#"Ok(Output(VarName::new("F"), None, Span { start: 0, end: 5 }))"#
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl("in GANDALF")),
-            r#"Ok(Input(VarName::new("GANDALF"), None))"#
+            r#"Ok(Input(VarName::new("GANDALF"), None, Span { start: 0, end: 10 }))"#
         );
         assert_eq!(
             presult_to_string(&parse_stopdecl("out FRODO")),
-            r#"Ok(Output(VarName::new("FRODO"), None))"#
+            r#"Ok(Output(VarName::new("FRODO"), None, Span { start: 0, end: 9 }))"#
         );
     }
 
