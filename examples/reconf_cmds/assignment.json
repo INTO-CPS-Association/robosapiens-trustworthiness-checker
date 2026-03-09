@@ -1,0 +1,7 @@
+{
+  "spec": "in x\nout z\nz = x",
+  "type_info": {
+    "x": "Int32",
+    "z": "Int32"
+  }
+}
