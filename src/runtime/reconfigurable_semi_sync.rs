@@ -17,10 +17,10 @@ use crate::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
+use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
 use serde_json::Value as JValue;
 use smol::LocalExecutor;
-use std::{collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, ops::ControlFlow, rc::Rc};
 use tracing::{debug, error, info, warn};
 use unsync::spsc::Sender as SpscSender;
 
@@ -337,6 +337,186 @@ where
         }
         Ok(())
     }
+
+    async fn await_inputs(
+        streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
+    ) -> BTreeMap<VarName, Option<AC::Val>> {
+        // Create input tasks
+        let mut futs: FuturesUnordered<_> = streams
+            .iter_mut()
+            .map(|(name, stream)| {
+                stream
+                    .next()
+                    .map(move |val| (name.clone(), val))
+                    .boxed_local()
+            })
+            .collect();
+
+        // Futs returns None when empty - does not indicate tasks result
+        let mut ret = BTreeMap::new();
+        while let Some((name, res)) = futs.next().await {
+            if let Some(val) = res {
+                ret.insert(name, Some(val));
+            } else {
+                // Not an error, most likely because the channel is done
+                debug!("ReconfSemiSyncMonitor: Input stream for {} has ended", name);
+                ret.insert(name, None);
+            }
+        }
+        ret
+    }
+
+    async fn handle_reconfig_input(
+        &mut self,
+        inner_rt_cancel_token: &CancellationToken,
+        val: Value,
+    ) -> anyhow::Result<ControlFlow<anyhow::Result<()>>> {
+        match val {
+            Value::Str(eco_string) => {
+                info!("Received reconfiguration command: {:?}", eco_string);
+                let parsed = P::parse(&mut eco_string.as_str());
+                info!("Parsed as: {:?}", parsed);
+                let parsed = parsed
+                    .map_err(|err| anyhow!("Failed to parse reconfiguration command: {:?}", err))?;
+
+                // TODO: Does not work with FileInputProvider as it reads the file from
+                // fresh...
+                self.self_builder = self.self_builder.clone().model(parsed.clone());
+
+                // Update InputProvider spec
+                let input_spec = match self.self_builder.input_builder.clone().unwrap().spec {
+                    // TODO: does not respect _topics...
+                    InputProviderSpec::MQTT(_topics) => InputProviderSpec::MQTT(Some(
+                        parsed
+                            .input_vars()
+                            .into_iter()
+                            .map(|v| v.to_string())
+                            .collect(),
+                    )),
+                    _ => self.self_builder.input_builder.clone().unwrap().spec,
+                };
+                if let Some(ref mut input_builder) = self.self_builder.input_builder {
+                    input_builder.spec = input_spec;
+                    self.self_builder.input_builder = Some(input_builder.clone());
+                }
+
+                // Update OutputMode
+                // TODO: does not respect _topics...
+                let output_mode = match self
+                    .self_builder
+                    .output_builder
+                    .clone()
+                    .unwrap()
+                    .output_mode
+                {
+                    // Auto assign topics on rebuild instead
+                    // this is only a problem if manual topics were configured
+                    // TODO: does not respect _topics...
+                    mode if mode.output_mqtt_topics.is_some() => OutputMode {
+                        output_stdout: false,
+                        output_mqtt_topics: None,
+                        mqtt_output: true,
+                        output_redis_topics: None,
+                        redis_output: false,
+                        output_ros_topics: None,
+                    },
+                    mode if mode.output_redis_topics.is_some() => OutputMode {
+                        output_stdout: false,
+                        output_mqtt_topics: None,
+                        mqtt_output: false,
+                        output_redis_topics: None,
+                        redis_output: true,
+                        output_ros_topics: None,
+                    },
+                    _ => {
+                        self.self_builder
+                            .output_builder
+                            .clone()
+                            .unwrap()
+                            .output_mode
+                    }
+                };
+                if let Some(ref mut output_builder) = self.self_builder.output_builder {
+                    output_builder.output_mode = output_mode;
+                    self.self_builder.output_builder = Some(output_builder.clone());
+                }
+
+                warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor - restarting inner runtime");
+                inner_rt_cancel_token.cancel();
+                let new_self = Box::new(self.self_builder.clone()).async_build().await;
+                Ok(ControlFlow::Break(new_self.run().await))
+            }
+            v => Err(anyhow!(
+                "Received invalid reconfiguration value type: {:?}",
+                v
+            )),
+        }
+    }
+
+    async fn handle_regular_input_update(
+        &mut self,
+        input_streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
+        var: VarName,
+        val: Option<Value>,
+    ) -> anyhow::Result<()> {
+        let Some(val) = val else {
+            info!("Input stream for variable {:?} ended", var);
+            input_streams.remove(&var);
+            return Ok(());
+        };
+
+        let chan = self
+            .sender_channels
+            .get_mut(&var)
+            .ok_or_else(|| anyhow!("No sender channel found for variable: {:?}", var))?;
+
+        info!(
+            "Forwarding to inner RT input for variable: {:?} with value: {:?}",
+            var, val
+        );
+
+        chan.send(val).await.map_err(|send_err| {
+            anyhow!(
+                "Failed to send for variable: {:?} with result: {:?}",
+                var,
+                send_err
+            )
+        })
+    }
+
+    async fn process_input_updates(
+        &mut self,
+        input_streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
+        reconf_topic: &VarName,
+        inner_rt_cancel_token: &CancellationToken,
+    ) -> anyhow::Result<ControlFlow<anyhow::Result<()>>> {
+        info!("ReconfSemiSyncMonitor: Waiting for inputs",);
+        let mut values = Self::await_inputs(input_streams).await;
+
+        // If we have reconf then do only that, as reconfiguration is orthogonal to receiving
+        // regular inputs
+        if let Some(reconf_val) = values.remove(reconf_topic) {
+            match reconf_val {
+                Some(Value::NoVal) => {
+                    info!("Ignoring NoVal for reconfiguration command");
+                }
+                Some(val) => return self.handle_reconfig_input(inner_rt_cancel_token, val).await,
+                None => {
+                    info!("Input stream for variable {:?} ended", reconf_topic);
+                    input_streams.remove(reconf_topic);
+                }
+            }
+        }
+
+        // Done synchronously because we would have to take/give back sender_channels otherwise,
+        // which is a bit annoying
+        for (var, val) in values {
+            self.handle_regular_input_update(input_streams, var, val)
+                .await?;
+        }
+
+        Ok(ControlFlow::Continue(()))
+    }
 }
 
 impl<AC, S, MS, P> Monitor<S, AC::Val> for ReconfSemiSyncMonitor<AC, S, MS, P>
@@ -361,32 +541,6 @@ where
     MS: MonitoringSemantics<AC>,
     P: SpecParser<S>,
 {
-    // TODO: We are currently using a loop to poll each stream one at a time, which is quite inefficient.
-    // The reason is that I have a weird bug when trying to merge the streams. The bug is that the
-    // streams seem to hang forever after having yielded a single value.
-    // See below.
-    //
-    // Merges input_streams into a SellectAll collection that can be awaited to get
-    // VarNames/Values whenever they are ready
-    // This does not work:
-    // let mut merged_streams = stream::select_all(
-    //     input_streams
-    //         .into_iter()
-    //         .map(|(key, stream)| {
-    //             let key_clone = key.clone();
-    //             stream.map(move |value| (key_clone.clone(), value))
-    //         })
-    //         .collect::<Vec<_>>(),
-    // );
-    //
-    // This magically works:
-    // let mut merged_streams = input_streams
-    //     .remove(&("x".into()))
-    //     .expect("x stream missing")
-    //     .map(|value| ("x".to_string(), value));
-    //
-    // I have spent so long trying to find the bug but nothing seems to do the trick. Neither
-    // pinning, fusing or boxing seems to catch this.
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         let reconf_topic: VarName = self
             .self_builder
@@ -397,16 +551,8 @@ where
 
         // Includes reconf stream:
         let mut input_streams = self.setup_input_provider().await;
-
-        // TODO: Fix this...
-        // Need to spawn input_provider in a separate task because of weird rule that they are
-        // supposed to run forever...
-        // This is especially important here as we want to turn it off sometimes.
         let mut input_provider_stream = self.input_provider.control_stream().await;
-        // let inner_run = self.semi_sync_monitor.run().map(|res| {
-        //     info!("Inner semi_sync_monitor.run() ended");
-        //     res
-        // });
+
         // TODO: Must not be a spawn, but it is not trivial since it requires us to define a
         // work_task function that is not using self, but still enables killing.
         let inner_rt_cancel_token = cancellation_token::CancellationToken::new();
@@ -420,189 +566,27 @@ where
                 monitor,
             ))
             .detach();
-        let mut res = Ok(());
 
-        loop {
-            let ip_res = input_provider_stream.next().await;
-            if let Some(ip_res) = ip_res {
-                if ip_res.is_err() {
-                    error!(
-                        "ReconfSemiSyncMonitor: Input provider stream returned error: {:?}",
-                        ip_res
-                    );
-                    res = ip_res;
-                    break;
-                }
-            } else {
-                debug!("Input provider stream ended, shutting down ReconfSemiSyncMonitor");
-                break;
-            }
-
-            for (var, val) in input_streams.iter_mut() {
-                info!(
-                    "ReconfSemiSyncMonitor waiting for input on variable: {:?}...",
-                    var
+        while let Some(ip_res) = input_provider_stream.next().await {
+            ip_res.map_err(|err| {
+                error!(
+                    "ReconfSemiSyncMonitor: Input provider stream returned error: {:?}",
+                    err
                 );
-                if let Some(val) = val.next().await {
-                    if var == &reconf_topic {
-                        match val {
-                            Value::Str(eco_string) => {
-                                info!("Received reconfiguration command: {:?}", eco_string);
-                                let parsed = P::parse(&mut eco_string.as_str());
-                                info!("Parsed as: {:?}", parsed);
-                                if let Ok(parsed) = parsed {
-                                    // TODO: Does not work with FileInputProvider as it reads the file from
-                                    // fresh...
-                                    self.self_builder = self.self_builder.model(parsed.clone());
+                err
+            })?;
 
-                                    // Update InputProvider spec
-                                    let input_spec = match self
-                                        .self_builder
-                                        .input_builder
-                                        .clone()
-                                        .unwrap()
-                                        .spec
-                                    {
-                                        // TODO: does not respect _topics...
-                                        InputProviderSpec::MQTT(_topics) => {
-                                            InputProviderSpec::MQTT(Some(
-                                                parsed
-                                                    .input_vars()
-                                                    .into_iter()
-                                                    .map(|v| v.to_string())
-                                                    .collect(),
-                                            ))
-                                        }
-                                        _ => self.self_builder.input_builder.clone().unwrap().spec,
-                                    };
-                                    if let Some(ref mut input_builder) =
-                                        self.self_builder.input_builder
-                                    {
-                                        input_builder.spec = input_spec;
-                                        self.self_builder.input_builder =
-                                            Some(input_builder.clone());
-                                    }
-                                    // Update OutputMode
-                                    // TODO: does not respect _topics...
-                                    let output_mode = match self
-                                        .self_builder
-                                        .output_builder
-                                        .clone()
-                                        .unwrap()
-                                        .output_mode
-                                    {
-                                        // Auto assign topics on rebuild instead
-                                        // this is only a problem if manual topics were configured
-                                        // TODO: does not respect _topics...
-                                        mode if mode.output_mqtt_topics.is_some() => OutputMode {
-                                            output_stdout: false,
-                                            output_mqtt_topics: None,
-                                            mqtt_output: true,
-                                            output_redis_topics: None,
-                                            redis_output: false,
-                                            output_ros_topics: None,
-                                        },
-                                        mode if mode.output_redis_topics.is_some() => OutputMode {
-                                            output_stdout: false,
-                                            output_mqtt_topics: None,
-                                            mqtt_output: false,
-                                            output_redis_topics: None,
-                                            redis_output: true,
-                                            output_ros_topics: None,
-                                        },
-                                        _ => {
-                                            self.self_builder
-                                                .output_builder
-                                                .clone()
-                                                .unwrap()
-                                                .output_mode
-                                        }
-                                    };
-                                    if let Some(ref mut output_builder) =
-                                        self.self_builder.output_builder
-                                    {
-                                        output_builder.output_mode = output_mode;
-                                        self.self_builder.output_builder =
-                                            Some(output_builder.clone());
-                                    }
-                                    warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor - restarting inner runtime");
-                                    inner_rt_cancel_token.cancel();
-                                    let new_self =
-                                        Box::new(self.self_builder.clone()).async_build().await;
-                                    return new_self.run().await;
-                                } else {
-                                    let msg = format!(
-                                        "Failed to parse reconfiguration command: {:?}",
-                                        parsed.err()
-                                    );
-                                    error!("{}", &msg);
-                                    res = Err(anyhow!(msg));
-                                    break;
-                                }
-                            }
-                            Value::NoVal => {
-                                info!("Ignoring NoVal for reconfiguration command");
-                            }
-                            v => {
-                                error!("Received invalid reconfiguration value type: {:?}", v);
-                                res = Err(anyhow!(
-                                    "Received invalid reconfiguration value type: {:?}",
-                                    v
-                                ));
-                                break;
-                            }
-                        }
-                    } else {
-                        if let Some(chan) = self.sender_channels.get_mut(&var) {
-                            info!(
-                                "Forwarding to inner RT input for variable: {:?} with value: {:?}",
-                                var, val
-                            );
-                            let send_res = chan.send(val).await;
-                            if send_res.is_err() {
-                                error!(
-                                    "Failed to send for variable: {:?} with result: {:?}",
-                                    var, send_res
-                                );
-                                res = Err(anyhow!(
-                                    "Failed to send for variable: {:?} with result: {:?}",
-                                    var,
-                                    send_res
-                                ));
-                                break;
-                            }
-                        } else {
-                            error!("No sender channel found for variable: {:?}", var);
-                            res = Err(anyhow!("No sender channel found for variable: {:?}", var));
-                            break;
-                        }
-                    }
-                } else {
-                    // TODO: Remove it from input_streams but handle multiple borrows
-                    info!("Input stream for variable {:?} ended", var);
-                }
-            }
-            if res.is_err() {
-                // Print error:
-                error!("Error in ReconfSemiSyncMonitor main loop: {:?}", res);
-                break;
+            match self
+                .process_input_updates(&mut input_streams, &reconf_topic, &inner_rt_cancel_token)
+                .await
+                .map_err(|err| {
+                    error!("Error in ReconfSemiSyncMonitor main loop: {:?}", err);
+                    err
+                })? {
+                ControlFlow::Continue(()) => {}
+                ControlFlow::Break(run_res) => return run_res,
             }
         }
-
-        // while let Some((var, val)) = merged_streams.next().await {}
-        // info!("ReconfSemiSyncMonitor.run_boxed() ending - waiting for inner to end");
-        // let inner_res = inner_run.await;
-        // if inner_res.is_err() {
-        //     error!(
-        //         "Inner semi_sync_monitor.run() ended with error: {:?}",
-        //         inner_res
-        //     );
-        //     if res.is_ok() {
-        //         res = inner_res;
-        //     }
-        // } else {
-        //     info!("Inner semi_sync_monitor.run() ended successfully");
-        // }
-        res
+        Ok(())
     }
 }
