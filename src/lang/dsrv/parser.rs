@@ -873,9 +873,11 @@ fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<S
         };
         let lit = current_op.get_lit();
 
-        separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
-            SExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
-        })
+        separated_foldl1(
+            &mut next_parser,
+            seq!(_: loop_ms_or_lb_or_lc, literal(lit), _: loop_ms_or_lb_or_lc),
+            |left, _, right| SExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop()),
+        )
         .parse_next(s)
     }
 }
@@ -985,15 +987,15 @@ pub(crate) fn type_annotation(s: &mut &str) -> Result<StreamType> {
 }
 
 pub(crate) fn input_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
-    seq!((
+    seq!(
         _: whitespace,
         _: literal("in"),
         _: loop_ms_or_lb_or_lc,
         ident,
         opt(type_annotation),
         _: whitespace,
-    ))
-    .map(|(name, typ): (&str, _)| (name.into(), typ))
+    )
+    .map(|(name, typ): (&str, Option<StreamType>)| (VarName::from(name), typ))
     .parse_next(s)
 }
 
@@ -1002,15 +1004,15 @@ pub(crate) fn input_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamTyp
 }
 
 pub(crate) fn output_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
-    seq!((
+    seq!(
         _: whitespace,
         _: literal("out"),
         _: loop_ms_or_lb_or_lc,
         ident,
         opt(type_annotation),
         _: whitespace,
-    ))
-    .map(|(name, typ): (&str, _)| (name.into(), typ))
+    )
+    .map(|(name, typ): (&str, Option<StreamType>)| (VarName::from(name), typ))
     .parse_next(s)
 }
 
@@ -1019,15 +1021,15 @@ pub(crate) fn output_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamTy
 }
 
 pub(crate) fn aux_decl(s: &mut &str) -> Result<(VarName, Option<StreamType>)> {
-    seq!((
+    seq!(
         _: whitespace,
         _: alt(("var", "aux")),
         _: loop_ms_or_lb_or_lc,
         ident,
         opt(type_annotation),
         _: whitespace,
-    ))
-    .map(|(name, typ): (&str, _)| (name.into(), typ))
+    )
+    .map(|(name, typ): (&str, Option<StreamType>)| (VarName::from(name), typ))
     .parse_next(s)
 }
 
@@ -1098,17 +1100,20 @@ pub fn dsrv_specification_with_source(
     source: &str,
     s: &mut &str,
 ) -> Result<UntypedDsrvSpecification> {
-    seq!((
-        _: loop_ms_or_lb_or_lc,
-        input_decls,
-        _: loop_ms_or_lb_or_lc,
-        output_decls,
-        _: loop_ms_or_lb_or_lc,
-        aux_decls,
-        _: loop_ms_or_lb_or_lc,
-        |i: &mut &str| assignment_decls_with_source(source, i),
-        _: loop_ms_or_lb_or_lc,
-    ))
+    terminated(
+        seq!((
+            _: loop_ms_or_lb_or_lc,
+            input_decls,
+            _: loop_ms_or_lb_or_lc,
+            output_decls,
+            _: loop_ms_or_lb_or_lc,
+            aux_decls,
+            _: loop_ms_or_lb_or_lc,
+            |i: &mut &str| assignment_decls_with_source(source, i),
+            _: loop_ms_or_lb_or_lc,
+        )),
+        eof,
+    )
     .map(|(input_vars, output_vars, aux_vars, exprs)| {
         UntypedDsrvSpecification::new(
             input_vars.iter().map(|(name, _)| name.clone()).collect(),
