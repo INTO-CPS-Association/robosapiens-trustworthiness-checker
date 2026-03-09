@@ -18,6 +18,7 @@ use crate::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
+use serde_json::Value as JValue;
 use smol::LocalExecutor;
 use std::{collections::BTreeMap, rc::Rc};
 use tracing::{debug, error, info, warn};
@@ -201,7 +202,7 @@ where
 
         // Compute new spec with reconf_topic injected when applicable
         let new_spec = match &input_builder.spec {
-            InputProviderSpec::Manual | InputProviderSpec::File(_) | InputProviderSpec::Ros(_) => {
+            InputProviderSpec::Manual | InputProviderSpec::File(_) => {
                 warn!(
                     "Limited support for reconfiguration of file inputs, ros inputs and manual. \
                  Treating var '{:?}' as reconfiguration variable",
@@ -229,6 +230,25 @@ where
                     InputProviderSpec::Redis(_) => InputProviderSpec::Redis(Some(var_topics)),
                     _ => unreachable!(),
                 }
+            }
+            InputProviderSpec::Ros(json_info) => {
+                info!(
+                    ?reconf_topic,
+                    "Injecting reconf variable into InputProvider"
+                );
+                // Read as JSON:
+                let mut json = serde_json5::from_str::<JValue>(&json_info)
+                    .expect("ROS input topics must be valid JSON");
+                if let JValue::Object(obj) = &mut json {
+                    obj.extend([(
+                        reconf_topic.name(),
+                        serde_json::json!({
+                            "topic": format!("/{}", reconf_topic.name()),
+                            "msg_type": "String",
+                        }),
+                    )]);
+                }
+                InputProviderSpec::Ros(json.to_string())
             }
         };
 
@@ -279,8 +299,6 @@ where
 {
     // Returns a configured input_provider and the input streams mapped by variable name
     async fn setup_input_provider(&mut self) -> BTreeMap<VarName, OutputStream<AC::Val>> {
-        // Note: Must use model and not InputProvider directly due to bug with vars() in
-        // InputProvider.
         let input_streams = self
             .self_builder
             .model
