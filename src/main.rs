@@ -65,6 +65,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.parser(cli.parser);
 
+    let builder = builder.reconf_topic(cli.reconf_topic);
+
     let model_parser = match cli.language {
         Language::DSRV => tc::lang::dynamic_lola::parser::lola_specification,
         Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,

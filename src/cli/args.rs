@@ -234,4 +234,11 @@ pub struct Cli {
 
     #[arg(long, help = "Port number for Redis server connection")]
     pub redis_port: Option<u16>,
+
+    #[arg(
+        long,
+        help = "Topic name for reconfiguration when using reconfiguration runtime",
+        default_value = "reconfig"
+    )]
+    pub reconf_topic: String,
 }
