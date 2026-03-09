@@ -18,6 +18,7 @@ use crate::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
+use serde::Deserialize;
 use serde_json::Value as JValue;
 use smol::LocalExecutor;
 use std::{collections::BTreeMap, ops::ControlFlow, rc::Rc};
@@ -25,6 +26,16 @@ use tracing::{debug, error, info, warn};
 use unsync::spsc::Sender as SpscSender;
 
 // TODO: Because InputProviderBuilder is hardcoded to Value, this also needs to be in some places
+
+#[derive(Deserialize, Clone, Debug)]
+struct ReconfInput {
+    spec: String,
+    // TODO: Certain InputProviders are type-strong (e.g. Ros). These must know the types of Inputs
+    // and Outputs. When type checking becomes more stable for the language, we
+    // should use that instead of a variable here, and simply enforce that the spec is typed.
+    #[allow(dead_code)]
+    type_info: BTreeMap<String, String>,
+}
 
 #[derive(Clone)]
 pub struct ReconfSemiSyncMonitorBuilder<AC, S, MS, P>
@@ -372,9 +383,13 @@ where
         val: Value,
     ) -> anyhow::Result<ControlFlow<anyhow::Result<()>>> {
         match val {
-            Value::Str(eco_string) => {
-                info!("Received reconfiguration command: {:?}", eco_string);
-                let parsed = P::parse(&mut eco_string.as_str());
+            Value::Str(config) => {
+                info!("Received reconfiguration command: {:?}", config);
+                let deserialized =
+                    serde_json5::from_str::<ReconfInput>(&config).map_err(|err| {
+                        anyhow!("Failed to deserialize reconfiguration command: {:?}", err)
+                    })?;
+                let parsed = P::parse(&mut deserialized.spec.as_str());
                 info!("Parsed as: {:?}", parsed);
                 let parsed = parsed
                     .map_err(|err| anyhow!("Failed to parse reconfiguration command: {:?}", err))?;

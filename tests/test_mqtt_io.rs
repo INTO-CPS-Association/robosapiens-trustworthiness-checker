@@ -407,6 +407,7 @@ mod reconf_tests {
     use async_compat::Compat as TokioCompat;
     use futures::{FutureExt, StreamExt, stream};
     use macro_rules_attribute::apply;
+    use serde_json::json;
     use smol::LocalExecutor;
     use std::rc::Rc;
     use tc_testutils::mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt};
@@ -768,8 +769,14 @@ mod reconf_tests {
         .await
         .unwrap();
 
-        let reconf_stream =
-            futures::stream::once(async { spec_simple_add_monitor_plus_one() }).boxed();
+        let reconf_stream = futures::stream::once(async {
+            json!({
+                "spec": spec_simple_add_monitor_plus_one(),
+                "type_info": {}
+            })
+            .to_string()
+        })
+        .boxed();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -995,7 +1002,14 @@ mod reconf_tests {
         .await
         .unwrap();
 
-        let reconf_stream = futures::stream::once(async { spec_acc_monitor() }).boxed();
+        let reconf_stream = futures::stream::once(async {
+            json!({
+                "spec": spec_acc_monitor(),
+                "type_info": {}
+            })
+            .to_string()
+        })
+        .boxed();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -1165,7 +1179,14 @@ mod reconf_tests {
         .await
         .unwrap();
 
-        let reconf_stream = futures::stream::once(async { spec_simple_add_monitor() }).boxed();
+        let reconf_stream = futures::stream::once(async {
+            json!({
+                "spec": spec_simple_add_monitor(),
+                "type_info": {}
+            })
+            .to_string()
+        })
+        .boxed();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -1359,7 +1380,14 @@ mod reconf_tests {
         .await
         .unwrap();
 
-        let reconf_stream = futures::stream::once(async { spec_assignment_monitor() }).boxed();
+        let reconf_stream = futures::stream::once(async {
+            json!({
+                "spec": spec_assignment_monitor(),
+                "type_info": {}
+            })
+            .to_string()
+        })
+        .boxed();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -1523,7 +1551,14 @@ mod reconf_tests {
         .await
         .unwrap();
 
-        let reconf_stream = futures::stream::once(async { spec_assignment2_monitor() }).boxed();
+        let reconf_stream = futures::stream::once(async {
+            json!({
+                "spec": spec_assignment2_monitor(),
+                "type_info": {}
+            })
+            .to_string()
+        })
+        .boxed();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
