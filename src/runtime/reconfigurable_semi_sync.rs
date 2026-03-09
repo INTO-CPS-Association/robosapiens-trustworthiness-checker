@@ -385,6 +385,8 @@ where
         match val {
             Value::Str(config) => {
                 info!("Received reconfiguration command: {:?}", config);
+                // TODO: This error message prints horribly... But I did not want to add another
+                // crate like schemar just for this
                 let deserialized =
                     serde_json5::from_str::<ReconfInput>(&config).map_err(|err| {
                         anyhow!("Failed to deserialize reconfiguration command: {:?}", err)
@@ -400,7 +402,7 @@ where
 
                 // Update InputProvider spec
                 let input_spec = match self.self_builder.input_builder.clone().unwrap().spec {
-                    // TODO: does not respect _topics...
+                    // TODO: does not respect _topics for any kind of InputProvider...
                     InputProviderSpec::MQTT(_topics) => InputProviderSpec::MQTT(Some(
                         parsed
                             .input_vars()
@@ -408,6 +410,36 @@ where
                             .map(|v| v.to_string())
                             .collect(),
                     )),
+                    InputProviderSpec::Ros(_json) => {
+                        let types = deserialized.type_info.clone();
+                        let vars = parsed.input_vars();
+                        let missing: Vec<_> = vars
+                            .iter()
+                            .filter_map(|v| types.get(&v.name()).is_none().then_some(v.name()))
+                            .collect();
+                        if !missing.is_empty() {
+                            return Err(anyhow!(
+                                "Missing msg_types for vars: {:?}. Required for ROS2 InputProvider",
+                                missing
+                            ));
+                        }
+                        let combined = JValue::Object(
+                            vars.into_iter()
+                                .map(|v| {
+                                    let name = v.name();
+                                    let msg_type = types.get(&name).unwrap().clone(); // Safe now
+                                    (
+                                        name,
+                                        serde_json::json!({
+                                            "topic": format!("/{}", v),
+                                            "msg_type": msg_type,
+                                        }),
+                                    )
+                                })
+                                .collect(),
+                        );
+                        InputProviderSpec::Ros(combined.to_string())
+                    }
                     _ => self.self_builder.input_builder.clone().unwrap().spec,
                 };
                 if let Some(ref mut input_builder) = self.self_builder.input_builder {
