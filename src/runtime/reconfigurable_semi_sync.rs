@@ -458,7 +458,6 @@ where
                 {
                     // Auto assign topics on rebuild instead
                     // this is only a problem if manual topics were configured
-                    // TODO: does not respect _topics...
                     mode if mode.output_mqtt_topics.is_some() => OutputMode {
                         output_stdout: false,
                         output_mqtt_topics: None,

@@ -401,63 +401,71 @@ where
         })
     }
 
+    pub async fn step(
+        ctx: &mut SemiSyncContext<AC>,
+        expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
+    ) -> anyhow::Result<StreamState> {
+        info!("SemiSyncMonitor work_task: Waiting for next tick...");
+        let result = futures::join!(ctx.forward_values(), Self::eval_expr_evals(expr_evals));
+
+        // A bit verbose but it is nice for debugging...
+        match result {
+            (Ok(StreamState::Pending), Ok(StreamState::Pending)) => {
+                debug!(
+                    "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals pending, continuing..."
+                );
+                Ok(StreamState::Pending)
+            }
+            (Ok(StreamState::Finished), Ok(StreamState::Finished)) => {
+                debug!(
+                    "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals finished, ending work_task."
+                );
+                Ok(StreamState::Finished)
+            }
+            (Ok(StreamState::Pending), Ok(StreamState::Finished)) => {
+                error!(
+                    "SemiSyncMonitor work_task: eval_expr_evals finished but forward_values pending"
+                );
+                Err(anyhow!(
+                    "eval_expr_evals finished but forward_values pending"
+                ))
+            }
+            (Ok(StreamState::Finished), Ok(StreamState::Pending)) => {
+                error!(
+                    "SemiSyncMonitor work_task: forward_values finished but eval_expr_evals pending"
+                );
+                Err(anyhow!(
+                    "forward_values finished but eval_expr_evals pending"
+                ))
+            }
+            (Ok(_), Err(e)) => {
+                error!(?e, "SemiSyncMonitor work_task: Error in eval_expr_evals");
+                Err(e)
+            }
+            (Err(e), Ok(_)) => {
+                error!(?e, "SemiSyncMonitor work_task: Error in ctx.forward_values");
+                Err(e)
+            }
+            (Err(e1), Err(e2)) => {
+                error!(
+                    ?e1,
+                    ?e2,
+                    "SemiSyncMonitor work_task: Errors in both ctx.forward_values and eval_expr_evals"
+                );
+                Err(anyhow!("Errors in work_task: {}, {}", e1, e2))
+            }
+        }
+    }
+
     async fn work_task(
         mut ctx: SemiSyncContext<AC>,
         mut expr_evals: Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<()> {
-        loop {
-            info!("SemiSyncMonitor work_task: Waiting for next tick...");
-            let result =
-                futures::join!(ctx.forward_values(), Self::eval_expr_evals(&mut expr_evals));
-
-            // A bit verbose but it is nice for debugging...
-            match result {
-                (Ok(StreamState::Pending), Ok(StreamState::Pending)) => {
-                    debug!(
-                        "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals pending, continuing..."
-                    );
-                    continue;
-                }
-                (Ok(StreamState::Finished), Ok(StreamState::Finished)) => {
-                    debug!(
-                        "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals finished, ending work_task."
-                    );
-                    return Ok(());
-                }
-                (Ok(StreamState::Pending), Ok(StreamState::Finished)) => {
-                    error!(
-                        "SemiSyncMonitor work_task: eval_expr_evals finished but forward_values pending"
-                    );
-                    return Err(anyhow!(
-                        "eval_expr_evals finished but forward_values pending"
-                    ));
-                }
-                (Ok(StreamState::Finished), Ok(StreamState::Pending)) => {
-                    error!(
-                        "SemiSyncMonitor work_task: forward_values finished but eval_expr_evals pending"
-                    );
-                    return Err(anyhow!(
-                        "forward_values finished but eval_expr_evals pending"
-                    ));
-                }
-                (Ok(_), Err(e)) => {
-                    error!(?e, "SemiSyncMonitor work_task: Error in eval_expr_evals");
-                    return Err(e);
-                }
-                (Err(e), Ok(_)) => {
-                    error!(?e, "SemiSyncMonitor work_task: Error in ctx.forward_values");
-                    return Err(e);
-                }
-                (Err(e1), Err(e2)) => {
-                    error!(
-                        ?e1,
-                        ?e2,
-                        "SemiSyncMonitor work_task: Errors in both ctx.forward_values and eval_expr_evals"
-                    );
-                    return Err(anyhow!("Errors in work_task: {}, {}", e1, e2));
-                }
-            }
+        let mut res = Self::step(&mut ctx, &mut expr_evals).await?;
+        while res != StreamState::Finished {
+            res = Self::step(&mut ctx, &mut expr_evals).await?;
         }
+        Ok(())
     }
 }
 
