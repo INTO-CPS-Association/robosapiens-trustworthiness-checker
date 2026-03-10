@@ -337,13 +337,21 @@ where
     ) -> anyhow::Result<()> {
         // Similar to run_boxed but also listens for cancellation signal from the executor
         // and forwards it to the inner semi_sync_monitor.
+        let (mut input_provider, mut output_handler, context, expr_evals) =
+            monitor.setup_runtime().await?;
+        let output_fut = output_handler.run();
+        let work_fut = SemiSyncMonitor::<AC, S, MS>::work_task(context, expr_evals);
+        let input_fut = SemiSyncMonitor::<AC, S, MS>::input_task(&mut *input_provider);
+        futures::pin_mut!(output_fut, work_fut, input_fut);
+        let mut combined = futures::future::join3(output_fut, work_fut, input_fut).fuse();
+
         futures::select_biased! {
             _ = cancellation_token.cancelled().fuse() => {
                 debug!("ReconfSemiSyncMonitor: Inner run cancelled");
             }
-            res = monitor.run().fuse() => {
+            (_output_res, _work_res, _input_res) = combined =>  {
                 debug!("ReconfSemiSyncMonitor: Inner semi_sync_monitor.run() ended");
-                return res;
+                // TODO: Combine errors...
             }
         }
         Ok(())

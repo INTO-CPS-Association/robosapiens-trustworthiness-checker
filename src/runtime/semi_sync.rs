@@ -445,7 +445,7 @@ where
         .fuse()
     }
 
-    async fn input_task(
+    pub async fn input_task(
         input_provider: &mut dyn InputProvider<Val = AC::Val>,
     ) -> anyhow::Result<()> {
         let mut input_provider_stream = input_provider.control_stream().await;
@@ -565,7 +565,7 @@ where
         }
     }
 
-    async fn work_task(
+    pub async fn work_task(
         mut ctx: SemiSyncContext<AC>,
         mut expr_evals: Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<()> {
