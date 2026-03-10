@@ -95,12 +95,12 @@ where
 }
 
 #[derive(Debug, PartialEq)]
-enum StreamState {
+pub enum StreamState {
     Pending,
     Finished,
 }
 
-struct ExprEvalutor<AC, MS>
+pub struct ExprEvalutor<AC, MS>
 where
     AC: AsyncConfig,
     AC::Val: DeferrableStreamData,
@@ -369,6 +369,114 @@ where
             .build()
     }
 
+    fn setup_input_streams(
+        model: &S,
+        input_provider: &mut dyn InputProvider<Val = AC::Val>,
+    ) -> BTreeMap<VarName, OutputStream<AC::Val>> {
+        model
+            .input_vars()
+            .iter()
+            .map(|var| {
+                let stream = input_provider.var_stream(var);
+                (
+                    var.clone(),
+                    stream.expect(&format!(
+                        "Input stream unavailable for input variable: {}",
+                        var
+                    )),
+                )
+            })
+            .collect()
+    }
+
+    fn setup_output_var_managers(
+        model: &S,
+    ) -> anyhow::Result<(
+        Vec<(VarName, AC::Expr, spsc::Sender<AC::Val>)>,
+        Vec<VarManager<AC>>,
+    )> {
+        model
+            .output_vars()
+            .iter()
+            .map(|var_name| {
+                let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
+                    spsc::channel(128);
+                let var_manager =
+                    VarManager::<AC>::new_from_receiver(var_name.clone(), receiver, false);
+                let expr = model.var_expr(var_name).ok_or_else(|| {
+                    anyhow!(
+                        "No expression found for output variable {} when setting up Monitor",
+                        var_name
+                    )
+                })?;
+                Ok(((var_name.clone(), expr, sender), var_manager))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map(|entries| entries.into_iter().unzip())
+    }
+
+    fn build_context(
+        var_managers: Vec<VarManager<AC>>,
+        input_streams: BTreeMap<VarName, OutputStream<AC::Val>>,
+    ) -> SemiSyncContext<AC> {
+        let var_managers = var_managers
+            .into_iter()
+            .chain(
+                input_streams
+                    .into_iter()
+                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream, true)),
+            )
+            .map(|vm| (vm.var_name.clone(), vm))
+            .collect();
+
+        SemiSyncContextBuilder::new()
+            .var_managers(var_managers)
+            .build()
+    }
+
+    fn log_when_done<Fut, T>(fut: Fut, msg: &'static str) -> impl futures::Future<Output = T>
+    where
+        Fut: futures::Future<Output = T>,
+    {
+        fut.map(move |res| {
+            info!("{}", msg);
+            res
+        })
+        .fuse()
+    }
+
+    async fn input_task(
+        input_provider: &mut dyn InputProvider<Val = AC::Val>,
+    ) -> anyhow::Result<()> {
+        let mut input_provider_stream = input_provider.control_stream().await;
+        while let Some(res) = input_provider_stream.next().await {
+            if res.is_err() {
+                error!(
+                    "SemiSyncMonitor: Input provider stream returned error: {:?}",
+                    res
+                );
+                return res;
+            }
+        }
+        Ok(())
+    }
+
+    fn log_task_errors(
+        output_res: anyhow::Result<()>,
+        work_res: anyhow::Result<()>,
+        input_res: anyhow::Result<()>,
+    ) {
+        if let Err(e) = output_res {
+            error!(?e, "Output handler had an error");
+        }
+        if let Err(e) = work_res {
+            error!(?e, "Work task had an error");
+        }
+        if let Err(e) = input_res {
+            error!(?e, "Input task had an error");
+        }
+    }
+
     async fn eval_expr_evals(
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<StreamState> {
@@ -467,6 +575,38 @@ where
         }
         Ok(())
     }
+
+    pub async fn setup_runtime(
+        self,
+    ) -> anyhow::Result<(
+        Box<dyn InputProvider<Val = AC::Val>>,
+        Box<dyn OutputHandler<Val = AC::Val>>,
+        SemiSyncContext<AC>,
+        Vec<ExprEvalutor<AC, MS>>,
+    )> {
+        let SemiSyncMonitor {
+            _executor: _,
+            model,
+            mut input_provider,
+            mut output_handler,
+            _marker: _,
+        } = self;
+
+        let input_streams = Self::setup_input_streams(&model, &mut *input_provider);
+        let (expr_eval_components, mut var_managers) = Self::setup_output_var_managers(&model)?;
+        let subscriptions = var_managers
+            .iter_mut()
+            .map(|vm| vm.subscribe(0))
+            .collect::<Vec<OutputStream<AC::Val>>>();
+        output_handler.provide_streams(subscriptions);
+        let context = Self::build_context(var_managers, input_streams);
+        let expr_evals = expr_eval_components
+            .into_iter()
+            .map(|(var_name, expr, sender)| ExprEvalutor::new(var_name, expr, sender, &context))
+            .collect();
+
+        Ok((input_provider, output_handler, context, expr_evals))
+    }
 }
 
 impl<AC, S, MS> Monitor<S, AC::Val> for SemiSyncMonitor<AC, S, MS>
@@ -491,122 +631,22 @@ where
 {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         debug!(?self.model, "Running SemiSyncMonitor based on model:");
-        // Set up input streams
-        let input_streams = self
-            .model
-            .input_vars()
-            .iter()
-            .map(|var| {
-                let stream = self.input_provider.var_stream(var);
-                (
-                    var.clone(),
-                    stream.expect(&format!(
-                        "Input stream unavailable for input variable: {}",
-                        var
-                    )),
-                )
-            })
-            .collect::<BTreeMap<VarName, OutputStream<AC::Val>>>();
 
-        // Prepare for ExprEvalutors and create VarManagers for output variables
-        let (expr_eval_components, mut var_managers): (BTreeMap<_, _>, Vec<_>) = self
-            .model
-            .output_vars()
-            .iter()
-            .map(|var_name| {
-                let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
-                    spsc::channel(128);
-                let var_manager =
-                    VarManager::<AC>::new_from_receiver(var_name.clone(), receiver, false);
-                let expr = self.model.var_expr(var_name).ok_or_else(|| {
-                    anyhow!(
-                        "No expression found for output variable {} when setting up Monitor",
-                        var_name
-                    )
-                });
-                ((var_name.clone(), (expr, sender)), var_manager)
-            })
-            .collect();
+        let (mut input_provider, mut output_handler, context, expr_evals) =
+            Self::setup_runtime(*self).await?;
 
-        // Give OutputHandler subscriptions to output variables
-        let subscriptions = var_managers
-            .iter_mut()
-            .map(|vm| vm.subscribe(0))
-            .collect::<Vec<OutputStream<AC::Val>>>();
-        self.output_handler.provide_streams(subscriptions);
-
-        // Let VarManagers used by Context also include input streams
-        // (so we can call var(x) on input variables)
-        let var_managers = var_managers
-            .into_iter()
-            .chain(
-                input_streams
-                    .into_iter()
-                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream, true)),
-            )
-            .collect::<Vec<VarManager<_>>>();
-
-        // Create context
-        let builder = SemiSyncContextBuilder::new().var_managers(
-            var_managers
-                .into_iter()
-                .map(|vm| (vm.var_name.clone(), vm))
-                .collect(),
-        );
-        let context = builder.build();
-
-        // Now that context is ready, create ExprEvalutors
-        let expr_evals = expr_eval_components
-            .into_iter()
-            .map(|(var_name, (expr_res, sender))| {
-                let expr = expr_res.unwrap();
-                ExprEvalutor::new(var_name, expr, sender, &context)
-            })
-            .collect::<Vec<ExprEvalutor<AC, MS>>>();
-
-        // Little helper function that logs after a future has ended. Reduces lines of code...
-        fn log_end<Fut, T>(fut: Fut, msg: &'static str) -> impl futures::Future<Output = T>
-        where
-            Fut: futures::Future<Output = T>,
-        {
-            fut.map(move |res| {
-                info!("{}", msg);
-                res
-            })
-            .fuse()
-        }
-
-        let mut input_provider_stream = self.input_provider.control_stream().await;
-        let input_fut = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!(
-                        "SemiSyncMonitor: Input provider stream returned error: {:?}",
-                        res
-                    );
-                    return res;
-                }
-            }
-            Ok(())
-        });
-        let input_fut = log_end(input_fut, "input_provider ended");
-
-        let output_fut = log_end(self.output_handler.run(), "output_handler.run() ended");
-        let work_fut = log_end(
-            Box::pin(Self::work_task(context, expr_evals)),
+        let output_fut = Self::log_when_done(output_handler.run(), "output_handler.run() ended");
+        let work_fut = Self::log_when_done(
+            Self::work_task(context, expr_evals),
             "work_task.run() ended",
         );
+        let input_fut = Self::log_when_done(
+            Self::input_task(&mut *input_provider),
+            "input_provider ended",
+        );
 
-        let res = futures::join!(output_fut, work_fut, input_fut);
-        if let Err(e) = res.0 {
-            error!(?e, "Output handler had an error");
-        }
-        if let Err(e) = res.1 {
-            error!(?e, "Work task had an error");
-        }
-        if let Err(e) = res.2 {
-            error!(?e, "Input task had an error");
-        }
+        let (output_res, work_res, input_res) = futures::join!(output_fut, work_fut, input_fut);
+        Self::log_task_errors(output_res, work_res, input_res);
 
         Ok(())
     }
