@@ -15,12 +15,17 @@ use crate::{
     semantics::{AsyncConfig, MonitoringSemantics},
 };
 use anyhow::anyhow;
+use async_stream::try_stream;
 use async_trait::async_trait;
-use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
+use futures::{
+    FutureExt, StreamExt,
+    future::LocalBoxFuture,
+    stream::{FuturesUnordered, LocalBoxStream},
+};
 use serde::Deserialize;
 use serde_json::Value as JValue;
 use smol::LocalExecutor;
-use std::{collections::BTreeMap, ops::ControlFlow, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc};
 use tracing::{debug, error, info, warn};
 use unsync::spsc::Sender as SpscSender;
 
@@ -376,10 +381,7 @@ where
         ret
     }
 
-    async fn handle_reconfig_input(
-        &mut self,
-        val: Value,
-    ) -> anyhow::Result<ControlFlow<anyhow::Result<()>>> {
+    async fn handle_reconfig_input(&mut self, val: Value) -> anyhow::Result<()> {
         match val {
             Value::Str(config) => {
                 info!("Received reconfiguration command: {:?}", config);
@@ -487,7 +489,7 @@ where
 
                 warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor");
                 let new_self = Box::new(self.self_builder.clone()).async_build().await;
-                Ok(ControlFlow::Break(new_self.run().await))
+                new_self.run().await
             }
             v => Err(anyhow!(
                 "Received invalid reconfiguration value type: {:?}",
@@ -527,45 +529,51 @@ where
         })
     }
 
-    async fn process_input_updates(
-        &mut self,
-        input_streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
-        reconf_topic: &VarName,
-        context: &mut SemiSyncContext<AC>,
-        expr_evals: &mut Vec<crate::runtime::semi_sync::ExprEvalutor<AC, MS>>,
-    ) -> anyhow::Result<ControlFlow<anyhow::Result<()>>> {
-        info!("ReconfSemiSyncMonitor: Waiting for inputs",);
-        let mut values = Self::await_inputs(input_streams).await;
+    fn process_input_updates<'a>(
+        &'a mut self,
+        input_streams: &'a mut BTreeMap<VarName, OutputStream<AC::Val>>,
+        reconf_topic: &'a VarName,
+        context: &'a mut SemiSyncContext<AC>,
+        expr_evals: &'a mut Vec<ExprEvalutor<AC, MS>>,
+    ) -> LocalBoxStream<'a, anyhow::Result<()>> {
+        Box::pin(try_stream! {
+            loop {
+                info!("ReconfSemiSyncMonitor: Waiting for inputs",);
+                let mut values = Self::await_inputs(input_streams).await;
 
-        // If we have reconf then do only that, as reconfiguration is orthogonal to receiving
-        // regular inputs
-        if let Some(reconf_val) = values.remove(reconf_topic) {
-            match reconf_val {
-                Some(Value::NoVal) => {
-                    info!("Ignoring NoVal for reconfiguration command");
+                // If we have reconf then do only that, as reconfiguration is orthogonal to receiving
+                // regular inputs
+                if let Some(reconf_val) = values.remove(reconf_topic) {
+                    match reconf_val {
+                        Some(Value::NoVal) => {
+                            info!("Ignoring NoVal for reconfiguration command");
+                        }
+                        Some(val) => {
+                            self.handle_reconfig_input(val).await?;
+                            return;
+                        }
+                        None => {
+                            info!("Input stream for variable {:?} ended", reconf_topic);
+                            input_streams.remove(reconf_topic);
+                        }
+                    }
                 }
-                Some(val) => return self.handle_reconfig_input(val).await,
-                None => {
-                    info!("Input stream for variable {:?} ended", reconf_topic);
-                    input_streams.remove(reconf_topic);
+
+                // Done synchronously because we would have to take/give back sender_channels otherwise,
+                // which is a bit annoying
+                let mut forwarded_regular_input = false;
+                for (var, val) in values {
+                    self.handle_regular_input_update(input_streams, var, val)
+                    .await?;
+                    forwarded_regular_input = true;
                 }
+
+                if forwarded_regular_input {
+                    SemiSyncMonitor::<AC, S, MS>::step(context, expr_evals).await?;
+                }
+                yield ();
             }
-        }
-
-        // Done synchronously because we would have to take/give back sender_channels otherwise,
-        // which is a bit annoying
-        let mut forwarded_regular_input = false;
-        for (var, val) in values {
-            self.handle_regular_input_update(input_streams, var, val)
-                .await?;
-            forwarded_regular_input = true;
-        }
-
-        if forwarded_regular_input {
-            SemiSyncMonitor::<AC, S, MS>::step(context, expr_evals).await?;
-        }
-
-        Ok(ControlFlow::Continue(()))
+        })
     }
 }
 
@@ -600,6 +608,13 @@ where
         self.executor.spawn(inner_input_task).detach();
         self.executor.spawn(output_task).detach();
 
+        let mut process_stream = self.process_input_updates(
+            &mut input_streams,
+            &reconf_topic,
+            &mut context,
+            &mut expr_evals,
+        );
+
         while let Some(ip_res) = input_provider_stream.next().await {
             ip_res.map_err(|err| {
                 error!(
@@ -609,23 +624,18 @@ where
                 err
             })?;
 
-            // TODO: No need for ControlFlow anymore
-            match self
-                .process_input_updates(
-                    &mut input_streams,
-                    &reconf_topic,
-                    &mut context,
-                    &mut expr_evals,
-                )
-                .await
-                .map_err(|err| {
-                    error!("Error in ReconfSemiSyncMonitor main loop: {:?}", err);
-                    err
-                })? {
-                ControlFlow::Continue(()) => {}
-                ControlFlow::Break(run_res) => return run_res,
-            }
+            let Some(process_res) = process_stream.next().await else {
+                info!("Process stream ended, shutting down ReconfSemiSyncMonitor");
+                return Ok(());
+            };
+
+            process_res.map_err(|err| {
+                error!("Error in ReconfSemiSyncMonitor main loop: {:?}", err);
+                err
+            })?;
         }
+
+        info!("Input provider control stream ended, shutting down ReconfSemiSyncMonitor");
         Ok(())
     }
 }
