@@ -11,9 +11,8 @@ use crate::{
         testing::ManualInputProvider,
     },
     lang::core::parser::SpecParser,
-    runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor, SemiSyncMonitorBuilder},
+    runtime::semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncMonitor, SemiSyncMonitorBuilder},
     semantics::{AsyncConfig, MonitoringSemantics},
-    utils::cancellation_token::{self, CancellationToken},
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -331,30 +330,22 @@ where
         input_streams
     }
 
-    async fn cancellable_run(
-        cancellation_token: CancellationToken,
+    async fn inner_monitor_tasks(
         monitor: SemiSyncMonitor<AC, S, MS>,
-    ) -> anyhow::Result<()> {
-        // Similar to run_boxed but also listens for cancellation signal from the executor
-        // and forwards it to the inner semi_sync_monitor.
+    ) -> anyhow::Result<(
+        LocalBoxFuture<'static, anyhow::Result<()>>,
+        LocalBoxFuture<'static, anyhow::Result<()>>,
+        SemiSyncContext<AC>,
+        Vec<ExprEvalutor<AC, MS>>,
+    )> {
         let (mut input_provider, mut output_handler, context, expr_evals) =
             monitor.setup_runtime().await?;
-        let output_fut = output_handler.run();
-        let work_fut = SemiSyncMonitor::<AC, S, MS>::work_task(context, expr_evals);
-        let input_fut = SemiSyncMonitor::<AC, S, MS>::input_task(&mut *input_provider);
-        futures::pin_mut!(output_fut, work_fut, input_fut);
-        let mut combined = futures::future::join3(output_fut, work_fut, input_fut).fuse();
+        let output_fut = async move { output_handler.run().await }.boxed_local();
+        let input_fut =
+            async move { SemiSyncMonitor::<AC, S, MS>::input_task(&mut *input_provider).await }
+                .boxed_local();
 
-        futures::select_biased! {
-            _ = cancellation_token.cancelled().fuse() => {
-                debug!("ReconfSemiSyncMonitor: Inner run cancelled");
-            }
-            (_output_res, _work_res, _input_res) = combined =>  {
-                debug!("ReconfSemiSyncMonitor: Inner semi_sync_monitor.run() ended");
-                // TODO: Combine errors...
-            }
-        }
-        Ok(())
+        Ok((output_fut, input_fut, context, expr_evals))
     }
 
     async fn await_inputs(
@@ -387,7 +378,6 @@ where
 
     async fn handle_reconfig_input(
         &mut self,
-        inner_rt_cancel_token: &CancellationToken,
         val: Value,
     ) -> anyhow::Result<ControlFlow<anyhow::Result<()>>> {
         match val {
@@ -495,8 +485,7 @@ where
                     self.self_builder.output_builder = Some(output_builder.clone());
                 }
 
-                warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor - restarting inner runtime");
-                inner_rt_cancel_token.cancel();
+                warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor");
                 let new_self = Box::new(self.self_builder.clone()).async_build().await;
                 Ok(ControlFlow::Break(new_self.run().await))
             }
@@ -542,7 +531,8 @@ where
         &mut self,
         input_streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
         reconf_topic: &VarName,
-        inner_rt_cancel_token: &CancellationToken,
+        context: &mut SemiSyncContext<AC>,
+        expr_evals: &mut Vec<crate::runtime::semi_sync::ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<ControlFlow<anyhow::Result<()>>> {
         info!("ReconfSemiSyncMonitor: Waiting for inputs",);
         let mut values = Self::await_inputs(input_streams).await;
@@ -554,7 +544,7 @@ where
                 Some(Value::NoVal) => {
                     info!("Ignoring NoVal for reconfiguration command");
                 }
-                Some(val) => return self.handle_reconfig_input(inner_rt_cancel_token, val).await,
+                Some(val) => return self.handle_reconfig_input(val).await,
                 None => {
                     info!("Input stream for variable {:?} ended", reconf_topic);
                     input_streams.remove(reconf_topic);
@@ -564,9 +554,15 @@ where
 
         // Done synchronously because we would have to take/give back sender_channels otherwise,
         // which is a bit annoying
+        let mut forwarded_regular_input = false;
         for (var, val) in values {
             self.handle_regular_input_update(input_streams, var, val)
                 .await?;
+            forwarded_regular_input = true;
+        }
+
+        if forwarded_regular_input {
+            SemiSyncMonitor::<AC, S, MS>::step(context, expr_evals).await?;
         }
 
         Ok(ControlFlow::Continue(()))
@@ -594,19 +590,15 @@ where
         let mut input_streams = self.setup_input_provider().await;
         let mut input_provider_stream = self.input_provider.control_stream().await;
 
-        // TODO: Must not be a spawn, but it is not trivial since it requires us to define a
-        // work_task function that is not using self, but still enables killing.
-        let inner_rt_cancel_token = cancellation_token::CancellationToken::new();
         let monitor = self
             .semi_sync_monitor
             .take()
             .expect("SemiSyncMonitor must exist");
-        self.executor
-            .spawn(Self::cancellable_run(
-                inner_rt_cancel_token.clone(),
-                monitor,
-            ))
-            .detach();
+        let (inner_input_task, output_task, mut context, mut expr_evals) =
+            Self::inner_monitor_tasks(monitor).await?;
+        // TODO: Don't spawn these
+        self.executor.spawn(inner_input_task).detach();
+        self.executor.spawn(output_task).detach();
 
         while let Some(ip_res) = input_provider_stream.next().await {
             ip_res.map_err(|err| {
@@ -617,8 +609,14 @@ where
                 err
             })?;
 
+            // TODO: No need for ControlFlow anymore
             match self
-                .process_input_updates(&mut input_streams, &reconf_topic, &inner_rt_cancel_token)
+                .process_input_updates(
+                    &mut input_streams,
+                    &reconf_topic,
+                    &mut context,
+                    &mut expr_evals,
+                )
                 .await
                 .map_err(|err| {
                     error!("Error in ReconfSemiSyncMonitor main loop: {:?}", err);
