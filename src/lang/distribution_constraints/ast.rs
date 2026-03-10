@@ -236,13 +236,14 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        SExpr, UntypedDsrvSpecification, VarName,
-        lang::dsrv::ast::{BoolBinOp, SBinOp},
+        UntypedDsrvSpecification, VarName,
+        lang::dsrv::ast::{BoolBinOp, SBinOp, SpannedExpr},
     };
+    type SExpr = SpannedExpr;
 
     pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
         let leaf = prop_oneof![
-            any::<bool>().prop_map(|x| SExpr::Val(x.into())),
+            any::<bool>().prop_map(|x| SExpr::Val(x)),
             proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
         ];
         leaf.prop_recursive(5, 50, 10, |inner| {
@@ -316,7 +317,7 @@ mod tests {
     proptest! {
         #[test]
         fn test_prop_format_works(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
-            let _ = format!("{}", e);
+            let _ = format!("{:?}", e);
         }
 
         #[test]

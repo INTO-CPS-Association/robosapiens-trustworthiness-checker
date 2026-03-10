@@ -12,7 +12,8 @@ use crate::lang::dsrv::type_checker::{
     TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::AsyncConfig;
-use crate::{SExpr, Specification, UntypedDsrvSpecification, VarName};
+use crate::lang::dsrv::ast::{SExpr, UntypedDsrvSpecification};
+use crate::{Specification, VarName};
 
 pub trait DependencyGraphExpr {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph;
@@ -52,10 +53,13 @@ pub struct DepGraph {
 }
 
 impl DepGraph {
-    pub fn from_sexprs(exprs: BTreeMap<VarName, SExpr>) -> Self {
+    pub fn from_sexprs<Expr>(exprs: BTreeMap<VarName, Expr>) -> Self
+    where
+        Expr: DependencyGraphExpr,
+    {
         let mut graph = Self::empty_graph();
         for (var, expr) in exprs {
-            let expr_deps = sexpr_dependencies(&expr, &var);
+            let expr_deps = expr.dependency_graph_for_root(&var);
             graph.merge_graphs(&expr_deps);
         }
         debug!("Constructed dependency graph: {:?}", graph.as_dot_graph());
@@ -264,7 +268,7 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
         }
     }
 
-    debug!("sexr_dependencies for {}: {}", root_name, sexpr);
+    debug!("sexr_dependencies for {}: {:?}", root_name, sexpr);
     let mut graph = DepGraph::empty_graph();
     let root_node = graph.graph.add_node(root_name.clone());
     deps_impl(sexpr, &mut vec![], &mut graph, &root_node, 0);
@@ -749,6 +753,12 @@ impl DependencyGraphExpr for SExpr {
     }
 }
 
+impl DependencyGraphExpr for crate::lang::dsrv::ast::SpannedExpr {
+    fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph {
+        self.node.dependency_graph_for_root(root)
+    }
+}
+
 impl DependencyGraphExpr for SExprTE {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph {
         typed_sexpr_dependencies(self, root)
@@ -829,6 +839,7 @@ mod tests {
     use crate::UntypedDsrvSpecification;
     use crate::dsrv_fixtures::*;
     use crate::lang::core::parser::SpecParser;
+    use crate::lang::dsrv::ast::SpannedExpr;
     use crate::lang::dsrv::lalr_parser::LALRParser;
 
     fn test_parser(input: &mut &str) -> anyhow::Result<UntypedDsrvSpecification> {
@@ -1066,7 +1077,7 @@ mod tests {
         let mut spec = specs()["single_no_inp"];
         let spec = test_parser(&mut spec).unwrap();
         let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
-        dep.add_dependency(&"new".into(), &SExpr::Val(42.into()));
+        dep.add_dependency(&"new".into(), &SpannedExpr::Val(42));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 0);
@@ -1077,7 +1088,7 @@ mod tests {
         let mut spec = specs()["single_no_inp"];
         let spec = test_parser(&mut spec).unwrap();
         let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
-        dep.add_dependency(&"a".into(), &SExpr::Var("x".into()));
+        dep.add_dependency(&"a".into(), &SpannedExpr::Var("x".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 1);
@@ -1093,7 +1104,7 @@ mod tests {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
         let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
-        dep.add_dependency(&"a".into(), &SExpr::Var("y".into()));
+        dep.add_dependency(&"a".into(), &SpannedExpr::Var("y".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 3);
@@ -1116,7 +1127,7 @@ mod tests {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
         let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
-        dep.add_dependency(&"x".into(), &SExpr::Var("a".into()));
+        dep.add_dependency(&"x".into(), &SpannedExpr::Var("a".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 3);
@@ -1134,7 +1145,7 @@ mod tests {
         let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
         dep.add_dependency(
             &"x".into(),
-            &SExpr::SIndex(Box::new(SExpr::Var("a".into())), 1),
+            &SpannedExpr::SIndex(Box::new(SpannedExpr::Var("a".into())), 1),
         );
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
@@ -1152,7 +1163,7 @@ mod tests {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
         let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
-        dep.remove_dependency(&"y".into(), &SExpr::Var("x".into()));
+        dep.remove_dependency(&"y".into(), &SpannedExpr::Var("x".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 1);
@@ -1171,7 +1182,7 @@ mod tests {
         let mut spec = specs()["multi_same_dependent"];
         let spec = test_parser(&mut spec).unwrap();
         let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
-        dep.remove_dependency(&"x".into(), &SExpr::Var("a".into()));
+        dep.remove_dependency(&"x".into(), &SpannedExpr::Var("a".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 1);

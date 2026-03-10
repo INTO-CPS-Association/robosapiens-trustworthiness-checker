@@ -8,9 +8,9 @@ macro_rules! is_enum_variant {
 
 // Creates a struct name with the given name, and implements AsyncConfig for it with the specified
 // associated types
-// E.g.: define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context, Spec = Specification);
+// E.g.: define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context, Spec = UntypedDsrvSpecification);
 // Creates the struct ValueConfig with AsyncConfig implementation where Val = Value, Expr = SExpr,
-// Ctx = Context<ValueConfig>, and Spec = Specification
+// Ctx = Context<ValueConfig>, and Spec = UntypedDsrvSpecification
 #[macro_export]
 macro_rules! define_config {
     ($name:ident, Val=$val:ty, Expr=$expr:ty, Ctx=$ctx:ident, Spec=$spec:ty) => {

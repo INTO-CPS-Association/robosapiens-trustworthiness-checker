@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use tracing::debug;
 
-use crate::lang::dsrv::ast::UntypedDsrvSpecification;
+use crate::lang::dsrv::ast::{SpannedExpr, UntypedDsrvSpecification};
 
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
 use crate::{SExpr, Specification, VarName};
@@ -47,11 +47,14 @@ pub trait Localisable {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self;
 }
 
-fn replace_var(var: &VarName, var_expr: &SExpr, repl_expr: &SExpr) -> SExpr {
+fn replace_var(var: &VarName, var_expr: &SpannedExpr, repl_expr: &SpannedExpr) -> SpannedExpr {
     // Replaces all occurrences of var in the repl_expr with var_expr
-    match repl_expr {
-        SExpr::Var(v) if v == var => var_expr.clone(),
-        SExpr::Var(_) => repl_expr.clone(),
+    if matches!(&repl_expr.node, SExpr::Var(v) if v == var) {
+        return var_expr.clone();
+    }
+
+    let node = match &repl_expr.node {
+        SExpr::Var(_) => repl_expr.node.clone(),
         SExpr::BinOp(lhs, rhs, op) => SExpr::BinOp(
             Box::new(replace_var(var, var_expr, lhs)),
             Box::new(replace_var(var, var_expr, rhs)),
@@ -90,7 +93,9 @@ fn replace_var(var: &VarName, var_expr: &SExpr, repl_expr: &SExpr) -> SExpr {
             Box::new(replace_var(var, var_expr, sexpr)),
             Box::new(replace_var(var, var_expr, sexpr1)),
         ),
-        SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::IsDefined(sexpr) => {
+            SExpr::IsDefined(Box::new(replace_var(var, var_expr, sexpr)))
+        }
         SExpr::When(sexpr) => SExpr::When(Box::new(replace_var(var, var_expr, sexpr))),
         SExpr::Latch(sexpr, sexpr1) => SExpr::Latch(
             Box::new(replace_var(var, var_expr, sexpr)),
@@ -176,6 +181,11 @@ fn replace_var(var: &VarName, var_expr: &SExpr, repl_expr: &SExpr) -> SExpr {
         SExpr::Dist(_, _) => {
             unimplemented!("Dist currently unsupported")
         }
+    };
+
+    SpannedExpr {
+        node,
+        span: repl_expr.span,
     }
 }
 
@@ -184,7 +194,7 @@ fn inline_aux(spec: UntypedDsrvSpecification) -> UntypedDsrvSpecification {
     let aux_vars: BTreeSet<VarName> = spec.aux_vars();
 
     // Build aux definition map and ensure every aux has a definition.
-    let aux_defs: BTreeMap<VarName, SExpr> = aux_vars
+    let aux_defs: BTreeMap<VarName, SpannedExpr> = aux_vars
         .iter()
         .map(|aux| {
             let aux_expr = spec.exprs.get(aux).unwrap_or_else(|| {
@@ -201,7 +211,7 @@ fn inline_aux(spec: UntypedDsrvSpecification) -> UntypedDsrvSpecification {
     // Cycle check: if an aux still references any aux after one full substitution pass,
     // we treat it as recursive/cyclic and reject localisation (we are guaranteed to remove any
     // non-cyclic dependencies after aux_vars.len() passes).
-    let expanded_aux_defs: BTreeMap<VarName, SExpr> =
+    let expanded_aux_defs: BTreeMap<VarName, SpannedExpr> =
         (0..aux_vars.len()).fold(aux_defs.clone(), |current_defs, _| {
             current_defs
                 .iter()
@@ -249,7 +259,7 @@ fn inline_aux(spec: UntypedDsrvSpecification) -> UntypedDsrvSpecification {
     });
 
     // Remove aux declarations/definitions from final spec and rebuild via constructor.
-    let filtered_exprs: BTreeMap<VarName, SExpr> = replaced_exprs
+    let filtered_exprs: BTreeMap<VarName, SpannedExpr> = replaced_exprs
         .into_iter()
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
@@ -323,13 +333,13 @@ mod tests {
 
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
     use crate::dsrv_specification;
-    use crate::lang::dsrv::ast::SExpr;
+    use crate::lang::dsrv::ast::SpannedExpr;
     use proptest::prelude::*;
     use test_log::test;
     use winnow::Parser;
 
     use crate::lang::dsrv::ast::generation::arb_boolean_dsrv_spec;
-
+    type SExpr = SpannedExpr;
     use super::*;
 
     #[test]
@@ -371,7 +381,7 @@ mod tests {
         let spec = UntypedDsrvSpecification::new(
             BTreeSet::from(["a".into()]),
             BTreeSet::from(["i".into()]),
-            vec![].into_iter().collect(),
+            BTreeMap::<VarName, SExpr>::new(),
             BTreeMap::new(),
             vec![],
         );
@@ -382,7 +392,7 @@ mod tests {
             UntypedDsrvSpecification::new(
                 BTreeSet::new(),
                 BTreeSet::new(),
-                vec![].into_iter().collect(),
+                BTreeMap::<VarName, SExpr>::new(),
                 BTreeMap::new(),
                 vec![],
             )
@@ -505,7 +515,7 @@ mod tests {
     fn test_replace_var_simple() {
         let x: VarName = "x".into();
         let expr = SExpr::Var(x.clone());
-        let replacement = SExpr::Val(42.into());
+        let replacement = SExpr::Val(42);
 
         let result = replace_var(&x, &replacement, &expr);
 
@@ -527,15 +537,15 @@ mod tests {
             "*".into(),
         );
 
-        let replacement = SExpr::Val(1.into());
+        let replacement = SExpr::Val(1);
 
         let result = replace_var(&x, &replacement, &expr);
 
         let expected = SExpr::BinOp(
-            Box::new(SExpr::Val(1.into())),
+            Box::new(SExpr::Val(1)),
             Box::new(SExpr::BinOp(
                 Box::new(SExpr::Var(y)),
-                Box::new(SExpr::Val(1.into())),
+                Box::new(SExpr::Val(1)),
                 "+".into(),
             )),
             "*".into(),
@@ -624,7 +634,7 @@ mod tests {
                     h2.clone(),
                     SExpr::BinOp(
                         Box::new(SExpr::Var(h1.clone())),
-                        Box::new(SExpr::Val(1.into())),
+                        Box::new(SExpr::Val(1)),
                         "+".into(),
                     ),
                 ),
@@ -632,7 +642,7 @@ mod tests {
                     h3.clone(),
                     SExpr::BinOp(
                         Box::new(SExpr::Var(h2.clone())),
-                        Box::new(SExpr::Val(2.into())),
+                        Box::new(SExpr::Val(2)),
                         "+".into(),
                     ),
                 ),
@@ -652,10 +662,10 @@ mod tests {
             SExpr::BinOp(
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var(i.clone())),
-                    Box::new(SExpr::Val(1.into())),
+                    Box::new(SExpr::Val(1)),
                     "+".into(),
                 )),
-                Box::new(SExpr::Val(2.into())),
+                Box::new(SExpr::Val(2)),
                 "+".into(),
             ),
         )]

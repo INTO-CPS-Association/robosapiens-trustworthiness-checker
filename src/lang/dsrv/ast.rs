@@ -12,8 +12,6 @@ use std::{
 
 use crate::lang::dsrv::span::{Span, Spanned};
 
-pub type SpannedExpr = Spanned<SExpr>;
-
 // Numerical Binary Operations
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum NumericalBinOp {
@@ -150,15 +148,17 @@ impl Into<String> for VarOrNodeName {
     }
 }
 
+pub type SpannedExpr = Spanned<SExpr>;
+
 #[derive(Clone, PartialEq, Debug, serde::Serialize)]
 pub enum SExpr {
     // if-then-else
-    If(Box<Self>, Box<Self>, Box<Self>),
+    If(Box<SpannedExpr>, Box<SpannedExpr>, Box<SpannedExpr>),
 
     // Stream indexing
     SIndex(
         // Inner SExpr e
-        Box<Self>,
+        Box<SpannedExpr>,
         // Index i
         u64,
     ),
@@ -166,56 +166,56 @@ pub enum SExpr {
     // Arithmetic Stream expression
     Val(Value),
 
-    BinOp(Box<Self>, Box<Self>, SBinOp),
+    BinOp(Box<SpannedExpr>, Box<SpannedExpr>, SBinOp),
 
     Var(VarName),
 
     // Dynamic, continuously updatable properties
-    Dynamic(Box<Self>, StreamTypeAscription),
-    RestrictedDynamic(Box<Self>, StreamTypeAscription, EcoVec<VarName>),
+    Dynamic(Box<SpannedExpr>, StreamTypeAscription),
+    RestrictedDynamic(Box<SpannedExpr>, StreamTypeAscription, EcoVec<VarName>),
     // Deferred properties
-    Defer(Box<Self>, StreamTypeAscription, EcoVec<VarName>),
+    Defer(Box<SpannedExpr>, StreamTypeAscription, EcoVec<VarName>),
     // Update between properties
-    Update(Box<Self>, Box<Self>),
+    Update(Box<SpannedExpr>, Box<SpannedExpr>),
     // Default value for properties (replaces Deferred with an alternative
     // stream)
-    Default(Box<Self>, Box<Self>),
-    IsDefined(Box<Self>), // True when .0 is not Deferred
-    When(Box<Self>),      // Becomes true after the first time .0 is not Deferred
+    Default(Box<SpannedExpr>, Box<SpannedExpr>),
+    IsDefined(Box<SpannedExpr>), // True when .0 is not Deferred
+    When(Box<SpannedExpr>),      // Becomes true after the first time .0 is not Deferred
 
     // Asynchronous operations
-    Latch(Box<Self>, Box<Self>),
-    Init(Box<Self>, Box<Self>),
+    Latch(Box<SpannedExpr>, Box<SpannedExpr>),
+    Init(Box<SpannedExpr>, Box<SpannedExpr>),
 
     // Unary expressions (refactor if more are added...)
-    Not(Box<Self>),
+    Not(Box<SpannedExpr>),
 
     // List and list expressions
-    List(EcoVec<Self>),
-    LIndex(Box<Self>, Box<Self>), // List index: First is list, second is index
-    LAppend(Box<Self>, Box<Self>), // List append -- First is list, second is el to add
-    LConcat(Box<Self>, Box<Self>), // List concat -- First is list, second is other list
-    LHead(Box<Self>),             // List head -- get first element of list
-    LTail(Box<Self>),             // List tail -- get all but first element of list
-    LLen(Box<Self>),              // List length -- returns length of the list
+    List(EcoVec<SpannedExpr>),
+    LIndex(Box<SpannedExpr>, Box<SpannedExpr>), // List index: First is list, second is index
+    LAppend(Box<SpannedExpr>, Box<SpannedExpr>), // List append -- First is list, second is el to add
+    LConcat(Box<SpannedExpr>, Box<SpannedExpr>), // List concat -- First is list, second is other list
+    LHead(Box<SpannedExpr>),                     // List head -- get first element of list
+    LTail(Box<SpannedExpr>),                     // List tail -- get all but first element of list
+    LLen(Box<SpannedExpr>),                      // List length -- returns length of the list
 
     // Map and struct expressions
-    Map(BTreeMap<EcoString, Self>),    // Map from String to SExpr
-    Struct(BTreeMap<EcoString, Self>), // Struct record from field name to SExpr
-    ObjectLiteral(BTreeMap<EcoString, Self>), // JSON-style object literal resolved by expected type
-    MGet(Box<Self>, EcoString),        // Get from map or struct
-    SGet(Box<Self>, EcoString),        // Dot field access for typed structs only
-    MInsert(Box<Self>, EcoString, Box<Self>), // Insert into map -- First is map, second is key, third is value
-    MRemove(Box<Self>, EcoString),            // Remove from map -- First is map, second is key
-    MHasKey(Box<Self>, EcoString),            // Check if map has key -- First is map, second is key
+    Map(BTreeMap<EcoString, SpannedExpr>), // Map from String to SExpr
+    Struct(BTreeMap<EcoString, SpannedExpr>), // Struct record from field name to SExpr
+    ObjectLiteral(BTreeMap<EcoString, SpannedExpr>), // JSON-style object literal resolved by expected type
+    MGet(Box<SpannedExpr>, EcoString),               // Get from map or struct
+    SGet(Box<SpannedExpr>, EcoString),               // Dot field access for typed structs only
+    MInsert(Box<SpannedExpr>, EcoString, Box<SpannedExpr>), // Insert into map -- First is map, second is key, third is value
+    MRemove(Box<SpannedExpr>, EcoString), // Remove from map -- First is map, second is key
+    MHasKey(Box<SpannedExpr>, EcoString), // Check if map has key -- First is map, second is key
 
     // Trigonometric functions
-    Sin(Box<Self>),
-    Cos(Box<Self>),
-    Tan(Box<Self>),
+    Sin(Box<SpannedExpr>),
+    Cos(Box<SpannedExpr>),
+    Tan(Box<SpannedExpr>),
 
     // Other math functions
-    Abs(Box<Self>),
+    Abs(Box<SpannedExpr>),
 
     // Distribution Constraint Specific
     MonitoredAt(VarName, NodeName),
@@ -325,7 +325,7 @@ pub struct UntypedDsrvSpecification {
     pub output_vars: BTreeSet<VarName>,
     pub aux_vars: BTreeSet<VarName>,
     pub stream_vars: BTreeSet<VarName>,
-    pub exprs: BTreeMap<VarName, SExpr>,
+    pub exprs: BTreeMap<VarName, SpannedExpr>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
@@ -357,11 +357,13 @@ impl UntypedDsrvSpecification {
     fn fix_dynamic(
         input_vars: &BTreeSet<VarName>,
         output_vars: &BTreeSet<VarName>,
-        exprs: &BTreeMap<VarName, SExpr>,
-    ) -> BTreeMap<VarName, SExpr> {
+        exprs: &BTreeMap<VarName, SpannedExpr>,
+    ) -> BTreeMap<VarName, SpannedExpr> {
         // Helper function to do the changes...
-        fn traverse_expr(expr: SExpr, vars: &EcoVec<VarName>) -> SExpr {
-            match expr {
+        fn traverse_expr(expr: SpannedExpr, vars: &EcoVec<VarName>) -> SpannedExpr {
+            let span = expr.span; // Store the original span to reuse in the output expression
+            let new_kind = match expr.node {
+                // March to node in the span and do the necessary changes
                 // Transform Dynamic into RestrictedDynamic without the lhs of the assignment
                 SExpr::Dynamic(sexpr, sta) => SExpr::RestrictedDynamic(
                     Box::new(traverse_expr(*sexpr, vars)),
@@ -439,20 +441,20 @@ impl UntypedDsrvSpecification {
                     Box::new(traverse_expr(*sexpr2, vars)),
                 ),
                 SExpr::List(vec) => {
-                    let v = vec.clone(); // TODO: Delete when no longer cloning and
-                    // just iter() instead of into_iter()...
-                    v.into_iter().for_each(|sexpr| {
-                        traverse_expr(sexpr, vars);
-                    });
-                    SExpr::List(vec)
+                    //Added recursive traversal for lists.
+                    let new_vec = vec
+                        .into_iter()
+                        .map(|sexpr| traverse_expr(sexpr, vars))
+                        .collect();
+
+                    SExpr::List(new_vec)
                 }
                 SExpr::Map(map) => {
-                    let m = map.clone(); // TODO: Delete when no
-                    // longer cloning and just iter() instead of into_iter()...
-                    m.into_iter().for_each(|(_, v)| {
-                        traverse_expr(v, vars);
-                    });
-                    SExpr::Map(map)
+                    let new_map = map
+                        .into_iter()
+                        .map(|(k, v)| (k, traverse_expr(v, vars)))
+                        .collect();
+                    SExpr::Map(new_map)
                 }
                 SExpr::Struct(map) => {
                     let m = map.clone(); // TODO: Delete when no
@@ -479,13 +481,19 @@ impl UntypedDsrvSpecification {
                 ),
                 SExpr::MRemove(map, k) => SExpr::MRemove(Box::new(traverse_expr(*map, vars)), k),
                 SExpr::MHasKey(map, k) => SExpr::MHasKey(Box::new(traverse_expr(*map, vars)), k),
+            };
+            Spanned {
+                node: new_kind,
+                span,
             }
         }
+
         let vars: EcoVec<VarName> = input_vars
             .iter()
             .cloned()
             .chain(output_vars.iter().cloned())
             .collect();
+
         exprs
             .iter()
             .map(|(name, expr)| {
@@ -495,22 +503,29 @@ impl UntypedDsrvSpecification {
             .collect()
     }
 
-    pub fn exprs(&self) -> BTreeMap<VarName, SExpr> {
+    pub fn exprs(&self) -> BTreeMap<VarName, SpannedExpr> {
         self.exprs.clone()
     }
 
-    pub fn new(
+    pub fn new<Expr>(
         input_vars: BTreeSet<VarName>,
         output_vars: BTreeSet<VarName>,
-        exprs: BTreeMap<VarName, SExpr>,
+        exprs: BTreeMap<VarName, Expr>,
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: impl IntoIterator<Item = VarName>,
-    ) -> Self {
+    ) -> Self
+    where
+        Expr: Into<SpannedExpr>,
+    {
         let aux_vars = aux_vars.into_iter().collect::<BTreeSet<_>>();
         let stream_vars = output_vars
             .iter()
             .cloned()
             .chain(aux_vars.iter().cloned())
+            .collect();
+        let exprs = exprs
+            .into_iter()
+            .map(|(name, expr)| (name, expr.into()))
             .collect();
         let exprs = Self::fix_dynamic(&input_vars, &stream_vars, &exprs);
         UntypedDsrvSpecification {
@@ -525,7 +540,7 @@ impl UntypedDsrvSpecification {
 }
 
 impl Specification for UntypedDsrvSpecification {
-    type Expr = SExpr;
+    type Expr = SpannedExpr;
 
     fn input_vars(&self) -> BTreeSet<VarName> {
         self.input_vars.clone()
@@ -546,8 +561,8 @@ impl Specification for UntypedDsrvSpecification {
         self.stream_vars.clone()
     }
 
-    fn var_expr(&self, var: &VarName) -> Option<SExpr> {
-        Some(self.exprs.get(var)?.clone())
+    fn var_expr(&self, var: &VarName) -> Option<SpannedExpr> {
+        self.exprs.get(var).cloned()
     }
 
     fn add_input_var(&mut self, var: VarName) {
@@ -572,11 +587,11 @@ impl Specification for UntypedDsrvSpecification {
     }
 }
 
-impl Display for SExpr {
+impl Display for SpannedExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         use SBinOp::*;
         use SExpr::*;
-        match self {
+        match &self.node {
             If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Val(n) => write!(f, "{}", n),
@@ -682,7 +697,7 @@ impl Display for UntypedDsrvSpecification {
                 writeln!(f, "aux {}", v)?;
             }
             for (v, e) in self.exprs.iter() {
-                writeln!(f, "{} = {}", v, e)?;
+                writeln!(f, "{} = {}", v, SpannedExpr::from(e.clone()))?;
             }
         } else {
             for v in self.input_vars.iter() {
@@ -698,7 +713,7 @@ impl Display for UntypedDsrvSpecification {
                 writeln!(f, "aux {}: {}", v, typ)?;
             }
             for (v, e) in self.exprs.iter() {
-                writeln!(f, "{} = {}", v, e)?;
+                writeln!(f, "{} = {}", v, SpannedExpr::from(e.clone()))?;
             }
         }
         Ok(())
@@ -712,15 +727,15 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        SExpr, UntypedDsrvSpecification, VarName,
-        lang::dsrv::ast::{BoolBinOp, NumericalBinOp, SBinOp, StrBinOp},
+        UntypedDsrvSpecification, VarName,
+        lang::dsrv::ast::{BoolBinOp, NumericalBinOp, SBinOp, SpannedExpr, StrBinOp},
     };
-
+    type SExpr = SpannedExpr;
     // Mixed type expressions. Note that these are not fully recursively mixed-type as we switch to
     // single type expressions within the individual branches of the mixed type expression
     pub fn arb_mixed_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
         let bool_leaf = prop_oneof![
-            any::<bool>().prop_map(|x| SExpr::Val(x.into())),
+            any::<bool>().prop_map(SExpr::Val),
             proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
         ];
 
@@ -801,7 +816,7 @@ pub mod generation {
 
     pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
         let leaf = prop_oneof![
-            any::<bool>().prop_map(|x| SExpr::Val(x.into())),
+            any::<bool>().prop_map(|x| SExpr::Val(x)),
             proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
         ];
         leaf.prop_recursive(5, 50, 10, |inner| {
@@ -827,7 +842,7 @@ pub mod generation {
 
     pub fn arb_int_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
         let leaf = prop_oneof![
-            any::<i64>().prop_map(|x| SExpr::Val(x.into())),
+            any::<i64>().prop_map(SExpr::Val),
             proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
         ];
         leaf.prop_recursive(5, 50, 10, move |inner| {
@@ -876,7 +891,7 @@ pub mod generation {
             any::<f64>()
                 .prop_filter("finite non-integer float", |x| x.is_finite()
                     && x.fract() != 0.0)
-                .prop_map(|x| SExpr::Val(x.into())),
+                .prop_map(SExpr::Val),
             proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
         ];
         leaf.prop_recursive(5, 50, 10, move |inner| {
@@ -1009,12 +1024,12 @@ mod tests {
     use super::generation::{
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
-    use crate::SExpr;
     use crate::dsrv_fixtures::{
         spec_simple_add_aux_monitor, spec_simple_add_aux_typed_monitor, spec_simple_add_monitor,
         spec_simple_add_monitor_typed,
     };
     use crate::dsrv_specification;
+    use crate::lang::dsrv::ast::SpannedExpr as SExpr;
     use crate::lang::dsrv::lalr_parser::parse_sexpr;
     use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
 
@@ -1129,8 +1144,7 @@ mod tests {
         assert_eq!(parsed_lalr, expr);
 
         let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        let parsed_comb = parse_sexpr_comb(&mut input);
         assert_eq!(parsed_comb, expr);
     }
 
@@ -1139,7 +1153,7 @@ mod tests {
         let expr = SExpr::MInsert(
             Box::new(SExpr::Var("m".into())),
             "key".into(),
-            Box::new(SExpr::Val(42.into())),
+            Box::new(SExpr::Val(42)),
         );
         let formatted = format!("{}", expr);
 
@@ -1147,8 +1161,7 @@ mod tests {
         assert_eq!(parsed_lalr, expr);
 
         let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        let parsed_comb = parse_sexpr_comb(&mut input);
         assert_eq!(parsed_comb, expr);
     }
 
@@ -1161,8 +1174,7 @@ mod tests {
         assert_eq!(parsed_lalr, expr);
 
         let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        let parsed_comb = parse_sexpr_comb(&mut input);
         assert_eq!(parsed_comb, expr);
     }
 
@@ -1175,22 +1187,20 @@ mod tests {
         assert_eq!(parsed_lalr, expr);
 
         let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        let parsed_comb = parse_sexpr_comb(&mut input);
         assert_eq!(parsed_comb, expr);
     }
 
     #[test]
     fn test_display_parse_roundtrip_map_literal_key_quoting_both_parsers() {
-        let expr = SExpr::Map(BTreeMap::from([("quoted".into(), SExpr::Val(true.into()))]));
+        let expr = SExpr::Map(BTreeMap::from([("quoted".into(), SExpr::Val(true))]));
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(parsed_lalr, expr);
 
         let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        let parsed_comb = parse_sexpr_comb(&mut input);
         assert_eq!(parsed_comb, expr);
     }
 }

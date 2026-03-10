@@ -4,11 +4,10 @@
 
 use super::*;
 use crate::core::{StreamType, StreamTypeAscription};
-use crate::lang::dsrv::ast::{CompBinOp, SBinOp, SExpr};
+use crate::lang::dsrv::ast::{CompBinOp, SBinOp, SExpr, SpannedExpr};
 use crate::{Value, VarName};
 use ecow::{EcoString, EcoVec};
 use std::collections::BTreeMap;
-use std::ops::Deref;
 
 impl TypeCheckableHelper<SExprTE> for Value {
     fn type_check_raw(
@@ -98,7 +97,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
 }
 
 // Type check a binary operation
-impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
+impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
     fn type_check_raw(
         &self,
         _expected: Option<&StreamType>,
@@ -138,7 +137,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                     Err(_) => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::OperatorTypeMismatch,
-                            "Numerical operation not valid on integers".into(),
+                            "Numerical operation not valid on floats".into(),
                         ));
                         Err(())
                     }
@@ -361,7 +360,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
 }
 
 // Type check a default operation
-impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
+impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr) {
     fn type_check_raw(
         &self,
         expected: Option<&StreamType>,
@@ -470,7 +469,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
 }
 
 // Type check an if expression
-impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
+impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr, &SpannedExpr) {
     fn type_check_raw(
         &self,
         expected: Option<&StreamType>,
@@ -597,7 +596,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
 }
 
 // Type check an index expression
-impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
+impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, u64) {
     fn type_check_raw(
         &self,
         expected: Option<&StreamType>,
@@ -1017,7 +1016,7 @@ fn typed_struct_get(
             kind: TypedStructExprKind::SGet(Box::new(typed_struct), key),
         })),
         TCType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::SGet(
-            Box::new(SExpr::Val(Value::Unit)),
+            Box::new(SExpr::Val(Value::Unit).into()),
             key,
         )))),
         TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
@@ -1059,7 +1058,7 @@ fn typed_map_get(
             Err(())
         }
         TCType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::MGet(
-            Box::new(SExpr::Val(Value::Unit)),
+            Box::new(SExpr::Val(Value::Unit).into()),
             key,
         )))),
         TCType::List(t) => Ok(SExprTE::List(TypedListExpr {
@@ -1193,7 +1192,7 @@ fn type_check_same_typed_stream_op(
     }
 }
 
-impl TypeCheckableHelper<SExprTE> for (SExpr, StreamTypeAscription) {
+impl TypeCheckableHelper<SExprTE> for (SpannedExpr, StreamTypeAscription) {
     fn type_check_raw(
         &self,
         expected: Option<&StreamType>,
@@ -1241,12 +1240,12 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
         match self {
             SExpr::Val(sdata) => sdata.type_check_raw(expected, ctx, errs),
             SExpr::BinOp(se1, se2, op) => {
-                (op.clone(), se1.deref(), se2.deref()).type_check_raw(expected, ctx, errs)
+                (op.clone(), se1.as_ref(), se2.as_ref()).type_check_raw(expected, ctx, errs)
             }
             SExpr::If(b, se1, se2) => {
-                (b.deref(), se1.deref(), se2.deref()).type_check_raw(expected, ctx, errs)
+                (b.as_ref(), se1.as_ref(), se2.as_ref()).type_check_raw(expected, ctx, errs)
             }
-            SExpr::SIndex(inner, idx) => (inner.deref(), *idx).type_check_raw(expected, ctx, errs),
+            SExpr::SIndex(inner, idx) => (inner.as_ref(), *idx).type_check_raw(expected, ctx, errs),
             SExpr::Var(id) => id.type_check_raw(expected, ctx, errs),
             SExpr::Dynamic(e, type_ascription) => {
                 let e_check = e.type_check_raw(None, ctx, errs)?;
@@ -1492,7 +1491,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 ctx,
                 errs,
             ),
-            SExpr::Default(se, d) => (se.deref(), d.deref()).type_check_raw(expected, ctx, errs),
+            SExpr::Default(se, d) => (se.as_ref(), d.as_ref()).type_check_raw(expected, ctx, errs),
             SExpr::Not(sexpr) => {
                 let sexpr_check = sexpr.type_check_raw(Some(&StreamType::Bool), ctx, errs)?;
                 match sexpr_check {
@@ -2141,6 +2140,22 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
     }
 }
 
+impl TypeCheckableHelper<SExprTE> for SpannedExpr {
+    fn type_check_raw(
+        &self,
+        expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
+        let first_new_error = errs.len();
+        let result = self.node.type_check_raw(expected, ctx, errs);
+        for err in &mut errs[first_new_error..] {
+            err.set_span_if_absent(self.span);
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{iter::zip, mem::discriminant};
@@ -2153,7 +2168,8 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;
 
-    type SExprV = SExpr;
+    type SExpr = SpannedExpr;
+    type SExprV = SpannedExpr;
     type SemantResultStr = SemanticResult<SExprTE>;
 
     trait BinOpExpr<Expr> {
@@ -2388,7 +2404,10 @@ mod tests {
         let vals_tmp = generate_binop_combinations(&variants, &variants, sbinops);
         let vals = vals_tmp.into_iter().filter(|bin_op| {
             match bin_op {
-                SExprV::BinOp(left, right, _) => {
+                SExprV {
+                    node: crate::lang::dsrv::ast::SExpr::BinOp(left, right, _),
+                    ..
+                } => {
                     // Only keep values where left != right
                     left != right
                 }
@@ -2508,7 +2527,7 @@ mod tests {
         ];
 
         // Create a vector of all SBinOp variants
-        let bexpr = Box::new(SExpr::Val(true.into()));
+        let bexpr = Box::new(SExpr::Val(true));
         let bexpr_checked = Box::new(SExprBool::Val(PartialStreamValue::Known(true)));
 
         let vals_tmp = generate_if_combinations(&val_variants, &val_variants, bexpr.clone());
@@ -2516,7 +2535,10 @@ mod tests {
         // Only consider cases where true and false cases are equal
         let vals = vals_tmp.into_iter().filter(|bin_op| {
             match bin_op {
-                SExprV::If(_, t, f) => t == f,
+                SExprV {
+                    node: crate::lang::dsrv::ast::SExpr::If(_, t, f),
+                    ..
+                } => t == f,
                 _ => true, // Keep non-ifs (unused in this case)
             }
         });
@@ -2560,12 +2582,15 @@ mod tests {
             SExprV::Val(Value::Unit),
         ];
 
-        let bexpr = Box::new(SExpr::Val(true.into()));
+        let bexpr = Box::new(SExpr::Val(true));
 
         let vals_tmp = generate_if_combinations(&variants, &variants, bexpr.clone());
         let vals = vals_tmp.into_iter().filter(|bin_op| {
             match bin_op {
-                SExprV::If(_, t, f) => t != f,
+                SExprV {
+                    node: crate::lang::dsrv::ast::SExpr::If(_, t, f),
+                    ..
+                } => t != f,
                 _ => true, // Keep non-BinOps (unused in this case)
             }
         });

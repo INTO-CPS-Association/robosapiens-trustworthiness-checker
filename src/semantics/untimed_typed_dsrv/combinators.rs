@@ -4,12 +4,13 @@ use crate::core::StreamData;
 use crate::core::to_typed_partial_stream;
 use crate::core::values::{StreamType, StreamTypeAscription};
 use crate::lang::core::parser::ExprParser;
+use crate::lang::dsrv::ast::SpannedExpr;
 use crate::lang::dsrv::type_checker::{SExprTE, TypeCheckable, TypeInfo, check_value_stream_type};
 use crate::semantics::untimed_untyped_dsrv::combinators::{CloneFn1, CloneFn2};
 use crate::semantics::{
     AsyncConfig, MonitoringSemantics, StreamContext, TypedUntimedDsrvSemantics,
 };
-use crate::{SExpr, Value, VarName};
+use crate::{Value, VarName};
 use async_stream::stream;
 use ecow::EcoVec;
 use futures::stream::LocalBoxStream;
@@ -395,7 +396,7 @@ pub fn dynamic<AC, Parser, T>(
     ascribed_type: StreamType,
 ) -> OutputStream<PartialStreamValue<T>>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     T: StreamData + TryFrom<Value>,
     <T as TryFrom<Value>>::Error: Debug,
@@ -526,7 +527,7 @@ pub fn defer<AC, Parser, T>(
     ascribed_type: StreamType,
 ) -> OutputStream<PartialStreamValue<T>>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     T: StreamData + TryFrom<Value>,
     <T as TryFrom<Value>>::Error: Debug,

@@ -7,10 +7,10 @@ use crate::core::Value;
 use crate::core::stream_casting::{from_typed_stream, to_typed_partial_stream, to_typed_stream};
 use crate::core::values::StreamType;
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dsrv::ast::SExpr;
 use crate::lang::dsrv::ast::{
     BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp,
 };
+use crate::lang::dsrv::ast::{SExpr, SpannedExpr};
 use crate::lang::dsrv::type_checker::{
     SExprAny, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
     TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr, TypedStructExprKind,
@@ -22,14 +22,14 @@ use ecow::EcoVec;
 #[derive(Clone)]
 pub struct TypedUntimedDsrvSemantics<Parser>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     _parser: std::marker::PhantomData<Parser>,
 }
 
 impl<Parser, AC> MonitoringSemantics<AC> for TypedUntimedDsrvSemantics<Parser>
 where
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
 {
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<Value> {
@@ -63,7 +63,7 @@ where
 fn eval_dyn<AC, Parser>(expr: SExprAny, ctx: &AC::Ctx) -> OutputStream<Value>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprAny::Var(v) => ctx.var(&v).unwrap(),
@@ -72,11 +72,12 @@ where
     }
 }
 
-fn eval_untyped_expr<AC, Parser>(expr: SExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+fn eval_untyped_expr<AC, Parser>(expr: impl Into<SpannedExpr>, ctx: &AC::Ctx) -> OutputStream<Value>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
+    let expr = expr.into().node;
     match expr {
         SExpr::Val(v) => uc::val(v),
         SExpr::Var(v) => uc::var::<AC>(ctx, v),
@@ -181,7 +182,7 @@ where
 fn eval_typed_list<AC, Parser>(typed_list: TypedListExpr, ctx: &AC::Ctx) -> mc::ListStream
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     let list_stream_type = typed_list
         .list_tc_type()
@@ -305,7 +306,7 @@ fn eval_typed_struct<AC, Parser>(
 ) -> OutputStream<Value>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     let typed_struct_stream_type = typed_struct
         .to_stream_type()
@@ -427,7 +428,7 @@ where
 fn eval_typed_map<AC, Parser>(typed_map: TypedMapExpr, ctx: &AC::Ctx) -> OutputStream<Value>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     let typed_map_stream_type = typed_map
         .map_tc_type()
@@ -557,7 +558,7 @@ fn to_async_stream_int<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<i64>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprInt::Cast(e) => to_typed_partial_stream::<i64>(
@@ -660,7 +661,7 @@ fn to_async_stream_float<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<f64>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprFloat::Cast(e) => to_typed_partial_stream::<f64>(
@@ -775,7 +776,7 @@ fn to_async_stream_str<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<String>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprStr::Cast(e) => to_typed_partial_stream::<String>(
@@ -874,7 +875,7 @@ fn eval_cmp<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match (e1, e2) {
         (SExprTE::Int(a), SExprTE::Int(b)) => {
@@ -944,7 +945,7 @@ fn eval_is_defined<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match inner {
         SExprTE::Int(e) => mc::is_defined(to_async_stream_int::<AC, Parser>(e, ctx)),
@@ -969,7 +970,7 @@ where
 fn eval_when<AC, Parser>(inner: SExprTE, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match inner {
         SExprTE::Int(e) => mc::when(to_async_stream_int::<AC, Parser>(e, ctx)),
@@ -996,7 +997,7 @@ fn to_async_stream_bool<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprBool::Cast(e) => to_typed_partial_stream::<bool>(
@@ -1104,7 +1105,7 @@ fn to_async_stream_unit<AC, Parser>(
 ) -> OutputStream<PartialStreamValue<()>>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    Parser: ExprParser<SExpr> + 'static,
+    Parser: ExprParser<SpannedExpr> + 'static,
 {
     match expr {
         SExprUnit::Cast(e) => to_typed_partial_stream::<()>(

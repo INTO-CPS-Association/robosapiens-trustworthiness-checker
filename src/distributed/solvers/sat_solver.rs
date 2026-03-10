@@ -12,7 +12,7 @@ use crate::{
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
     },
-    lang::dsrv::ast::SExpr,
+    lang::dsrv::ast::{SExpr, SpannedExpr},
     semantics::{AsyncConfig, MonitoringSemantics, distributed::localisation::Localisable},
 };
 
@@ -350,10 +350,11 @@ impl std::fmt::Display for SatCompileError {
 impl std::error::Error for SatCompileError {}
 
 fn eval_const_expr(
-    expr: SExpr,
+    expr: impl Into<SpannedExpr>,
     spec: &crate::UntypedDsrvSpecification,
     st: &CnfCompilerState,
 ) -> Option<Value> {
+    let expr = expr.into().node;
     match expr {
         SExpr::Val(v) => Some(v),
         SExpr::Var(v) => {
@@ -773,10 +774,11 @@ fn eval_const_expr(
 }
 
 fn compile_expr_to_lit(
-    expr: SExpr,
+    expr: impl Into<SpannedExpr>,
     spec: &crate::UntypedDsrvSpecification,
     st: &mut CnfCompilerState,
 ) -> Result<Lit, SatCompileError> {
+    let expr = expr.into().node;
     match expr {
         SExpr::MonitoredAt(v, n) => Ok(st.atom_for_monitored_at(v, n)),
 
@@ -884,7 +886,7 @@ fn compile_expr_to_lit(
 
             let is_dist_constraint = spec.var_expr(&v).is_some_and(|e| {
                 matches!(
-                    e,
+                    e.node,
                     SExpr::MonitoredAt(_, _)
                         | SExpr::If(_, _, _)
                         | SExpr::Not(_)

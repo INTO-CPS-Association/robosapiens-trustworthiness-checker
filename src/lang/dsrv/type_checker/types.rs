@@ -4,6 +4,7 @@
 use super::*;
 use crate::Value;
 use crate::core::StreamType;
+use crate::lang::dsrv::span::Span;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeErrorKind {
@@ -32,6 +33,7 @@ pub enum TypeErrorKind {
 pub struct TypeError {
     kind: TypeErrorKind,
     message: String,
+    span: Option<Span>,
 }
 
 impl TypeError {
@@ -39,6 +41,15 @@ impl TypeError {
         Self {
             kind,
             message: message.into(),
+            span: None,
+        }
+    }
+
+    pub fn with_span(kind: TypeErrorKind, message: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            span: Some(span),
         }
     }
 
@@ -48,6 +59,14 @@ impl TypeError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn span(&self) -> Option<Span> {
+        self.span
+    }
+
+    fn set_span_if_absent(&mut self, span: Span) {
+        self.span.get_or_insert(span);
     }
 }
 
@@ -66,6 +85,7 @@ pub enum UnresolvedTypeKind {
 pub struct UnresolvedTypeError {
     kind: UnresolvedTypeKind,
     message: String,
+    span: Option<Span>,
 }
 
 impl UnresolvedTypeError {
@@ -73,6 +93,15 @@ impl UnresolvedTypeError {
         Self {
             kind,
             message: message.into(),
+            span: None,
+        }
+    }
+
+    pub fn with_span(kind: UnresolvedTypeKind, message: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            span: Some(span),
         }
     }
 
@@ -82,6 +111,14 @@ impl UnresolvedTypeError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn span(&self) -> Option<Span> {
+        self.span
+    }
+
+    fn set_span_if_absent(&mut self, span: Span) {
+        self.span.get_or_insert(span);
     }
 }
 
@@ -102,8 +139,32 @@ impl SemanticError {
         Self::TypeError(TypeError::new(kind, message))
     }
 
+    pub fn type_error_at(kind: TypeErrorKind, message: String, span: Span) -> Self {
+        Self::TypeError(TypeError::with_span(kind, message, span))
+    }
+
     pub fn unresolved_type(kind: UnresolvedTypeKind, message: String) -> Self {
         Self::UnresolvedType(UnresolvedTypeError::new(kind, message))
+    }
+
+    pub fn unresolved_type_at(kind: UnresolvedTypeKind, message: String, span: Span) -> Self {
+        Self::UnresolvedType(UnresolvedTypeError::with_span(kind, message, span))
+    }
+
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Self::TypeError(error) => error.span(),
+            Self::UnresolvedType(error) => error.span(),
+            _ => None,
+        }
+    }
+
+    pub fn set_span_if_absent(&mut self, span: Span) {
+        match self {
+            Self::TypeError(error) => error.set_span_if_absent(span),
+            Self::UnresolvedType(error) => error.set_span_if_absent(span),
+            _ => {}
+        }
     }
 }
 

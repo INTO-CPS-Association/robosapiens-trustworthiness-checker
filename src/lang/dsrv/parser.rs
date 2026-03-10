@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
+use ecow::eco_vec;
 use ecow::EcoString;
 use ecow::EcoVec;
-use ecow::eco_vec;
 use tracing::debug;
-use winnow::Parser;
-use winnow::Result;
 use winnow::combinator::*;
 use winnow::token::literal;
+use winnow::Parser;
+use winnow::Result;
 
 use super::super::core::parser::*;
 use super::ast::*;
@@ -15,126 +15,167 @@ use crate::core::StreamType;
 use crate::core::StreamTypeAscription;
 use crate::core::VarName;
 use crate::distributed::distribution_graphs::NodeName;
-use crate::lang::dsrv::span::Span;
+use crate::lang::dsrv::span::*;
 pub use winnow::ascii::dec_uint as uint;
 
 #[derive(Clone)]
 pub struct CombExprParser;
 
-impl ExprParser<SExpr> for CombExprParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
+//Main expression parser that combines all the different expression types
+impl ExprParser<SpannedExpr> for CombExprParser {
+    fn parse(input: &mut &str) -> anyhow::Result<SpannedExpr> {
         debug!("Parsing expr: {}", input);
         dsrv_expression(input).map_err(|e| anyhow::anyhow!(e))
     }
 
+    //Added for better errors in the language Server
     type Error = winnow::error::ContextError;
-
-    fn raw_parse_error(input: &mut &str) -> Result<UntypedDsrvSpecification, Self::Error> {
-        dsrv_specification(input)
+    fn raw_parse_error(input: &mut &str) -> Result<SpannedExpr, Self::Error> {
+        dsrv_expression(input)
     }
 }
 
-impl ExprParser<SpannedExpr> for CombExprParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SpannedExpr> {
+impl ExprParser<SExpr> for CombExprParser {
+    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
         debug!("Parsing expr: {}", input);
-        parse_spanned_expression(input).map_err(|e| anyhow::anyhow!(e))
+        dsrv_expression(input)
+            .map(|expr| expr.node)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     type Error = winnow::error::ContextError;
-
-    fn raw_parse_error(input: &mut &str) -> Result<UntypedDsrvSpecification, Self::Error> {
-        dsrv_specification(input)
+    fn raw_parse_error(input: &mut &str) -> Result<SExpr, Self::Error> {
+        dsrv_expression(input).map(|expr| expr.node)
     }
 }
 
 // This is the top-level parser for LOLA expressions
-pub fn dsrv_expression(s: &mut &str) -> Result<SExpr> {
-    sexpr.parse_next(s)
+pub fn dsrv_expression(s: &mut &str) -> Result<SpannedExpr> {
+    sexpr_old.parse_next(s)
 }
 
-fn parse_spanned_expression(s: &mut &str) -> Result<SpannedExpr> {
-    let source = *s;
-    let start_len = s.len();
-    let node = dsrv_expression(s)?;
-    let end_len = s.len();
-    Ok(SpannedExpr {
-        node,
-        span: Span::new(0, (start_len - end_len).min(source.len()) as u32),
-    })
-}
-
-fn paren(s: &mut &str) -> Result<SExpr> {
-    delimited('(', sexpr, ')').parse_next(s)
+fn paren(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    delimited('(', |i: &mut &str| sexpr_with_source(source, i), ')').parse_next(s)
 }
 
 // Used for Lists in output streams
-fn sexpr_list(s: &mut &str) -> Result<SExpr> {
-    let res: Result<Vec<SExpr>, _> = delimited(
+fn sexpr_list(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+
+    let res: Result<Vec<SpannedExpr>, _> = delimited(
         seq!("List", loop_ms_or_lb_or_lc, '('),
         separated(
             0..,
-            sexpr,
+            |i: &mut &str| sexpr_with_source(source, i),
             seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
         ),
         ')',
     )
     .parse_next(s);
     match res {
-        Ok(exprs) => Ok(SExpr::List(exprs.into())),
+        Ok(exprs) => {
+            let end_rest = *s;
+            Ok(span_wrapper_winnow(
+                source,
+                start_rest,
+                end_rest,
+                SExpr::List(exprs.into()),
+            ))
+        }
         Err(e) => Err(e),
     }
 }
 
-pub fn key_sexpr(s: &mut &str) -> Result<(EcoString, SExpr)> {
-    seq!(_: loop_ms_or_lb_or_lc, string, _: ':', _: loop_ms_or_lb_or_lc, sexpr,)
-        .map(|(key, value)| (key.into(), value))
-        .parse_next(s)
-}
-
-fn key_value_constructor(
-    name: &'static str,
-    make_expr: fn(BTreeMap<EcoString, SExpr>) -> SExpr,
-) -> impl FnMut(&mut &str) -> Result<SExpr> {
-    move |s: &mut &str| {
-        delimited(
-            seq!(literal(name), loop_ms_or_lb_or_lc, '('),
-            separated(
-                0..,
-                key_sexpr,
-                seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
-            ),
-            ')',
-        )
-        .map(|exprs: Vec<(EcoString, SExpr)>| make_expr(BTreeMap::from_iter(exprs)))
-        .parse_next(s)
-    }
+pub fn key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, SpannedExpr)> {
+    seq!(
+        _: loop_ms_or_lb_or_lc, string,
+        _: ':',
+        _: loop_ms_or_lb_or_lc,
+        |i: &mut &str| sexpr_with_source(source, i),
+    )
+    .map(|(key, value)| (key.into(), value))
+    .parse_next(s)
 }
 
 // Used for Maps in output streams
-fn sexpr_map(s: &mut &str) -> Result<SExpr> {
-    key_value_constructor("Map", SExpr::Map).parse_next(s)
+fn sexpr_map(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let exprs: Vec<(EcoString, SpannedExpr)> = delimited(
+        seq!("Map", loop_ms_or_lb_or_lc, '('),
+        separated(
+            0..,
+            |i: &mut &str| key_sexpr(source, i),
+            seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+        ),
+        ')',
+    )
+    .parse_next(s)?;
+
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Map(BTreeMap::from_iter(exprs.into_iter())),
+    ))
 }
 
-fn sexpr_struct(s: &mut &str) -> Result<SExpr> {
-    key_value_constructor("Struct", SExpr::Struct).parse_next(s)
+fn sexpr_struct(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let exprs: Vec<(EcoString, SpannedExpr)> = delimited(
+        seq!("Struct", loop_ms_or_lb_or_lc, '('),
+        separated(
+            0..,
+            |i: &mut &str| key_sexpr(source, i),
+            seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+        ),
+        ')',
+    )
+    .parse_next(s)?;
+
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Struct(BTreeMap::from_iter(exprs.into_iter())),
+    ))
 }
 
-fn object_literal(s: &mut &str) -> Result<SExpr> {
-    delimited(
+fn object_literal(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let exprs: Vec<(EcoString, SpannedExpr)> = delimited(
         '{',
         separated(
             0..,
-            key_sexpr,
+            |i: &mut &str| key_sexpr(source, i),
             seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
         ),
         '}',
     )
-    .map(|exprs: Vec<(EcoString, SExpr)>| SExpr::ObjectLiteral(BTreeMap::from_iter(exprs)))
-    .parse_next(s)
+    .parse_next(s)?;
+
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::ObjectLiteral(BTreeMap::from_iter(exprs.into_iter())),
+    ))
 }
 
-fn var(s: &mut &str) -> Result<SExpr> {
-    var_name.map(SExpr::Var).parse_next(s)
+fn var(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start = *s;
+    let v = var_name.parse_next(s)?;
+    let end = *s;
+    Ok(SpannedExpr::VarAt(
+        v,
+        Span::new(
+            (source.len() - start.len()) as u32,
+            (source.len() - end.len()) as u32,
+        ),
+    ))
+    // Ok(span_wrapper_winnow(source, start, end, SExpr::Var(v)))
 }
 
 fn var_name(s: &mut &str) -> Result<VarName> {
@@ -146,200 +187,317 @@ fn node_name(s: &mut &str) -> Result<NodeName> {
 }
 
 // Same as `val` but returns SExpr::Val
-fn sval(s: &mut &str) -> Result<SExpr> {
-    val.map(SExpr::Val).parse_next(s)
+fn sval(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start = *s;
+    let v = val.parse_next(s)?;
+    let end = *s;
+    Ok(span_wrapper_winnow(source, start, end, SExpr::Val(v)))
 }
 
-fn sindex(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn sindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, idx) = seq!((
         _: whitespace,
-        alt((sval, var, paren)),
+        alt((
+          |i: &mut &str| sval(source, i),
+          |i: &mut &str| var(source, i),
+          |i: &mut &str| paren(source, i),
+        )),
         _: loop_ms_or_lb_or_lc,
         _: '[',
         _: loop_ms_or_lb_or_lc,
         uint,
         _: loop_ms_or_lb_or_lc,
-        _: ']'
-    )
-    .map(|(e, i)| SExpr::SIndex(Box::new(e), i))
+        _: ']',
+    ))
+    .parse_next(s)?;
+
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::SIndex(Box::new(e), idx),
+    ))
+}
+
+fn field_base(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    alt((
+        |i: &mut &str| sexpr_list(source, i),
+        |i: &mut &str| sexpr_map(source, i),
+        |i: &mut &str| sexpr_struct(source, i),
+        |i: &mut &str| object_literal(source, i),
+        |i: &mut &str| sval(source, i),
+        |i: &mut &str| var(source, i),
+        |i: &mut &str| paren(source, i),
+    ))
     .parse_next(s)
 }
 
-fn ifelse(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn sget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (base, fields): (SpannedExpr, Vec<&str>) = seq!((
+        |i: &mut &str| field_base(source, i),
+        repeat(
+            1..,
+            seq!(
+                _: loop_ms_or_lb_or_lc,
+                _: '.',
+                _: loop_ms_or_lb_or_lc,
+                ident
+            )
+            .map(|(field,)| field),
+        ),
+    ))
+    .parse_next(s)?;
+
+    let mut expr = base;
+    for field in fields {
+        let end_rest = *s;
+        expr = span_wrapper_winnow(
+            source,
+            start_rest,
+            end_rest,
+            SExpr::SGet(Box::new(expr), field.into()),
+        );
+    }
+    Ok(expr)
+}
+
+fn ifelse(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (b, s1, s2) = seq!((
         _: whitespace,
         _: "if",
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: "then",
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: "else",
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: whitespace,
     ))
-    .map(|(b, s1, s2)| SExpr::If(Box::new(b), Box::new(s1), Box::new(s2)))
-    .parse_next(s)
-}
+    .parse_next(s)?;
 
-fn defer(s: &mut &str) -> Result<SExpr> {
-    alt((
-        seq!((
-            _: whitespace,
-            _: literal("defer"),
-            _: loop_ms_or_lb_or_lc,
-            _: '(',
-            _: loop_ms_or_lb_or_lc,
-            sexpr,
-            _: loop_ms_or_lb_or_lc,
-            _: ')',
-        ))
-        .map(|(e,)| SExpr::Defer(Box::new(e), StreamTypeAscription::Unascribed, eco_vec![])),
-        seq!((
-            _: whitespace,
-            _: literal("defer"),
-            _: loop_ms_or_lb_or_lc,
-            _: '(',
-            _: loop_ms_or_lb_or_lc,
-            sexpr,
-            type_annotation,
-            _: loop_ms_or_lb_or_lc,
-            _: ')',
-        ))
-        .map(|(e, st)| SExpr::Defer(Box::new(e), StreamTypeAscription::Ascribed(st), eco_vec![])),
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::If(Box::new(b), Box::new(s1), Box::new(s2)),
     ))
-    .parse_next(s)
 }
 
-fn update(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn defer(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, st) = seq!((
+        _: whitespace,
+        _: literal("defer"),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        |i: &mut &str| sexpr_with_source(source, i),
+        opt(type_annotation),
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    ))
+    .parse_next(s)?;
+
+    let end_rest = *s;
+
+    // Improved the optional type annotation parsing by using `opt` to make it more robust and readable instead of alt
+    let ascription = match st {
+        Some(st) => StreamTypeAscription::Ascribed(st),
+        None => StreamTypeAscription::Unascribed,
+    };
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Defer(Box::new(e), ascription, eco_vec![]),
+    ))
+}
+
+fn update(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+
+    let (lhs, rhs) = seq!((
         _: whitespace,
         _: literal("update"),
         _: loop_ms_or_lb_or_lc,
         _: '(',
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Update(Box::new(lhs), Box::new(rhs)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Update(Box::new(lhs), Box::new(rhs)),
+    ))
+    // .map(|(lhs, rhs)| span_wrapper_winnow(SExpr::Update(Box::new(lhs), Box::new(rhs))))
+    // .parse_next(s)
 }
 
-fn is_defined(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn is_defined(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+
+    let (e,) = seq!((
         _: whitespace,
         _: literal("is_defined"),
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(e,)| SExpr::IsDefined(Box::new(e)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::IsDefined(Box::new(e)),
+    ))
+    // .map(|(e,)| span_wrapper_winnow(SExpr::IsDefined(Box::new(e))))
+    // .parse_next(s)
 }
 
-fn when(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn when(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e,) = seq!((
         _: whitespace,
         _: literal("when"),
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+         |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(e,)| SExpr::When(Box::new(e)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::When(Box::new(e)),
+    ))
+    // .map(|(e,)| span_wrapper_winnow(SExpr::When(Box::new(e))))
+    // .parse_next(s)
 }
 
-fn latch(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn latch(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (lhs, rhs) = seq!((
         _: whitespace,
         _: literal("latch"),
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Latch(Box::new(lhs), Box::new(rhs)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Latch(Box::new(lhs), Box::new(rhs)),
+    ))
+    // .map(|(lhs, rhs)| span_wrapper_winnow(
+    // .parse_next(s)
 }
 
-fn init(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn init(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (lhs, rhs) = seq!((
         _: whitespace,
         _: literal("init"),
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Init(Box::new(lhs), Box::new(rhs)))
-    .parse_next(s)
-}
-
-fn dynamic(s: &mut &str) -> Result<SExpr> {
-    alt((
-        seq!((
-            _: whitespace,
-            _: alt(("dynamic", "eval")),
-            _: loop_ms_or_lb_or_lc,
-            _: '(',
-            _: loop_ms_or_lb_or_lc,
-            sexpr,
-            _: loop_ms_or_lb_or_lc,
-            _: ')',
-        ))
-        .map(|(e,)| SExpr::Dynamic(Box::new(e), StreamTypeAscription::Unascribed)),
-        seq!((
-            _: whitespace,
-            _: alt(("dynamic", "eval")),
-            _: loop_ms_or_lb_or_lc,
-            _: '(',
-            _: loop_ms_or_lb_or_lc,
-            sexpr,
-            type_annotation,
-            _: loop_ms_or_lb_or_lc,
-            _: ')',
-        ))
-        .map(|(e, st)| SExpr::Dynamic(Box::new(e), StreamTypeAscription::Ascribed(st))),
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Init(Box::new(lhs), Box::new(rhs)),
     ))
-    .parse_next(s)
+    // .map(|(lhs, rhs)| span_wrapper_winnow(SExpr::Init(Box::new(lhs), Box::new(rhs))))
+    // .parse_next(s)
 }
 
-fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
-    alt((
+fn dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, st) = seq!((
+        _: whitespace,
+        _: alt(("dynamic", "eval")),
+        _: loop_ms_or_lb_or_lc,
+        _: '(',
+        _: loop_ms_or_lb_or_lc,
+        |i: &mut &str| sexpr_with_source(source, i),
+        opt(type_annotation),
+        _: loop_ms_or_lb_or_lc,
+        _: ')',
+    ))
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    // Improved the optional type annotation parsing by using `opt` to make it more robust and readable instead of alt
+    let type_ascription = match st {
+        Some(st) => StreamTypeAscription::Ascribed(st),
+        None => StreamTypeAscription::Unascribed,
+    };
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Dynamic(Box::new(e), type_ascription),
+    ))
+}
+
+fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let expr = alt((
         seq!((
             _: whitespace,
             _: alt(("dynamic", "eval")),
             _: loop_ms_or_lb_or_lc,
             _: '(',
             _: loop_ms_or_lb_or_lc,
-            sexpr,
+            |i: &mut &str| sexpr_with_source(source, i),
             _: loop_ms_or_lb_or_lc,
             _: literal(","),
             _: loop_ms_or_lb_or_lc,
-            var_set,
+            |i: &mut &str| var_set(source, i),
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
@@ -352,12 +510,12 @@ fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
             _: loop_ms_or_lb_or_lc,
             _: '(',
             _: loop_ms_or_lb_or_lc,
-            sexpr,
+            |i: &mut &str| sexpr_with_source(source, i),
             type_annotation,
             _: loop_ms_or_lb_or_lc,
             _: literal(","),
             _: loop_ms_or_lb_or_lc,
-            var_set,
+            |i: &mut &str| var_set(source, i),
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
@@ -365,10 +523,13 @@ fn restricted_dynamic(s: &mut &str) -> Result<SExpr> {
             SExpr::RestrictedDynamic(Box::new(e), StreamTypeAscription::Ascribed(st), var_set)
         }),
     ))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(source, start_rest, end_rest, expr))
 }
 
-fn var_set(s: &mut &str) -> Result<EcoVec<VarName>> {
+fn var_set(_source: &str, s: &mut &str) -> Result<EcoVec<VarName>> {
     seq!((
         _: whitespace,
         _: '{',
@@ -387,149 +548,222 @@ fn var_set(s: &mut &str) -> Result<EcoVec<VarName>> {
     .parse_next(s)
 }
 
-fn default(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn default(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start = *s;
+    let (lhs, rhs) = seq!((
         _: whitespace,
         _: literal("default"),
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| SExpr::Default(Box::new(lhs), Box::new(rhs)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start,
+        end,
+        SExpr::Default(Box::new(lhs), Box::new(rhs)),
+    ))
 }
 
-fn not(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn not(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e,) = seq!((
         _: whitespace,
         _: "!",
         _: loop_ms_or_lb_or_lc,
-        atom,
+        |i: &mut &str | atom(source, i),
         _: whitespace,
     ))
-    .map(|(e,)| SExpr::Not(Box::new(e)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Not(Box::new(e)),
+    ))
+    // .map(|(e,)| span_wrapper_winnow(SExpr::Not(Box::new(e))))
+    // .parse_next(s)
 }
 
-fn lindex(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn lindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, i) = seq!(
         _: whitespace,
         _: "List.get",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, i)| SExpr::LIndex(Box::new(e), Box::new(i)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::LIndex(Box::new(e), Box::new(i)),
+    ))
+    // .map(|(e, i)| span_wrapper_winnow(SExpr::LIndex(Box::new(e), Box::new(i))))
+    // .parse_next(s)
 }
 
-fn lappend(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn lappend(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (lst, el) = seq!(
         _: whitespace,
         _: "List.append",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(lst, el)| SExpr::LAppend(Box::new(lst), Box::new(el)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::LAppend(Box::new(lst), Box::new(el)),
+    ))
+    // .map(|(lst, el)| span_wrapper_winnow(SExpr::LAppend(Box::new(lst), Box::new(el))))
+    // .parse_next(s)
 }
 
-fn lconcat(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn lconcat(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (lst1, lst2) = seq!(
         _: whitespace,
         _: "List.concat",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(lst1, lst2)| SExpr::LConcat(Box::new(lst1), Box::new(lst2)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::LConcat(Box::new(lst1), Box::new(lst2)),
+    ))
+    // .parse_next(s)
 }
 
-fn lhead(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn lhead(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (lst,) = seq!((
         _: whitespace,
         _: "List.head",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| SExpr::LHead(Box::new(lst)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::LHead(Box::new(lst)),
+    ))
+    // .parse_next(s)
 }
 
-fn ltail(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn ltail(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (lst,) = seq!((
         _: whitespace,
         _: "List.tail",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| SExpr::LTail(Box::new(lst)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::LTail(Box::new(lst)),
+    ))
+    // .parse_next(s)
 }
 
-fn llen(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn llen(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (lst,) = seq!((
         _: whitespace,
         _: "List.len",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| SExpr::LLen(Box::new(lst)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::LLen(Box::new(lst)),
+    ))
+    // .parse_next(s)
 }
 
-fn mget(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn mget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, k) = seq!(
         _: whitespace,
         _: "Map.get",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
@@ -537,18 +771,27 @@ fn mget(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k)| SExpr::MGet(Box::new(e), k.into()))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::MGet(Box::new(e), k.into()),
+    ))
+    // .parse_next(s)
 }
 
-fn minsert(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn minsert(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, k, v) = seq!(
         _: whitespace,
         _: "Map.insert",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
@@ -556,22 +799,31 @@ fn minsert(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k, v)| SExpr::MInsert(Box::new(e), k.into(), Box::new(v)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::MInsert(Box::new(e), k.into(), Box::new(v)),
+    ))
+    // .parse_next(s)
 }
 
-fn mremove(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn mremove(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, k) = seq!(
         _: whitespace,
         _: "Map.remove",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
@@ -579,18 +831,27 @@ fn mremove(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k)| SExpr::MRemove(Box::new(e), k.into()))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::MRemove(Box::new(e), k.into()),
+    ))
+    // .parse_next(s)
 }
 
-fn mhas_key(s: &mut &str) -> Result<SExpr> {
-    seq!(
+fn mhas_key(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (e, k) = seq!(
         _: whitespace,
         _: "Map.has_key",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ',',
         _: loop_ms_or_lb_or_lc,
@@ -598,16 +859,25 @@ fn mhas_key(s: &mut &str) -> Result<SExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, k)| SExpr::MHasKey(Box::new(e), k.into()))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::MHasKey(Box::new(e), k.into()),
+    ))
+    // .parse_next(s)
 }
 
 fn var_or_nodename(s: &mut &str) -> Result<VarOrNodeName> {
     ident.map(|w: &str| VarOrNodeName(w.into())).parse_next(s)
 }
 
-fn monitored_at(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn monitored_at(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (u, v) = seq!((
         _: whitespace,
         _: "monitored_at",
         _: loop_ms_or_lb_or_lc,
@@ -622,12 +892,21 @@ fn monitored_at(s: &mut &str) -> Result<SExpr> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(u, v)| SExpr::MonitoredAt(u, v))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::MonitoredAt(u, v),
+    ))
+    // .parse_next(s)
 }
 
-fn dist(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn dist(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (u, v) = seq!((
         _: whitespace,
         _: "dist",
         _: loop_ms_or_lb_or_lc,
@@ -642,129 +921,183 @@ fn dist(s: &mut &str) -> Result<SExpr> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(u, v)| SExpr::Dist(u, v))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Dist(u, v),
+    ))
+    // .parse_next(s)
 }
 
 /// Trigonometric functions
-fn sin(s: &mut &str) -> Result<SExpr> {
-    seq!((
+fn sin(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (v,) = seq!((
         _: whitespace,
         _: "sin",
         _: loop_ms_or_lb_or_lc,
         _: "(",
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ")",
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Sin(Box::new(v)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Sin(Box::new(v)),
+    ))
+    // .parse_next(s)
 }
-fn cos(s: &mut &str) -> Result<SExpr> {
-    seq!((
+
+fn cos(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (v,) = seq!((
         _: whitespace,
         _: "cos",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Cos(Box::new(v)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Cos(Box::new(v)),
+    ))
+    // .parse_next(s)
 }
-fn tan(s: &mut &str) -> Result<SExpr> {
-    seq!((
+
+fn tan(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (v,) = seq!((
         _: whitespace,
         _: "tan",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Tan(Box::new(v)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Tan(Box::new(v)),
+    ))
+    // .parse_next(s)
 }
-fn abs(s: &mut &str) -> Result<SExpr> {
-    seq!((
+
+fn abs(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start_rest = *s;
+    let (v,) = seq!((
         _: whitespace,
         _: "abs",
         _: loop_ms_or_lb_or_lc,
         _: '(',
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        |i: &mut &str| sexpr_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| SExpr::Abs(Box::new(v)))
-    .parse_next(s)
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::Abs(Box::new(v)),
+    ))
+    // .parse_next(s)
 }
 
-/// Fundamental expressions of the language, before postfix field access.
-fn atom_base(s: &mut &str) -> Result<SExpr> {
+/// Fundamental expressions of the language
+fn atom(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     // Break up the large alt into smaller groups to avoid exceeding the trait implementation limit
     delimited(
         whitespace,
         alt((
-            // Group 1
-            alt((sindex, lindex, lappend, lconcat, lhead, ltail, llen)),
+            //Group 1
+            alt((
+                |i: &mut &str| sindex(source, i),
+                |i: &mut &str| lindex(source, i),
+                |i: &mut &str| lappend(source, i),
+                |i: &mut &str| lconcat(source, i),
+                |i: &mut &str| lhead(source, i),
+                |i: &mut &str| ltail(source, i),
+                |i: &mut &str| llen(source, i),
+            )),
             // Group 2
-            alt((mget, minsert, mremove, mhas_key)),
+            alt((
+                |i: &mut &str| mget(source, i),
+                |i: &mut &str| minsert(source, i),
+                |i: &mut &str| mremove(source, i),
+                |i: &mut &str| mhas_key(source, i),
+            )),
             // Group 3
             alt((
-                not,
-                restricted_dynamic,
-                dynamic,
-                sval,
-                ifelse,
-                defer,
-                update,
-                monitored_at,
+                alt((
+                    |i: &mut &str| not(source, i),
+                    |i: &mut &str| restricted_dynamic(source, i),
+                    |i: &mut &str| dynamic(source, i),
+                    |i: &mut &str| sval(source, i),
+                    |i: &mut &str| ifelse(source, i),
+                    |i: &mut &str| defer(source, i),
+                    |i: &mut &str| update(source, i),
+                )),
+                alt((
+                    |i: &mut &str| monitored_at(source, i),
+                    |i: &mut &str| dist(source, i),
+                    |i: &mut &str| sin(source, i),
+                    |i: &mut &str| cos(source, i),
+                    |i: &mut &str| tan(source, i),
+                    |i: &mut &str| abs(source, i),
+                )),
             )),
             // Group 4
-            alt((dist, sin, cos, tan, abs)),
-            // Group 5
-            alt((default, when, latch, init, is_defined)),
-            // Group 6
             alt((
-                sexpr_list,
-                sexpr_map,
-                sexpr_struct,
-                object_literal,
-                var,
-                paren,
+                alt((
+                    |i: &mut &str| default(source, i),
+                    |i: &mut &str| when(source, i),
+                    |i: &mut &str| latch(source, i),
+                    |i: &mut &str| init(source, i),
+                |i: &mut &str| is_defined(source, i),
+                |i: &mut &str| sexpr_list(source, i),
+                |i: &mut &str| sget(source, i),
+            )),
+            alt((
+                |i: &mut &str| sexpr_map(source, i),
+                    |i: &mut &str| sexpr_struct(source, i),
+                    |i: &mut &str| object_literal(source, i),
+                    |i: &mut &str| var(source, i),
+                    |i: &mut &str| paren(source, i),
+                )),
             )),
         )),
         whitespace,
     )
-    .parse_next(s)
-}
-
-/// Fundamental expressions of the language, including postfix field access.
-///
-/// Field access expression e.field is typed-struct-only shorthand.
-fn atom(s: &mut &str) -> Result<SExpr> {
-    seq!(
-        atom_base,
-        repeat(
-            0..,
-            seq!(_: '.', _: loop_ms_or_lb_or_lc, ident).map(|(field,)| field)
-        ),
-        _: whitespace,
-    )
-    .map(|(base, fields): (SExpr, Vec<&str>)| {
-        fields.into_iter().fold(base, |expr, field| {
-            SExpr::SGet(Box::new(expr), field.into())
-        })
-    })
     .parse_next(s)
 }
 
@@ -864,113 +1197,114 @@ impl BinaryPrecedences {
 /// @param current_op: The current precedence level
 ///
 /// (Inspired by https://github.com/winnow-rs/winnow/blob/main/examples/arithmetic/parser_ast.rs)
-fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<SExpr> {
+fn binary_op(
+    source: &str,
+    current_op: BinaryPrecedences,
+) -> impl FnMut(&mut &str) -> Result<SpannedExpr> {
     move |s: &mut &str| {
-        let next_parser_op = current_op.next();
-        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<SExpr>> = match next_parser_op {
-            Some(next_parser) => Box::new(binary_op(next_parser)),
-            None => Box::new(|i: &mut &str| atom.parse_next(i)),
-        };
-        let lit = current_op.get_lit();
+        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<SpannedExpr> + '_> =
+            match current_op.next() {
+                Some(next) => Box::new(binary_op(source, next)),
+                None => Box::new(|i: &mut &str| atom(source, i)),
+            };
+        let op_lit = current_op.get_lit();
+        let op = current_op.get_binop();
 
         separated_foldl1(
             &mut next_parser,
-            seq!(_: loop_ms_or_lb_or_lc, literal(lit), _: loop_ms_or_lb_or_lc),
-            |left, _, right| SExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop()),
+            seq!(_: loop_ms_or_lb_or_lc, literal(op_lit), _: loop_ms_or_lb_or_lc),
+            move |left, _, right| Spanned {
+                node: SExpr::BinOp(Box::new(left.clone()), Box::new(right.clone()), op.clone()),
+                span: Span::new(left.span.start, right.span.end),
+            },
         )
         .parse_next(s)
     }
 }
+pub fn sexpr_old(s: &mut &str) -> Result<SpannedExpr> {
+    let source = *s;
+    sexpr_with_source(source, s)
+}
 
-pub fn sexpr(s: &mut &str) -> Result<SExpr> {
+pub fn sexpr(s: &mut &str) -> SpannedExpr {
+    let source = *s;
+    sexpr_with_source(source, s).expect("parser failed in test")
+}
+
+pub fn sexpr_with_source(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     delimited(
         whitespace,
-        binary_op(BinaryPrecedences::lowest_precedence()),
+        binary_op(source, BinaryPrecedences::lowest_precedence()),
         whitespace,
     )
     .parse_next(s)
 }
 
 fn struct_type_field(s: &mut &str) -> Result<(EcoString, StreamType)> {
-    seq!(
-        _: loop_ms_or_lb_or_lc,
+    seq!((
+        _: whitespace,
         ident,
         _: loop_ms_or_lb_or_lc,
-        _: ':',
+        _: literal(":"),
         _: loop_ms_or_lb_or_lc,
         stream_type,
-    )
-    .map(|(name, typ): (&str, _)| (name.into(), typ))
+        _: whitespace,
+    ))
+    .map(|(name, typ): (&str, StreamType)| (name.into(), typ))
     .parse_next(s)
 }
 
 fn stream_type(s: &mut &str) -> Result<StreamType> {
-    delimited(
-        whitespace,
+    alt((
+        seq!(_: literal("List"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
+            .map(|(inner,)| StreamType::List(Box::new(inner))),
+        seq!(_: literal("Map"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
+            .map(|(inner,)| StreamType::Map(Box::new(inner))),
+        seq!(
+            _: literal("Struct"),
+            _: loop_ms_or_lb_or_lc,
+            _: '<',
+            _: loop_ms_or_lb_or_lc,
+            _: literal("..."),
+            _: loop_ms_or_lb_or_lc,
+            _: '>',
+        )
+        .map(|()| StreamType::Struct(EcoVec::new(), true)),
+        seq!(
+            _: literal("Struct"),
+            _: loop_ms_or_lb_or_lc,
+            _: '<',
+            separated(1.., struct_type_field, seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc)),
+            _: loop_ms_or_lb_or_lc,
+            _: ',',
+            _: loop_ms_or_lb_or_lc,
+            _: literal("..."),
+            _: loop_ms_or_lb_or_lc,
+            _: '>',
+        )
+        .map(|(fields,): (Vec<(EcoString, StreamType)>,)| {
+            StreamType::Struct(fields.into(), true)
+        }),
+        seq!(
+            _: literal("Struct"),
+            _: loop_ms_or_lb_or_lc,
+            _: '<',
+            separated(0.., struct_type_field, seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc)),
+            _: loop_ms_or_lb_or_lc,
+            _: '>',
+        )
+        .map(|(fields,): (Vec<(EcoString, StreamType)>,)| {
+            StreamType::Struct(fields.into(), false)
+        }),
         alt((
-            seq!(literal("List"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
-                .map(|(_, inner)| StreamType::List(Box::new(inner))),
-            seq!(literal("Map"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
-                .map(|(_, inner)| StreamType::Map(Box::new(inner))),
-            seq!(
-                literal("Struct"),
-                _: loop_ms_or_lb_or_lc,
-                _: '<',
-                _: loop_ms_or_lb_or_lc,
-                literal("..."),
-                _: loop_ms_or_lb_or_lc,
-                _: '>'
-            )
-            .map(|(_, _)| StreamType::Struct(EcoVec::new(), true)),
-            seq!(
-                literal("Struct"),
-                _: loop_ms_or_lb_or_lc,
-                _: '<',
-                separated(
-                    1..,
-                    struct_type_field,
-                    seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
-                ),
-                _: loop_ms_or_lb_or_lc,
-                _: ',',
-                _: loop_ms_or_lb_or_lc,
-                _: literal("..."),
-                _: loop_ms_or_lb_or_lc,
-                _: '>'
-            )
-            .map(|(_, fields): (_, Vec<_>)| StreamType::Struct(fields.into(), true)),
-            seq!(
-                literal("Struct"),
-                _: loop_ms_or_lb_or_lc,
-                _: '<',
-                separated(
-                    0..,
-                    struct_type_field,
-                    seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
-                ),
-                _: '>'
-            )
-            .map(|(_, fields): (_, Vec<_>)| StreamType::Struct(fields.into(), false)),
-            alt((
-                literal("Int"),
-                literal("Float"),
-                literal("Bool"),
-                literal("Str"),
-                literal("Unit"),
-                literal("Any"),
-            ))
-            .map(|typ| match typ {
-                "Int" => StreamType::Int,
-                "Float" => StreamType::Float,
-                "Bool" => StreamType::Bool,
-                "Str" => StreamType::Str,
-                "Unit" => StreamType::Unit,
-                "Any" => StreamType::Any,
-                _ => unreachable!(),
-            }),
+            literal("Int").map(|_| StreamType::Int),
+            literal("Float").map(|_| StreamType::Float),
+            literal("Bool").map(|_| StreamType::Bool),
+            literal("Str").map(|_| StreamType::Str),
+            literal("Unit").map(|_| StreamType::Unit),
+            literal("Any").map(|_| StreamType::Any),
         )),
-        whitespace,
-    )
+    ))
     .parse_next(s)
 }
 
@@ -1045,23 +1379,14 @@ fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
         _: loop_ms_or_lb_or_lc,
         _: literal("="),
         _: loop_ms_or_lb_or_lc,
-        sexpr,
+        sexpr_old,
         _: whitespace,
     ))
-    .map(|(name, expr)| (name.into(), expr))
+    .map(|(name, expr)| (name.into(), expr.node))
     .parse_next(s)
 }
 
-fn sexpr_with_source(source: &str, s: &mut &str) -> Result<SpannedExpr> {
-    let start = source.len().saturating_sub(s.len());
-    let node = dsrv_expression(s)?;
-    let end = source.len().saturating_sub(s.len());
-    Ok(SpannedExpr {
-        node,
-        span: Span::new(start as u32, end as u32),
-    })
-}
-
+// New for not losing source info in assignment declarations
 pub(crate) fn assignment_decl_with_source(
     source: &str,
     s: &mut &str,
@@ -1071,14 +1396,14 @@ pub(crate) fn assignment_decl_with_source(
         ident,
         _: loop_ms_or_lb_or_lc,
         _: literal("="),
-        _: loop_ms_or_lb_or_lc,
-        |i: &mut &str| sexpr_with_source(source, i),
+        |i: &mut &str | sexpr_with_source(source, i),
         _: whitespace,
     ))
     .map(|(name, expr)| (name.into(), expr))
     .parse_next(s)
 }
 
+// New for not losing source info in assignment declarations
 pub(crate) fn assignment_decls_with_source(
     source: &str,
     s: &mut &str,
@@ -1096,6 +1421,7 @@ pub fn dsrv_specification(s: &mut &str) -> Result<UntypedDsrvSpecification> {
     dsrv_specification_with_source(source, s)
 }
 
+// New for not losing source info in assignment declarations in the LOLA specification
 pub fn dsrv_specification_with_source(
     source: &str,
     s: &mut &str,
@@ -1109,7 +1435,7 @@ pub fn dsrv_specification_with_source(
             _: loop_ms_or_lb_or_lc,
             aux_decls,
             _: loop_ms_or_lb_or_lc,
-            |i: &mut &str| assignment_decls_with_source(source, i),
+            |i: &mut &str | assignment_decls_with_source(source, i),
             _: loop_ms_or_lb_or_lc,
         )),
         eof,
@@ -1120,7 +1446,7 @@ pub fn dsrv_specification_with_source(
             output_vars.iter().map(|(name, _)| name.clone()).collect(),
             exprs
                 .into_iter()
-                .map(|(name, expr)| (name, expr.node))
+                .map(|(name, expr)| (name, expr))
                 .collect(),
             input_vars
                 .iter()
@@ -1129,7 +1455,10 @@ pub fn dsrv_specification_with_source(
                 .cloned()
                 .filter_map(|(name, typ)| typ.map(|typ| (name, typ)))
                 .collect(),
-            aux_vars.iter().map(|(name, _)| name.clone()),
+            aux_vars
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>(),
         )
     })
     .parse_next(s)
@@ -1144,7 +1473,29 @@ mod tests {
     use winnow::error::ContextError;
 
     use super::*;
+    // use crate::lang::dsrv::span::strip_span;
     use test_log::test;
+    // TODO: FIX tests to not use spans
+    type SExpr = SpannedExpr;
+
+    fn expected_spec(
+        input_vars: Vec<VarName>,
+        output_vars: Vec<VarName>,
+        exprs: BTreeMap<VarName, SpannedExpr>,
+        type_annotations: BTreeMap<VarName, StreamType>,
+        aux_vars: Vec<VarName>,
+    ) -> UntypedDsrvSpecification {
+        UntypedDsrvSpecification::new(
+            input_vars.into_iter().collect::<BTreeSet<_>>(),
+            output_vars.into_iter().collect::<BTreeSet<_>>(),
+            exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.node))
+                .collect(),
+            type_annotations,
+            aux_vars,
+        )
+    }
 
     #[test]
     fn test_streamdata() {
@@ -1169,7 +1520,6 @@ mod tests {
             val(&mut (*"false".to_string()).into()),
             Ok(Value::Bool(false)),
         );
-        assert_eq!(val(&mut (*"()".to_string()).into()), Ok(Value::Unit));
         assert_eq!(
             val(&mut (*"\"x+y\"".to_string()).into()),
             Ok(Value::Str("x+y".into())),
@@ -1179,7 +1529,7 @@ mod tests {
     #[test]
     fn test_sexpr() -> Result<(), ContextError> {
         assert_eq!(
-            sexpr(&mut (*"1 + 2".to_string()).into())?,
+            sexpr(&mut (*"1 + 2".to_string()).into()),
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::Val(Value::Int(2))),
@@ -1187,7 +1537,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"1 + 2 * 3".to_string()).into())?,
+            sexpr(&mut (*"1 + 2 * 3".to_string()).into()),
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::BinOp(
@@ -1199,7 +1549,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"x + (y + 2)".to_string()).into())?,
+            sexpr(&mut (*"x + (y + 2)".to_string()).into()),
             SExpr::BinOp(
                 Box::new(SExpr::Var("x".into())),
                 Box::new(SExpr::BinOp(
@@ -1211,19 +1561,19 @@ mod tests {
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"if true then 1 else 2".to_string()).into())?,
+            sexpr(&mut (*"if true then 1 else 2".to_string()).into()),
             SExpr::If(
-                Box::new(SExpr::Val(true.into())),
+                Box::new(SExpr::Val(true)),
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::Val(Value::Int(2))),
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"(x)[1]".to_string()).into())?,
+            sexpr(&mut (*"(x)[1]".to_string()).into()),
             SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1),
         );
         assert_eq!(
-            sexpr(&mut (*"(x + y)[3]".to_string()).into())?,
+            sexpr(&mut (*"(x + y)[3]".to_string()).into()),
             SExpr::SIndex(
                 Box::new(SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
@@ -1234,7 +1584,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            sexpr(&mut (*"1 + (x)[1]".to_string()).into())?,
+            sexpr(&mut (*"1 + (x)[1]".to_string()).into()),
             SExpr::BinOp(
                 Box::new(SExpr::Val(Value::Int(1))),
                 Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1),),
@@ -1242,52 +1592,16 @@ mod tests {
             )
         );
         assert_eq!(
-            sexpr(&mut (*"\"test\"".to_string()).into())?,
+            sexpr(&mut (*"\"test\"".to_string()).into()),
             SExpr::Val(Value::Str("test".into())),
         );
         assert_eq!(
-            sexpr(&mut (*"(stage == \"m\")").into())?,
+            sexpr(&mut (*"(stage == \"m\")").into()),
             SExpr::BinOp(
                 Box::new(SExpr::Var("stage".into())),
-                Box::new(SExpr::Val("m".into())),
+                Box::new(SExpr::Val("m")),
                 SBinOp::COp(CompBinOp::Eq),
             )
-        );
-        assert_eq!(
-            sexpr(&mut (*"robot.id").into())?,
-            SExpr::SGet(Box::new(SExpr::Var("robot".into())), "id".into()),
-        );
-        assert_eq!(
-            sexpr(&mut (*"robot.pose.x + 1").into())?,
-            SExpr::BinOp(
-                Box::new(SExpr::SGet(
-                    Box::new(SExpr::SGet(
-                        Box::new(SExpr::Var("robot".into())),
-                        "pose".into(),
-                    )),
-                    "x".into(),
-                )),
-                Box::new(SExpr::Val(Value::Int(1))),
-                SBinOp::NOp(NumericalBinOp::Add),
-            ),
-        );
-        assert_eq!(
-            sexpr(&mut (*"robot.sensor_value").into())?,
-            SExpr::SGet(Box::new(SExpr::Var("robot".into())), "sensor_value".into(),),
-        );
-        assert_eq!(
-            sexpr(&mut (*"robot_A.pose.x + 1").into())?,
-            SExpr::BinOp(
-                Box::new(SExpr::SGet(
-                    Box::new(SExpr::SGet(
-                        Box::new(SExpr::Var("robot_A".into())),
-                        "pose".into(),
-                    )),
-                    "x".into(),
-                )),
-                Box::new(SExpr::Val(Value::Int(1))),
-                SBinOp::NOp(NumericalBinOp::Add),
-            ),
         );
         Ok(())
     }
@@ -1314,46 +1628,6 @@ mod tests {
         let exp = Ok(("x".into(), Some(StreamType::Float)));
         assert_eq!(res, exp);
 
-        let res = input_decl(&mut "in xs: List<Int>");
-        let exp = Ok((
-            "xs".into(),
-            Some(StreamType::List(Box::new(StreamType::Int))),
-        ));
-        assert_eq!(res, exp);
-
-        let res = input_decl(&mut "in m: Map<List<Bool>>");
-        let exp = Ok((
-            "m".into(),
-            Some(StreamType::Map(Box::new(StreamType::List(Box::new(
-                StreamType::Bool,
-            ))))),
-        ));
-        assert_eq!(res, exp);
-
-        let res = input_decl(&mut "in robot: Struct<id: Int, label: Str>");
-        let exp = Ok((
-            "robot".into(),
-            Some(StreamType::Struct(
-                vec![
-                    ("id".into(), StreamType::Int),
-                    ("label".into(), StreamType::Str),
-                ]
-                .into(),
-                false,
-            )),
-        ));
-        assert_eq!(res, exp);
-
-        let res = input_decl(&mut "in robot: Struct<id: Int, ...>");
-        let exp = Ok((
-            "robot".into(),
-            Some(StreamType::Struct(
-                vec![("id".into(), StreamType::Int)].into(),
-                true,
-            )),
-        ));
-        assert_eq!(res, exp);
-
         // TODO: This should not be allowed... In should be followed by at least one space
         let res = input_decl(&mut "inx:Int");
         let exp = Ok(("x".into(), Some(StreamType::Int)));
@@ -1376,14 +1650,12 @@ mod tests {
 
     #[test]
     fn test_parse_aux() -> Result<(), ContextError> {
-        // Tests that aux streams are in aux_vars and stream_vars.
+        // Tests that aux streams are in aux_info and output_vars
         let input = crate::dsrv_fixtures::spec_simple_add_aux_monitor();
-        let simple_add_spec = UntypedDsrvSpecification {
-            input_vars: BTreeSet::from(["x".into(), "y".into()]),
-            output_vars: BTreeSet::from(["z".into()]),
-            aux_vars: BTreeSet::from(["u".into(), "w".into()]),
-            stream_vars: BTreeSet::from(["z".into(), "u".into(), "w".into()]),
-            exprs: BTreeMap::from([
+        let simple_add_spec = expected_spec(
+            vec!["x".into(), "y".into()],
+            vec!["z".into()],
+            BTreeMap::from([
                 (
                     "z".into(),
                     SExpr::BinOp(
@@ -1395,22 +1667,21 @@ mod tests {
                 ("u".into(), SExpr::Var("x".into())),
                 ("w".into(), SExpr::Var("y".into())),
             ]),
-            type_annotations: BTreeMap::new(),
-        };
+            BTreeMap::new(),
+            vec!["u".into(), "w".into()],
+        );
         assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
         Ok(())
     }
 
     #[test]
     fn test_parse_aux_typed() -> Result<(), ContextError> {
-        // Tests that aux streams are in aux_vars and stream_vars.
+        // Tests that aux streams are in aux_info and output_vars
         let input = crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor();
-        let simple_add_spec = UntypedDsrvSpecification {
-            input_vars: BTreeSet::from(["x".into(), "y".into()]),
-            output_vars: BTreeSet::from(["z".into()]),
-            aux_vars: BTreeSet::from(["u".into(), "w".into()]),
-            stream_vars: BTreeSet::from(["z".into(), "u".into(), "w".into()]),
-            exprs: BTreeMap::from([
+        let simple_add_spec = expected_spec(
+            vec!["x".into(), "y".into()],
+            vec!["z".into()],
+            BTreeMap::from([
                 (
                     "z".into(),
                     SExpr::BinOp(
@@ -1422,14 +1693,15 @@ mod tests {
                 ("u".into(), SExpr::Var("x".into())),
                 ("w".into(), SExpr::Var("y".into())),
             ]),
-            type_annotations: BTreeMap::from([
+            BTreeMap::from([
                 ("x".into(), StreamType::Int),
                 ("y".into(), StreamType::Int),
                 ("u".into(), StreamType::Int),
                 ("w".into(), StreamType::Int),
                 ("z".into(), StreamType::Int),
             ]),
-        };
+            vec!["u".into(), "w".into()],
+        );
         assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
         Ok(())
     }
@@ -1437,12 +1709,10 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add() -> Result<(), ContextError> {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor();
-        let simple_add_spec = UntypedDsrvSpecification {
-            input_vars: BTreeSet::from(["x".into(), "y".into()]),
-            output_vars: BTreeSet::from(["z".into()]),
-            aux_vars: BTreeSet::new(),
-            stream_vars: BTreeSet::from(["z".into()]),
-            exprs: BTreeMap::from([(
+        let simple_add_spec = expected_spec(
+            vec!["x".into(), "y".into()],
+            vec!["z".into()],
+            BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
@@ -1450,8 +1720,9 @@ mod tests {
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
-            type_annotations: BTreeMap::new(),
-        };
+            BTreeMap::new(),
+            vec![],
+        );
         assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
         Ok(())
     }
@@ -1459,12 +1730,10 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_typed() -> Result<(), ContextError> {
         let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
-        let simple_add_spec = UntypedDsrvSpecification {
-            input_vars: BTreeSet::from(["x".into(), "y".into()]),
-            output_vars: BTreeSet::from(["z".into()]),
-            aux_vars: BTreeSet::new(),
-            stream_vars: BTreeSet::from(["z".into()]),
-            exprs: BTreeMap::from([(
+        let simple_add_spec = expected_spec(
+            vec!["x".into(), "y".into()],
+            vec!["z".into()],
+            BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
@@ -1472,12 +1741,13 @@ mod tests {
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
-            type_annotations: BTreeMap::from([
+            BTreeMap::from([
                 (VarName::new("x"), StreamType::Int),
                 (VarName::new("y"), StreamType::Int),
                 (VarName::new("z"), StreamType::Int),
             ]),
-        };
+            vec![],
+        );
         assert_eq!(dsrv_specification(&mut input)?, simple_add_spec);
         Ok(())
     }
@@ -1485,12 +1755,10 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_float_typed() -> Result<(), ContextError> {
         let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
-        let simple_add_spec = UntypedDsrvSpecification {
-            input_vars: BTreeSet::from(["x".into(), "y".into()]),
-            output_vars: BTreeSet::from(["z".into()]),
-            aux_vars: BTreeSet::new(),
-            stream_vars: BTreeSet::from(["z".into()]),
-            exprs: BTreeMap::from([(
+        let simple_add_spec = expected_spec(
+            vec!["x".into(), "y".into()],
+            vec!["z".into()],
+            BTreeMap::from([(
                 "z".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Var("x".into())),
@@ -1498,12 +1766,13 @@ mod tests {
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
-            type_annotations: BTreeMap::from([
+            BTreeMap::from([
                 ("x".into(), StreamType::Float),
                 ("y".into(), StreamType::Float),
                 ("z".into(), StreamType::Float),
             ]),
-        };
+            vec![],
+        );
         assert_eq!(dsrv_specification(&mut input)?, simple_add_spec);
         Ok(())
     }
@@ -1513,12 +1782,10 @@ mod tests {
         let input = "\
             out x\n\
             x = 1 + (x)[1]";
-        let count_spec = UntypedDsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from(["x".into()]),
-            aux_vars: BTreeSet::new(),
-            stream_vars: BTreeSet::from(["x".into()]),
-            exprs: BTreeMap::from([(
+        let count_spec = expected_spec(
+            vec![],
+            vec!["x".into()],
+            BTreeMap::from([(
                 "x".into(),
                 SExpr::BinOp(
                     Box::new(SExpr::Val(Value::Int(1))),
@@ -1526,8 +1793,9 @@ mod tests {
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
-            type_annotations: BTreeMap::new(),
-        };
+            BTreeMap::new(),
+            vec![],
+        );
         assert_eq!(dsrv_specification(&mut (*input).into())?, count_spec);
         Ok(())
     }
@@ -1542,9 +1810,9 @@ mod tests {
             out w\n\
             z = x + y\n\
             w = dynamic(s)";
-        let eval_spec = UntypedDsrvSpecification::new(
-            BTreeSet::from(["x".into(), "y".into(), "s".into()]),
-            BTreeSet::from(["z".into(), "w".into()]),
+        let eval_spec = expected_spec(
+            vec!["x".into(), "y".into(), "s".into()],
+            vec!["z".into(), "w".into()],
             BTreeMap::from([
                 (
                     "z".into(),
@@ -1556,9 +1824,10 @@ mod tests {
                 ),
                 (
                     "w".into(),
-                    SExpr::Dynamic(
+                    SExpr::RestrictedDynamic(
                         Box::new(SExpr::Var("s".into())),
                         StreamTypeAscription::Unascribed,
+                        eco_vec!["x".into(), "y".into(), "s".into(), "z".into()],
                     ),
                 ),
             ]),
@@ -1571,49 +1840,52 @@ mod tests {
 
     #[test]
     fn test_unary() {
-        assert_eq!(presult_to_string(&sexpr(&mut "-1")), "Ok(Val(Int(-1)))");
+        assert_eq!(presult_strip_span(&sexpr(&mut "-1")), "Ok(Val(Int(-1)))");
         assert_eq!(
-            presult_to_string(&sexpr(&mut "-1.0")),
+            presult_strip_span(&sexpr(&mut "-1.0")),
             "Ok(Val(Float(-1.0)))"
         );
         // TODO: These currently fail
-        // assert_eq!(presult_to_string(&sexpr(&mut "-x")), "");
-        // assert_eq!(presult_to_string(&sexpr(&mut "-(1+2)")), "");
+        // assert_eq!(strip_span(&sexpr(&mut "-x")), "");
+        // assert_eq!(strip_span(&sexpr(&mut "-(1+2)")), "");
     }
 
     #[test]
     fn test_float_exprs() {
         // Add
-        assert_eq!(presult_to_string(&sexpr(&mut "0.0")), "Ok(Val(Float(0.0)))");
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1.0 +2.0  ")),
+            presult_strip_span(&sexpr(&mut "0.0")),
+            "Ok(Val(Float(0.0)))"
+        );
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut "  1.0 +2.0  ")),
             "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1.0  + 2.0 +3.0")),
+            presult_strip_span(&sexpr(&mut " 1.0  + 2.0 +3.0")),
             "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
         );
         // Sub
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1.0 -2.0  ")),
+            presult_strip_span(&sexpr(&mut "  1.0 -2.0  ")),
             "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1.0  - 2.0 -3.0")),
+            presult_strip_span(&sexpr(&mut " 1.0  - 2.0 -3.0")),
             "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
         );
         // Mul
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1.0 *2.0  ")),
+            presult_strip_span(&sexpr(&mut "  1.0 *2.0  ")),
             "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1.0  * 2.0 *3.0")),
+            presult_strip_span(&sexpr(&mut " 1.0  * 2.0 *3.0")),
             "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
         );
         // Div
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1.0 /2.0  ")),
+            presult_strip_span(&sexpr(&mut "  1.0 /2.0  ")),
             "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Div)))"
         );
     }
@@ -1622,38 +1894,38 @@ mod tests {
     fn test_mixed_float_int_exprs() {
         // Add
         assert_eq!(
-            presult_to_string(&sexpr(&mut "0.0 + 2")),
+            presult_strip_span(&sexpr(&mut "0.0 + 2")),
             "Ok(BinOp(Val(Float(0.0)), Val(Int(2)), NOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + 2.0")),
+            presult_strip_span(&sexpr(&mut "1 + 2.0")),
             "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1.0 + 2 + 3.0")),
+            presult_strip_span(&sexpr(&mut "1.0 + 2 + 3.0")),
             "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
         );
         // Sub
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 - 2.0")),
+            presult_strip_span(&sexpr(&mut "1 - 2.0")),
             "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Sub)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1.0 - 2 - 3.0")),
+            presult_strip_span(&sexpr(&mut "1.0 - 2 - 3.0")),
             "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
         );
         // Mul
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 * 2.0")),
+            presult_strip_span(&sexpr(&mut "1 * 2.0")),
             "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Mul)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1.0 * 2 * 3.0")),
+            presult_strip_span(&sexpr(&mut "1.0 * 2 * 3.0")),
             "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
         );
         // Div
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 / 2.0")),
+            presult_strip_span(&sexpr(&mut "1 / 2.0")),
             "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Div)))"
         );
     }
@@ -1661,186 +1933,189 @@ mod tests {
     #[test]
     fn test_integer_exprs() {
         // Add
-        assert_eq!(presult_to_string(&sexpr(&mut "0")), "Ok(Val(Int(0)))");
+        assert_eq!(presult_strip_span(&sexpr(&mut "0")), "Ok(Val(Int(0)))");
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1 +2  ")),
+            presult_strip_span(&sexpr(&mut "  1 +2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1  + 2 +3")),
+            presult_strip_span(&sexpr(&mut " 1  + 2 +3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Add)))"
         );
         // Sub
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1 -2  ")),
+            presult_strip_span(&sexpr(&mut "  1 -2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1  - 2 -3")),
+            presult_strip_span(&sexpr(&mut " 1  - 2 -3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)), Val(Int(3)), NOp(Sub)))"
         );
         // Mul
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1 *2  ")),
+            presult_strip_span(&sexpr(&mut "  1 *2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1  * 2 *3")),
+            presult_strip_span(&sexpr(&mut " 1  * 2 *3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Mul)))"
         );
         // Div
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1 /2  ")),
+            presult_strip_span(&sexpr(&mut "  1 /2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1  / 2 /3")),
+            presult_strip_span(&sexpr(&mut " 1  / 2 /3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)), Val(Int(3)), NOp(Div)))"
         );
         // Mod
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  1 %2  ")),
+            presult_strip_span(&sexpr(&mut "  1 %2  ")),
             "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mod)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 1  % 2 %3")),
+            presult_strip_span(&sexpr(&mut " 1  % 2 %3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mod)), Val(Int(3)), NOp(Mod)))"
         );
         // Var
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  x  ")),
+            presult_strip_span(&sexpr(&mut "  x  ")),
             r#"Ok(Var(VarName::new("x")))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "  xsss ")),
+            presult_strip_span(&sexpr(&mut "  xsss ")),
             r#"Ok(Var(VarName::new("xsss")))"#
         );
         // Time index
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x [1]")),
+            presult_strip_span(&sexpr(&mut "x [1]")),
             r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x[1 ]")),
+            presult_strip_span(&sexpr(&mut "x[1 ]")),
             r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
         );
         // Paren
-        assert_eq!(presult_to_string(&sexpr(&mut "  (1)  ")), "Ok(Val(Int(1)))");
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut "  (1)  ")),
+            "Ok(Val(Int(1)))"
+        );
         // Don't care about order of eval; care about what the AST looks like
         assert_eq!(
-            presult_to_string(&sexpr(&mut " 2 + (2 + 3)")),
+            presult_strip_span(&sexpr(&mut " 2 + (2 + 3)")),
             "Ok(BinOp(Val(Int(2)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Add)), NOp(Add)))"
         );
         // If then else
         assert_eq!(
-            presult_to_string(&sexpr(&mut "if true then 1 else 2")),
+            presult_strip_span(&sexpr(&mut "if true then 1 else 2")),
             "Ok(If(Val(Bool(true)), Val(Int(1)), Val(Int(2))))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "if true then x+x else y+y")),
+            presult_strip_span(&sexpr(&mut "if true then x+x else y+y")),
             r#"Ok(If(Val(Bool(true)), BinOp(Var(VarName::new("x")), Var(VarName::new("x")), NOp(Add)), BinOp(Var(VarName::new("y")), Var(VarName::new("y")), NOp(Add))))"#
         );
 
         // ChatGPT generated tests with mixed arithmetic and parentheses iexprs. It only had knowledge of the tests above.
         // Basic mixed addition and multiplication
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + 2 * 3")),
+            presult_strip_span(&sexpr(&mut "1 + 2 * 3")),
             "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 * 2 + 3")),
+            presult_strip_span(&sexpr(&mut "1 * 2 + 3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)))"
         );
         // Mixed addition, subtraction, and multiplication
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + 2 * 3 - 4")),
+            presult_strip_span(&sexpr(&mut "1 + 2 * 3 - 4")),
             "Ok(BinOp(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 * 2 + 3 - 4")),
+            presult_strip_span(&sexpr(&mut "1 * 2 + 3 - 4")),
             "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
         );
         // Mixed addition and division
         assert_eq!(
-            presult_to_string(&sexpr(&mut "10 + 20 / 5")),
+            presult_strip_span(&sexpr(&mut "10 + 20 / 5")),
             "Ok(BinOp(Val(Int(10)), BinOp(Val(Int(20)), Val(Int(5)), NOp(Div)), NOp(Add)))"
         );
         // Nested parentheses with mixed operations
         assert_eq!(
-            presult_to_string(&sexpr(&mut "(1 + 2) * (3 - 4)")),
+            presult_strip_span(&sexpr(&mut "(1 + 2) * (3 - 4)")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Sub)), NOp(Mul)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + (2 * (3 + 4))")),
+            presult_strip_span(&sexpr(&mut "1 + (2 * (3 + 4))")),
             "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)), NOp(Add)))"
         );
         // Complex nested expressions
         assert_eq!(
-            presult_to_string(&sexpr(&mut "((1 + 2) * 3) + (4 / (5 - 6))")),
+            presult_strip_span(&sexpr(&mut "((1 + 2) * 3) + (4 / (5 - 6))")),
             "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Mul)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "(1 + (2 * (3 - (4 / 5))))")),
+            presult_strip_span(&sexpr(&mut "(1 + (2 * (3 - (4 / 5))))")),
             "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), Val(Int(5)), NOp(Div)), NOp(Sub)), NOp(Mul)), NOp(Add)))"
         );
         // More complex expressions with deep nesting
         assert_eq!(
-            presult_to_string(&sexpr(&mut "((1 + 2) * (3 + 4))")),
+            presult_strip_span(&sexpr(&mut "((1 + 2) * (3 + 4))")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "((1 * 2) + (3 * 4)) / 5")),
+            presult_strip_span(&sexpr(&mut "((1 * 2) + (3 * 4)) / 5")),
             "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul)), NOp(Add)), Val(Int(5)), NOp(Div)))"
         );
         // Multiple levels of nested expressions
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + (2 * (3 + (4 / (5 - 6))))")),
+            presult_strip_span(&sexpr(&mut "1 + (2 * (3 + (4 / (5 - 6))))")),
             "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)), NOp(Mul)), NOp(Add)))"
         );
 
         // ChatGPT generated tests with mixed iexprs. It only had knowledge of the tests above.
         // Mixing addition, subtraction, and variables
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x + 2 - y")),
+            presult_strip_span(&sexpr(&mut "x + 2 - y")),
             r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Val(Int(2)), NOp(Add)), Var(VarName::new("y")), NOp(Sub)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "(x + y) * 3")),
+            presult_strip_span(&sexpr(&mut "(x + y) * 3")),
             r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), NOp(Add)), Val(Int(3)), NOp(Mul)))"#
         );
         // Nested arithmetic with variables and parentheses
         assert_eq!(
-            presult_to_string(&sexpr(&mut "(a + b) / (c - d)")),
+            presult_strip_span(&sexpr(&mut "(a + b) / (c - d)")),
             r#"Ok(BinOp(BinOp(Var(VarName::new("a")), Var(VarName::new("b")), NOp(Add)), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Sub)), NOp(Div)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x * (y + 3) - z / 2")),
+            presult_strip_span(&sexpr(&mut "x * (y + 3) - z / 2")),
             r#"Ok(BinOp(BinOp(Var(VarName::new("x")), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)), BinOp(Var(VarName::new("z")), Val(Int(2)), NOp(Div)), NOp(Sub)))"#
         );
         // If-then-else with mixed arithmetic
         assert_eq!(
-            presult_to_string(&sexpr(&mut "if true then 1 + 2 else 3 * 4")),
+            presult_strip_span(&sexpr(&mut "if true then 1 + 2 else 3 * 4")),
             "Ok(If(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul))))"
         );
         // Time index in arithmetic expression
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x[0] + y[1]")),
+            presult_strip_span(&sexpr(&mut "x[0] + y[1]")),
             r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), 1), NOp(Add)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x[1] * (y + 3)")),
+            presult_strip_span(&sexpr(&mut "x[1] * (y + 3)")),
             r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)))"#
         );
         // Case to test precedence of if-then-else with arithmetic
         // Most languages implement this as "if a then b else (c + d)" and so should we.
         // Programmers can write "(if a then b else c) + d" if they want the other behavior.
         assert_eq!(
-            presult_to_string(&sexpr(&mut "if a then b else c + d")),
+            presult_strip_span(&sexpr(&mut "if a then b else c + d")),
             r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
         );
         // Complex expression with nested if-then-else and mixed operations
         assert_eq!(
-            presult_to_string(&sexpr(&mut "(1 + x) * if y then 3 else z / 2")),
+            presult_strip_span(&sexpr(&mut "(1 + x) * if y then 3 else z / 2")),
             r#"Ok(BinOp(BinOp(Val(Int(1)), Var(VarName::new("x")), NOp(Add)), If(Var(VarName::new("y")), Val(Int(3)), BinOp(Var(VarName::new("z")), Val(Int(2)), NOp(Div))), NOp(Mul)))"#
         );
     }
@@ -1868,7 +2143,7 @@ mod tests {
     #[test]
     fn test_parse_empty_string() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut "")),
+            presult_to_string(&sexpr_old(&mut "")),
             "Err(ContextError { context: [], cause: None })"
         );
     }
@@ -1876,9 +2151,9 @@ mod tests {
     #[test]
     fn test_parse_invalid_expression() {
         // TODO: Bug here in parser. It should be able to handle these cases.
-        // assert_eq!(presult_to_string(&sexpr(&mut "1 +")), "Err(Backtrack(ContextError { context: [], cause: None }))");
+        // assert_eq!(strip_span(&sexpr(&mut "1 +")), "Err(Backtrack(ContextError { context: [], cause: None }))");
         assert_eq!(
-            presult_to_string(&sexpr(&mut "&& true")),
+            presult_to_string(&sexpr_old(&mut "&& true")),
             "Err(ContextError { context: [], cause: None })"
         );
     }
@@ -1886,11 +2161,11 @@ mod tests {
     #[test]
     fn test_parse_boolean_expressions() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut "true && false")),
+            presult_strip_span(&sexpr(&mut "true && false")),
             "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "true || false")),
+            presult_strip_span(&sexpr(&mut "true || false")),
             "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)))"
         );
     }
@@ -1899,26 +2174,26 @@ mod tests {
     fn test_parse_mixed_boolean_and_arithmetic() {
         // Expressions do not make sense but parser should allow it
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + 2 && 3")),
+            presult_strip_span(&sexpr(&mut "1 + 2 && 3")),
             "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), BOp(And)))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "true || 1 * 2")),
+            presult_strip_span(&sexpr(&mut "true || 1 * 2")),
             "Ok(BinOp(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BOp(Or)))"
         );
     }
     #[test]
     fn test_parse_string_concatenation() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#""foo" ++ "bar""#)),
+            presult_strip_span(&sexpr(&mut r#""foo" ++ "bar""#)),
             r#"Ok(BinOp(Val(Str("foo")), Val(Str("bar")), SOp(Concat)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#""hello" ++ " " ++ "world""#)),
+            presult_strip_span(&sexpr(&mut r#""hello" ++ " " ++ "world""#)),
             r#"Ok(BinOp(BinOp(Val(Str("hello")), Val(Str(" ")), SOp(Concat)), Val(Str("world")), SOp(Concat)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#""a" ++ "b" ++ "c""#)),
+            presult_strip_span(&sexpr(&mut r#""a" ++ "b" ++ "c""#)),
             r#"Ok(BinOp(BinOp(Val(Str("a")), Val(Str("b")), SOp(Concat)), Val(Str("c")), SOp(Concat)))"#
         );
     }
@@ -1926,7 +2201,7 @@ mod tests {
     #[test]
     fn test_parse_defer() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"defer(x)"#)),
+            presult_strip_span(&sexpr(&mut r#"defer(x)"#)),
             r#"Ok(Defer(Var(VarName::new("x")), Unascribed, []))"#
         )
     }
@@ -1934,7 +2209,7 @@ mod tests {
     #[test]
     fn test_parse_update() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"update(x, y)"#)),
+            presult_strip_span(&sexpr(&mut r#"update(x, y)"#)),
             r#"Ok(Update(Var(VarName::new("x")), Var(VarName::new("y"))))"#
         )
     }
@@ -1942,7 +2217,7 @@ mod tests {
     #[test]
     fn test_parse_default() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"default(x, 0)"#)),
+            presult_strip_span(&sexpr(&mut r#"default(x, 0)"#)),
             r#"Ok(Default(Var(VarName::new("x")), Val(Int(0))))"#
         )
     }
@@ -1950,7 +2225,7 @@ mod tests {
     #[test]
     fn test_parse_default_sexpr() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"default(x, y)"#)),
+            presult_strip_span(&sexpr(&mut r#"default(x, y)"#)),
             r#"Ok(Default(Var(VarName::new("x")), Var(VarName::new("y"))))"#
         )
     }
@@ -1958,7 +2233,7 @@ mod tests {
     #[test]
     fn test_when() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"when(x)"#)),
+            presult_strip_span(&sexpr(&mut r#"when(x)"#)),
             r#"Ok(When(Var(VarName::new("x"))))"#
         )
     }
@@ -1966,66 +2241,66 @@ mod tests {
     #[test]
     fn test_is_defined() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"is_defined(x)"#)),
+            presult_strip_span(&sexpr(&mut r#"is_defined(x)"#)),
             r#"Ok(IsDefined(Var(VarName::new("x"))))"#
         )
     }
 
     #[test]
     fn test_parse_list() {
-        assert_eq!(sexpr(&mut r#"List()"#), Ok(SExpr::List(eco_vec![])));
+        assert_eq!(sexpr(&mut r#"List()"#), (SExpr::List(eco_vec![])));
         // Same as above
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List()"#)),
+            presult_strip_span(&sexpr(&mut r#"List()"#)),
             r#"Ok(List([]))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List () "#)),
+            presult_strip_span(&sexpr(&mut r#"List () "#)),
             r#"Ok(List([]))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List(1,2)"#)),
+            presult_strip_span(&sexpr(&mut r#"List(1,2)"#)),
             r#"Ok(List([Val(Int(1)), Val(Int(2))]))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List(1+2,2*5)"#)),
+            presult_strip_span(&sexpr(&mut r#"List(1+2,2*5)"#)),
             r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))]))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List("hello","world")"#)),
+            presult_strip_span(&sexpr(&mut r#"List("hello","world")"#)),
             r#"Ok(List([Val(Str("hello")), Val(Str("world"))]))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List(true || false, true && false)"#)),
+            presult_strip_span(&sexpr(&mut r#"List(true || false, true && false)"#)),
             r#"Ok(List([BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))]))"#
         );
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List(1,"hello")"#)),
+            presult_strip_span(&sexpr(&mut r#"List(1,"hello")"#)),
             r#"Ok(List([Val(Int(1)), Val(Str("hello"))]))"#
         );
         assert_eq!(
             assignment_decl(&mut "y = List()"),
-            Ok(("y".into(), SExpr::List(eco_vec![])))
+            Ok(("y".into(), SExpr::List(eco_vec![]).node))
         )
     }
 
     #[test]
     fn test_parse_lindex() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.get(List(1, 2), 42)"#)),
+            presult_strip_span(&sexpr(&mut r#"List.get(List(1, 2), 42)"#)),
             r#"Ok(LIndex(List([Val(Int(1)), Val(Int(2))]), Val(Int(42))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.get(x, 42)"#)),
+            presult_strip_span(&sexpr(&mut r#"List.get(x, 42)"#)),
             r#"Ok(LIndex(Var(VarName::new("x")), Val(Int(42))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.get(x, 1+2)"#)),
+            presult_strip_span(&sexpr(&mut r#"List.get(x, 1+2)"#)),
             r#"Ok(LIndex(Var(VarName::new("x")), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(
+            presult_strip_span(&sexpr(
                 &mut r#"List.get(List.get(List(List(1, 2), List(3, 4)), 0), 1)"#
             )),
             r#"Ok(LIndex(LIndex(List([List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])]), Val(Int(0))), Val(Int(1))))"#
@@ -2035,11 +2310,11 @@ mod tests {
     #[test]
     fn test_parse_lconcat() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.concat(List(1, 2), List(3, 4))"#)),
+            presult_strip_span(&sexpr(&mut r#"List.concat(List(1, 2), List(3, 4))"#)),
             r#"Ok(LConcat(List([Val(Int(1)), Val(Int(2))]), List([Val(Int(3)), Val(Int(4))])))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.concat(List(), List())"#)),
+            presult_strip_span(&sexpr(&mut r#"List.concat(List(), List())"#)),
             r#"Ok(LConcat(List([]), List([])))"#
         );
     }
@@ -2047,15 +2322,15 @@ mod tests {
     #[test]
     fn test_parse_lappend() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.append(List(1, 2), 3)"#)),
+            presult_strip_span(&sexpr(&mut r#"List.append(List(1, 2), 3)"#)),
             r#"Ok(LAppend(List([Val(Int(1)), Val(Int(2))]), Val(Int(3))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.append(List(), 3)"#)),
+            presult_strip_span(&sexpr(&mut r#"List.append(List(), 3)"#)),
             r#"Ok(LAppend(List([]), Val(Int(3))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.append(List(), x)"#)),
+            presult_strip_span(&sexpr(&mut r#"List.append(List(), x)"#)),
             r#"Ok(LAppend(List([]), Var(VarName::new("x"))))"#
         );
     }
@@ -2063,12 +2338,12 @@ mod tests {
     #[test]
     fn test_parse_lhead() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.head(List(1, 2))"#)),
+            presult_strip_span(&sexpr(&mut r#"List.head(List(1, 2))"#)),
             r#"Ok(LHead(List([Val(Int(1)), Val(Int(2))])))"#
         );
         // Ok for parser but will result in runtime error:
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.head(List())"#)),
+            presult_strip_span(&sexpr(&mut r#"List.head(List())"#)),
             r#"Ok(LHead(List([])))"#
         );
     }
@@ -2076,12 +2351,12 @@ mod tests {
     #[test]
     fn test_parse_ltail() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.tail(List(1, 2))"#)),
+            presult_strip_span(&sexpr(&mut r#"List.tail(List(1, 2))"#)),
             r#"Ok(LTail(List([Val(Int(1)), Val(Int(2))])))"#
         );
         // Ok for parser but will result in runtime error:
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.tail(List())"#)),
+            presult_strip_span(&sexpr(&mut r#"List.tail(List())"#)),
             r#"Ok(LTail(List([])))"#
         );
     }
@@ -2089,68 +2364,67 @@ mod tests {
     #[test]
     fn test_parse_llen() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.len(List(1, 2))"#)),
+            presult_strip_span(&sexpr(&mut r#"List.len(List(1, 2))"#)),
             r#"Ok(LLen(List([Val(Int(1)), Val(Int(2))])))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"List.len(List())"#)),
+            presult_strip_span(&sexpr(&mut r#"List.len(List())"#)),
             r#"Ok(LLen(List([])))"#
         );
     }
 
     #[test]
     fn test_parse_map() {
-        assert_eq!(sexpr(&mut r#"Map()"#), Ok(SExpr::Map(BTreeMap::new())),);
-        assert_eq!(presult_to_string(&sexpr(&mut r#"Map()"#)), r#"Ok(Map({}))"#);
+        assert_eq!(sexpr(&mut r#"Map()"#), (SExpr::Map(BTreeMap::new())),);
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"{"x": 1, "y": 2}"#)),
-            r#"Ok(ObjectLiteral({"x": Val(Int(1)), "y": Val(Int(2))}))"#
+            presult_strip_span(&sexpr(&mut r#"Map()"#)),
+            r#"Ok(Map({}))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map("x": 1, "y": 2)"#)),
+            presult_strip_span(&sexpr(&mut r#"Map("x": 1, "y": 2)"#)),
             r#"Ok(Map({"x": Val(Int(1)), "y": Val(Int(2))}))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map("x": 1+2,"y": 2*5)"#)),
+            presult_strip_span(&sexpr(&mut r#"Map("x": 1+2,"y": 2*5)"#)),
             r#"Ok(Map({"x": BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), "y": BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))}))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map("x": "hello", "y": "world")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map("x": "hello", "y": "world")"#)),
             r#"Ok(Map({"x": Val(Str("hello")), "y": Val(Str("world"))}))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(
+            presult_strip_span(&sexpr(
                 &mut r#"Map("xxxx": true || false, "yyyy": true && false)"#
             )),
             r#"Ok(Map({"xxxx": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), "yyyy": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))}))"#
         );
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map( "x": 1, "y": "hello" )"#)),
+            presult_strip_span(&sexpr(&mut r#"Map( "x": 1, "y": "hello" )"#)),
             r#"Ok(Map({"x": Val(Int(1)), "y": Val(Str("hello"))}))"#
         );
         assert_eq!(
             assignment_decl(&mut "y = Map()"),
-            Ok(("y".into(), SExpr::Map(BTreeMap::new())))
+            Ok(("y".into(), SExpr::Map(BTreeMap::new()).node))
         )
     }
 
     #[test]
     fn test_parse_mget() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.get(Map("x": 2, "y": true), "x")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.get(Map("x": 2, "y": true), "x")"#)),
             r#"Ok(MGet(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.get(x, "key")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.get(x, "key")"#)),
             r#"Ok(MGet(Var(VarName::new("x")), "key"))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.get(x, "")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.get(x, "")"#)),
             r#"Ok(MGet(Var(VarName::new("x")), ""))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(
+            presult_strip_span(&sexpr(
                 &mut r#"Map.get(Map.get(Map.get(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
             )),
             r#"Ok(MGet(MGet(MGet(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
@@ -2160,19 +2434,20 @@ mod tests {
     #[test]
     fn test_parse_mremove() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.remove(Map("x": 2, "y": true), "x")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.remove(Map("x": 2, "y": true), "x")"#)),
+            // presult_to_string(&sexpr_old(&mut r#"Map.remove(Map("x": 2, "y": true), "x")"#)),
             r#"Ok(MRemove(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.remove(x, "key")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.remove(x, "key")"#)),
             r#"Ok(MRemove(Var(VarName::new("x")), "key"))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.remove(x, "")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.remove(x, "")"#)),
             r#"Ok(MRemove(Var(VarName::new("x")), ""))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(
+            presult_strip_span(&sexpr(
                 &mut r#"Map.remove(Map.remove(Map.remove(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
             )),
             r#"Ok(MRemove(MRemove(MRemove(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
@@ -2182,19 +2457,19 @@ mod tests {
     #[test]
     fn test_parse_mhas_key() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.has_key(Map("x": 2, "y": true), "x")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.has_key(Map("x": 2, "y": true), "x")"#)),
             r#"Ok(MHasKey(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "x"))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.has_key(x, "key")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.has_key(x, "key")"#)),
             r#"Ok(MHasKey(Var(VarName::new("x")), "key"))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.has_key(x, "")"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.has_key(x, "")"#)),
             r#"Ok(MHasKey(Var(VarName::new("x")), ""))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(
+            presult_strip_span(&sexpr(
                 &mut r#"Map.has_key(Map.has_key(Map.has_key(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
             )),
             r#"Ok(MHasKey(MHasKey(MHasKey(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
@@ -2204,17 +2479,17 @@ mod tests {
     #[test]
     fn test_parse_minsert() {
         assert_eq!(
-            presult_to_string(&sexpr(
+            presult_strip_span(&sexpr(
                 &mut r#"Map.insert(Map("x": 2, "y": true), "z", 42)"#
             )),
             r#"Ok(MInsert(Map({"x": Val(Int(2)), "y": Val(Bool(true))}), "z", Val(Int(42))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.insert(x, "key", true)"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.insert(x, "key", true)"#)),
             r#"Ok(MInsert(Var(VarName::new("x")), "key", Val(Bool(true))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut r#"Map.insert(x, "", 1)"#)),
+            presult_strip_span(&sexpr(&mut r#"Map.insert(x, "", 1)"#)),
             r#"Ok(MInsert(Var(VarName::new("x")), "", Val(Int(1))))"#
         );
     }
@@ -2222,7 +2497,7 @@ mod tests {
     #[test]
     fn test_dangling_else() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut "if a then b else c + d")),
+            presult_strip_span(&sexpr(&mut "if a then b else c + d")),
             r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
         )
     }
@@ -2230,15 +2505,15 @@ mod tests {
     #[test]
     fn test_trig() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut "sin(1.0)")),
+            presult_strip_span(&sexpr(&mut "sin(1.0)")),
             r#"Ok(Sin(Val(Float(1.0))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "cos(0)")),
+            presult_strip_span(&sexpr(&mut "cos(0)")),
             r#"Ok(Cos(Val(Int(0))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "tan(3.14)")),
+            presult_strip_span(&sexpr(&mut "tan(3.14)")),
             r#"Ok(Tan(Val(Float(3.14))))"#
         );
     }
@@ -2246,11 +2521,11 @@ mod tests {
     #[test]
     fn test_abs() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut "abs(-5)")),
+            presult_strip_span(&sexpr(&mut "abs(-5)")),
             r#"Ok(Abs(Val(Int(-5))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "abs(3.14)")),
+            presult_strip_span(&sexpr(&mut "abs(3.14)")),
             r#"Ok(Abs(Val(Float(3.14))))"#
         );
     }
@@ -2258,37 +2533,37 @@ mod tests {
     #[test]
     fn test_comparison() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 < 2")),
+            presult_strip_span(&sexpr(&mut "1 < 2")),
             r#"Ok(BinOp(Val(Int(1)), Val(Int(2)), COp(Lt)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 > 2")),
+            presult_strip_span(&sexpr(&mut "1 > 2")),
             r#"Ok(BinOp(Val(Int(1)), Val(Int(2)), COp(Gt)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "3.14 >= 2.71")),
+            presult_strip_span(&sexpr(&mut "3.14 >= 2.71")),
             r#"Ok(BinOp(Val(Float(3.14)), Val(Float(2.71)), COp(Ge)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "3.14 <= 2.71")),
+            presult_strip_span(&sexpr(&mut "3.14 <= 2.71")),
             r#"Ok(BinOp(Val(Float(3.14)), Val(Float(2.71)), COp(Le)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "x == y")),
+            presult_strip_span(&sexpr(&mut "x == y")),
             r#"Ok(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), COp(Eq)))"#
         );
         // Test precedence:
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + 2 > 3")),
+            presult_strip_span(&sexpr(&mut "1 + 2 > 3")),
             r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), COp(Gt)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 + 2 == 3 * 4")),
+            presult_strip_span(&sexpr(&mut "1 + 2 == 3 * 4")),
             r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul)), COp(Eq)))"#
         );
         // Equality has lower precedence than other comparisons
         assert_eq!(
-            presult_to_string(&sexpr(&mut "1 < 2 == 3 < 4")),
+            presult_strip_span(&sexpr(&mut "1 < 2 == 3 < 4")),
             r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), COp(Lt)), BinOp(Val(Int(3)), Val(Int(4)), COp(Lt)), COp(Eq)))"#
         );
     }
@@ -2296,36 +2571,36 @@ mod tests {
     #[test]
     fn test_not() {
         assert_eq!(
-            presult_to_string(&sexpr(&mut "!true")),
+            presult_strip_span(&sexpr(&mut "!true")),
             r#"Ok(Not(Val(Bool(true))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "!false")),
+            presult_strip_span(&sexpr(&mut "!false")),
             r#"Ok(Not(Val(Bool(false))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "! (1 + 2 > 3)")),
+            presult_strip_span(&sexpr(&mut "! (1 + 2 > 3)")),
             r#"Ok(Not(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), COp(Gt))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "!!false")),
+            presult_strip_span(&sexpr(&mut "!!false")),
             r#"Ok(Not(Not(Val(Bool(false)))))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "!(if a then b else c)")),
+            presult_strip_span(&sexpr(&mut "!(if a then b else c)")),
             r#"Ok(Not(If(Var(VarName::new("a")), Var(VarName::new("b")), Var(VarName::new("c")))))"#
         );
         // Another edge case:
         assert_eq!(
-            presult_to_string(&sexpr(&mut "!1 + 2")),
+            presult_strip_span(&sexpr(&mut "!1 + 2")),
             r#"Ok(BinOp(Not(Val(Int(1))), Val(Int(2)), NOp(Add)))"#
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "if !true then 1 else 2")),
+            presult_strip_span(&sexpr(&mut "if !true then 1 else 2")),
             "Ok(If(Not(Val(Bool(true))), Val(Int(1)), Val(Int(2))))"
         );
         assert_eq!(
-            presult_to_string(&sexpr(&mut "dynamic(!s)")),
+            presult_strip_span(&sexpr(&mut "dynamic(!s)")),
             r#"Ok(Dynamic(Not(Var(VarName::new("s"))), Unascribed))"#
         );
     }
@@ -2355,17 +2630,19 @@ mod tests {
     #[ignore]
     fn test_large_expression() {
         let expr = &mut "(((((if !(!(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ))) % 2) == 1) || (((((if !(!(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((0.1) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((0.1) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ))) % 2) == 1) || (((((if !(!(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((0.153) * sin(3.14))) + 1.0))) then 1 else 0 ))) % 2) == 1) || (((((if !(!(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) && !((((((((0.1) * cos((a))) - ((-0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) / ((((((0.1) * sin((a))) + ((-0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ) + (if !(!(((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) == !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) <= ((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5))) && !(((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y)) == ((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y))) && !((((((((-0.181) * cos((a))) - ((0.153) * sin((a)))) + (x))) - (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) * ((((((-0.181) * sin(3.14)) + ((-0.153) * cos(3.14))) + -0.5)) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) / ((((((-0.181) * sin((a))) + ((0.153) * cos((a)))) + (y))) - (((((-0.181) * sin((a))) + ((-0.153) * cos((a)))) + (y)))) + (((((-0.181) * cos((a))) - ((-0.153) * sin((a)))) + (x)))) <= (((((-0.181) * cos(3.14)) - ((-0.153) * sin(3.14))) + 1.0))) then 1 else 0 ))) % 2) == 1)";
-        let res = sexpr(expr);
+        let res = sexpr_old(expr);
         assert!(res.is_ok());
     }
 }
 
 #[cfg(test)]
 mod spec_tests {
-    use crate::lang::core::parser::presult_to_string;
-
     use super::*;
     use test_log::test;
+
+    fn spec_presult_to_string(result: &Result<UntypedDsrvSpecification>) -> String {
+        format!("{result:?}")
+    }
 
     fn counter_inf() -> (&'static str, &'static str) {
         (
@@ -2466,7 +2743,7 @@ mod spec_tests {
     #[test]
     fn test_dsrv_specs_normal() {
         for &(name, (mut spec, exp)) in specs().iter() {
-            let parsed = presult_to_string(&dsrv_specification(&mut spec));
+            let parsed = spec_presult_to_string(&dsrv_specification(&mut spec));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
@@ -2478,7 +2755,7 @@ mod spec_tests {
     fn test_dsrv_specs_added_newlines() {
         for &(name, (spec, exp)) in specs().iter() {
             let spec = spec.replace("\n", "\n\n");
-            let parsed = presult_to_string(&dsrv_specification(&mut spec.as_str()));
+            let parsed = spec_presult_to_string(&dsrv_specification(&mut spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
@@ -2490,14 +2767,13 @@ mod spec_tests {
     fn test_dsrv_specs_added_comments() {
         for &(name, (spec, exp)) in specs().iter() {
             let mod_spec = spec.replace("\n", "\n//This is a comment\n");
-            let parsed = presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));
+            let parsed = spec_presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
             );
-
             let mod_spec = spec.replace("\n", "//This is a comment\n"); // Beginning \n
-            let parsed = presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));
+            let parsed = spec_presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)

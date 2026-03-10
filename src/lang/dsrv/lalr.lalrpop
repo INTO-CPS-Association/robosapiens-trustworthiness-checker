@@ -48,9 +48,9 @@ Box<T>: Box<T> = {
     <T> => Box::new(<>),
 }
 
-// Box the node inside a spanned expression.
-BoxNode<T>: Box<SExpr> = {
-    <e:T> => Box::new(e.node),
+// Box a spanned expression.
+BoxNode<T>: Box<SpannedExpr> = {
+    <e:T> => Box::new(e),
 }
 
 // A list of elements separated by Sep
@@ -72,12 +72,12 @@ KVPair<K, V>: (K, V) = {
     <k: K> ":" <v: V> => (k, v)
 };
 
-ExprKVPair: (EcoString, SExpr) = {
-    <k: String> ":" <v: Expr> => (k, v.node)
+ExprKVPair: (EcoString, SpannedExpr) = {
+    <k: String> ":" <v: Expr> => (k, v)
 };
 
-ExprList: EcoVec<SExpr> = {
-    <items: SepListOpt<Expr, ",">> => EcoVec::from_iter(items.into_iter().map(|expr| expr.node))
+ExprList: EcoVec<SpannedExpr> = {
+    <items: SepListOpt<Expr, ",">> => items
 };
 
 // -----------------------------------------------------------------------------
@@ -112,10 +112,10 @@ IdentSExpr : SExpr = {
 };
 
 // Helpers for indexing base (literal, ident, or paren)
-SIndexHelp: Box<SExpr> = {
-    BoxNode<SpannedLiteral>,
-    BoxNode<SpannedIdentSExpr>,
-    BoxNode<SpannedParen>
+SIndexHelp: Box<SpannedExpr> = {
+    Box<SpannedLiteral>,
+    Box<SpannedIdentSExpr>,
+    Box<SpannedParen>
 };
 
 // Indexing expression e[idx]
@@ -232,13 +232,13 @@ AtomBase: SpannedExpr = {
 Atom: SpannedExpr = {
     <base: AtomBase> <fields:("." <Ident>)*> <r:@R> => {
         let span_start = base.span.start;
-        let node = fields.into_iter().fold(base.node, |expr, field| {
-            SExpr::SGet(Box::new(expr), field.name().into())
-        });
-        Spanned {
-            node,
-            span: Span::new(span_start, r as u32),
-        }
+        let span_end = r as u32;
+        fields.into_iter().fold(base, |expr, field| {
+            Spanned {
+                node: SExpr::SGet(Box::new(expr), field.name().into()),
+                span: Span::new(span_start, span_end),
+            }
+        })
     }
 }
 
@@ -246,25 +246,42 @@ Atom: SpannedExpr = {
 // Unary expressions
 // -----------------------------------------------------------------------------
 
-UnaryMinusHelper: SExpr = {
-    <n: Int> => SExpr::Val(Value::Int(-n)),
-    <n: Float> => SExpr::Val(Value::Float(-n)),
-    <x: BoxNode<SpannedIdentSExpr>> => SExpr::BinOp(
-        Box::new(SExpr::Val(Value::Int(0))), 
-        x, 
-        SBinOp::NOp(NumericalBinOp::Sub)
-    ),
-    <x: BoxNode<SpannedParen>> => SExpr::BinOp(
-        Box::new(SExpr::Val(Value::Int(0))), 
-        x, 
-        SBinOp::NOp(NumericalBinOp::Sub)
-    ),
-};
-
 UnaryExpr<Next>: SpannedExpr = {
-   <l:@L> "-" <n: UnaryMinusHelper> <r:@R> => {
-        Spanned { 
-            node: n, 
+   <l:@L> "-" <n: Int> <r:@R> => {
+        Spanned {
+            node: SExpr::Val(Value::Int(-n)),
+            span: Span::new(l as u32, r as u32),
+        }
+   },
+   <l:@L> "-" <n: Float> <r:@R> => {
+        Spanned {
+            node: SExpr::Val(Value::Float(-n)),
+            span: Span::new(l as u32, r as u32),
+        }
+   },
+   <l:@L> "-" <x: BoxNode<SpannedIdentSExpr>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(
+                Box::new(Spanned {
+                    node: SExpr::Val(Value::Int(0)),
+                    span: Span::new(l as u32, l as u32 + 1),
+                }),
+                x,
+                SBinOp::NOp(NumericalBinOp::Sub)
+            ),
+            span: Span::new(l as u32, r as u32),
+        }
+   },
+   <l:@L> "-" <x: BoxNode<SpannedParen>> <r:@R> => {
+        Spanned {
+            node: SExpr::BinOp(
+                Box::new(Spanned {
+                    node: SExpr::Val(Value::Int(0)),
+                    span: Span::new(l as u32, l as u32 + 1),
+                }),
+                x,
+                SBinOp::NOp(NumericalBinOp::Sub)
+            ),
             span: Span::new(l as u32, r as u32),
         }
    },
@@ -470,14 +487,14 @@ AuxDecl: STopDecl = {
 };
 
 Assignment: STopDecl = {
-   <l:@L> <var: Ident> "=" <expr: Expr> <r:@R>=> STopDecl::Assignment(var, expr, Span::new(l as u32, r as u32))
+   <l:@L> <var: Ident> "=" <expr: Expr> <r:@R> => STopDecl::Assignment(var, expr, Span::new(l as u32, r as u32))
 }
 
 pub TopDecl: STopDecl = {
     InputDecl,
     OutputDecl,
     AuxDecl,
-    Assignment,
+    Assignment
 }
 
 pub TopDecls: EcoVec<STopDecl> = {

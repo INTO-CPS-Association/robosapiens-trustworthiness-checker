@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use crate::InputProvider;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
-    Runtime, SExpr, Specification, UntypedDsrvSpecification, Value, VarName,
+    Runtime, Specification, UntypedDsrvSpecification, Value, VarName,
     cli::{
         adapters::DistributionModeBuilder,
         args::{MstloAlgorithm, MstloSynchronizationStrategy, ParserMode},
@@ -23,6 +23,7 @@ use crate::{
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::core::parser::SpecParser,
     lang::dsrv::{
+        ast::SpannedExpr,
         lalr_parser::LALRParser,
         parser::CombExprParser,
         type_checker::{SExprTE, TypedDsrvSpecification, type_check, type_check_gradual},
@@ -48,13 +49,13 @@ use static_assertions::assert_obj_safe;
 
 // Various AsyncConfigs to use
 #[rustfmt::skip]
-define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context, Spec = UntypedDsrvSpecification);
+define_config!(ValueConfig, Val = Value, Expr = SpannedExpr, Ctx = Context, Spec = UntypedDsrvSpecification);
 #[rustfmt::skip]
 define_config!(TypedValueConfig, Val = Value, Expr = SExprTE, Ctx = Context, Spec = TypedDsrvSpecification);
 #[rustfmt::skip]
-define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedContext, Spec = UntypedDsrvSpecification);
+define_config!(DistValueConfig, Val = Value, Expr = SpannedExpr, Ctx = DistributedContext, Spec = UntypedDsrvSpecification);
 #[rustfmt::skip]
-define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext, Spec = UntypedDsrvSpecification);
+define_config!(SemiSyncValueConfig, Val = Value, Expr = SpannedExpr, Ctx = SemiSyncContext, Spec = UntypedDsrvSpecification);
 #[rustfmt::skip]
 define_config!(TypedSemiSyncValueConfig, Val = Value, Expr = SExprTE, Ctx = SemiSyncContext, Spec = TypedDsrvSpecification);
 

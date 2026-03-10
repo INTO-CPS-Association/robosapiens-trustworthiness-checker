@@ -5,13 +5,13 @@
 use super::expr::{cast_to_type, coerce_empty_list, coerce_empty_map};
 use super::*;
 use crate::core::StreamType;
-use crate::lang::dsrv::ast::SExpr;
+use crate::lang::dsrv::ast::SpannedExpr;
 use crate::{UntypedDsrvSpecification, VarName};
 use std::collections::BTreeMap;
 
 struct PendingAssignment {
     var: VarName,
-    expr: SExpr,
+    expr: SpannedExpr,
     errors: SemanticErrors,
 }
 
@@ -177,7 +177,7 @@ pub fn type_check_gradual(
                 errors: local_errors,
             } = pending.remove(pos);
             if can_widen_gradual_errors(&local_errors) {
-                typed_exprs.insert(var.clone(), SExprTE::Any(SExprAny::Expr(expr)));
+                typed_exprs.insert(var.clone(), SExprTE::Any(SExprAny::Expr(expr.node)));
                 type_context.insert(var, StreamType::Any);
                 continue 'outer;
             }
@@ -224,7 +224,7 @@ pub fn type_check_gradual(
 mod tests {
     use super::*;
     use crate::lang::dsrv::ast::{
-        BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp,
+        BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
     };
     use crate::{Specification, Value};
     use ecow::EcoVec;
@@ -239,8 +239,8 @@ mod tests {
         exprs.insert(
             y.clone(),
             SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone())),
-                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Var(x.clone()).into()),
+                Box::new(SExpr::Val(Value::Int(1)).into()),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
@@ -250,7 +250,10 @@ mod tests {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -268,8 +271,8 @@ mod tests {
         exprs.insert(
             y.clone(),
             SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone())),
-                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Var(x.clone()).into()),
+                Box::new(SExpr::Val(Value::Int(1)).into()),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
@@ -277,7 +280,10 @@ mod tests {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -292,6 +298,39 @@ mod tests {
     }
 
     #[test]
+    fn test_gradual_type_check_preserves_aux_vars() {
+        let x: VarName = "gradual_aux_x".into();
+        let z: VarName = "gradual_aux_z".into();
+        let u: VarName = "gradual_aux_u".into();
+        let exprs = BTreeMap::from([
+            (u.clone(), SExpr::Var(x.clone())),
+            (z.clone(), SExpr::Var(u.clone())),
+        ]);
+        let type_annotations = BTreeMap::from([
+            (x.clone(), StreamType::Int),
+            (u.clone(), StreamType::Int),
+            (z.clone(), StreamType::Int),
+        ]);
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::from([x]),
+            output_vars: BTreeSet::from([z.clone()]),
+            aux_vars: BTreeSet::from([u.clone()]),
+            stream_vars: BTreeSet::from([z.clone(), u.clone()]),
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
+            type_annotations,
+        };
+
+        let typed = type_check_gradual(spec).expect("gradual type check should preserve aux vars");
+
+        assert_eq!(typed.aux_vars(), BTreeSet::from([u.clone()]));
+        assert_eq!(typed.stream_vars(), BTreeSet::from([z.clone(), u]));
+        assert_eq!(typed.output_vars(), BTreeSet::from([z]));
+    }
+
+    #[test]
     fn test_strict_type_check_still_requires_output_annotation() {
         let y: VarName = "y_strict_missing".into();
         let mut exprs = BTreeMap::new();
@@ -300,7 +339,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -322,16 +364,16 @@ mod tests {
         exprs.insert(
             z.clone(),
             SExpr::BinOp(
-                Box::new(SExpr::Var(y.clone())),
-                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Var(y.clone()).into()),
+                Box::new(SExpr::Val(Value::Int(1)).into()),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         exprs.insert(
             y.clone(),
             SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone())),
-                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Var(x.clone()).into()),
+                Box::new(SExpr::Val(Value::Int(1)).into()),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
@@ -341,7 +383,10 @@ mod tests {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([y.clone(), z.clone()]),
             stream_vars: BTreeSet::from([y.clone(), z.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -364,7 +409,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone(), m.clone()]),
             stream_vars: BTreeSet::from([xs.clone(), m.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -399,7 +447,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([x.clone()]),
             stream_vars: BTreeSet::from([x.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -424,7 +475,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -438,7 +492,9 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             xs.clone(),
-            SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Str("a".into()))])),
+            SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Str("a".into())).into(),
+            ])),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
@@ -446,7 +502,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
             stream_vars: BTreeSet::from([xs.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -465,7 +524,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -484,8 +546,8 @@ mod tests {
         exprs.insert(
             z.clone(),
             SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::Val(Value::Str("a".into()))),
+                Box::new(SExpr::Val(Value::Int(1)).into()),
+                Box::new(SExpr::Val(Value::Str("a".into())).into()),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
@@ -495,7 +557,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -513,8 +578,8 @@ mod tests {
         exprs.insert(
             z.clone(),
             SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::Val(Value::Str("a".into()))),
+                Box::new(SExpr::Val(Value::Int(1)).into()),
+                Box::new(SExpr::Val(Value::Str("a".into())).into()),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
@@ -522,7 +587,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -540,15 +608,18 @@ mod tests {
         exprs.insert(
             xs.clone(),
             SExpr::List(EcoVec::from(vec![
-                SExpr::Val(Value::Int(1)),
-                SExpr::Val(Value::Str("a".into())),
+                SExpr::Val(Value::Int(1)).into(),
+                SExpr::Val(Value::Str("a".into())).into(),
             ])),
         );
         let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
             stream_vars: BTreeSet::from([xs.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -568,8 +639,8 @@ mod tests {
         exprs.insert(
             xs.clone(),
             SExpr::List(EcoVec::from(vec![
-                SExpr::Val(Value::Int(1)),
-                SExpr::Val(Value::Str("a".into())),
+                SExpr::Val(Value::Int(1)).into(),
+                SExpr::Val(Value::Str("a".into())).into(),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
@@ -578,7 +649,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
             stream_vars: BTreeSet::from([xs]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -596,15 +670,18 @@ mod tests {
         exprs.insert(
             m.clone(),
             SExpr::Map(BTreeMap::from([
-                ("x".into(), SExpr::Val(Value::Int(1))),
-                ("y".into(), SExpr::Val(Value::Str("a".into()))),
+                ("x".into(), SExpr::Val(Value::Int(1)).into()),
+                ("y".into(), SExpr::Val(Value::Str("a".into())).into()),
             ])),
         );
         let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([m.clone()]),
             stream_vars: BTreeSet::from([m.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -624,8 +701,8 @@ mod tests {
         exprs.insert(
             m.clone(),
             SExpr::Map(BTreeMap::from([
-                ("x".into(), SExpr::Val(Value::Int(1))),
-                ("y".into(), SExpr::Val(Value::Str("a".into()))),
+                ("x".into(), SExpr::Val(Value::Int(1)).into()),
+                ("y".into(), SExpr::Val(Value::Str("a".into())).into()),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
@@ -634,7 +711,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([m.clone()]),
             stream_vars: BTreeSet::from([m]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -650,15 +730,18 @@ mod tests {
         exprs.insert(
             robot.clone(),
             SExpr::Struct(BTreeMap::from([
-                ("id".into(), SExpr::Val(Value::Int(1))),
-                ("name".into(), SExpr::Val(Value::Str("r2d2".into()))),
+                ("id".into(), SExpr::Val(Value::Int(1)).into()),
+                ("name".into(), SExpr::Val(Value::Str("r2d2".into())).into()),
             ])),
         );
         let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([robot.clone()]),
             stream_vars: BTreeSet::from([robot.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -694,19 +777,22 @@ mod tests {
         exprs.insert(
             robot.clone(),
             SExpr::Struct(BTreeMap::from([
-                ("id".into(), SExpr::Val(Value::Int(1))),
-                ("name".into(), SExpr::Val(Value::Str("r2d2".into()))),
+                ("id".into(), SExpr::Val(Value::Int(1)).into()),
+                ("name".into(), SExpr::Val(Value::Str("r2d2".into())).into()),
             ])),
         );
         exprs.insert(
             name.clone(),
-            SExpr::SGet(Box::new(SExpr::Var(robot.clone())), "name".into()),
+            SExpr::SGet(Box::new(SExpr::Var(robot.clone()).into()), "name".into()),
         );
         let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([name.clone()]),
             stream_vars: BTreeSet::from([robot.clone(), name.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::from([robot]),
         };
@@ -723,8 +809,11 @@ mod tests {
         exprs.insert(
             robot.clone(),
             SExpr::Struct(BTreeMap::from([
-                ("id".into(), SExpr::Val(Value::Str("not an int".into()))),
-                ("name".into(), SExpr::Val(Value::Str("r2d2".into()))),
+                (
+                    "id".into(),
+                    SExpr::Val(Value::Str("not an int".into())).into(),
+                ),
+                ("name".into(), SExpr::Val(Value::Str("r2d2".into())).into()),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
@@ -742,7 +831,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([robot.clone()]),
             stream_vars: BTreeSet::from([robot]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -762,9 +854,9 @@ mod tests {
         exprs.insert(
             z.clone(),
             SExpr::If(
-                Box::new(SExpr::Var(c.clone())),
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::Val(Value::Str("a".into()))),
+                Box::new(SExpr::Var(c.clone()).into()),
+                Box::new(SExpr::Val(Value::Int(1)).into()),
+                Box::new(SExpr::Val(Value::Str("a".into())).into()),
             ),
         );
         let mut type_annotations = BTreeMap::new();
@@ -773,7 +865,10 @@ mod tests {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
@@ -796,7 +891,10 @@ mod tests {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -819,8 +917,8 @@ mod tests {
         exprs.insert(
             z.clone(),
             SExpr::BinOp(
-                Box::new(SExpr::Var(a.clone())),
-                Box::new(SExpr::Var(b.clone())),
+                Box::new(SExpr::Var(a.clone()).into()),
+                Box::new(SExpr::Var(b.clone()).into()),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
@@ -828,7 +926,10 @@ mod tests {
             input_vars: BTreeSet::from([a.clone(), b.clone()]),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations: BTreeMap::new(),
             aux_vars: BTreeSet::new(),
         };
@@ -852,8 +953,8 @@ mod tests {
             let mut ctx = TypeInfo::new();
             ctx.insert(x.clone(), StreamType::Any);
             let expr = SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone())),
-                Box::new(SExpr::Val(Value::Int(10))),
+                Box::new(SExpr::Var(x.clone()).into()),
+                Box::new(SExpr::Val(Value::Int(10)).into()),
                 SBinOp::COp(op.clone()),
             );
             let te = expr
@@ -880,8 +981,8 @@ mod tests {
 
         // Int arithmetic: x * 2 : Int with a cast on the Any side
         let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone())),
-            Box::new(SExpr::Val(Value::Int(2))),
+            Box::new(SExpr::Var(x.clone()).into()),
+            Box::new(SExpr::Val(Value::Int(2)).into()),
             SBinOp::NOp(NumericalBinOp::Mul),
         );
         let te = expr.type_check(&mut ctx).expect("Any * Int should check");
@@ -892,8 +993,8 @@ mod tests {
 
         // Float arithmetic: x + 1.5 : Float
         let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone())),
-            Box::new(SExpr::Val(Value::Float(1.5))),
+            Box::new(SExpr::Var(x.clone()).into()),
+            Box::new(SExpr::Val(Value::Float(1.5)).into()),
             SBinOp::NOp(NumericalBinOp::Add),
         );
         let te = expr.type_check(&mut ctx).expect("Any + Float should check");
@@ -904,8 +1005,8 @@ mod tests {
 
         // Boolean operation: x && true : Bool
         let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone())),
-            Box::new(SExpr::Val(Value::Bool(true))),
+            Box::new(SExpr::Var(x.clone()).into()),
+            Box::new(SExpr::Val(Value::Bool(true)).into()),
             SBinOp::BOp(BoolBinOp::And),
         );
         let te = expr.type_check(&mut ctx).expect("Any && Bool should check");
@@ -916,8 +1017,8 @@ mod tests {
 
         // String concatenation: x ++ "s" : Str
         let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone())),
-            Box::new(SExpr::Val(Value::Str("s".into()))),
+            Box::new(SExpr::Var(x.clone()).into()),
+            Box::new(SExpr::Val(Value::Str("s".into())).into()),
             SBinOp::SOp(StrBinOp::Concat),
         );
         let te = expr.type_check(&mut ctx).expect("Any ++ Str should check");
@@ -966,7 +1067,10 @@ mod tests {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
-            exprs,
+            exprs: exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.into()))
+                .collect(),
             type_annotations,
             aux_vars: BTreeSet::new(),
         };
