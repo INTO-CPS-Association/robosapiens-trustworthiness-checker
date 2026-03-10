@@ -73,6 +73,7 @@ itertools = "0.14.0"
 redis = { version = "1.0.3", default-features = false, features = ["smol-comp"] }
 anyhow = { version = "1.0.101", features = ["backtrace"] }
 fs2 = "0.4.3"
+cfg-if = "1.0.4"
 
 [profile.dev-fast]
 # Optimize build times for debug builds
@@ -89,7 +90,7 @@ opt-level = 3
 panic = "abort"
 
 [features]
-ros = ["dep:r2r"]
+ros = ["dep:r2r", "tc-testutils/ros"]
 testcontainers = ["tc-testutils/testcontainers", "async-compat"]
 span-tracing = []
 

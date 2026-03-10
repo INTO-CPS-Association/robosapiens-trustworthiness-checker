@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JValue;
 use tracing::debug;
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone)]
 pub enum ROSMsgType {
     Bool,
     String,
@@ -102,7 +102,7 @@ pub fn json_to_mapping(json: &str) -> Result<ROSStreamMapping, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::io::ros::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, json_to_mapping};
+    use crate::io::ros::ros_topic_stream_mapping::{json_to_mapping, ROSMsgType, ROSStreamMapping};
     use test_log::test;
 
     #[test]

@@ -7,6 +7,10 @@ use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::cli::StdoutOutputHandler;
 use crate::io::mqtt::{MQTTOutputHandler, MqttFactory};
 use crate::io::redis::RedisOutputHandler;
+#[cfg(feature = "ros")]
+use crate::io::ros::ROSOutputHandler;
+#[cfg(feature = "ros")]
+use crate::io::ros::json_to_mapping;
 use crate::{Value, VarName, core::OutputHandler};
 
 #[derive(Debug, Clone)]
@@ -75,7 +79,7 @@ impl OutputHandlerBuilder {
                 executor,
                 output_var_names,
                 aux_info,
-            )),
+            )) as Box<dyn OutputHandler<Val = Value>>,
             OutputMode {
                 output_mqtt_topics: Some(topics),
                 ..
@@ -175,9 +179,24 @@ impl OutputHandlerBuilder {
                 Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
             }
             OutputMode {
-                output_ros_topics: Some(_),
+                output_ros_file: Some(_output_ros_file),
                 ..
-            } => unimplemented!("ROS output not implemented"),
+            } => {
+                cfg_if::cfg_if! {
+                    if #[cfg(feature="ros")] {
+                        let output_mapping_str = std::fs::read_to_string(&_output_ros_file)
+                            .expect("Output mapping file could not be read");
+                        let output_mapping = json_to_mapping(&output_mapping_str)
+                            .expect("Output mapping file could not be parsed");
+                        Box::new(
+                            ROSOutputHandler::new(executor, "tc_ros_output".into(), output_var_names, output_mapping, aux_info)
+                                .expect("ROS output handler could not be created"),
+                        )
+                    } else {
+                        panic!("ROS support not enabled");
+                    }
+                }
+            }
             // Default to stdout
             _ => Box::new(StdoutOutputHandler::new(
                 executor,

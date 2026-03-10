@@ -116,11 +116,25 @@ mod integration_tests {
 
     use futures::FutureExt;
     use macro_rules_attribute::apply;
+    #[cfg(feature = "ros")]
+    use r2r::std_msgs::msg::Int32;
     use smol::process::Command;
+    #[cfg(feature = "ros")]
+    use smol::stream::StreamExt;
     use smol::{LocalExecutor, Timer};
+    #[cfg(feature = "ros")]
+    use std::fs;
+    #[cfg(feature = "ros")]
+    use std::os::unix::process::ExitStatusExt;
     use std::path::Path;
     use std::rc::Rc;
     use std::time::Duration;
+    #[cfg(feature = "ros")]
+    use tc_testutils::ros::{
+        generate_xy_test_publisher_tasks_with_topics, qualified_ros_name, recv_ros_int_stream,
+    };
+    #[cfg(feature = "ros")]
+    use tc_testutils::streams::{with_timeout, with_timeout_res};
     use tracing::error;
     use trustworthiness_checker::async_test;
 
@@ -262,6 +276,62 @@ mod integration_tests {
     /// Helper function to get fixture file path
     fn fixture_path(filename: &str) -> String {
         format!("tests/fixtures/{}", filename)
+    }
+
+    #[cfg(feature = "ros")]
+    fn render_template(template_path: &str, replacements: &[(&str, &str)]) -> String {
+        let mut content =
+            fs::read_to_string(template_path).expect("Failed to read mapping template file");
+        for (placeholder, value) in replacements {
+            content = content.replace(placeholder, value);
+        }
+        content
+    }
+
+    #[cfg(feature = "ros")]
+    fn cleanup_file(path: &str) {
+        let _ = fs::remove_file(path);
+    }
+
+    #[cfg(feature = "ros")]
+    async fn wait_for_value(
+        stream: &mut (impl smol::stream::Stream<Item = i32> + Unpin),
+        expected: i32,
+        max_reads: usize,
+        timeout_per_read_secs: u64,
+    ) -> anyhow::Result<Vec<Option<i32>>> {
+        let mut observed = Vec::new();
+        for _ in 0..max_reads {
+            let next = with_timeout(
+                stream.next(),
+                timeout_per_read_secs,
+                "z_output_stream.next()",
+            )
+            .await?;
+            observed.push(next);
+            if next == Some(expected) {
+                return Ok(observed);
+            }
+            if next.is_none() {
+                break;
+            }
+        }
+        Err(anyhow::anyhow!(
+            "Expected to observe Some({expected}), got {:?}",
+            observed
+        ))
+    }
+
+    #[cfg(feature = "ros")]
+    async fn tick_xy_and_wait_for(
+        x_tick: &mut tc_testutils::streams::TickSender,
+        y_tick: &mut tc_testutils::streams::TickSender,
+        z_output_stream: &mut (impl smol::stream::Stream<Item = i32> + Unpin),
+        expected: i32,
+    ) -> anyhow::Result<Vec<Option<i32>>> {
+        with_timeout_res(x_tick.send(()), 3, "x_tick.send").await?;
+        with_timeout_res(y_tick.send(()), 3, "y_tick.send").await?;
+        wait_for_value(z_output_stream, expected, 20, 3).await
     }
 
     /// Test simple addition with typed inputs
@@ -2059,5 +2129,126 @@ mod integration_tests {
             }
             // If no exit status, the process was terminated due to timeout (expected behavior)
         }
+    }
+
+    #[cfg(feature = "ros")]
+    #[apply(async_test)]
+    async fn test_ros_input_ros_output(ex: Rc<LocalExecutor>) {
+        let x_topic = format!("/{}", qualified_ros_name(test_ros_input_ros_output, "x"));
+        let y_topic = format!("/{}", qualified_ros_name(test_ros_input_ros_output, "y"));
+        let z_topic = format!("/{}", qualified_ros_name(test_ros_input_ros_output, "z"));
+
+        let tmp_id = qualified_ros_name(
+            test_ros_input_ros_output,
+            format!("{}", std::process::id()).as_str(),
+        );
+        let input_map = format!("/tmp/tc_ros_input_map_{tmp_id}.json");
+        let output_map = format!("/tmp/tc_ros_output_map_{tmp_id}.json");
+
+        let input_map_content = render_template(
+            &fixture_path("simple_add_mapping.template.json"),
+            &[("{{X_TOPIC}}", &x_topic), ("{{Y_TOPIC}}", &y_topic)],
+        );
+        let output_map_content = render_template(
+            &fixture_path("simple_add_output_mapping.template.json"),
+            &[("{{Z_TOPIC}}", &z_topic)],
+        );
+
+        fs::write(&input_map, input_map_content)
+            .expect("Failed to write temporary ROS input mapping");
+        fs::write(&output_map, output_map_content)
+            .expect("Failed to write temporary ROS output mapping");
+
+        // Start CLI concurrently so it can subscribe before we publish ROS inputs.
+        let cli_timeout = Duration::from_secs(6);
+        let args = vec![
+            fixture_path("simple_add_typed.lola"),
+            "--input-ros-file".to_string(),
+            input_map.clone(),
+            "--output-ros-file".to_string(),
+            output_map.clone(),
+        ];
+        let cli_task = ex.spawn(async move {
+            let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run_cli_streaming(&args_refs, cli_timeout).await
+        });
+
+        let xs_ros = vec![Int32 { data: 1 }, Int32 { data: 2 }];
+        let ys_ros = vec![Int32 { data: 3 }, Int32 { data: 4 }];
+
+        let mut z_output_stream = recv_ros_int_stream(
+            ex.clone(),
+            qualified_ros_name(test_ros_input_ros_output, "z_int_receiver"),
+            z_topic,
+            15,
+        )
+        .unwrap();
+
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_xy_test_publisher_tasks_with_topics(
+                ex.clone(),
+                test_ros_input_ros_output,
+                &x_topic,
+                &y_topic,
+                xs_ros,
+                ys_ros,
+            );
+
+        let mut observed_first = Vec::new();
+        let mut got_first = false;
+        for _ in 0..3 {
+            let obs = tick_xy_and_wait_for(&mut x_tick, &mut y_tick, &mut z_output_stream, 4)
+                .await
+                .expect("Failed while waiting for first ROS output value");
+            observed_first.extend(obs);
+            if observed_first.contains(&Some(4)) {
+                got_first = true;
+                break;
+            }
+        }
+        assert!(
+            got_first,
+            "Expected to observe Some(4) after retrying tick pairs, got {:?}",
+            observed_first
+        );
+
+        let mut observed_second = Vec::new();
+        let mut got_second = false;
+        for _ in 0..3 {
+            let obs = tick_xy_and_wait_for(&mut x_tick, &mut y_tick, &mut z_output_stream, 6)
+                .await
+                .expect("Failed while waiting for second ROS output value");
+            observed_second.extend(obs);
+            if observed_second.contains(&Some(6)) {
+                got_second = true;
+                break;
+            }
+        }
+        assert!(
+            got_second,
+            "Expected to observe Some(6) after retrying tick pairs, got {:?}",
+            observed_second
+        );
+
+        // Close tick channels so tick-gated publisher streams can terminate cleanly.
+        drop(x_tick);
+        drop(y_tick);
+
+        x_publisher_task.await.unwrap();
+        y_publisher_task.await.unwrap();
+
+        let (_stdout, stderr, exit_status) = cli_task.await.expect("Failed to run CLI streaming");
+
+        if let Some(status) = exit_status {
+            assert!(
+                status.signal().is_some(),
+                "Command failed:\nexit_status = {}\nstderr = {}",
+                status,
+                stderr
+            );
+        }
+
+        cleanup_file(&input_map);
+        cleanup_file(&output_map);
     }
 }

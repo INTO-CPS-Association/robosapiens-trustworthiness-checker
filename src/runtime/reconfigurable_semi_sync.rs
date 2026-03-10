@@ -462,7 +462,7 @@ where
                         mqtt_output: true,
                         output_redis_topics: None,
                         redis_output: false,
-                        output_ros_topics: None,
+                        output_ros_file: None,
                     },
                     mode if mode.output_redis_topics.is_some() => OutputMode {
                         output_stdout: false,
@@ -470,7 +470,7 @@ where
                         mqtt_output: false,
                         output_redis_topics: None,
                         redis_output: true,
-                        output_ros_topics: None,
+                        output_ros_file: None,
                     },
                     _ => {
                         self.self_builder

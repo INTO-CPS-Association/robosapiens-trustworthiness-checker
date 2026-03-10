@@ -88,9 +88,8 @@ pub struct OutputMode {
     pub redis_output: bool,
 
     // #[cfg(feature = "ros")]
-    // TODO: Implement ROS output support
     #[clap(long, help = "ROS topics configuration file for output")]
-    pub output_ros_topics: Option<String>,
+    pub output_ros_file: Option<String>,
 }
 
 /// Distribution and deployment configuration for monitoring
@@ -241,4 +240,29 @@ pub struct Cli {
         default_value = "reconfig"
     )]
     pub reconf_topic: String,
+}
+
+/// ROS-specific Trustworthiness Checker configuration
+///
+/// Specialized version for Robot Operating System (ROS) environments with
+/// ROS topic mapping and integration capabilities.
+#[derive(Parser)]
+#[command(name = "trustworthiness-checker-ros")]
+#[command(about = "ROS-specific runtime verification tool")]
+#[command(
+    long_about = "ROS-specific version of the Trustworthiness Checker with native ROS topic integration and mapping capabilities."
+)]
+pub struct CliROS {
+    #[arg(help = "Path to the model specification file")]
+    pub model: String,
+    #[arg(help = "Path to ROS input mapping configuration file")]
+    pub ros_input_mapping_file: String,
+    #[arg(help = "Path to ROS output mapping configuration file")]
+    pub ros_output_file: String,
+    #[arg(long, help = "Specification language to use")]
+    pub language: Option<Language>,
+    #[arg(long, help = "Semantics engine to use for monitoring")]
+    pub semantics: Option<Semantics>,
+    #[arg(long, help = "Runtime system to use for execution")]
+    pub runtime: Option<Runtime>,
 }

@@ -148,6 +148,7 @@ impl ROSInputProvider {
     ) -> Result<Self, r2r::Error> {
         // Create a ROS node to subscribe to all of the input topics
         let ctx = r2r::Context::create()?;
+        // TODO: do we need to specify a unique ROS node name?
         let mut node = r2r::Node::create(ctx, "input_monitor", "")?;
 
         // Cancellation token to stop the subscriber node

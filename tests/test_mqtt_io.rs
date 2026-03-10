@@ -520,7 +520,7 @@ mod reconf_tests {
             mqtt_output: true,
             output_redis_topics: None,
             redis_output: false,
-            output_ros_topics: None,
+            output_ros_file: None,
         };
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
@@ -663,7 +663,7 @@ mod reconf_tests {
             mqtt_output: true,
             output_redis_topics: None,
             redis_output: false,
-            output_ros_topics: None,
+            output_ros_file: None,
         };
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
@@ -897,7 +897,7 @@ mod reconf_tests {
             mqtt_output: true,
             output_redis_topics: None,
             redis_output: false,
-            output_ros_topics: None,
+            output_ros_file: None,
         };
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
@@ -1104,7 +1104,7 @@ mod reconf_tests {
             mqtt_output: true,
             output_redis_topics: None,
             redis_output: false,
-            output_ros_topics: None,
+            output_ros_file: None,
         };
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
@@ -1300,7 +1300,7 @@ mod reconf_tests {
             mqtt_output: true,
             output_redis_topics: None,
             redis_output: false,
-            output_ros_topics: None,
+            output_ros_file: None,
         };
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
@@ -1477,7 +1477,7 @@ mod reconf_tests {
             mqtt_output: true,
             output_redis_topics: None,
             redis_output: false,
-            output_ros_topics: None,
+            output_ros_file: None,
         };
 
         let output_builder = OutputHandlerBuilder::new(output_mode)

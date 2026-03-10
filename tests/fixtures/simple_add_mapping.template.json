@@ -1,0 +1,10 @@
+{
+    "x": {
+        "topic": "{{X_TOPIC}}",
+        "msg_type": "Int32"
+    },
+    "y": {
+        "topic": "{{Y_TOPIC}}",
+        "msg_type": "Int32"
+    }
+}

@@ -1,0 +1,6 @@
+{
+    "z": {
+        "topic": "{{Z_TOPIC}}",
+        "msg_type": "Int32"
+    }
+}
