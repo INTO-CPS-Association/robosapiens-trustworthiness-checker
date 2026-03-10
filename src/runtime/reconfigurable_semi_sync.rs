@@ -2,8 +2,8 @@ use crate::{
     OutputStream, Value, VarName,
     cli::args::OutputMode,
     core::{
-        AbstractMonitorBuilder, DeferrableStreamData, InputProvider, Monitor, OutputHandler,
-        Runnable, Specification,
+        AbstractMonitorBuilder, DeferrableStreamData, InputProvider, OutputHandler, Runnable,
+        Specification,
     },
     io::{
         InputProviderBuilder,
@@ -570,19 +570,6 @@ where
         }
 
         Ok(ControlFlow::Continue(()))
-    }
-}
-
-impl<AC, S, MS, P> Monitor<S, AC::Val> for ReconfSemiSyncMonitor<AC, S, MS, P>
-where
-    AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
-    AC::Val: DeferrableStreamData,
-    S: Specification<Expr = AC::Expr>,
-    MS: MonitoringSemantics<AC>,
-    P: SpecParser<S>,
-{
-    fn spec(&self) -> &S {
-        unimplemented!("Don't think this is used anywhere...")
     }
 }
 
