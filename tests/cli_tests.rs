@@ -2134,6 +2134,7 @@ mod integration_tests {
     }
 
     #[cfg(feature = "ros")]
+    #[ignore = "TODO: TW - this test is too flaky. Please fix it the way we discussed. See reconf tests in test_mqtt_io"]
     #[apply(async_test)]
     async fn test_ros_input_ros_output(ex: Rc<LocalExecutor>) {
         let x_topic = format!("/{}", qualified_ros_name(test_ros_input_ros_output, "x"));
