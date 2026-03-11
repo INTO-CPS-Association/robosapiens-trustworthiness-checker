@@ -45,7 +45,7 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec = trustworthiness_checker::lola_specification(&mut spec_add_defer()).unwrap();
+    let spec = trustworthiness_checker::dsrv_specification(&mut spec_add_defer()).unwrap();
 
     for size in sizes {
         let input_stream_fn = || input_streams_add_defer(size);

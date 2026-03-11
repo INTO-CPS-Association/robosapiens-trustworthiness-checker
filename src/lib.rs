@@ -9,7 +9,7 @@ pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
     ast::{DSRVSpecification, SExpr},
-    parser::lola_specification,
+    parser::dsrv_specification,
 };
 pub mod distributed;
 pub mod dsrv_fixtures;

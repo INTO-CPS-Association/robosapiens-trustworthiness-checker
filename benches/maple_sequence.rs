@@ -8,9 +8,9 @@ use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
-use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
+use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -47,7 +47,7 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec = trustworthiness_checker::lola_specification(&mut spec_maple_sequence()).unwrap();
+    let spec = trustworthiness_checker::dsrv_specification(&mut spec_maple_sequence()).unwrap();
     let spec_typed = type_check(spec.clone()).expect("Type check failed");
 
     for size in sizes {

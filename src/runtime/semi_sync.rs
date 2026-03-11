@@ -943,7 +943,7 @@ mod tests {
     use crate::runtime::semi_sync::SemiSyncMonitor;
     use crate::semantics::UntimedLolaSemantics;
     use crate::{DSRVSpecification, dsrv_fixtures::*};
-    use crate::{Value, lola_specification};
+    use crate::{Value, dsrv_specification};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -957,7 +957,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
-        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
@@ -999,7 +999,7 @@ mod tests {
     async fn test_simple_add_null_handler(executor: Rc<LocalExecutor<'static>>) {
         // Testing that the monitor works with a NullOutputHandler
         // (to avoid previous regressions)
-        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
@@ -1028,7 +1028,7 @@ mod tests {
         // on each other
         // (There was a bug where output stream cancellation did not propagate properly)
         let mut spec = "in x\nout a\nout b\na = x\nb = a + 1";
-        let spec = lola_specification(&mut spec).unwrap();
+        let spec = dsrv_specification(&mut spec).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let input_streams = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
@@ -1066,7 +1066,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
-        let spec = lola_specification(&mut spec_dynamic()).unwrap();
+        let spec = dsrv_specification(&mut spec_dynamic()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -1106,7 +1106,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_defer_single(executor: Rc<LocalExecutor<'static>>) {
-        let spec = lola_specification(&mut spec_defer()).unwrap();
+        let spec = dsrv_specification(&mut spec_defer()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), Value::Deferred, Value::Deferred];
@@ -1146,7 +1146,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_defer_multiple(executor: Rc<LocalExecutor<'static>>) {
-        let spec = lola_specification(&mut spec_defer()).unwrap();
+        let spec = dsrv_specification(&mut spec_defer()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -1186,7 +1186,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_defer_delayed(executor: Rc<LocalExecutor<'static>>) {
-        let spec = lola_specification(&mut spec_defer()).unwrap();
+        let spec = dsrv_specification(&mut spec_defer()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, Value::Deferred, "x + 3".into()];

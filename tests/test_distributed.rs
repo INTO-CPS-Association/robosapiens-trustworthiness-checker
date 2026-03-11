@@ -9,8 +9,8 @@ use trustworthiness_checker::{
     core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
+    dsrv_specification,
     io::testing::ManualOutputHandler,
-    lola_specification,
     runtime::distributed::DistAsyncMonitorBuilder,
     semantics::distributed::semantics::DistributedSemantics,
 };
@@ -54,7 +54,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = monitored_at(x, B)";
     let var_names = vec!["w".into(), "y".into(), "z".into()];
-    let spec = lola_specification.parse(spec).unwrap();
+    let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -111,7 +111,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(x, y)";
     let var_names = vec!["w".into(), "y".into(), "z".into()];
-    let spec = lola_specification.parse(spec).unwrap();
+    let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -168,7 +168,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(A, C)";
     let var_names = vec!["w".into(), "y".into(), "z".into()];
-    let spec = lola_specification.parse(spec).unwrap();
+    let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -225,7 +225,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(x, C)";
     let var_names = vec!["w".into(), "y".into(), "z".into()];
-    let spec = lola_specification.parse(spec).unwrap();
+    let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -282,7 +282,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(x, z)";
     let var_names = vec!["w".into(), "y".into(), "z".into()];
-    let spec = lola_specification.parse(spec).unwrap();
+    let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 

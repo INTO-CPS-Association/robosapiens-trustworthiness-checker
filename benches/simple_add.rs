@@ -9,10 +9,10 @@ use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
-use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::dsrv_fixtures::input_streams_simple_add;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor_typed;
+use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -49,9 +49,9 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec = trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor()).unwrap();
+    let spec = trustworthiness_checker::dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
     let spec_typed =
-        trustworthiness_checker::lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        trustworthiness_checker::dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
     let spec_typed = type_check(spec_typed.clone()).expect("Type check failed");
 
     for size in sizes {

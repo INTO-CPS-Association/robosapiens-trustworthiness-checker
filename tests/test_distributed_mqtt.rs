@@ -22,9 +22,8 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
 
     use trustworthiness_checker::{
-        VarName,
+        VarName, dsrv_specification,
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
-        lola_specification,
         semantics::distributed::localisation::Localisable,
     };
 
@@ -146,10 +145,10 @@ mod integration_tests {
     async fn manually_decomposed_monitor_test(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        let model1 = lola_specification
+        let model1 = dsrv_specification
             .parse(spec_simple_add_decomposed_1())
             .expect("Model could not be parsed");
-        let model2 = lola_specification
+        let model2 = dsrv_specification
             .parse(spec_simple_add_decomposed_2())
             .expect("Model could not be parsed");
 
@@ -273,10 +272,10 @@ mod integration_tests {
     async fn test_localisation_distribution(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        let model1 = lola_specification
+        let model1 = dsrv_specification
             .parse(spec_simple_add_decomposed_1())
             .expect("Model could not be parsed");
-        let model2 = lola_specification
+        let model2 = dsrv_specification
             .parse(spec_simple_add_decomposed_2())
             .expect("Model could not be parsed");
 
@@ -429,10 +428,10 @@ mod integration_tests {
     async fn test_localisation_distribution_graphs(
         executor: Rc<LocalExecutor<'static>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let model1 = lola_specification
+        let model1 = dsrv_specification
             .parse(spec_simple_add_decomposed_1())
             .expect("Model could not be parsed");
-        let model2 = lola_specification
+        let model2 = dsrv_specification
             .parse(spec_simple_add_decomposed_2())
             .expect("Model could not be parsed");
 

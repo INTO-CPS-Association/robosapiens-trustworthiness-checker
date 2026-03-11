@@ -93,8 +93,8 @@ mod tests {
     use std::vec;
 
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
+    use crate::dsrv_specification;
     use crate::lang::dsrv::ast::SExpr;
-    use crate::lola_specification;
     use proptest::prelude::*;
     use test_log::test;
     use winnow::Parser;
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_localise_specification_simple_add() {
-        let spec = lola_specification
+        let spec = dsrv_specification
             .parse(spec_simple_add_decomposable())
             .expect("Failed to parse specification");
 

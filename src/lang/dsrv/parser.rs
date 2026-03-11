@@ -898,7 +898,7 @@ pub(crate) fn assignment_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
     separated(0.., assignment_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-pub fn lola_specification(s: &mut &str) -> Result<DSRVSpecification> {
+pub fn dsrv_specification(s: &mut &str) -> Result<DSRVSpecification> {
     seq!((
         _: loop_ms_or_lb_or_lc,
         input_decls,
@@ -1117,7 +1117,7 @@ mod tests {
             type_annotations: BTreeMap::new(),
             aux_info: vec!["u".into(), "w".into()],
         };
-        assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
+        assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
         Ok(())
     }
 
@@ -1149,7 +1149,7 @@ mod tests {
             ]),
             aux_info: vec!["u".into(), "w".into()],
         };
-        assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
+        assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
         Ok(())
     }
 
@@ -1170,7 +1170,7 @@ mod tests {
             )]),
             type_annotations: BTreeMap::new(),
         };
-        assert_eq!(lola_specification(&mut (*input).into())?, simple_add_spec);
+        assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
         Ok(())
     }
 
@@ -1195,7 +1195,7 @@ mod tests {
                 (VarName::new("z"), StreamType::Int),
             ]),
         };
-        assert_eq!(lola_specification(&mut input)?, simple_add_spec);
+        assert_eq!(dsrv_specification(&mut input)?, simple_add_spec);
         Ok(())
     }
 
@@ -1220,7 +1220,7 @@ mod tests {
                 ("z".into(), StreamType::Float),
             ]),
         };
-        assert_eq!(lola_specification(&mut input)?, simple_add_spec);
+        assert_eq!(dsrv_specification(&mut input)?, simple_add_spec);
         Ok(())
     }
 
@@ -1243,7 +1243,7 @@ mod tests {
             )]),
             type_annotations: BTreeMap::new(),
         };
-        assert_eq!(lola_specification(&mut (*input).into())?, count_spec);
+        assert_eq!(dsrv_specification(&mut (*input).into())?, count_spec);
         Ok(())
     }
 
@@ -1280,7 +1280,7 @@ mod tests {
             BTreeMap::new(),
             vec![],
         );
-        assert_eq!(lola_specification(&mut (*input).into())?, eval_spec);
+        assert_eq!(dsrv_specification(&mut (*input).into())?, eval_spec);
         Ok(())
     }
 
@@ -2177,7 +2177,7 @@ mod spec_tests {
     #[test]
     fn test_lola_specs_normal() {
         for &(name, (mut spec, exp)) in specs().iter() {
-            let parsed = presult_to_string(&lola_specification(&mut spec));
+            let parsed = presult_to_string(&dsrv_specification(&mut spec));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
@@ -2189,7 +2189,7 @@ mod spec_tests {
     fn test_lola_specs_added_newlines() {
         for &(name, (spec, exp)) in specs().iter() {
             let spec = spec.replace("\n", "\n\n");
-            let parsed = presult_to_string(&lola_specification(&mut spec.as_str()));
+            let parsed = presult_to_string(&dsrv_specification(&mut spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
@@ -2201,13 +2201,13 @@ mod spec_tests {
     fn test_lola_specs_added_comments() {
         for &(name, (spec, exp)) in specs().iter() {
             let mod_spec = spec.replace("\n", "\n//This is a comment\n");
-            let parsed = presult_to_string(&lola_specification(&mut mod_spec.as_str()));
+            let parsed = presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
             );
             let mod_spec = spec.replace("\n", "//This is a comment\n"); // Beginning \n
-            let parsed = presult_to_string(&lola_specification(&mut mod_spec.as_str()));
+            let parsed = presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)

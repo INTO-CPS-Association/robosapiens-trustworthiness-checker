@@ -68,8 +68,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = builder.reconf_topic(cli.reconf_topic);
 
     let model_parser = match cli.language {
-        Language::DSRV => tc::lang::dsrv::parser::lola_specification,
-        Language::Lola => tc::lang::dsrv::parser::lola_specification,
+        Language::DSRV => tc::lang::dsrv::parser::dsrv_specification,
+        Language::Lola => tc::lang::dsrv::parser::dsrv_specification,
     };
 
     let builder = builder.scheduler_mode(cli.scheduling_mode.clone());

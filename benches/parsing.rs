@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use trustworthiness_checker::dsrv_specification;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_str;
-use trustworthiness_checker::lola_specification;
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -120,7 +120,7 @@ fn parse_small_varied_inputs(c: &mut Criterion) {
         // pre-validate that all parsers accept the input
         assert!(parse_str(input.as_str()).is_ok());
         let inp = &mut input.as_str();
-        assert!(lola_specification(inp).is_ok());
+        assert!(dsrv_specification(inp).is_ok());
 
         group.bench_with_input(
             BenchmarkId::new("parsing_winnow", size),
@@ -128,7 +128,7 @@ fn parse_small_varied_inputs(c: &mut Criterion) {
             |b, input| {
                 b.iter(|| {
                     let inp = &mut input.as_str();
-                    let _ = lola_specification(inp);
+                    let _ = dsrv_specification(inp);
                 })
             },
         );
@@ -175,7 +175,7 @@ fn parse_growing_complexity_input(c: &mut Criterion) {
         assert!(parse_str(input.as_str()).is_ok());
         if size <= 16 {
             let inp = &mut input.as_str();
-            assert!(lola_specification(inp).is_ok());
+            assert!(dsrv_specification(inp).is_ok());
         }
 
         // parsing with winnow gets very slow for complex inputs
@@ -186,7 +186,7 @@ fn parse_growing_complexity_input(c: &mut Criterion) {
                 |b, input| {
                     b.iter(|| {
                         let inp = &mut input.as_str();
-                        let _ = lola_specification(inp);
+                        let _ = dsrv_specification(inp);
                     })
                 },
             );

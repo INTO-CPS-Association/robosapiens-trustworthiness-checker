@@ -11,7 +11,7 @@ use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
 use trustworthiness_checker::{DSRVSpecification, dsrv_fixtures::*};
-use trustworthiness_checker::{Value, lola_specification, runtime::RuntimeBuilder};
+use trustworthiness_checker::{Value, dsrv_specification, runtime::RuntimeBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TestConfiguration {
@@ -70,7 +70,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -123,7 +123,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
@@ -176,7 +176,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
@@ -229,7 +229,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
@@ -282,7 +282,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
             continue;
         }
         let mut spec_str = "in x: Int\nin y: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = x + y";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
         let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
@@ -341,7 +341,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
+        let spec_untyped = dsrv_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
         let x = vec!["x0".into(), "x1".into(), "x2".into()];
         let y = vec!["y0".into(), "y1".into(), "y2".into()];
@@ -390,7 +390,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = lola_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
+        let spec_untyped = dsrv_specification(&mut "in x\nin y\nout z\nz = update(x, y)").unwrap();
 
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
@@ -445,7 +445,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             continue;
         }
         let spec_untyped =
-            lola_specification(&mut "in x\nin e\nout z\nz = update(\"def\", defer(e))").unwrap();
+            dsrv_specification(&mut "in x\nin e\nout z\nz = update(\"def\", defer(e))").unwrap();
 
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
@@ -500,7 +500,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             continue;
         }
         let spec_untyped =
-            lola_specification(&mut "in x\nin y\nout z\nz = defer(update(x, y))").unwrap();
+            dsrv_specification(&mut "in x\nin y\nout z\nz = defer(update(x, y))").unwrap();
 
         let x = vec![Value::Deferred, "x".into(), "x_lost".into(), "x_sad".into()];
         let y = vec![
@@ -665,7 +665,7 @@ pub fn input_streams_constraint() -> MapInputProvider {
 #[apply(async_test)]
 async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = lola_specification(&mut spec_empty()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_empty()).unwrap();
 
         let input_streams = input_empty();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -701,7 +701,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
 async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nout z: Int\nz = x";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -747,7 +747,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "out z: Int\nz = 42";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -797,7 +797,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nout z: Int\nz = x + 1";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -843,7 +843,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
 async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nout z: Int\nz = x - 10";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -891,7 +891,7 @@ async fn test_index_past_mult_dependencies(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nout z1: Int\nout z2: Int\nz2 = x[2]\nz1 = x[1]";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -943,7 +943,7 @@ async fn test_index_past_mult_dependencies(
 async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Bool\nin y: Bool\nout z: Bool\nz = if(x) then y else false";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams5();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -989,7 +989,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Str\nin y: Str\nout z: Str\nz = x ++ y";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams4();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -1031,7 +1031,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -1077,7 +1077,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
 async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = MapInputProvider::new(BTreeMap::from([(
             "x".into(),
@@ -1126,7 +1126,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nout z: Int\nz = default(x, 42)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = MapInputProvider::new(BTreeMap::from([(
             "x".into(),
@@ -1175,7 +1175,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_empty();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -1228,7 +1228,7 @@ async fn test_simple_add_monitor_does_not_go_away(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
-        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_streams = input_streams1();
@@ -1280,7 +1280,7 @@ async fn test_simple_add_monitor_large_input(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
-        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
 
         // Create fresh input streams for each test iteration (100 elements)
         let input_streams = trustworthiness_checker::dsrv_fixtures::input_streams_simple_add(100);
@@ -1350,7 +1350,7 @@ pub fn input_streams_constraint_style() -> MapInputProvider {
 #[apply(async_test)]
 async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
 
         let input_streams = input_streams3();
 
@@ -1390,7 +1390,7 @@ async fn test_simple_add_monitor_untyped_spec(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
         let input_streams = input_streams3();
 
@@ -1434,7 +1434,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
             continue;
         }
         let mut spec_str = "in x\nin e\nout z\nz = defer(e)";
-        let spec = lola_specification(&mut spec_str).unwrap();
+        let spec = dsrv_specification(&mut spec_str).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -1479,7 +1479,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
 async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
         let mut spec_str = spec_dynamic_monitor();
-        let spec = lola_specification(&mut spec_str).unwrap();
+        let spec = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams2();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -1518,7 +1518,7 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
 #[apply(async_test)]
 async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = lola_specification(&mut spec_simple_modulo_monitor_typed()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_simple_modulo_monitor_typed()).unwrap();
 
         let input_streams = input_streams3();
 
@@ -1560,7 +1560,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 #[apply(async_test)]
 async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::async_configurations() {
-        let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
 
         let input_streams = input_streams_float();
 
@@ -1607,7 +1607,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
         {
             let input_streams = MapInputProvider::new(BTreeMap::new());
             let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-            let spec_untyped = lola_specification(&mut spec_str).unwrap();
+            let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -1645,7 +1645,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
         {
             let input_streams = MapInputProvider::new(BTreeMap::new());
             let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-            let spec_untyped = lola_specification(&mut spec_str).unwrap();
+            let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -1761,7 +1761,7 @@ async fn test_drop_guard_cancellation_behavior(
     for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
         let input_streams = MapInputProvider::new(BTreeMap::new());
         let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -1802,7 +1802,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
     for config in TestConfiguration::all() {
         // Use different specifications based on configuration to ensure type compatibility
         let mut spec_str = "out x: Int\nx = 1 + default(x[1], 0)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration (empty for count monitor)
         let input_streams = MapInputProvider::new(BTreeMap::new());
@@ -1851,7 +1851,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::async_configurations() {
         let mut spec = "in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y";
-        let spec_untyped = lola_specification(&mut spec).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec).unwrap();
 
         let input_streams = input_streams3();
 
@@ -1892,7 +1892,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int)";
         let input_streams = input_streams2();
-        let spec = lola_specification(&mut spec_str).unwrap();
+        let spec = dsrv_specification(&mut spec_str).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars.clone(),
@@ -1928,7 +1928,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
 #[apply(async_test)]
 async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = lola_specification(&mut spec_typed_string_concat()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_typed_string_concat()).unwrap();
 
         let input_streams = input_streams4();
 
@@ -1967,7 +1967,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nin y: Int\nout z: Int\nz = x[1]";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         let input_streams = input_streams_constraint_style();
 
@@ -2009,7 +2009,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 #[apply(async_test)]
 async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = lola_specification(&mut spec_maple_sequence()).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_maple_sequence()).unwrap();
 
         let input_streams = maple_valid_input_stream(10);
 
@@ -2068,7 +2068,7 @@ async fn test_restricted_dynamic_monitor(
             continue;
         }
         let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int, {x,y})";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_streams = input_streams2();
@@ -2128,7 +2128,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_streams = input_streams_defer_1();
@@ -2199,7 +2199,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_streams = input_streams_defer_2();
@@ -2270,7 +2270,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_streams = input_streams_defer_3();
@@ -2341,7 +2341,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             continue;
         }
         let mut spec_str = "in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_streams = input_streams_defer_4();
@@ -2413,7 +2413,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let mut spec_str = "in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = dynamic(e : Int)";
-        let spec_untyped = lola_specification(&mut spec_str).unwrap();
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_streams = input_streams_defer_comp_dynamic();
@@ -2485,7 +2485,7 @@ async fn test_benchmark_regression_long_add_defer(
     let _guard = subscriber.set_default(); // active only in this scope
 
     for config in TestConfiguration::untyped_configurations() {
-        let spec = lola_specification(&mut spec_add_defer()).unwrap();
+        let spec = dsrv_specification(&mut spec_add_defer()).unwrap();
 
         let input_streams = input_streams_add_defer(SIZE);
 

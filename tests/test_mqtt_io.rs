@@ -33,8 +33,8 @@ mod integration_tests {
         Value,
         core::Runnable,
         dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
+        dsrv_specification,
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
-        lola_specification,
     };
 
     const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
@@ -98,7 +98,7 @@ mod integration_tests {
 
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
-        let spec = lola_specification
+        let spec = dsrv_specification
             .parse(spec_simple_add_monitor())
             .expect("Model could not be parsed");
 
@@ -149,7 +149,7 @@ mod integration_tests {
 
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_output_float(executor: Rc<LocalExecutor<'static>>) {
-        let spec = lola_specification
+        let spec = dsrv_specification
             .parse(spec_simple_add_monitor_typed_float())
             .expect("Model could not be parsed");
 
@@ -418,12 +418,12 @@ mod reconf_tests {
     use trustworthiness_checker::core::values::Value;
     use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
     use trustworthiness_checker::dsrv_fixtures::*;
+    use trustworthiness_checker::dsrv_specification;
     use trustworthiness_checker::io::builders::{
         InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
     };
     use trustworthiness_checker::lang::dsrv::ast::DSRVSpecification;
     use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
-    use trustworthiness_checker::lola_specification;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder;
     use trustworthiness_checker::semantics::UntimedLolaSemantics;
@@ -490,7 +490,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, without actually sending a
         // reconfiguration, to check that the basic MQTT input/output works as expected.
 
-        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let expected = vec![Value::Int(3), Value::Int(5), Value::Int(7)];
@@ -624,7 +624,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure but do
         // not introduce/remove any streams
 
-        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
         let in_len = xs.len();
@@ -859,7 +859,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure to a
         // spec that does not require a y stream
 
-        let spec = lola_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -1065,7 +1065,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncMonitor with the acc spec, where we reconfigure to
         // run the simple_add spec, which includes an extra input stream
 
-        let spec = lola_specification(&mut spec_acc_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_acc_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -1269,7 +1269,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncMonitor with the where we initally have two output streams,
         // and reconfigure into having one
 
-        let spec = lola_specification(&mut spec_assignment2_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_assignment2_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(2), Value::Int(3)];
@@ -1445,7 +1445,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncMonitor with the where we initally have one output streams,
         // and reconfigure into having two
 
-        let spec = lola_specification(&mut spec_assignment_monitor()).unwrap();
+        let spec = dsrv_specification(&mut spec_assignment_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(4), Value::Int(5)];

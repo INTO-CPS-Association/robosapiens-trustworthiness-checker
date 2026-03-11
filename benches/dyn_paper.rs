@@ -51,8 +51,8 @@ fn from_elem(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(std::time::Duration::from_secs(10));
 
-    let spec_direct = trustworthiness_checker::lola_specification(&mut spec_direct_and()).unwrap();
-    let spec = trustworthiness_checker::lola_specification(&mut spec_deferred_and()).unwrap();
+    let spec_direct = trustworthiness_checker::dsrv_specification(&mut spec_direct_and()).unwrap();
+    let spec = trustworthiness_checker::dsrv_specification(&mut spec_deferred_and()).unwrap();
     let percents = vec![0, 25, 50, 75, 100];
 
     for size in sizes.iter() {
