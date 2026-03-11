@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use tracing::debug;
 
-use crate::lang::dsrv::ast::DSRVSpecification;
+use crate::lang::dsrv::ast::DsrvSpecification;
 
 use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
@@ -47,7 +47,7 @@ pub trait Localisable {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self;
 }
 
-impl Localisable for DSRVSpecification {
+impl Localisable for DsrvSpecification {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self {
         let local_vars = locality_spec.local_vars();
         let mut exprs = self.exprs.clone();
@@ -77,7 +77,7 @@ impl Localisable for DSRVSpecification {
         debug!("Old input vars: {:?}", input_vars);
         debug!("New input vars: {:?}", new_input_vars);
 
-        DSRVSpecification::new(
+        DsrvSpecification::new(
             new_input_vars,
             output_vars,
             exprs,
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_localise_specification_1() {
-        let spec = DSRVSpecification::new(
+        let spec = DsrvSpecification::new(
             vec!["a".into(), "b".into()],
             vec!["c".into(), "d".into(), "e".into()],
             vec![
@@ -122,7 +122,7 @@ mod tests {
         let localised_spec = spec.localise(&restricted_vars);
         assert_eq!(
             localised_spec,
-            DSRVSpecification::new(
+            DsrvSpecification::new(
                 vec!["a".into(), "d".into()],
                 vec!["c".into(), "e".into()],
                 vec![
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_localise_specification_2() {
-        let spec = DSRVSpecification::new(
+        let spec = DsrvSpecification::new(
             vec!["a".into()],
             vec!["i".into()],
             vec![].into_iter().collect(),
@@ -150,7 +150,7 @@ mod tests {
         let localised_spec = spec.localise(&restricted_vars);
         assert_eq!(
             localised_spec,
-            DSRVSpecification::new(
+            DsrvSpecification::new(
                 vec![],
                 vec![],
                 vec![].into_iter().collect(),
@@ -171,7 +171,7 @@ mod tests {
 
         assert_eq!(
             local_spec1,
-            DSRVSpecification::new(
+            DsrvSpecification::new(
                 vec!["x".into(), "y".into()],
                 vec!["w".into()],
                 vec![(
@@ -191,7 +191,7 @@ mod tests {
 
         assert_eq!(
             local_spec2,
-            DSRVSpecification::new(
+            DsrvSpecification::new(
                 vec!["z".into(), "w".into()],
                 vec!["v".into()],
                 vec![(

@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use tracing::{debug, warn};
 
 use crate::{
-    DSRVSpecification, Monitor, SExpr, Value, VarName,
+    DsrvSpecification, Monitor, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     define_config,
@@ -14,7 +14,7 @@ use crate::{
     lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
-        type_checker::{SExprTE, TypedDSRVSpecification, type_check},
+        type_checker::{SExprTE, TypedDsrvSpecification, type_check},
     },
     runtime::{
         reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder,
@@ -126,9 +126,9 @@ struct TypeCheckingBuilder<Builder>(Builder);
 
 impl<
     V: StreamData,
-    Mon: Monitor<TypedDSRVSpecification, V> + 'static,
-    MonBuilder: AbstractMonitorBuilder<TypedDSRVSpecification, V, Mon = Mon> + 'static,
-> AbstractMonitorBuilder<DSRVSpecification, V> for TypeCheckingBuilder<MonBuilder>
+    Mon: Monitor<TypedDsrvSpecification, V> + 'static,
+    MonBuilder: AbstractMonitorBuilder<TypedDsrvSpecification, V, Mon = Mon> + 'static,
+> AbstractMonitorBuilder<DsrvSpecification, V> for TypeCheckingBuilder<MonBuilder>
 {
     type Mon = Mon;
 
@@ -140,7 +140,7 @@ impl<
         Self(self.0.executor(ex))
     }
 
-    fn model(self, model: DSRVSpecification) -> Self {
+    fn model(self, model: DsrvSpecification) -> Self {
         let model = type_check(model).expect("Model failed to type check");
         Self(self.0.model(model))
     }
@@ -311,8 +311,8 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
     }
 }
 
-impl AbstractMonitorBuilder<DSRVSpecification, Value>
-    for GenericMonitorBuilder<DSRVSpecification, Value>
+impl AbstractMonitorBuilder<DsrvSpecification, Value>
+    for GenericMonitorBuilder<DsrvSpecification, Value>
 {
     type Mon = Box<dyn Runnable>;
 
@@ -343,7 +343,7 @@ impl AbstractMonitorBuilder<DSRVSpecification, Value>
         }
     }
 
-    fn model(self, model: DSRVSpecification) -> Self {
+    fn model(self, model: DsrvSpecification) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -372,7 +372,7 @@ impl AbstractMonitorBuilder<DSRVSpecification, Value>
             panic!("Call async_build instead");
         }
 
-        let builder: Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> =
+        let builder: Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,
@@ -405,37 +405,37 @@ impl AbstractMonitorBuilder<DSRVSpecification, Value>
     }
 }
 
-impl GenericMonitorBuilder<DSRVSpecification, Value> {
+impl GenericMonitorBuilder<DsrvSpecification, Value> {
     // Creates the common parts of the builder
     fn create_common_builder(
         runtime: Runtime,
         semantics: Semantics,
         parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
-        model: Option<DSRVSpecification>,
+        model: Option<DsrvSpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
         reconf_topic: String,
-    ) -> Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> {
+    ) -> Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
         );
-        let builder: Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> = match (
+        let builder: Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> = match (
             runtime, semantics, parser,
         ) {
             (Runtime::Async, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(AsyncMonitorBuilder::<
-                    DSRVSpecification,
+                    DsrvSpecification,
                     ValueConfig,
                     UntimedDsrvSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
                 Box::new(AsyncMonitorBuilder::<
-                    DSRVSpecification,
+                    DsrvSpecification,
                     ValueConfig,
                     UntimedDsrvSemantics<CombExprParser>,
                 >::new())
@@ -443,14 +443,14 @@ impl GenericMonitorBuilder<DSRVSpecification, Value> {
             (Runtime::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(SemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
-                    DSRVSpecification,
+                    DsrvSpecification,
                     UntimedDsrvSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfSemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
-                    DSRVSpecification,
+                    DsrvSpecification,
                     UntimedDsrvSemantics<LALRParser>,
                     LALRParser,
                 >::new();
@@ -467,14 +467,14 @@ impl GenericMonitorBuilder<DSRVSpecification, Value> {
             }
             (Runtime::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
-                    TypedDSRVSpecification,
+                    TypedDsrvSpecification,
                     TypedValueConfig,
                     TypedUntimedDsrvSemantics<LALRParser>,
                 >::new()))
             }
             (Runtime::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
-                    TypedDSRVSpecification,
+                    TypedDsrvSpecification,
                     TypedValueConfig,
                     TypedUntimedDsrvSemantics<CombExprParser>,
                 >::new()))
@@ -493,7 +493,7 @@ impl GenericMonitorBuilder<DSRVSpecification, Value> {
                 }
 
                 let builder = DistAsyncMonitorBuilder::<
-                    DSRVSpecification,
+                    DsrvSpecification,
                     DistValueConfig,
                     DistributedSemantics<LALRParser>,
                 >::new();
@@ -576,7 +576,7 @@ impl GenericMonitorBuilder<DSRVSpecification, Value> {
             }
         };
 
-        let builder: Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> =
+        let builder: Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,

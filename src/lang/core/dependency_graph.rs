@@ -294,13 +294,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DSRVSpecification;
+    use crate::DsrvSpecification;
     use crate::dsrv_fixtures::TestConfig;
     use crate::lang::core::parser::SpecParser;
     use crate::lang::dsrv::lalr_parser::LALRParser;
 
-    fn test_parser(input: &mut &str) -> anyhow::Result<DSRVSpecification> {
-        <LALRParser as SpecParser<DSRVSpecification>>::parse(input)
+    fn test_parser(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
+        <LALRParser as SpecParser<DsrvSpecification>>::parse(input)
     }
 
     fn specs() -> BTreeMap<&'static str, &'static str> {
@@ -334,7 +334,7 @@ mod tests {
     }
 
     fn get_graph(
-        graph: impl DependencyResolver<TestConfig, DSRVSpecification> + 'static,
+        graph: impl DependencyResolver<TestConfig, DsrvSpecification> + 'static,
     ) -> GraphType {
         <dyn std::any::Any>::downcast_ref::<DepGraph>(&graph)
             .unwrap()

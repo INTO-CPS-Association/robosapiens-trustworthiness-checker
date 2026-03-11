@@ -8,7 +8,7 @@ pub mod io;
 pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
-    ast::{DSRVSpecification, SExpr},
+    ast::{DsrvSpecification, SExpr},
     parser::dsrv_specification,
 };
 pub mod distributed;

@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use crate::DSRVSpecification;
+use crate::DsrvSpecification;
 use crate::Value;
 use crate::core::AbstractMonitorBuilder;
 use crate::core::OutputHandler;
@@ -13,7 +13,7 @@ use crate::core::Semantics;
 use crate::io::map::MapInputProvider;
 use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::lang::dsrv::lalr_parser::LALRParser;
-use crate::lang::dsrv::type_checker::TypedDSRVSpecification;
+use crate::lang::dsrv::type_checker::TypedDsrvSpecification;
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::asynchronous::AsyncMonitorBuilder;
 use crate::runtime::builder::TypedValueConfig;
@@ -24,7 +24,7 @@ pub async fn monitor_runtime_outputs(
     runtime: Runtime,
     semantics: Semantics,
     executor: Rc<LocalExecutor<'static>>,
-    spec: DSRVSpecification,
+    spec: DsrvSpecification,
     input_provider: MapInputProvider,
     output_limit: Option<usize>,
 ) {
@@ -53,7 +53,7 @@ pub async fn monitor_runtime_outputs(
 
 pub async fn monitor_outputs_untyped_async_limited(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DSRVSpecification,
+    spec: DsrvSpecification,
     input_provider: MapInputProvider,
     limit: usize,
 ) {
@@ -70,7 +70,7 @@ pub async fn monitor_outputs_untyped_async_limited(
 
 pub async fn monitor_outputs_untyped_async(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DSRVSpecification,
+    spec: DsrvSpecification,
     input_values: MapInputProvider,
 ) {
     monitor_runtime_outputs(
@@ -86,7 +86,7 @@ pub async fn monitor_outputs_untyped_async(
 
 pub async fn monitor_outputs_untyped_little(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DSRVSpecification,
+    spec: DsrvSpecification,
     input_provider: MapInputProvider,
 ) {
     monitor_runtime_outputs(
@@ -102,7 +102,7 @@ pub async fn monitor_outputs_untyped_little(
 
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
-    spec: TypedDSRVSpecification,
+    spec: TypedDsrvSpecification,
     input_provider: MapInputProvider,
 ) {
     // Currently cannot be deduplicated since it includes the type

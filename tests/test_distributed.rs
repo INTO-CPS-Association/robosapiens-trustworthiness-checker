@@ -5,7 +5,7 @@ use petgraph::graph::DiGraph;
 use smol::{LocalExecutor, stream::StreamExt};
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::{
-    DSRVSpecification, OutputStream, Value,
+    DsrvSpecification, OutputStream, Value,
     core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
@@ -19,7 +19,7 @@ use winnow::Parser;
 
 type TestDistSemantics = DistributedSemantics<LALRParser>;
 type TestDistMonitorBuilder =
-    DistAsyncMonitorBuilder<DSRVSpecification, TestDistConfig, TestDistSemantics>;
+    DistAsyncMonitorBuilder<DsrvSpecification, TestDistConfig, TestDistSemantics>;
 
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {

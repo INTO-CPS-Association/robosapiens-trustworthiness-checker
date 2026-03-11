@@ -2,7 +2,7 @@ use ecow::EcoVec;
 
 use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::{StreamData, StreamType, StreamTypeAscription};
-use crate::{DSRVSpecification, Specification};
+use crate::{DsrvSpecification, Specification};
 use crate::{Value, VarName};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -378,14 +378,14 @@ pub enum SExprTE {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct TypedDSRVSpecification {
+pub struct TypedDsrvSpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
     pub exprs: BTreeMap<VarName, SExprTE>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
-impl Specification for TypedDSRVSpecification {
+impl Specification for TypedDsrvSpecification {
     type Expr = SExprTE;
 
     fn input_vars(&self) -> Vec<VarName> {
@@ -411,7 +411,7 @@ impl Specification for TypedDSRVSpecification {
     }
 }
 
-pub fn type_check(spec: DSRVSpecification) -> SemanticResult<TypedDSRVSpecification> {
+pub fn type_check(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSpecification> {
     let type_context = spec.type_annotations.clone();
     let mut typed_exprs = BTreeMap::new();
     let mut errors = vec![];
@@ -421,7 +421,7 @@ pub fn type_check(spec: DSRVSpecification) -> SemanticResult<TypedDSRVSpecificat
         typed_exprs.insert(var, typed_expr);
     }
     if errors.is_empty() {
-        Ok(TypedDSRVSpecification {
+        Ok(TypedDsrvSpecification {
             input_vars: spec.input_vars.clone(),
             output_vars: spec.output_vars.clone(),
             exprs: typed_exprs
