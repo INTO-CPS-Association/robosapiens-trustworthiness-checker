@@ -1,8 +1,10 @@
 use anyhow::Context;
 use tracing::{debug, info};
 
+use crate::cli::args::OutputMode;
 use crate::distributed::distribution_graphs::NodeName;
 use crate::distributed::locality_receiver::LocalityReceiver;
+use crate::io::builders::output_handler_builder::OutputHandlerSpec;
 use crate::semantics::distributed::localisation::LocalitySpec;
 use crate::{
     VarName, distributed::distribution_graphs::LabelledDistributionGraph,
@@ -44,6 +46,41 @@ impl From<InputMode> for InputProviderSpec {
                 redis_input: true, ..
             } => InputProviderSpec::Redis(None),
             _ => panic!("Invalid input provider specification"),
+        }
+    }
+}
+
+impl From<OutputMode> for OutputHandlerSpec {
+    fn from(output_mode: OutputMode) -> Self {
+        match output_mode {
+            OutputMode {
+                output_stdout: true,
+                ..
+            } => OutputHandlerSpec::Stdout,
+            OutputMode {
+                output_ros_file: Some(output_ros_file),
+                ..
+            } => {
+                let json_string = std::fs::read_to_string(&output_ros_file)
+                    .expect("Output mapping file could not be read");
+                OutputHandlerSpec::Ros(json_string)
+            }
+            OutputMode {
+                output_mqtt_topics: Some(output_mqtt_topics),
+                ..
+            } => OutputHandlerSpec::MQTT(Some(output_mqtt_topics)),
+            OutputMode {
+                output_redis_topics: Some(output_redis_topics),
+                ..
+            } => OutputHandlerSpec::Redis(Some(output_redis_topics)),
+            OutputMode {
+                mqtt_output: true, ..
+            } => OutputHandlerSpec::MQTT(None),
+            OutputMode {
+                redis_output: true, ..
+            } => OutputHandlerSpec::Redis(None),
+            // Default to stdout if no options provided
+            _ => OutputHandlerSpec::Stdout,
         }
     }
 }

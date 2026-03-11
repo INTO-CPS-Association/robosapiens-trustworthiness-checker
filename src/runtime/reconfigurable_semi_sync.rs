@@ -1,13 +1,14 @@
 use crate::{
     OutputStream, Value, VarName,
-    cli::args::OutputMode,
     core::{
         AbstractMonitorBuilder, DeferrableStreamData, InputProvider, OutputHandler, Runnable,
         Specification,
     },
     io::{
         InputProviderBuilder,
-        builders::{InputProviderSpec, OutputHandlerBuilder},
+        builders::{
+            InputProviderSpec, OutputHandlerBuilder, output_handler_builder::OutputHandlerSpec,
+        },
         testing::ManualInputProvider,
     },
     lang::core::parser::SpecParser,
@@ -447,43 +448,20 @@ where
                     self.self_builder.input_builder = Some(input_builder.clone());
                 }
 
-                // Update OutputMode
+                // Update OutputSpec
                 // TODO: does not respect _topics...
-                let output_mode = match self
-                    .self_builder
-                    .output_builder
-                    .clone()
-                    .unwrap()
-                    .output_mode
-                {
-                    // Auto assign topics on rebuild instead
-                    // this is only a problem if manual topics were configured
-                    mode if mode.output_mqtt_topics.is_some() => OutputMode {
-                        output_stdout: false,
-                        output_mqtt_topics: None,
-                        mqtt_output: true,
-                        output_redis_topics: None,
-                        redis_output: false,
-                        output_ros_file: None,
-                    },
-                    mode if mode.output_redis_topics.is_some() => OutputMode {
-                        output_stdout: false,
-                        output_mqtt_topics: None,
-                        mqtt_output: false,
-                        output_redis_topics: None,
-                        redis_output: true,
-                        output_ros_file: None,
-                    },
-                    _ => {
-                        self.self_builder
-                            .output_builder
-                            .clone()
-                            .unwrap()
-                            .output_mode
-                    }
+                let output_spec = match self.self_builder.output_builder.clone().unwrap().spec {
+                    OutputHandlerSpec::Stdout => OutputHandlerSpec::Stdout,
+                    // Unsupported output reconfiguration:
+                    OutputHandlerSpec::Ros(json_string) => OutputHandlerSpec::Ros(json_string),
+                    // Auto assign topics on rebuild instead - a problem if manual topics were configured
+                    OutputHandlerSpec::MQTT(_) => OutputHandlerSpec::MQTT(None),
+                    // Auto assign topics on rebuild instead - a problem if manual topics were configured
+                    OutputHandlerSpec::Redis(_) => OutputHandlerSpec::Redis(None),
+                    OutputHandlerSpec::Manual => unimplemented!("Not needed yet"),
                 };
                 if let Some(ref mut output_builder) = self.self_builder.output_builder {
-                    output_builder.output_mode = output_mode;
+                    output_builder.spec = output_spec;
                     self.self_builder.output_builder = Some(output_builder.clone());
                 }
 

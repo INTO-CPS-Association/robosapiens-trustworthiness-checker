@@ -3812,7 +3812,6 @@ dependencies = [
  "async-trait",
  "async-unsync",
  "async_cell",
- "cfg-if",
  "clap",
  "contracts",
  "criterion",
