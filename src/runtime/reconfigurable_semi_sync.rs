@@ -449,11 +449,41 @@ where
                 }
 
                 // Update OutputSpec
-                // TODO: does not respect _topics...
+                // TODO: Most matches do not respect _topics...
                 let output_spec = match self.self_builder.output_builder.clone().unwrap().spec {
                     OutputHandlerSpec::Stdout => OutputHandlerSpec::Stdout,
-                    // Unsupported output reconfiguration:
-                    OutputHandlerSpec::Ros(json_string) => OutputHandlerSpec::Ros(json_string),
+                    // Requires type_info:
+                    OutputHandlerSpec::Ros(_) => {
+                        let types = deserialized.type_info.clone();
+                        let vars = parsed.output_vars();
+                        let missing: Vec<_> = vars
+                            .iter()
+                            .filter_map(|v| types.get(&v.name()).is_none().then_some(v.name()))
+                            .collect();
+                        if !missing.is_empty() {
+                            return Err(anyhow!(
+                                "Missing msg_types for vars: {:?}. Required for ROS2 InputProvider",
+                                missing
+                            ));
+                        }
+                        let combined = JValue::Object(
+                            vars.into_iter()
+                                .map(|v| {
+                                    let name = v.name();
+                                    let msg_type = types.get(&name).unwrap().clone(); // Safe now
+                                    (
+                                        name,
+                                        serde_json::json!({
+                                            "topic": format!("/{}", v),
+                                            "msg_type": msg_type,
+                                        }),
+                                    )
+                                })
+                                .collect(),
+                        );
+
+                        OutputHandlerSpec::Ros(combined.to_string())
+                    }
                     // Auto assign topics on rebuild instead - a problem if manual topics were configured
                     OutputHandlerSpec::MQTT(_) => OutputHandlerSpec::MQTT(None),
                     // Auto assign topics on rebuild instead - a problem if manual topics were configured
