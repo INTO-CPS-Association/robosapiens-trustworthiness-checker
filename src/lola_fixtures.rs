@@ -1,7 +1,7 @@
 use crate::{
     InputProvider, LOLASpecification, Value,
     io::map::MapInputProvider,
-    lang::dynamic_lola::lalr_parser::LALRParser,
+    lang::dsrv::lalr_parser::LALRParser,
     runtime::{
         asynchronous::AsyncMonitorRunner,
         builder::{DistValueConfig, TypedValueConfig, ValueConfig},

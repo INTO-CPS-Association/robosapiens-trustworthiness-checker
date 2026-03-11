@@ -2,7 +2,7 @@ use crate::VarName;
 use crate::core::OutputStream;
 use crate::core::Value;
 use crate::distributed::distribution_graphs::{Distance, NodeName};
-use crate::lang::dynamic_lola::ast::VarOrNodeName;
+use crate::lang::dsrv::ast::VarOrNodeName;
 use crate::semantics::AsyncConfig;
 use async_stream::stream;
 use futures::StreamExt;
@@ -59,7 +59,7 @@ mod tests {
 
     use super::*;
     use crate::async_test;
-    use crate::lang::dynamic_lola::lalr_parser::LALRParser;
+    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lola_fixtures::TestDistConfig;
     use crate::{
         core::Value,

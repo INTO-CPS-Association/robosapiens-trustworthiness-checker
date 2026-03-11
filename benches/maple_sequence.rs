@@ -8,7 +8,7 @@ use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
-use trustworthiness_checker::lang::dynamic_lola::type_checker::type_check;
+use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::lola_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::lola_fixtures::spec_maple_sequence;
 

@@ -4,7 +4,7 @@ use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dynamic_lola::ast::{
+use crate::lang::dsrv::ast::{
     BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
 };
 use crate::semantics::AsyncConfig;
@@ -247,8 +247,8 @@ mod tests {
     use super::*;
     use crate::async_test;
     use crate::core::StreamTypeAscription;
-    use crate::lang::dynamic_lola::ast::SExpr;
-    use crate::lang::dynamic_lola::lalr_parser::LALRParser;
+    use crate::lang::dsrv::ast::SExpr;
+    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lola_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use crate::semantics::StreamContext;

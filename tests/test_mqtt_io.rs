@@ -420,8 +420,8 @@ mod reconf_tests {
     use trustworthiness_checker::io::builders::{
         InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
     };
-    use trustworthiness_checker::lang::dynamic_lola::ast::LOLASpecification;
-    use trustworthiness_checker::lang::dynamic_lola::lalr_parser::LALRParser;
+    use trustworthiness_checker::lang::dsrv::ast::LOLASpecification;
+    use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
     use trustworthiness_checker::lola_fixtures::*;
     use trustworthiness_checker::lola_specification;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;

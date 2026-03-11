@@ -3,8 +3,8 @@ use crate::core::to_typed_partial_stream;
 use crate::core::values::StreamTypeAscription;
 use crate::core::{StreamData, TypedStreamData};
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dynamic_lola::type_checker::PartialStreamValue;
-use crate::lang::dynamic_lola::type_checker::{SExprTE, TypeCheckable, TypeInfo};
+use crate::lang::dsrv::type_checker::PartialStreamValue;
+use crate::lang::dsrv::type_checker::{SExprTE, TypeCheckable, TypeInfo};
 use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
 use crate::semantics::{
     AsyncConfig, MonitoringSemantics, StreamContext, TypedUntimedLolaSemantics,
@@ -688,7 +688,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
-    type Parser = crate::lang::dynamic_lola::lalr_parser::LALRParser;
+    type Parser = crate::lang::dsrv::lalr_parser::LALRParser;
 
     type TypedTestConfig = TypedValueConfig;
 

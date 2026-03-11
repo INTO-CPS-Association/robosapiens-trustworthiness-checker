@@ -14,7 +14,7 @@ use trustworthiness_checker::{
     runtime::distributed::DistAsyncMonitorBuilder,
     semantics::distributed::semantics::DistributedSemantics,
 };
-use trustworthiness_checker::{async_test, lang::dynamic_lola::lalr_parser::LALRParser};
+use trustworthiness_checker::{async_test, lang::dsrv::lalr_parser::LALRParser};
 use winnow::Parser;
 
 type TestDistSemantics = DistributedSemantics<LALRParser>;

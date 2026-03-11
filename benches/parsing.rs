@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use trustworthiness_checker::lang::dynamic_lola::lalr_parser::parse_str;
+use trustworthiness_checker::lang::dsrv::lalr_parser::parse_str;
 use trustworthiness_checker::lola_specification;
 
 #[global_allocator]

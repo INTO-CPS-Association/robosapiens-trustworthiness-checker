@@ -7,7 +7,7 @@ use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
 use crate::lang::core::parser::{ExprParser as EParserTrait, SpecParser as SParserTrait};
-use crate::{LOLASpecification, SExpr, lang::dynamic_lola::ast::STopDecl};
+use crate::{LOLASpecification, SExpr, lang::dsrv::ast::STopDecl};
 
 #[derive(Clone)]
 pub struct LALRParser;
@@ -131,8 +131,8 @@ mod tests {
     use crate::lang::core::parser::presult_to_string;
 
     use crate::VarName;
-    use crate::lang::dynamic_lola::ast::NumericalBinOp;
-    use crate::lang::dynamic_lola::ast::SBinOp;
+    use crate::lang::dsrv::ast::NumericalBinOp;
+    use crate::lang::dsrv::ast::SBinOp;
 
     use crate::core::StreamTypeAscription;
 

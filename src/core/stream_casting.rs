@@ -1,5 +1,5 @@
 use crate::{
-    OutputStream, Value, core::StreamData, lang::dynamic_lola::type_checker::PartialStreamValue,
+    OutputStream, Value, core::StreamData, lang::dsrv::type_checker::PartialStreamValue,
 };
 use futures::StreamExt;
 use std::fmt::Debug;

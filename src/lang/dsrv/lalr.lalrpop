@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::collections::BTreeMap;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dynamic_lola::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp};
+use crate::lang::dsrv::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp};
 use crate::core::{Value, VarName, StreamType, StreamTypeAscription};
 
 grammar;

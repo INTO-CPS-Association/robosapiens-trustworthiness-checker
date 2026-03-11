@@ -1074,7 +1074,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
 mod tests {
     use std::{iter::zip, mem::discriminant};
 
-    use crate::lang::dynamic_lola::ast::{NumericalBinOp, StrBinOp};
+    use crate::lang::dsrv::ast::{NumericalBinOp, StrBinOp};
 
     use super::{SemanticResult, TypeCheckable, TypeInfo};
 

@@ -3,9 +3,9 @@ use crate::core::OutputStream;
 use crate::core::Value;
 use crate::core::stream_casting::{from_typed_stream, to_typed_stream};
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dynamic_lola::ast::SExpr;
-use crate::lang::dynamic_lola::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
-use crate::lang::dynamic_lola::type_checker::{
+use crate::lang::dsrv::ast::SExpr;
+use crate::lang::dsrv::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
+use crate::lang::dsrv::type_checker::{
     PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
 };
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
@@ -466,10 +466,10 @@ where
 mod tests {
     use super::*;
     use crate::core::StreamType;
-    use crate::lang::dynamic_lola::type_checker::TypeInfo;
+    use crate::lang::dsrv::type_checker::TypeInfo;
     use crate::lola_fixtures::TestTypedConfig;
     use crate::runtime::asynchronous::Context;
-    use crate::{async_test, lang::dynamic_lola::lalr_parser::LALRParser};
+    use crate::{async_test, lang::dsrv::lalr_parser::LALRParser};
     use ecow::eco_vec;
     use futures::stream::{self, StreamExt};
     use macro_rules_attribute::apply;

@@ -9,7 +9,7 @@ use crate::{
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, NodeName, TaggedVarOrNodeName,
     },
-    lang::dynamic_lola::ast::VarOrNodeName,
+    lang::dsrv::ast::VarOrNodeName,
     runtime::asynchronous::{Context as AsyncCtx, ContextBuilder as AsyncCtxBuilder, VarManager},
     semantics::{AbstractContextBuilder, AsyncConfig, StreamContext},
 };

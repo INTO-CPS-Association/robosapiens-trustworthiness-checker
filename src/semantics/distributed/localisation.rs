@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use tracing::debug;
 
-use crate::lang::dynamic_lola::ast::LOLASpecification;
+use crate::lang::dsrv::ast::LOLASpecification;
 
 use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
@@ -92,14 +92,14 @@ mod tests {
     use std::collections::BTreeMap;
     use std::vec;
 
-    use crate::lang::dynamic_lola::ast::SExpr;
+    use crate::lang::dsrv::ast::SExpr;
     use crate::lola_fixtures::spec_simple_add_decomposable;
     use crate::lola_specification;
     use proptest::prelude::*;
     use test_log::test;
     use winnow::Parser;
 
-    use crate::lang::dynamic_lola::ast::generation::arb_boolean_lola_spec;
+    use crate::lang::dsrv::ast::generation::arb_boolean_lola_spec;
 
     use super::*;
 

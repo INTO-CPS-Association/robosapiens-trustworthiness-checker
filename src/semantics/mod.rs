@@ -13,7 +13,7 @@ mod tests {
 
     use crate::{
         Value, core::stream_casting::to_typed_stream,
-        lang::dynamic_lola::type_checker::PartialStreamValue,
+        lang::dsrv::type_checker::PartialStreamValue,
     };
 
     use super::*;

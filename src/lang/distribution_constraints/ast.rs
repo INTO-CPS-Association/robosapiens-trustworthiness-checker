@@ -237,7 +237,7 @@ pub mod generation {
 
     use crate::{
         LOLASpecification, SExpr, VarName,
-        lang::dynamic_lola::ast::{BoolBinOp, SBinOp},
+        lang::dsrv::ast::{BoolBinOp, SBinOp},
     };
 
     pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {

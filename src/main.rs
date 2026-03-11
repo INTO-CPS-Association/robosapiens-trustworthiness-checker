@@ -12,7 +12,7 @@ use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
 use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::builders::OutputHandlerBuilder;
-use trustworthiness_checker::lang::dynamic_lola::lalr_parser::parse_file as lalr_parse_file;
+use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
@@ -68,8 +68,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = builder.reconf_topic(cli.reconf_topic);
 
     let model_parser = match cli.language {
-        Language::DSRV => tc::lang::dynamic_lola::parser::lola_specification,
-        Language::Lola => tc::lang::dynamic_lola::parser::lola_specification,
+        Language::DSRV => tc::lang::dsrv::parser::lola_specification,
+        Language::Lola => tc::lang::dsrv::parser::lola_specification,
     };
 
     let builder = builder.scheduler_mode(cli.scheduling_mode.clone());

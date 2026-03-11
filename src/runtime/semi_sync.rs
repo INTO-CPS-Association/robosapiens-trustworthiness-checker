@@ -938,7 +938,7 @@ mod tests {
     use crate::core::Runnable;
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
-    use crate::lang::dynamic_lola::lalr_parser::LALRParser;
+    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::runtime::builder::SemiSyncValueConfig;
     use crate::runtime::semi_sync::SemiSyncMonitor;
     use crate::semantics::UntimedLolaSemantics;

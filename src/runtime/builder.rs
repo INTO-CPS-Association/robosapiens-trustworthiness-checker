@@ -11,7 +11,7 @@ use crate::{
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     define_config,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
-    lang::dynamic_lola::{
+    lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
         type_checker::{SExprTE, TypedLOLASpecification, type_check},
