@@ -115,12 +115,12 @@
 mod integration_tests {
 
     use futures::FutureExt;
+    #[cfg(feature = "ros")]
+    use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     #[cfg(feature = "ros")]
     use r2r::std_msgs::msg::Int32;
     use smol::process::Command;
-    #[cfg(feature = "ros")]
-    use smol::stream::StreamExt;
     use smol::{LocalExecutor, Timer};
     #[cfg(feature = "ros")]
     use std::fs;
@@ -136,6 +136,8 @@ mod integration_tests {
     #[cfg(feature = "ros")]
     use tc_testutils::streams::{with_timeout, with_timeout_res};
     use tracing::error;
+    #[cfg(feature = "ros")]
+    use trustworthiness_checker::OutputStream;
     use trustworthiness_checker::async_test;
 
     /// Helper function to get the path to the binary
@@ -295,7 +297,7 @@ mod integration_tests {
 
     #[cfg(feature = "ros")]
     async fn wait_for_value(
-        stream: &mut (impl smol::stream::Stream<Item = i32> + Unpin),
+        stream: &mut OutputStream<i32>,
         expected: i32,
         max_reads: usize,
         timeout_per_read_secs: u64,
@@ -326,7 +328,7 @@ mod integration_tests {
     async fn tick_xy_and_wait_for(
         x_tick: &mut tc_testutils::streams::TickSender,
         y_tick: &mut tc_testutils::streams::TickSender,
-        z_output_stream: &mut (impl smol::stream::Stream<Item = i32> + Unpin),
+        z_output_stream: &mut OutputStream<i32>,
         expected: i32,
     ) -> anyhow::Result<Vec<Option<i32>>> {
         with_timeout_res(x_tick.send(()), 3, "x_tick.send").await?;
@@ -2140,7 +2142,7 @@ mod integration_tests {
 
         let tmp_id = qualified_ros_name(
             test_ros_input_ros_output,
-            format!("{}", std::process::id()).as_str(),
+            std::process::id().to_string().as_str(),
         );
         let input_map = format!("/tmp/tc_ros_input_map_{tmp_id}.json");
         let output_map = format!("/tmp/tc_ros_output_map_{tmp_id}.json");
@@ -2194,6 +2196,7 @@ mod integration_tests {
                 ys_ros,
             );
 
+        // TODO: Why do we need to tick 3 times to observe the first output value?
         let mut observed_first = Vec::new();
         let mut got_first = false;
         for _ in 0..3 {

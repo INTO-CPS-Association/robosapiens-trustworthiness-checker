@@ -40,6 +40,8 @@ struct TypedValuePublisher<T: r2r::WrappedTypesupport> {
 
 impl<T: r2r::WrappedTypesupport> ValuePublisher for TypedValuePublisher<T> {
     fn publish_value(&self, value: &Value) -> anyhow::Result<()> {
+        // TODO: Maybe a bit over-engineered to have this indirection with the HOF when
+        // we only use one implementation (`create_value_publisher`)
         (self.convert_and_publish)(&self.publisher, value)
     }
 }
@@ -399,6 +401,11 @@ impl OutputHandler for ROSOutputHandler {
     fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
         debug!("Providing {} streams to ROS output handler", streams.len());
         debug!("Expected var_names: {:?}", self.var_names());
+        assert_eq!(
+            self.var_names().len(),
+            streams.len(),
+            "Number of provided streams must match number of variable names"
+        );
 
         for (var, stream) in self.var_names().iter().zip(streams.into_iter()) {
             debug!("Assigning stream for output variable: {}", var);
