@@ -132,6 +132,9 @@ impl InputProviderBuilder {
                     unimplemented!("ROS support not enabled")
                 }
             }
+            // TODO: For the Some case to be useful, it should be a mapping of InputStream ->
+            // Topic, not just a list of topics (because this makes no difference compared to just
+            // using --mqtt-input).
             InputProviderSpec::MQTT(topics) => {
                 let var_topics = match topics {
                     Some(topics) => topics
@@ -160,6 +163,9 @@ impl InputProviderBuilder {
 
                 Box::new(mqtt_input_provider) as Box<dyn InputProvider<Val = Value>>
             }
+            // TODO: For the Some case to be useful, it should be a mapping of InputStream ->
+            // Topic, not just a list of topics (because this makes no difference compared to just
+            // using --redis-input).
             InputProviderSpec::Redis(topics) => {
                 let var_topics = match topics {
                     Some(topics) => topics
