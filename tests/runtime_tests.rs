@@ -555,7 +555,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 // async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 //     // TODO: This test only works on the constraint-based runtime
 //     for config in vec![TestConfiguration::Constraints] {
-//         let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(x, z))").unwrap();
+//         let spec_untyped = dsrv_specification(&mut "in x\nout z\nz = update(x, z))").unwrap();
 //
 //             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
 //             let input_streams = BTreeMap::from([("x".into(), x)]);
@@ -606,7 +606,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 //     // TODO: This test only runs on the constraint-based runtime due to update/defer functionality
 //     // limitations
 //     for config in vec![TestConfiguration::Constraints] {
-//         let spec_untyped = lola_specification(&mut "in x\nout z\nz = update(defer(x), z)").unwrap();
+//         let spec_untyped = dsrv_specification(&mut "in x\nout z\nz = update(defer(x), z)").unwrap();
 //
 //             let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
 //             let input_streams = BTreeMap::from([("x".into(), x)]);

@@ -43,7 +43,7 @@ pub fn parse_stopdecls<'input>(input: &'input str) -> Result<EcoVec<STopDecl>, E
         .map_err(|e| anyhow!("Parse error: {:?}", e))
 }
 
-pub fn create_lola_spec(stmts: &EcoVec<STopDecl>) -> DsrvSpecification {
+pub fn create_dsrv_spec(stmts: &EcoVec<STopDecl>) -> DsrvSpecification {
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     let mut aux_info = Vec::new();
@@ -113,7 +113,7 @@ pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<DsrvSpecification
         let err_fixed = e.map_location(|byte| line_col(&input, byte));
         anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse input {}", input))
     })?;
-    Ok(create_lola_spec(&stmts))
+    Ok(create_dsrv_spec(&stmts))
 }
 
 pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<DsrvSpecification> {
@@ -122,7 +122,7 @@ pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<DsrvSpecifica
         let err_fixed = e.map_location(|byte| line_col(&contents, byte));
         anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse file {}", file))
     })?;
-    Ok(create_lola_spec(&stmts))
+    Ok(create_dsrv_spec(&stmts))
 }
 
 #[cfg(test)]
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_simple_add() {
+    fn test_parse_dsrv_simple_add() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor();
         let simple_add_spec = DsrvSpecification {
             input_vars: vec!["x".into(), "y".into()],
@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_simple_add_typed() {
+    fn test_parse_dsrv_simple_add_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
         let simple_add_spec = DsrvSpecification {
             input_vars: vec!["x".into(), "y".into()],
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_simple_add_float_typed() {
+    fn test_parse_dsrv_simple_add_float_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
         let simple_add_spec = DsrvSpecification {
             input_vars: vec!["x".into(), "y".into()],
@@ -321,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_count() {
+    fn test_parse_dsrv_count() {
         let input = "\
             out x\n\
             x = 1 + (x)[1]";
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_dynamic() {
+    fn test_parse_dsrv_dynamic() {
         let input = "\
             in x\n\
             in y\n\
@@ -1318,7 +1318,7 @@ mod spec_tests {
     }
 
     #[test]
-    fn test_lola_specs_normal() {
+    fn test_dsrv_specs_normal() {
         for &(name, (spec, exp)) in specs().iter() {
             let parsed = presult_to_string(&parse_str(spec));
             assert_eq!(
@@ -1329,7 +1329,7 @@ mod spec_tests {
     }
 
     #[test]
-    fn test_lola_specs_added_newlines() {
+    fn test_dsrv_specs_added_newlines() {
         for &(name, (spec, exp)) in specs().iter() {
             let spec = spec.replace("\n", "\n\n");
             let parsed = presult_to_string(&parse_str(&mut spec.as_str()));
@@ -1341,7 +1341,7 @@ mod spec_tests {
     }
 
     #[test]
-    fn test_lola_specs_added_comments() {
+    fn test_dsrv_specs_added_comments() {
         for &(name, (spec, exp)) in specs().iter() {
             let mod_spec = spec.replace("\n", "\n//This is a comment\n");
             let parsed = presult_to_string(&parse_str(&mut mod_spec.as_str()));

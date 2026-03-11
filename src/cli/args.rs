@@ -15,8 +15,6 @@ pub enum Language {
     /// A stream-based specification language for runtime verification that supports
     /// temporal logic properties and dynamic spawning of new monitors
     DSRV,
-    /// LOLA: a synonym for DSRV for legacy compatibility
-    Lola,
 }
 
 /// Parser implementation strategies for specification parsing
@@ -186,7 +184,7 @@ impl Into<OsStr> for SchedulingType {
 
 /// Trustworthiness Checker - A runtime verification tool for distributed systems
 ///
-/// This tool monitors system behavior against formal specifications written in LOLA,
+/// This tool monitors system behavior against formal specifications written in DSRV,
 /// supporting both centralized and distributed monitoring modes with various input/output
 /// mechanisms including MQTT, Redis, ROS, and file-based sources.
 #[derive(Parser, Clone)]

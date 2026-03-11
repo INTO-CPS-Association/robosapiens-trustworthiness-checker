@@ -99,7 +99,7 @@ mod tests {
     use test_log::test;
     use winnow::Parser;
 
-    use crate::lang::dsrv::ast::generation::arb_boolean_lola_spec;
+    use crate::lang::dsrv::ast::generation::arb_boolean_dsrv_spec;
 
     use super::*;
 
@@ -213,7 +213,7 @@ mod tests {
     proptest! {
         #[test]
         fn test_localise_specification_prop(
-            spec in arb_boolean_lola_spec(),
+            spec in arb_boolean_dsrv_spec(),
             restricted_vars in prop::collection::hash_set("[a-z]", 0..5)
         ) {
             let restricted_vars: Vec<VarName> = restricted_vars.into_iter().map(|s| s.into()).collect();

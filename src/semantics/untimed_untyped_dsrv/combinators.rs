@@ -592,7 +592,7 @@ where
     }
 }
 
-// Defer for an UntimedLolaExpression using the lola_expression parser
+// Defer for an UntimedDsrvExpression using the dsrv_expression parser
 pub fn defer<AC, Parser>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,

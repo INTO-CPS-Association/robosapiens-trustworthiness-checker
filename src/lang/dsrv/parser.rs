@@ -23,12 +23,12 @@ pub struct CombExprParser;
 impl ExprParser<SExpr> for CombExprParser {
     fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
         debug!("Parsing expr: {}", input);
-        lola_expression(input).map_err(|e| anyhow::anyhow!(e))
+        dsrv_expression(input).map_err(|e| anyhow::anyhow!(e))
     }
 }
 
 // This is the top-level parser for LOLA expressions
-pub fn lola_expression(s: &mut &str) -> Result<SExpr> {
+pub fn dsrv_expression(s: &mut &str) -> Result<SExpr> {
     sexpr.parse_next(s)
 }
 
@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_simple_add() -> Result<(), ContextError> {
+    fn test_parse_dsrv_simple_add() -> Result<(), ContextError> {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor();
         let simple_add_spec = DsrvSpecification {
             input_vars: vec!["x".into(), "y".into()],
@@ -1175,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_simple_add_typed() -> Result<(), ContextError> {
+    fn test_parse_dsrv_simple_add_typed() -> Result<(), ContextError> {
         let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
         let simple_add_spec = DsrvSpecification {
             input_vars: vec!["x".into(), "y".into()],
@@ -1200,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_simple_add_float_typed() -> Result<(), ContextError> {
+    fn test_parse_dsrv_simple_add_float_typed() -> Result<(), ContextError> {
         let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
         let simple_add_spec = DsrvSpecification {
             input_vars: vec!["x".into(), "y".into()],
@@ -1225,7 +1225,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_count() -> Result<(), ContextError> {
+    fn test_parse_dsrv_count() -> Result<(), ContextError> {
         let input = "\
             out x\n\
             x = 1 + (x)[1]";
@@ -1248,7 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_lola_dynamic() -> Result<(), ContextError> {
+    fn test_parse_dsrv_dynamic() -> Result<(), ContextError> {
         let input = "\
             in x\n\
             in y\n\
@@ -2175,7 +2175,7 @@ mod spec_tests {
     }
 
     #[test]
-    fn test_lola_specs_normal() {
+    fn test_dsrv_specs_normal() {
         for &(name, (mut spec, exp)) in specs().iter() {
             let parsed = presult_to_string(&dsrv_specification(&mut spec));
             assert_eq!(
@@ -2186,7 +2186,7 @@ mod spec_tests {
     }
 
     #[test]
-    fn test_lola_specs_added_newlines() {
+    fn test_dsrv_specs_added_newlines() {
         for &(name, (spec, exp)) in specs().iter() {
             let spec = spec.replace("\n", "\n\n");
             let parsed = presult_to_string(&dsrv_specification(&mut spec.as_str()));
@@ -2198,7 +2198,7 @@ mod spec_tests {
     }
 
     #[test]
-    fn test_lola_specs_added_comments() {
+    fn test_dsrv_specs_added_comments() {
         for &(name, (spec, exp)) in specs().iter() {
             let mod_spec = spec.replace("\n", "\n//This is a comment\n");
             let parsed = presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));

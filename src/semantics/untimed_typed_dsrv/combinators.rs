@@ -507,7 +507,7 @@ where
     })
 }
 
-// Defer for an UntimedLolaExpression using the lola_expression parser
+// Defer for an UntimedDsrvExpression using the dsrv_expression parser
 // TODO: this currently has unnecessary potentially-panicing casts since the types in the untyped
 // semantics are not granular enough
 // TODO: TW: I don't think the combinators in this file are implementing NoVal/Defer semantics
@@ -595,76 +595,6 @@ where
             }
         }
     })
-    // let mut subcontext = ctx.subcontext(history_length);
-    // let type_info = type_info.clone();
-    // Box::pin(stream! {
-    //     let mut eval_output_stream: Option<OutputStream<PartialStreamValue<T>>> = None;
-    //     let mut i = 0;
-    //     let mut prev_received_deferred = false;
-    //
-    //     // Yield Deferred until we have a value to evaluate, then evaluate it
-    //     while let Some(current) = prop_stream.next().await {
-    //         debug!(?i, ?current, "Defer");
-    //         match current {
-    //             PartialStreamValue::Known(defer_s) => {
-    //                 // We have a string to evaluate so do so
-    //                 let expr = Parser::parse(&mut defer_s.as_ref())
-    //                     .expect("Invalid dynamic str");
-    //                 // Create a typed version of the expression
-    //                 let mut type_info_local = type_info.clone();
-    //                 let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
-    //                     .expect("Type error");
-    //                 let untyped_eval_output_stream: OutputStream<Value> = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
-    //                 eval_output_stream = Some(to_typed_partial_stream::<T>(untyped_eval_output_stream));
-    //                 // debug!(s = ?defer_s.as_ref(), "Evaluated defer string");
-    //                 subcontext.run().await;
-    //                 break;
-    //             }
-    //             PartialStreamValue::Deferred => {
-    //                 // Consume a sample from the subcontext but return Deferred
-    //                 debug!("defer combinator received Deferred");
-    //                 if i >= history_length {
-    //                     debug!(?i, ?history_length, "Advancing subcontext to clean history");
-    //                     subcontext.tick().await;
-    //                 }
-    //                 i += 1;
-    //                 prev_received_deferred = true;
-    //                 yield PartialStreamValue::Deferred;
-    //             }
-    //             PartialStreamValue::NoVal => {
-    //                 // Consume a sample from the subcontext but return NoVal
-    //                 debug!("defer combinator received NoVal");
-    //                 if i >= history_length {
-    //                     debug!(?i, ?history_length, "Advancing subcontext to clean history");
-    //                     subcontext.tick().await;
-    //                 }
-    //                 i += 1;
-    //
-    //                 // Deferred is sticky compared to NoVal, since Deferred indicates that we have
-    //                 // a pending property that cannot be evaluated yet with the given context.
-    //                 if prev_received_deferred {
-    //                     yield PartialStreamValue::Deferred;
-    //                 } else {
-    //                     yield PartialStreamValue::NoVal;
-    //                 }
-    //             }
-    //
-    //         }
-    //     }
-    //
-    //     // This is None if the prop_stream is done but we never received a property
-    //     if let Some(eval_output_stream) = eval_output_stream {
-    //         // Wind forward the stream to the current time
-    //         let time_progressed = i.min(history_length);
-    //         debug!(?i, ?time_progressed, ?history_length, "Time progressed");
-    //         let mut eval_output_stream = eval_output_stream.skip(time_progressed);
-    //
-    //         // Yield the saved value until the inner stream is done
-    //         while let Some(eval_res) = eval_output_stream.next().await {
-    //             yield eval_res;
-    //         }
-    //     }
-    // })
 }
 
 #[cfg(test)]

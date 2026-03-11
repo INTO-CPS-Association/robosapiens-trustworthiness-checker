@@ -639,7 +639,7 @@ pub mod generation {
         })
     }
 
-    pub fn arb_boolean_lola_spec() -> impl Strategy<Value = DsrvSpecification> {
+    pub fn arb_boolean_dsrv_spec() -> impl Strategy<Value = DsrvSpecification> {
         (
             // Generate a hash set of inputs from 'a' to 'h' with at least one element.
             prop::collection::hash_set("[a-h]", 1..5),
