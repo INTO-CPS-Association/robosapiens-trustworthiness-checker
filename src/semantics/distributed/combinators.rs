@@ -60,7 +60,7 @@ mod tests {
     use super::*;
     use crate::async_test;
     use crate::lang::dsrv::lalr_parser::LALRParser;
-    use crate::lola_fixtures::TestDistConfig;
+    use crate::dsrv_fixtures::TestDistConfig;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{

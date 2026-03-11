@@ -1098,7 +1098,7 @@ mod tests {
     #[test]
     fn test_parse_aux() -> Result<(), ContextError> {
         // Tests that aux streams are in aux_info and output_vars
-        let input = crate::lola_fixtures::spec_simple_add_aux_monitor();
+        let input = crate::dsrv_fixtures::spec_simple_add_aux_monitor();
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into(), "u".into(), "w".into()],
@@ -1124,7 +1124,7 @@ mod tests {
     #[test]
     fn test_parse_aux_typed() -> Result<(), ContextError> {
         // Tests that aux streams are in aux_info and output_vars
-        let input = crate::lola_fixtures::spec_simple_add_aux_typed_monitor();
+        let input = crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor();
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into(), "u".into(), "w".into()],
@@ -1155,7 +1155,7 @@ mod tests {
 
     #[test]
     fn test_parse_lola_simple_add() -> Result<(), ContextError> {
-        let input = crate::lola_fixtures::spec_simple_add_monitor();
+        let input = crate::dsrv_fixtures::spec_simple_add_monitor();
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
@@ -1176,7 +1176,7 @@ mod tests {
 
     #[test]
     fn test_parse_lola_simple_add_typed() -> Result<(), ContextError> {
-        let mut input = crate::lola_fixtures::spec_simple_add_monitor_typed();
+        let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
@@ -1201,7 +1201,7 @@ mod tests {
 
     #[test]
     fn test_parse_lola_simple_add_float_typed() -> Result<(), ContextError> {
-        let mut input = crate::lola_fixtures::spec_simple_add_monitor_typed_float();
+        let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
         let simple_add_spec = LOLASpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
@@ -2115,13 +2115,13 @@ mod spec_tests {
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
-            crate::lola_fixtures::spec_simple_add_aux_monitor(),
+            crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
             "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
-            crate::lola_fixtures::spec_simple_add_aux_typed_monitor(),
+            crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor(),
             "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
         )
     }

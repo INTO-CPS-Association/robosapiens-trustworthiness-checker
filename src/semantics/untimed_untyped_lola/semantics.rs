@@ -249,7 +249,7 @@ mod tests {
     use crate::core::StreamTypeAscription;
     use crate::lang::dsrv::ast::SExpr;
     use crate::lang::dsrv::lalr_parser::LALRParser;
-    use crate::lola_fixtures::TestConfig;
+    use crate::dsrv_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use crate::semantics::StreamContext;
     use ecow::eco_vec;

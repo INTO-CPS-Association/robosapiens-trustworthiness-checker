@@ -942,7 +942,7 @@ mod tests {
     use crate::runtime::builder::SemiSyncValueConfig;
     use crate::runtime::semi_sync::SemiSyncMonitor;
     use crate::semantics::UntimedLolaSemantics;
-    use crate::{LOLASpecification, lola_fixtures::*};
+    use crate::{LOLASpecification, dsrv_fixtures::*};
     use crate::{Value, lola_specification};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;

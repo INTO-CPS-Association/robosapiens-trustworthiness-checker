@@ -1050,7 +1050,7 @@ mod combinator_tests {
     use super::*;
     use crate::async_test;
     use crate::core::Value;
-    use crate::lola_fixtures::TestConfig;
+    use crate::dsrv_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use ecow::eco_vec;
     use futures::stream;
@@ -1973,7 +1973,7 @@ mod noval_tests {
     use super::*;
     use crate::async_test;
     use crate::core::Value;
-    use crate::lola_fixtures::TestConfig;
+    use crate::dsrv_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use ecow::eco_vec;
     use futures::stream;

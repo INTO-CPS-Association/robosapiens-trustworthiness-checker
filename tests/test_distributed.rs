@@ -9,7 +9,7 @@ use trustworthiness_checker::{
     core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     io::testing::ManualOutputHandler,
-    lola_fixtures::TestDistConfig,
+    dsrv_fixtures::TestDistConfig,
     lola_specification,
     runtime::distributed::DistAsyncMonitorBuilder,
     semantics::distributed::semantics::DistributedSemantics,

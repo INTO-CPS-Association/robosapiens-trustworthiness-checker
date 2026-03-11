@@ -12,7 +12,7 @@ pub use lang::dsrv::{
     parser::lola_specification,
 };
 pub mod distributed;
-pub mod lola_fixtures;
+pub mod dsrv_fixtures;
 pub mod macros;
 pub mod runtime;
 pub mod semantics;

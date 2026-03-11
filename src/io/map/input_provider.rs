@@ -114,7 +114,7 @@ impl InputProvider for MapInputProvider {
 mod tests {
     use std::{rc::Rc, time::Duration};
 
-    use crate::{async_test, lola_fixtures::input_streams_add_defer};
+    use crate::{async_test, dsrv_fixtures::input_streams_add_defer};
 
     use super::*;
     use futures::{FutureExt, StreamExt};

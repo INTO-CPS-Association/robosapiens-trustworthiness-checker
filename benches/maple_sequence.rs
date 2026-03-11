@@ -9,8 +9,8 @@ use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
-use trustworthiness_checker::lola_fixtures::maple_valid_input_stream;
-use trustworthiness_checker::lola_fixtures::spec_maple_sequence;
+use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
+use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;

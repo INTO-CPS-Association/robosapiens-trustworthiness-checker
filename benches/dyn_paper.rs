@@ -9,9 +9,9 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use itertools::Itertools;
 use smol::LocalExecutor;
-use trustworthiness_checker::lola_fixtures::spec_deferred_and;
-use trustworthiness_checker::lola_fixtures::spec_direct_and;
-use trustworthiness_checker::lola_fixtures::{
+use trustworthiness_checker::dsrv_fixtures::spec_deferred_and;
+use trustworthiness_checker::dsrv_fixtures::spec_direct_and;
+use trustworthiness_checker::dsrv_fixtures::{
     input_streams_paper_benchmark, input_streams_paper_benchmark_direct,
 };
 

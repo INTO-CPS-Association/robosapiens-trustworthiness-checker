@@ -93,7 +93,7 @@ mod tests {
     use std::vec;
 
     use crate::lang::dsrv::ast::SExpr;
-    use crate::lola_fixtures::spec_simple_add_decomposable;
+    use crate::dsrv_fixtures::spec_simple_add_decomposable;
     use crate::lola_specification;
     use proptest::prelude::*;
     use test_log::test;

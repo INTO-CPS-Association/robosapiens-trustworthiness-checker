@@ -297,7 +297,7 @@ mod tests {
     use crate::LOLASpecification;
     use crate::lang::core::parser::SpecParser;
     use crate::lang::dsrv::lalr_parser::LALRParser;
-    use crate::lola_fixtures::TestConfig;
+    use crate::dsrv_fixtures::TestConfig;
 
     fn test_parser(input: &mut &str) -> anyhow::Result<LOLASpecification> {
         <LALRParser as SpecParser<LOLASpecification>>::parse(input)

@@ -7,8 +7,8 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
-use trustworthiness_checker::lola_fixtures::input_streams_add_defer;
-use trustworthiness_checker::lola_fixtures::spec_add_defer;
+use trustworthiness_checker::dsrv_fixtures::input_streams_add_defer;
+use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;

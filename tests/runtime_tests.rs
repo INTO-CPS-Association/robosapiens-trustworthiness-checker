@@ -10,7 +10,7 @@ use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Runtime, S
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
-use trustworthiness_checker::{LOLASpecification, lola_fixtures::*};
+use trustworthiness_checker::{LOLASpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{Value, lola_specification, runtime::RuntimeBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1283,7 +1283,7 @@ async fn test_simple_add_monitor_large_input(
         let spec_untyped = lola_specification(&mut spec_simple_add_monitor_typed()).unwrap();
 
         // Create fresh input streams for each test iteration (100 elements)
-        let input_streams = trustworthiness_checker::lola_fixtures::input_streams_simple_add(100);
+        let input_streams = trustworthiness_checker::dsrv_fixtures::input_streams_simple_add(100);
 
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(

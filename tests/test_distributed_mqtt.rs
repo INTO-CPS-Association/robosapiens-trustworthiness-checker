@@ -13,7 +13,7 @@ mod integration_tests {
     use trustworthiness_checker::core::Runnable;
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
     use trustworthiness_checker::io::mqtt::MqttFactory;
-    use trustworthiness_checker::{OutputStream, lola_fixtures::*};
+    use trustworthiness_checker::{OutputStream, dsrv_fixtures::*};
     use trustworthiness_checker::{Specification, Value};
     use winnow::Parser;
 

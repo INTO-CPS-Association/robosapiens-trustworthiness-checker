@@ -1243,7 +1243,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{Value, lola_fixtures::TestConfig};
+    use crate::{Value, dsrv_fixtures::TestConfig};
 
     use super::*;
 

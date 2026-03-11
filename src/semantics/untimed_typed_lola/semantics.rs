@@ -467,7 +467,7 @@ mod tests {
     use super::*;
     use crate::core::StreamType;
     use crate::lang::dsrv::type_checker::TypeInfo;
-    use crate::lola_fixtures::TestTypedConfig;
+    use crate::dsrv_fixtures::TestTypedConfig;
     use crate::runtime::asynchronous::Context;
     use crate::{async_test, lang::dsrv::lalr_parser::LALRParser};
     use ecow::eco_vec;

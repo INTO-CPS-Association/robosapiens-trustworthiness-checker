@@ -130,7 +130,7 @@ impl<AC: AsyncConfig> InputProvider for ManualInputProvider<AC> {
 mod tests {
     use crate::{
         InputProvider, Value, async_test, io::testing::ManualInputProvider,
-        lola_fixtures::TestConfig,
+        dsrv_fixtures::TestConfig,
     };
     use futures::{FutureExt, StreamExt};
     use macro_rules_attribute::apply;

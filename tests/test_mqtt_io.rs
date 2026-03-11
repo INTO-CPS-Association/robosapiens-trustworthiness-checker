@@ -17,7 +17,7 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::io::mqtt::MqttFactory;
     use trustworthiness_checker::io::mqtt::MqttMessage;
-    use trustworthiness_checker::lola_fixtures::spec_simple_add_monitor;
+    use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use winnow::Parser;
 
     use approx::assert_abs_diff_eq;
@@ -28,12 +28,12 @@ mod integration_tests {
 
     use trustworthiness_checker::semantics::distributed::localisation::LocalitySpec;
 
-    use trustworthiness_checker::lola_fixtures::{TestMonitorRunner, input_streams1};
+    use trustworthiness_checker::dsrv_fixtures::{TestMonitorRunner, input_streams1};
     use trustworthiness_checker::{
         Value,
         core::Runnable,
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
-        lola_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
+        dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         lola_specification,
     };
 
@@ -422,7 +422,7 @@ mod reconf_tests {
     };
     use trustworthiness_checker::lang::dsrv::ast::LOLASpecification;
     use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
-    use trustworthiness_checker::lola_fixtures::*;
+    use trustworthiness_checker::dsrv_fixtures::*;
     use trustworthiness_checker::lola_specification;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder;
