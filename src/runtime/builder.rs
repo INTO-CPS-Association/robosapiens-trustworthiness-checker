@@ -21,7 +21,7 @@ use crate::{
         semi_sync::{SemiSyncContext, SemiSyncMonitorBuilder},
     },
     semantics::{
-        AsyncConfig, DistributedSemantics, TypedUntimedLolaSemantics, UntimedLolaSemantics,
+        AsyncConfig, DistributedSemantics, TypedUntimedDsrvSemantics, UntimedDsrvSemantics,
         distributed::{contexts::DistributedContext, localisation::LocalitySpec},
     },
 };
@@ -430,28 +430,28 @@ impl GenericMonitorBuilder<DSRVSpecification, Value> {
                 Box::new(AsyncMonitorBuilder::<
                     DSRVSpecification,
                     ValueConfig,
-                    UntimedLolaSemantics<LALRParser>,
+                    UntimedDsrvSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
                 Box::new(AsyncMonitorBuilder::<
                     DSRVSpecification,
                     ValueConfig,
-                    UntimedLolaSemantics<CombExprParser>,
+                    UntimedDsrvSemantics<CombExprParser>,
                 >::new())
             }
             (Runtime::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(SemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
                     DSRVSpecification,
-                    UntimedLolaSemantics<LALRParser>,
+                    UntimedDsrvSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfSemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
                     DSRVSpecification,
-                    UntimedLolaSemantics<LALRParser>,
+                    UntimedDsrvSemantics<LALRParser>,
                     LALRParser,
                 >::new();
                 builder = builder.reconf_topic(reconf_topic);
@@ -469,14 +469,14 @@ impl GenericMonitorBuilder<DSRVSpecification, Value> {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
                     TypedDSRVSpecification,
                     TypedValueConfig,
-                    TypedUntimedLolaSemantics<LALRParser>,
+                    TypedUntimedDsrvSemantics<LALRParser>,
                 >::new()))
             }
             (Runtime::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
                     TypedDSRVSpecification,
                     TypedValueConfig,
-                    TypedUntimedLolaSemantics<CombExprParser>,
+                    TypedUntimedDsrvSemantics<CombExprParser>,
                 >::new()))
             }
             (Runtime::Distributed, Semantics::Untimed, _) => {

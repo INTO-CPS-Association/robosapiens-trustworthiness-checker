@@ -7,7 +7,7 @@ use crate::lang::dsrv::type_checker::PartialStreamValue;
 use crate::lang::dsrv::type_checker::{SExprTE, TypeCheckable, TypeInfo};
 use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
 use crate::semantics::{
-    AsyncConfig, MonitoringSemantics, StreamContext, TypedUntimedLolaSemantics,
+    AsyncConfig, MonitoringSemantics, StreamContext, TypedUntimedDsrvSemantics,
 };
 use crate::{SExpr, Value, VarName};
 use async_stream::stream;
@@ -466,7 +466,7 @@ where
                     let mut type_info_local = type_info.clone();
                     let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
                         .expect("Type error");
-                    let eval_output_stream_raw: OutputStream<Value> = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
+                    let eval_output_stream_raw: OutputStream<Value> = <TypedUntimedDsrvSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     // Apply stream lift to handle NoVal by repeating last value
                     let mut eval_output_stream = Box::pin(stream! {
                         let mut last: Option<Value> = None;
@@ -563,7 +563,7 @@ where
                     let mut type_info_local = type_info.clone();
                     let expr = (expr, StreamTypeAscription::Ascribed(T::stream_data_type())).type_check(&mut type_info_local)
                         .expect("Type error");
-                    let tmp_stream = <TypedUntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
+                    let tmp_stream = <TypedUntimedDsrvSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     // let tmp_stream = stream_lift_base(tmp_stream);
                     let mut tmp_stream = to_typed_partial_stream::<T>(tmp_stream);
                     // Advance the subcontext to make a new set of input values

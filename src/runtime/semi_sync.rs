@@ -941,7 +941,7 @@ mod tests {
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::runtime::builder::SemiSyncValueConfig;
     use crate::runtime::semi_sync::SemiSyncMonitor;
-    use crate::semantics::UntimedLolaSemantics;
+    use crate::semantics::UntimedDsrvSemantics;
     use crate::{DSRVSpecification, dsrv_fixtures::*};
     use crate::{Value, dsrv_specification};
     use futures::stream::StreamExt;
@@ -953,7 +953,7 @@ mod tests {
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
     type TestMonitor =
-        SemiSyncMonitor<SemiSyncValueConfig, DSRVSpecification, UntimedLolaSemantics<LALRParser>>;
+        SemiSyncMonitor<SemiSyncValueConfig, DSRVSpecification, UntimedDsrvSemantics<LALRParser>>;
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {

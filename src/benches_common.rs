@@ -114,7 +114,7 @@ pub async fn monitor_outputs_typed_async(
     let async_monitor = AsyncMonitorBuilder::<
         _,
         TypedValueConfig,
-        crate::semantics::TypedUntimedLolaSemantics<LALRParser>,
+        crate::semantics::TypedUntimedDsrvSemantics<LALRParser>,
     >::new()
     .executor(executor.clone())
     .model(spec.clone())

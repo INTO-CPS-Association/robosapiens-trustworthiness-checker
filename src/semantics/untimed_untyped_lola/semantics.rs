@@ -4,22 +4,20 @@ use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dsrv::ast::{
-    BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
-};
+use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp};
 use crate::semantics::AsyncConfig;
 use crate::semantics::MonitoringSemantics;
 use tracing::debug;
 
 #[derive(Clone)]
-pub struct UntimedLolaSemantics<Parser>
+pub struct UntimedDsrvSemantics<Parser>
 where
     Parser: ExprParser<SExpr> + 'static,
 {
     _parser: std::marker::PhantomData<Parser>,
 }
 
-impl<Parser, AC> MonitoringSemantics<AC> for UntimedLolaSemantics<Parser>
+impl<Parser, AC> MonitoringSemantics<AC> for UntimedDsrvSemantics<Parser>
 where
     Parser: ExprParser<SExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExpr>,
@@ -247,9 +245,9 @@ mod tests {
     use super::*;
     use crate::async_test;
     use crate::core::StreamTypeAscription;
+    use crate::dsrv_fixtures::TestConfig;
     use crate::lang::dsrv::ast::SExpr;
     use crate::lang::dsrv::lalr_parser::LALRParser;
-    use crate::dsrv_fixtures::TestConfig;
     use crate::runtime::asynchronous::Context;
     use crate::semantics::StreamContext;
     use ecow::eco_vec;
@@ -258,7 +256,7 @@ mod tests {
     use smol::LocalExecutor;
     use std::rc::Rc;
 
-    type Semantics = UntimedLolaSemantics<LALRParser>;
+    type Semantics = UntimedDsrvSemantics<LALRParser>;
     type TestCtx = Context<TestConfig>;
 
     fn to_stream(expr: SExpr, ctx: &TestCtx) -> OutputStream<Value> {

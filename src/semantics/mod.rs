@@ -1,7 +1,7 @@
 pub mod untimed_typed_lola;
-pub use untimed_typed_lola::semantics::TypedUntimedLolaSemantics;
+pub use untimed_typed_lola::semantics::TypedUntimedDsrvSemantics;
 pub mod untimed_untyped_lola;
-pub use untimed_untyped_lola::semantics::UntimedLolaSemantics;
+pub use untimed_untyped_lola::semantics::UntimedDsrvSemantics;
 pub mod distributed;
 pub use distributed::semantics::DistributedSemantics;
 pub mod async_interface;
@@ -12,8 +12,7 @@ mod tests {
     use std::pin::Pin;
 
     use crate::{
-        Value, core::stream_casting::to_typed_stream,
-        lang::dsrv::type_checker::PartialStreamValue,
+        Value, core::stream_casting::to_typed_stream, lang::dsrv::type_checker::PartialStreamValue,
     };
 
     use super::*;

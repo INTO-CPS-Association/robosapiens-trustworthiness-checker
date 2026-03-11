@@ -3,7 +3,7 @@ use crate::core::StreamData;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
 use crate::semantics::AsyncConfig;
-use crate::semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics;
+use crate::semantics::untimed_untyped_lola::semantics::UntimedDsrvSemantics;
 use crate::semantics::{MonitoringSemantics, StreamContext};
 use crate::{OutputStream, VarName};
 use async_stream::stream;
@@ -554,7 +554,7 @@ where
                     let expr = Parser::parse(&mut s.as_ref())
                         .expect("Invalid dynamic str");
                     debug!("Dynamic evaluated to expression {:?}", expr);
-                    let eval_output_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
+                    let eval_output_stream = <UntimedDsrvSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
@@ -627,7 +627,7 @@ where
                     let expr = Parser::parse(&mut s.as_ref())
                         .expect("Invalid defer str");
                     debug!("Defer evaluated to expression {:?}", expr);
-                    let tmp_stream = <UntimedLolaSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
+                    let tmp_stream = <UntimedDsrvSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
                     let mut tmp_stream = stream_lift_base(tmp_stream);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream

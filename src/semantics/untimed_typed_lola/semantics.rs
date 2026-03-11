@@ -11,14 +11,14 @@ use crate::lang::dsrv::type_checker::{
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 
 #[derive(Clone)]
-pub struct TypedUntimedLolaSemantics<Parser>
+pub struct TypedUntimedDsrvSemantics<Parser>
 where
     Parser: ExprParser<SExpr> + 'static,
 {
     _parser: std::marker::PhantomData<Parser>,
 }
 
-impl<Parser, AC> MonitoringSemantics<AC> for TypedUntimedLolaSemantics<Parser>
+impl<Parser, AC> MonitoringSemantics<AC> for TypedUntimedDsrvSemantics<Parser>
 where
     Parser: ExprParser<SExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
@@ -466,8 +466,8 @@ where
 mod tests {
     use super::*;
     use crate::core::StreamType;
-    use crate::lang::dsrv::type_checker::TypeInfo;
     use crate::dsrv_fixtures::TestTypedConfig;
+    use crate::lang::dsrv::type_checker::TypeInfo;
     use crate::runtime::asynchronous::Context;
     use crate::{async_test, lang::dsrv::lalr_parser::LALRParser};
     use ecow::eco_vec;

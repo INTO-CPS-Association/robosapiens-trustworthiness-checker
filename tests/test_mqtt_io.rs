@@ -426,12 +426,12 @@ mod reconf_tests {
     use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder;
-    use trustworthiness_checker::semantics::UntimedLolaSemantics;
+    use trustworthiness_checker::semantics::UntimedDsrvSemantics;
 
     type TestMonitorBuilder = ReconfSemiSyncMonitorBuilder<
         SemiSyncValueConfig,
         DSRVSpecification,
-        UntimedLolaSemantics<LALRParser>,
+        UntimedDsrvSemantics<LALRParser>,
         LALRParser,
     >;
 

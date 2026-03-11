@@ -1,12 +1,12 @@
 use crate::{
-    InputProvider, DSRVSpecification, Value,
+    DSRVSpecification, InputProvider, Value,
     io::map::MapInputProvider,
     lang::dsrv::lalr_parser::LALRParser,
     runtime::{
         asynchronous::AsyncMonitorRunner,
         builder::{DistValueConfig, TypedValueConfig, ValueConfig},
     },
-    semantics::untimed_untyped_lola::semantics::UntimedLolaSemantics,
+    semantics::untimed_untyped_lola::semantics::UntimedDsrvSemantics,
 };
 use std::{collections::BTreeMap, iter};
 
@@ -18,7 +18,7 @@ pub type TestTypedConfig = TypedValueConfig;
 pub type TestDistConfig = DistValueConfig;
 
 // Default semantics to use in tests
-pub type TestSemantics = UntimedLolaSemantics<LALRParser>;
+pub type TestSemantics = UntimedDsrvSemantics<LALRParser>;
 
 // Default monitor runner to use in tests
 pub type TestMonitorRunner = AsyncMonitorRunner<TestConfig, TestSemantics, DSRVSpecification>;
