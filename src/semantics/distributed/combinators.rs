@@ -92,7 +92,7 @@ mod tests {
             .node_names(vec!["A".into(), "B".into(), "C".into()])
             .build();
         let exp = vec![Value::Int(2), Value::Int(4)];
-        let res_stream = crate::semantics::untimed_untyped_lola::combinators::dynamic::<
+        let res_stream = crate::semantics::untimed_untyped_dsrv::combinators::dynamic::<
             TestDistConfig,
             LALRParser,
         >(&ctx, e, None, 10);

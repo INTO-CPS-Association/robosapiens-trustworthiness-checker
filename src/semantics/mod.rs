@@ -1,7 +1,7 @@
-pub mod untimed_typed_lola;
-pub use untimed_typed_lola::semantics::TypedUntimedDsrvSemantics;
-pub mod untimed_untyped_lola;
-pub use untimed_untyped_lola::semantics::UntimedDsrvSemantics;
+pub mod untimed_typed_dsrv;
+pub use untimed_typed_dsrv::semantics::TypedUntimedDsrvSemantics;
+pub mod untimed_untyped_dsrv;
+pub use untimed_untyped_dsrv::semantics::UntimedDsrvSemantics;
 pub mod distributed;
 pub use distributed::semantics::DistributedSemantics;
 pub mod async_interface;
@@ -21,8 +21,8 @@ mod tests {
     use proptest::prelude::*;
     use smol::stream::{self, StreamExt};
     use test_log::test;
-    use untimed_typed_lola::combinators as tc;
-    use untimed_untyped_lola::combinators as uc;
+    use untimed_typed_dsrv::combinators as tc;
+    use untimed_untyped_dsrv::combinators as uc;
 
     // Property-based testing that the typed and untyped combinators
     // are equivalent on well-typed inputs

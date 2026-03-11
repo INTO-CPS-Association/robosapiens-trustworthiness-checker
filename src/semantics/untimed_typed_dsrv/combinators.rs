@@ -5,7 +5,7 @@ use crate::core::{StreamData, TypedStreamData};
 use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::type_checker::PartialStreamValue;
 use crate::lang::dsrv::type_checker::{SExprTE, TypeCheckable, TypeInfo};
-use crate::semantics::untimed_untyped_lola::combinators::{CloneFn1, CloneFn2};
+use crate::semantics::untimed_untyped_dsrv::combinators::{CloneFn1, CloneFn2};
 use crate::semantics::{
     AsyncConfig, MonitoringSemantics, StreamContext, TypedUntimedDsrvSemantics,
 };

@@ -3,7 +3,7 @@ use crate::core::StreamData;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
 use crate::semantics::AsyncConfig;
-use crate::semantics::untimed_untyped_lola::semantics::UntimedDsrvSemantics;
+use crate::semantics::untimed_untyped_dsrv::semantics::UntimedDsrvSemantics;
 use crate::semantics::{MonitoringSemantics, StreamContext};
 use crate::{OutputStream, VarName};
 use async_stream::stream;

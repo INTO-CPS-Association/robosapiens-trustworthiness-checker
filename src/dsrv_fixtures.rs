@@ -6,7 +6,7 @@ use crate::{
         asynchronous::AsyncMonitorRunner,
         builder::{DistValueConfig, TypedValueConfig, ValueConfig},
     },
-    semantics::untimed_untyped_lola::semantics::UntimedDsrvSemantics,
+    semantics::untimed_untyped_dsrv::semantics::UntimedDsrvSemantics,
 };
 use std::{collections::BTreeMap, iter};
 

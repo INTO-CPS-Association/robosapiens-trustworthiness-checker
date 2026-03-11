@@ -8,7 +8,7 @@ use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBi
 use crate::semantics::AsyncConfig;
 use crate::semantics::MonitoringSemantics;
 use crate::semantics::distributed::combinators as dist_mc;
-use crate::semantics::untimed_untyped_lola::combinators as mc;
+use crate::semantics::untimed_untyped_dsrv::combinators as mc;
 
 use super::contexts::DistributedContext;
 
