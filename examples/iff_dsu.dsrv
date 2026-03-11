@@ -1,4 +1,4 @@
-// Run with: cargo run --features ros --profile dev-fast -- --input-ros-topics examples/iff_dsu_map.json examples/iff_dsu.lola
+// Run with: cargo run --features ros --profile dev-fast -- --input-ros-topics examples/iff_dsu_map.json examples/iff_dsu.dsrv
 // Cameras encoded as: true == use the left camera (ORBBEC). false = use the right camera (Intel)
 in rawHuman
 in useNucOne

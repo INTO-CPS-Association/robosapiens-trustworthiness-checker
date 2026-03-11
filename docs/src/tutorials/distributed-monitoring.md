@@ -39,7 +39,7 @@ In this section we will set up a static distribution of a specification across t
 
 ### Step 1: Create the Specification
 
-**File**: `simple_add_distributable.lola`
+**File**: `simple_add_distributable.dsrv`
 
 ```ocaml
 in x: Int
@@ -105,7 +105,7 @@ We'll split this so Node A computes `w` and Node B computes `v`.
 **Node A**:
 
 ```bash
-cargo run -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.dsrv \
   --mqtt-input --mqtt-output \
   --distribution-graph examples/simple_add_distribution_graph.json \
   --local-node A
@@ -114,7 +114,7 @@ cargo run -- examples/simple_add_distributable.lola \
 **Node B**:
 
 ```bash
-cargo run -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.dsrv \
   --mqtt-input --mqtt-output \
   --distribution-graph examples/simple_add_distribution_graph.json \
   --local-node B
@@ -155,11 +155,11 @@ mosquitto_sub -t v
 
 In this section we will set up a dynamic distribution of a specification based on a central coordination node. 
 
-This will use the same specification as before (`simple_add_distributable.lola`) but with a dynamic distribution graph.
+This will use the same specification as before (`simple_add_distributable.dsrv`) but with a dynamic distribution graph.
 
 ### Step 1: Create the Specification
 
-**File**: `simple_add_distributable.lola`
+**File**: `simple_add_distributable.dsrv`
 
 ```ocaml
 in x: Int
@@ -184,7 +184,7 @@ We'll split this so Node A computes `w` and Node B computes `v`.
 **Node A**:
 
 ```bash
-cargo run -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.dsrv \
   --mqtt-input --mqtt-output \
   --distributed-work \
   --local-node A
@@ -193,7 +193,7 @@ cargo run -- examples/simple_add_distributable.lola \
 **Node B**:
 
 ```bash
-cargo run -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.dsrv \
   --mqtt-input --mqtt-output \
   --distributed-work \
   --local-node B
@@ -226,7 +226,7 @@ To automatically distribute work randomly across nodes, start the central node:
 **Central Coordination Node**:
 
 ```bash
-cargo run -- examples/simple_add_distributable.lola \
+cargo run -- examples/simple_add_distributable.dsrv \
   --mqtt-input --mqtt-output \
   --mqtt-randomized-distributed A B
 ```
@@ -238,7 +238,7 @@ The central coordination node will randomly assign streams to the specified node
 
 For optimized distribution based on constraints, create a specification with distribution constraints and start the coordinator:
 
-**File**: `simple_add_dist_constraints.lola`
+**File**: `simple_add_dist_constraints.dsrv`
 
 ```ocaml
 in x
@@ -260,7 +260,7 @@ locality v: dist(source(z)) + dist(monitor(w))
 **Central Coordination Node**:
 
 ```bash
-cargo run -- examples/simple_add_dist_constraints.lola \
+cargo run -- examples/simple_add_dist_constraints.dsrv \
   --mqtt-input --mqtt-output \
   --mqtt-static-optimized A B \
   --distribution-constraints w v

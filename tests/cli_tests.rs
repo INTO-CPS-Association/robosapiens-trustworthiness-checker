@@ -18,14 +18,14 @@
 //!
 //! All test data is stored in the `tests/fixtures/` directory:
 //!
-//! ### Model Files (`.lola`)
-//! - `simple_add_typed.lola` - Basic addition with typed inputs
-//! - `counter.lola` - Counter with past indexing
-//! - `string_concat.lola` - String concatenation
-//! - `float_arithmetic.lola` - Float arithmetic operations
-//! - `if_else.lola` - Conditional logic
-//! - `past_indexing.lola` - Past value access
-//! - `debug_simple.lola` - Minimal test case
+//! ### Model Files (`.dsrv`)
+//! - `simple_add_typed.dsrv` - Basic addition with typed inputs
+//! - `counter.dsrv` - Counter with past indexing
+//! - `string_concat.dsrv` - String concatenation
+//! - `float_arithmetic.dsrv` - Float arithmetic operations
+//! - `if_else.dsrv` - Conditional logic
+//! - `past_indexing.dsrv` - Past value access
+//! - `debug_simple.dsrv` - Minimal test case
 //!
 //! ### Input Files (`.input`)
 //! - `simple_add_typed.input` - Integer inputs for addition
@@ -98,7 +98,7 @@
 //! ### Debug Commands
 //! ```bash
 //! # Run binary manually to see output
-//! ./target/debug/trustworthiness_checker tests/fixtures/simple_add_typed.lola \
+//! ./target/debug/trustworthiness_checker tests/fixtures/simple_add_typed.dsrv \
 //!   --input-file tests/fixtures/simple_add_typed.input --output-stdout
 //!
 //! # Run single test in isolation
@@ -340,7 +340,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_simple_add_typed() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -373,7 +373,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_simple_add_typed_no_stdout() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
         ])
@@ -405,7 +405,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_counter() {
         let output = run_cli(&[
-            &fixture_path("counter.lola"),
+            &fixture_path("counter.dsrv"),
             "--input-file",
             &fixture_path("counter.input"),
             "--output-stdout",
@@ -448,7 +448,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_string_concat() {
         let output = run_cli(&[
-            &fixture_path("string_concat.lola"),
+            &fixture_path("string_concat.dsrv"),
             "--input-file",
             &fixture_path("string_concat.input"),
             "--output-stdout",
@@ -491,7 +491,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_float_arithmetic() {
         let output = run_cli(&[
-            &fixture_path("float_arithmetic.lola"),
+            &fixture_path("float_arithmetic.dsrv"),
             "--input-file",
             &fixture_path("float_arithmetic.input"),
             "--output-stdout",
@@ -534,7 +534,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_if_else() {
         let output = run_cli(&[
-            &fixture_path("if_else.lola"),
+            &fixture_path("if_else.dsrv"),
             "--input-file",
             &fixture_path("if_else.input"),
             "--output-stdout",
@@ -580,7 +580,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_past_indexing() {
         let output = run_cli(&[
-            &fixture_path("past_indexing.lola"),
+            &fixture_path("past_indexing.dsrv"),
             "--input-file",
             &fixture_path("past_indexing.input"),
             "--output-stdout",
@@ -626,7 +626,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_invalid_model_file() {
         let output = run_cli(&[
-            "nonexistent_model.lola",
+            "nonexistent_model.dsrv",
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -651,7 +651,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_invalid_input_file() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             "nonexistent_input.input",
             "--output-stdout",
@@ -676,7 +676,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_malformed_input() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("malformed.input"),
             "--output-stdout",
@@ -701,7 +701,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_combinator_parser() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -734,7 +734,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_lola_language() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -767,7 +767,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_dsrv_language() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -800,7 +800,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_centralised_mode() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -833,7 +833,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_empty_input(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("empty.input"),
             "--output-stdout",
@@ -855,7 +855,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_single_timestep(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("single_timestep.input"),
             "--output-stdout",
@@ -910,7 +910,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_missing_required_args() {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"), // Missing input mode
+            &fixture_path("simple_add_typed.dsrv"), // Missing input mode
         ])
         .await
         .expect("Failed to run CLI");
@@ -944,7 +944,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_distribution_graph_with_local_node(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -967,7 +967,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_distribution_graph_missing_local_node(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -989,7 +989,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_local_topics_mode(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1011,7 +1011,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_mqtt_centralised_distributed_mode(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1033,7 +1033,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_mqtt_randomized_distributed_mode(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1054,7 +1054,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_mqtt_static_optimized_with_constraints(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1078,7 +1078,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_mqtt_static_optimized_missing_constraints(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1099,7 +1099,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_mqtt_dynamic_optimized_with_constraints(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1122,7 +1122,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_mqtt_dynamic_optimized_missing_constraints(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1144,7 +1144,7 @@ mod integration_tests {
         // Use streaming version since --distributed-work waits indefinitely for work assignment
         let (_stdout, stderr, exit_status) = run_cli_streaming(
             &[
-                &fixture_path("simple_add_typed.lola"),
+                &fixture_path("simple_add_typed.dsrv"),
                 "--input-file",
                 &fixture_path("simple_add_typed.input"),
                 "--output-stdout",
@@ -1178,7 +1178,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_distributed_work_missing_local_node(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1197,7 +1197,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_scheduling_mode_mock(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1217,7 +1217,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_scheduling_mode_mqtt(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1237,7 +1237,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_scheduling_mode_invalid(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1257,7 +1257,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_distribution_constraints_standalone(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1279,7 +1279,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_mqtt_port_configuration(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1299,7 +1299,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_redis_port_configuration(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1319,7 +1319,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_multiple_distribution_modes_conflict(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1343,7 +1343,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_complex_distributed_configuration(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1371,7 +1371,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_default_centralised_mode(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1397,7 +1397,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_explicit_centralised_mode(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1425,7 +1425,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_async_runtime_with_distribution(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1449,7 +1449,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_async_runtime_default_with_mqtt_distributed(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1471,7 +1471,7 @@ mod integration_tests {
     #[apply(async_test)]
     async fn test_runtime_async(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.lola"),
+            &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
@@ -1528,7 +1528,7 @@ mod integration_tests {
 
             // Start CLI process with streaming output capture
             let args = vec![
-                fixture_path("simple_add_typed.lola"),
+                fixture_path("simple_add_typed.dsrv"),
                 "--mqtt-input".to_string(),
                 "--mqtt-port".to_string(),
                 format!("{}", mqtt_port),
@@ -1605,7 +1605,7 @@ mod integration_tests {
 
             // Start CLI process with streaming output capture
             let args = vec![
-                fixture_path("simple_add_typed.lola"),
+                fixture_path("simple_add_typed.dsrv"),
                 "--redis-input".to_string(),
                 "--redis-port".to_string(),
                 format!("{}", redis_port),
@@ -1694,7 +1694,7 @@ mod integration_tests {
                 executor.clone(),
                 REDIS_HOSTNAME,
                 Some(redis_port),
-                vec!["z".to_string()], // The output variable from simple_add_typed.lola
+                vec!["z".to_string()], // The output variable from simple_add_typed.dsrv
                 ready_tx,
             )
             .await
@@ -1705,7 +1705,7 @@ mod integration_tests {
 
             // Start CLI process with file input and Redis output
             let args = vec![
-                fixture_path("simple_add_typed.lola"),
+                fixture_path("simple_add_typed.dsrv"),
                 "--input-file".to_string(),
                 fixture_path("simple_add_typed.input"),
                 "--redis-output".to_string(),
@@ -1784,7 +1784,7 @@ mod integration_tests {
 
             // Start CLI process with Redis input and output
             let args = vec![
-                fixture_path("simple_add_typed.lola"),
+                fixture_path("simple_add_typed.dsrv"),
                 "--input-redis-topics".to_string(),
                 "x".to_string(),
                 "y".to_string(),
@@ -1861,7 +1861,7 @@ mod integration_tests {
 
             // Start CLI process with MQTT input and output
             let args = vec![
-                fixture_path("simple_add_typed.lola"),
+                fixture_path("simple_add_typed.dsrv"),
                 "--input-mqtt-topics".to_string(),
                 "x".to_string(),
                 "y".to_string(),
@@ -1997,7 +1997,7 @@ mod integration_tests {
 
             // Start CLI process with file input and MQTT output
             let args = vec![
-                fixture_path("simple_add_typed.lola"),
+                fixture_path("simple_add_typed.dsrv"),
                 "--input-file".to_string(),
                 fixture_path("simple_add_typed.input"),
                 "--mqtt-output".to_string(),
@@ -2105,7 +2105,7 @@ mod integration_tests {
             // Use streaming version since --distributed-work waits indefinitely for work assignment
             let (_stdout, stderr, exit_status) = run_cli_streaming(
                 &[
-                    &fixture_path("simple_add_typed.lola"),
+                    &fixture_path("simple_add_typed.dsrv"),
                     "--distributed-work",
                     "--local-node",
                     "a",
@@ -2165,7 +2165,7 @@ mod integration_tests {
         // Start CLI concurrently so it can subscribe before we publish ROS inputs.
         let cli_timeout = Duration::from_secs(6);
         let args = vec![
-            fixture_path("simple_add_typed.lola"),
+            fixture_path("simple_add_typed.dsrv"),
             "--input-ros-file".to_string(),
             input_map.clone(),
             "--output-ros-file".to_string(),
