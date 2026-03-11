@@ -15,9 +15,9 @@ mod integration_tests {
     use tracing::{error, info};
     use trustworthiness_checker::InputProvider;
     use trustworthiness_checker::async_test;
+    use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use trustworthiness_checker::io::mqtt::MqttFactory;
     use trustworthiness_checker::io::mqtt::MqttMessage;
-    use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use winnow::Parser;
 
     use approx::assert_abs_diff_eq;
@@ -32,8 +32,8 @@ mod integration_tests {
     use trustworthiness_checker::{
         Value,
         core::Runnable,
-        io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
         dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
+        io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
         lola_specification,
     };
 
@@ -417,12 +417,12 @@ mod reconf_tests {
     use trustworthiness_checker::cli::args::OutputMode;
     use trustworthiness_checker::core::values::Value;
     use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
+    use trustworthiness_checker::dsrv_fixtures::*;
     use trustworthiness_checker::io::builders::{
         InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
     };
-    use trustworthiness_checker::lang::dsrv::ast::LOLASpecification;
+    use trustworthiness_checker::lang::dsrv::ast::DSRVSpecification;
     use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
-    use trustworthiness_checker::dsrv_fixtures::*;
     use trustworthiness_checker::lola_specification;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder;
@@ -430,7 +430,7 @@ mod reconf_tests {
 
     type TestMonitorBuilder = ReconfSemiSyncMonitorBuilder<
         SemiSyncValueConfig,
-        LOLASpecification,
+        DSRVSpecification,
         UntimedLolaSemantics<LALRParser>,
         LALRParser,
     >;

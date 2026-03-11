@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use tracing::{debug, warn};
 
 use crate::{
-    LOLASpecification, Monitor, SExpr, Value, VarName,
+    DSRVSpecification, Monitor, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     define_config,
@@ -14,7 +14,7 @@ use crate::{
     lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
-        type_checker::{SExprTE, TypedLOLASpecification, type_check},
+        type_checker::{SExprTE, TypedDSRVSpecification, type_check},
     },
     runtime::{
         reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder,
@@ -126,9 +126,9 @@ struct TypeCheckingBuilder<Builder>(Builder);
 
 impl<
     V: StreamData,
-    Mon: Monitor<TypedLOLASpecification, V> + 'static,
-    MonBuilder: AbstractMonitorBuilder<TypedLOLASpecification, V, Mon = Mon> + 'static,
-> AbstractMonitorBuilder<LOLASpecification, V> for TypeCheckingBuilder<MonBuilder>
+    Mon: Monitor<TypedDSRVSpecification, V> + 'static,
+    MonBuilder: AbstractMonitorBuilder<TypedDSRVSpecification, V, Mon = Mon> + 'static,
+> AbstractMonitorBuilder<DSRVSpecification, V> for TypeCheckingBuilder<MonBuilder>
 {
     type Mon = Mon;
 
@@ -140,7 +140,7 @@ impl<
         Self(self.0.executor(ex))
     }
 
-    fn model(self, model: LOLASpecification) -> Self {
+    fn model(self, model: DSRVSpecification) -> Self {
         let model = type_check(model).expect("Model failed to type check");
         Self(self.0.model(model))
     }
@@ -311,8 +311,8 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
     }
 }
 
-impl AbstractMonitorBuilder<LOLASpecification, Value>
-    for GenericMonitorBuilder<LOLASpecification, Value>
+impl AbstractMonitorBuilder<DSRVSpecification, Value>
+    for GenericMonitorBuilder<DSRVSpecification, Value>
 {
     type Mon = Box<dyn Runnable>;
 
@@ -343,7 +343,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
         }
     }
 
-    fn model(self, model: LOLASpecification) -> Self {
+    fn model(self, model: DSRVSpecification) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -372,7 +372,7 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
             panic!("Call async_build instead");
         }
 
-        let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> =
+        let builder: Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,
@@ -405,37 +405,37 @@ impl AbstractMonitorBuilder<LOLASpecification, Value>
     }
 }
 
-impl GenericMonitorBuilder<LOLASpecification, Value> {
+impl GenericMonitorBuilder<DSRVSpecification, Value> {
     // Creates the common parts of the builder
     fn create_common_builder(
         runtime: Runtime,
         semantics: Semantics,
         parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
-        model: Option<LOLASpecification>,
+        model: Option<DSRVSpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
         reconf_topic: String,
-    ) -> Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> {
+    ) -> Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
         );
-        let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> = match (
+        let builder: Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> = match (
             runtime, semantics, parser,
         ) {
             (Runtime::Async, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(AsyncMonitorBuilder::<
-                    LOLASpecification,
+                    DSRVSpecification,
                     ValueConfig,
                     UntimedLolaSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
                 Box::new(AsyncMonitorBuilder::<
-                    LOLASpecification,
+                    DSRVSpecification,
                     ValueConfig,
                     UntimedLolaSemantics<CombExprParser>,
                 >::new())
@@ -443,14 +443,14 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             (Runtime::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(SemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
-                    LOLASpecification,
+                    DSRVSpecification,
                     UntimedLolaSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfSemiSyncMonitorBuilder::<
                     SemiSyncValueConfig,
-                    LOLASpecification,
+                    DSRVSpecification,
                     UntimedLolaSemantics<LALRParser>,
                     LALRParser,
                 >::new();
@@ -467,14 +467,14 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             }
             (Runtime::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
-                    TypedLOLASpecification,
+                    TypedDSRVSpecification,
                     TypedValueConfig,
                     TypedUntimedLolaSemantics<LALRParser>,
                 >::new()))
             }
             (Runtime::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
-                    TypedLOLASpecification,
+                    TypedDSRVSpecification,
                     TypedValueConfig,
                     TypedUntimedLolaSemantics<CombExprParser>,
                 >::new()))
@@ -493,7 +493,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
                 }
 
                 let builder = DistAsyncMonitorBuilder::<
-                    LOLASpecification,
+                    DSRVSpecification,
                     DistValueConfig,
                     DistributedSemantics<LALRParser>,
                 >::new();
@@ -576,7 +576,7 @@ impl GenericMonitorBuilder<LOLASpecification, Value> {
             }
         };
 
-        let builder: Box<dyn AnonymousMonitorBuilder<LOLASpecification, Value>> =
+        let builder: Box<dyn AnonymousMonitorBuilder<DSRVSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,

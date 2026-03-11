@@ -7,7 +7,7 @@ use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
 use crate::lang::core::parser::{ExprParser as EParserTrait, SpecParser as SParserTrait};
-use crate::{LOLASpecification, SExpr, lang::dsrv::ast::STopDecl};
+use crate::{DSRVSpecification, SExpr, lang::dsrv::ast::STopDecl};
 
 #[derive(Clone)]
 pub struct LALRParser;
@@ -18,8 +18,8 @@ impl EParserTrait<SExpr> for LALRParser {
         parse_sexpr(input)
     }
 }
-impl SParserTrait<LOLASpecification> for LALRParser {
-    fn parse(input: &mut &str) -> anyhow::Result<LOLASpecification> {
+impl SParserTrait<DSRVSpecification> for LALRParser {
+    fn parse(input: &mut &str) -> anyhow::Result<DSRVSpecification> {
         debug!("Parsing expr: {}", input);
         parse_str(input)
     }
@@ -43,7 +43,7 @@ pub fn parse_stopdecls<'input>(input: &'input str) -> Result<EcoVec<STopDecl>, E
         .map_err(|e| anyhow!("Parse error: {:?}", e))
 }
 
-pub fn create_lola_spec(stmts: &EcoVec<STopDecl>) -> LOLASpecification {
+pub fn create_lola_spec(stmts: &EcoVec<STopDecl>) -> DSRVSpecification {
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     let mut aux_info = Vec::new();
@@ -77,7 +77,7 @@ pub fn create_lola_spec(stmts: &EcoVec<STopDecl>) -> LOLASpecification {
         }
     }
 
-    LOLASpecification::new(inputs, outputs, assignments, type_annotations, aux_info)
+    DSRVSpecification::new(inputs, outputs, assignments, type_annotations, aux_info)
 }
 
 struct LineCol {
@@ -108,7 +108,7 @@ fn line_col(input: &str, byte: usize) -> LineCol {
     LineCol { line, col }
 }
 
-pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<LOLASpecification> {
+pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<DSRVSpecification> {
     let stmts = TopDeclsParser::new().parse(&input).map_err(|e| {
         let err_fixed = e.map_location(|byte| line_col(&input, byte));
         anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse input {}", input))
@@ -116,7 +116,7 @@ pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<LOLASpecification
     Ok(create_lola_spec(&stmts))
 }
 
-pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<LOLASpecification> {
+pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<DSRVSpecification> {
     let contents = smol::fs::read_to_string(file).await?;
     let stmts = TopDeclsParser::new().parse(&contents).map_err(|e| {
         let err_fixed = e.map_location(|byte| line_col(&contents, byte));
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_parse_lola_simple_add() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor();
-        let simple_add_spec = LOLASpecification {
+        let simple_add_spec = DSRVSpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
             aux_info: vec![],
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn test_parse_lola_simple_add_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
-        let simple_add_spec = LOLASpecification {
+        let simple_add_spec = DSRVSpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
             aux_info: vec![],
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn test_parse_lola_simple_add_float_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
-        let simple_add_spec = LOLASpecification {
+        let simple_add_spec = DSRVSpecification {
             input_vars: vec!["x".into(), "y".into()],
             output_vars: vec!["z".into()],
             aux_info: vec![],
@@ -325,7 +325,7 @@ mod tests {
         let input = "\
             out x\n\
             x = 1 + (x)[1]";
-        let count_spec = LOLASpecification {
+        let count_spec = DSRVSpecification {
             input_vars: vec![],
             output_vars: vec!["x".into()],
             aux_info: vec![],
@@ -355,7 +355,7 @@ mod tests {
             out w\n\
             z = x + y\n\
             w = dynamic(s)";
-        let dynamic_spec = LOLASpecification::new(
+        let dynamic_spec = DSRVSpecification::new(
             vec!["x".into(), "y".into(), "s".into()],
             vec!["z".into(), "w".into()],
             BTreeMap::from([
@@ -725,7 +725,7 @@ mod tests {
         let res = res.unwrap();
         assert_eq!(
             res,
-            LOLASpecification::new(vec![], vec![], BTreeMap::new(), BTreeMap::new(), vec![])
+            DSRVSpecification::new(vec![], vec![], BTreeMap::new(), BTreeMap::new(), vec![])
         );
     }
 
@@ -1224,69 +1224,69 @@ mod spec_tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[1], 0) + 1",
-            "Ok(LOLASpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[1], 0) + x",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"a\")], exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"a\")], exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"iList\")], output_vars: [VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")], exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"iList\")], output_vars: [VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")], exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int}, aux_info: [] })",
         )
     }
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor(),
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int}, aux_info: [VarName::new(\"u\"), VarName::new(\"w\")] })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int}, aux_info: [] })",
         )
     }
 
     fn if_statement() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if x == 0 then y else 42",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
         )
     }
 
     fn if_statement_newlines() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
-            "Ok(LOLASpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
+            "Ok(DSRVSpecification { input_vars: [VarName::new(\"x\"), VarName::new(\"y\")], output_vars: [VarName::new(\"z\")], exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {}, aux_info: [] })",
         )
     }
 

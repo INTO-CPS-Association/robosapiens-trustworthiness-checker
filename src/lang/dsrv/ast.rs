@@ -306,7 +306,7 @@ impl SExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct LOLASpecification {
+pub struct DSRVSpecification {
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
     pub exprs: BTreeMap<VarName, SExpr>,
@@ -314,7 +314,7 @@ pub struct LOLASpecification {
     pub aux_info: Vec<VarName>,
 }
 
-impl LOLASpecification {
+impl DSRVSpecification {
     // NOTE: This is a hack that ensures that when we create subcontexts for usage in DUPs,
     // the subcontexts do not refer to the lhs of assignments.
     // I.e., if we have an assignment `z = dynamic(s)` then the subcontext provided for
@@ -475,7 +475,7 @@ impl LOLASpecification {
         aux_info: Vec<VarName>,
     ) -> Self {
         let exprs = Self::fix_dynamic(&input_vars, &output_vars, &exprs);
-        LOLASpecification {
+        DSRVSpecification {
             input_vars,
             output_vars,
             exprs,
@@ -485,7 +485,7 @@ impl LOLASpecification {
     }
 }
 
-impl Specification for LOLASpecification {
+impl Specification for DSRVSpecification {
     type Expr = SExpr;
 
     fn input_vars(&self) -> Vec<VarName> {
@@ -508,7 +508,7 @@ impl Specification for LOLASpecification {
             .chain(std::iter::once(var))
             .collect();
         // Call new so we make sure that fix_dynamic is also called
-        *self = LOLASpecification::new(
+        *self = DSRVSpecification::new(
             input_vars,
             self.output_vars.clone(),
             self.exprs.clone(),
@@ -609,7 +609,7 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        LOLASpecification, SExpr, VarName,
+        DSRVSpecification, SExpr, VarName,
         lang::dsrv::ast::{BoolBinOp, SBinOp},
     };
 
@@ -639,7 +639,7 @@ pub mod generation {
         })
     }
 
-    pub fn arb_boolean_lola_spec() -> impl Strategy<Value = LOLASpecification> {
+    pub fn arb_boolean_lola_spec() -> impl Strategy<Value = DSRVSpecification> {
         (
             // Generate a hash set of inputs from 'a' to 'h' with at least one element.
             prop::collection::hash_set("[a-h]", 1..5),
@@ -664,7 +664,7 @@ pub mod generation {
                     arb_boolean_sexpr(all_vars.clone()),
                     0..=all_vars.len(),
                 )
-                .prop_map(move |exprs| LOLASpecification {
+                .prop_map(move |exprs| DSRVSpecification {
                     input_vars: input_vars.clone(),
                     output_vars: output_vars.clone(),
                     aux_info: vec![],

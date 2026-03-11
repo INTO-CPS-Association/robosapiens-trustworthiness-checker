@@ -236,7 +236,7 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        LOLASpecification, SExpr, VarName,
+        DSRVSpecification, SExpr, VarName,
         lang::dsrv::ast::{BoolBinOp, SBinOp},
     };
 
@@ -266,7 +266,7 @@ pub mod generation {
         })
     }
 
-    pub fn arb_boolean_lola_spec() -> impl Strategy<Value = LOLASpecification> {
+    pub fn arb_boolean_lola_spec() -> impl Strategy<Value = DSRVSpecification> {
         (
             // Generate a hash set of inputs from 'a' to 'h' with at least one element.
             prop::collection::hash_set("[a-h]", 1..5),
@@ -291,7 +291,7 @@ pub mod generation {
                     arb_boolean_sexpr(all_vars.clone()),
                     0..=all_vars.len(),
                 )
-                .prop_map(move |exprs| LOLASpecification {
+                .prop_map(move |exprs| DSRVSpecification {
                     input_vars: input_vars.clone(),
                     output_vars: output_vars.clone(),
                     aux_info: vec![],

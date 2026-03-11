@@ -8,7 +8,7 @@ pub mod io;
 pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
-    ast::{LOLASpecification, SExpr},
+    ast::{DSRVSpecification, SExpr},
     parser::lola_specification,
 };
 pub mod distributed;

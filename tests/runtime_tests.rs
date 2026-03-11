@@ -10,7 +10,7 @@ use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Runtime, S
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
-use trustworthiness_checker::{LOLASpecification, dsrv_fixtures::*};
+use trustworthiness_checker::{DSRVSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{Value, lola_specification, runtime::RuntimeBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,9 +46,9 @@ impl TestConfiguration {
 }
 
 fn create_builder_from_config(
-    builder: GenericMonitorBuilder<LOLASpecification, Value>,
+    builder: GenericMonitorBuilder<DSRVSpecification, Value>,
     config: TestConfiguration,
-) -> GenericMonitorBuilder<LOLASpecification, Value> {
+) -> GenericMonitorBuilder<DSRVSpecification, Value> {
     match config {
         TestConfiguration::AsyncUntimed => {
             let builder = builder.runtime(Runtime::Async);
