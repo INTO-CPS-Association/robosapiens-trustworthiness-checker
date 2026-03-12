@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use trustworthiness_checker::dsrv_specification;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_str;
 
