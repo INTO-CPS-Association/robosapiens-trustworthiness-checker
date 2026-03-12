@@ -1,6 +1,6 @@
 # General Usage
 
-This page should give a short overview of the standard command-line workflow.
+This page gives a short overview of the standard command-line workflow for running the Trustworthiness Checker (TC) with the most common input and output configurations.
 
 ## Basic usage
 The most basic usage of the TC is to run it locally on a model and an input trace.
