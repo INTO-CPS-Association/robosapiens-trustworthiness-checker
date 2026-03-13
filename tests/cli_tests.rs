@@ -1467,18 +1467,103 @@ mod integration_tests {
 
         use async_compat::Compat as TokioCompat;
         use async_unsync::oneshot;
-        use futures::StreamExt;
+        use futures::{StreamExt, stream};
         use paho_mqtt as mqtt;
         use std::collections::BTreeMap;
         use std::os::unix::process::ExitStatusExt;
         use tc_testutils::{
-            mqtt::{dummy_mqtt_publisher, start_mqtt},
-            redis::{dummy_redis_receiver, dummy_redis_sender, start_redis},
+            mqtt::{
+                dummy_mqtt_publisher, dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt,
+            },
+            redis::{
+                dummy_redis_receiver, dummy_redis_sender, dummy_redis_stream_sender, start_redis,
+            },
+            streams::{TickSender, with_timeout, with_timeout_res},
         };
         use trustworthiness_checker::Value;
         use trustworthiness_checker::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 
         use super::*;
+
+        fn generate_mqtt_test_publisher_tasks(
+            executor: Rc<LocalExecutor>,
+            xs: Vec<Value>,
+            ys: Vec<Value>,
+            mqtt_port: u16,
+        ) -> (
+            (TickSender, smol::Task<anyhow::Result<()>>),
+            (TickSender, smol::Task<anyhow::Result<()>>),
+        ) {
+            let (x_tick, x_pub_stream) =
+                tc_testutils::streams::tick_stream(stream::iter(xs.clone()).boxed());
+            let (y_tick, y_pub_stream) =
+                tc_testutils::streams::tick_stream(stream::iter(ys.clone()).boxed());
+
+            let x_publisher_task = executor.spawn(with_timeout_res(
+                dummy_stream_mqtt_publisher(
+                    "x_publisher".to_string(),
+                    "x".to_string(),
+                    x_pub_stream,
+                    xs.len(),
+                    mqtt_port,
+                ),
+                10,
+                "x_publisher_task",
+            ));
+
+            let y_publisher_task = executor.spawn(with_timeout_res(
+                dummy_stream_mqtt_publisher(
+                    "y_publisher".to_string(),
+                    "y".to_string(),
+                    y_pub_stream,
+                    ys.len(),
+                    mqtt_port,
+                ),
+                10,
+                "y_publisher_task",
+            ));
+
+            ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
+        }
+
+        fn generate_redis_test_publisher_tasks(
+            executor: Rc<LocalExecutor>,
+            redis_port: u16,
+            xs: Vec<Value>,
+            ys: Vec<Value>,
+        ) -> (
+            (TickSender, smol::Task<anyhow::Result<()>>),
+            (TickSender, smol::Task<anyhow::Result<()>>),
+        ) {
+            let (x_tick, x_pub_stream) =
+                tc_testutils::streams::tick_stream(stream::iter(xs).boxed());
+            let (y_tick, y_pub_stream) =
+                tc_testutils::streams::tick_stream(stream::iter(ys).boxed());
+
+            let x_publisher_task = executor.spawn(with_timeout_res(
+                dummy_redis_stream_sender(
+                    REDIS_HOSTNAME,
+                    Some(redis_port),
+                    "x".to_string(),
+                    x_pub_stream,
+                ),
+                10,
+                "x_publisher_task",
+            ));
+
+            let y_publisher_task = executor.spawn(with_timeout_res(
+                dummy_redis_stream_sender(
+                    REDIS_HOSTNAME,
+                    Some(redis_port),
+                    "y".to_string(),
+                    y_pub_stream,
+                ),
+                10,
+                "y_publisher_task",
+            ));
+
+            ((x_tick, x_publisher_task), (y_tick, y_publisher_task))
+        }
 
         /// Test MQTT connection on the cli
         #[cfg(feature = "testcontainers")]
@@ -1507,29 +1592,62 @@ mod integration_tests {
             });
 
             // Wait for CLI to start and subscribe to MQTT topics
-            Timer::after(Duration::from_millis(150)).await;
+            Timer::after(Duration::from_millis(1000)).await;
 
-            // Now start publishers to send data to the waiting CLI
-            let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
-                "x_publisher".to_string(),
-                "x".to_string(),
-                xs,
-                mqtt_port,
-            ));
+            let mut x_sub = with_timeout(
+                get_mqtt_outputs("x".to_string(), "x_cli_subscriber".to_string(), mqtt_port),
+                5,
+                "x_cli_subscriber",
+            )
+            .await
+            .expect("Failed to subscribe to x topic");
+            let mut y_sub = with_timeout(
+                get_mqtt_outputs("y".to_string(), "y_cli_subscriber".to_string(), mqtt_port),
+                5,
+                "y_cli_subscriber",
+            )
+            .await
+            .expect("Failed to subscribe to y topic");
 
-            let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
-                "y_publisher".to_string(),
-                "y".to_string(),
-                ys,
-                mqtt_port,
-            ));
+            let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+                generate_mqtt_test_publisher_tasks(
+                    executor.clone(),
+                    xs.clone(),
+                    ys.clone(),
+                    mqtt_port,
+                );
 
-            // Wait for publishers to complete
+            let mut x_iter = xs.into_iter();
+            let mut y_iter = ys.into_iter();
+
+            for (x_expected, y_expected) in x_iter.by_ref().zip(y_iter.by_ref()) {
+                with_timeout_res(x_tick.send(()), 3, "x_tick.send")
+                    .await
+                    .expect("Failed to send x tick");
+                let x_received = with_timeout(x_sub.next(), 5, "x_sub.next()")
+                    .await
+                    .expect("Failed to receive x publication");
+                assert_eq!(x_received, Some(x_expected));
+
+                with_timeout_res(y_tick.send(()), 3, "y_tick.send")
+                    .await
+                    .expect("Failed to send y tick");
+                let y_received = with_timeout(y_sub.next(), 5, "y_sub.next()")
+                    .await
+                    .expect("Failed to receive y publication");
+                assert_eq!(y_received, Some(y_expected));
+            }
+
+            // Final ticks let the controlled streams observe EOF so the publisher tasks can finish.
+            with_timeout_res(x_tick.send(()), 3, "x_tick.send")
+                .await
+                .expect("Failed to send final x tick");
+            with_timeout_res(y_tick.send(()), 3, "y_tick.send")
+                .await
+                .expect("Failed to send final y tick");
+
             x_publisher_task.await.expect("Failed to run x_publisher");
             y_publisher_task.await.expect("Failed to run y_publisher");
-
-            // Give CLI additional time to process the messages
-            Timer::after(Duration::from_millis(150)).await;
 
             // Wait for CLI to capture output or timeout
             let (stdout, stderr, exit_status) =
@@ -1546,13 +1664,13 @@ mod integration_tests {
 
             // Expected output: z = 4, 6 (from adding x + y for each timestep)
             assert!(
-                stdout.contains("4"),
-                "Expected output '4' not found in: '{}'",
+                stdout.lines().any(|line| line.contains("Int(4)")),
+                "Expected MQTT-derived output 'Int(4)' not found in: '{}'",
                 stdout
             );
             assert!(
-                stdout.contains("6"),
-                "Expected output '6' not found in: '{}'",
+                stdout.lines().any(|line| line.contains("Int(6)")),
+                "Expected MQTT-derived output 'Int(6)' not found in: '{}'",
                 stdout
             );
         }
@@ -1583,39 +1701,71 @@ mod integration_tests {
                 run_cli_streaming(&args_refs, cli_timeout).await
             });
 
-            // Wait for CLI to start and subscribe to Redis channels
-            // smol::Timer::after(Duration::from_millis(5)).await;
+            let ready_channel = oneshot::channel();
+            let (ready_tx, ready_rx) = ready_channel.into_split();
 
-            // Now start publishers to send data to the waiting CLI
-            let ready_rx1 = Box::pin(futures::FutureExt::map(
-                Timer::after(Duration::from_millis(200)),
-                |_| (),
-            ));
-            let ready_rx2 = Box::pin(futures::FutureExt::map(
-                Timer::after(Duration::from_millis(200)),
-                |_| (),
-            ));
-            let x_publisher_task = executor.spawn(dummy_redis_sender(
+            let receiver_outputs = dummy_redis_receiver(
+                executor.clone(),
                 REDIS_HOSTNAME,
                 Some(redis_port),
-                // "x_publisher".to_string(),
-                "x".to_string(),
-                xs,
-                ready_rx1,
-            ));
+                vec!["x".to_string(), "y".to_string()],
+                ready_tx,
+            )
+            .await
+            .expect("Failed to create Redis receiver");
 
-            let y_publisher_task = executor.spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                // "y_publisher".to_string(),
-                "y".to_string(),
-                ys,
-                ready_rx2,
-            ));
+            ready_rx.await.expect("Redis receiver should signal readiness");
+
+            // Give the CLI time to subscribe before releasing the controlled publishers.
+            Timer::after(Duration::from_millis(1000)).await;
+
+            let mut receiver_outputs = receiver_outputs.into_iter();
+            let mut x_sub = receiver_outputs
+                .next()
+                .expect("Missing x Redis receiver stream");
+            let mut y_sub = receiver_outputs
+                .next()
+                .expect("Missing y Redis receiver stream");
+
+            let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+                generate_redis_test_publisher_tasks(
+                    executor.clone(),
+                    redis_port,
+                    xs.clone(),
+                    ys.clone(),
+                );
+
+            let mut x_iter = xs.into_iter();
+            let mut y_iter = ys.into_iter();
+
+            for (x_expected, y_expected) in x_iter.by_ref().zip(y_iter.by_ref()) {
+                with_timeout_res(x_tick.send(()), 3, "x_tick.send")
+                    .await
+                    .expect("Failed to send x tick");
+                let x_received = with_timeout(x_sub.next(), 5, "x_sub.next()")
+                    .await
+                    .expect("Failed to receive x publication");
+                assert_eq!(x_received, Some(x_expected));
+
+                with_timeout_res(y_tick.send(()), 3, "y_tick.send")
+                    .await
+                    .expect("Failed to send y tick");
+                let y_received = with_timeout(y_sub.next(), 5, "y_sub.next()")
+                    .await
+                    .expect("Failed to receive y publication");
+                assert_eq!(y_received, Some(y_expected));
+            }
+
+            with_timeout_res(x_tick.send(()), 3, "x_tick.send")
+                .await
+                .expect("Failed to send final x tick");
+            with_timeout_res(y_tick.send(()), 3, "y_tick.send")
+                .await
+                .expect("Failed to send final y tick");
 
             // Wait for publishers to complete
-            x_publisher_task.await.unwrap();
-            y_publisher_task.await.unwrap();
+            x_publisher_task.await.expect("Failed to run x_publisher");
+            y_publisher_task.await.expect("Failed to run y_publisher");
 
             // Wait for CLI to capture output or timeout
             let (stdout, stderr, exit_status) =
@@ -1632,13 +1782,13 @@ mod integration_tests {
 
             // Expected output: z = 4, 6 (from adding x + y for each timestep)
             assert!(
-                stdout.contains("4"),
-                "Expected output '4' not found in: '{}'",
+                stdout.lines().any(|line| line.contains("Int(4)")),
+                "Expected Redis-derived output 'Int(4)' not found in: '{}'",
                 stdout
             );
             assert!(
-                stdout.contains("6"),
-                "Expected output '6' not found in: '{}'",
+                stdout.lines().any(|line| line.contains("Int(6)")),
+                "Expected Redis-derived output 'Int(6)' not found in: '{}'",
                 stdout
             );
         }
