@@ -900,22 +900,48 @@ mod integration_tests {
         );
     }
 
-    // TODO: TW: Fix this test - localisation does not work as intended.
-    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
     #[apply(async_test)]
-    async fn test_local_topics_mode(_executor: Rc<LocalExecutor>) {
+    async fn test_local_topics_trivial(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
-            &fixture_path("simple_add_typed.input"),
+            &fixture_path("simple_add.input"),
             "--output-stdout",
             "--local-topics",
-            "topic1",
-            "--local-topics",
-            "topic2",
+            "z",
         ])
         .await
         .expect("Failed to run CLI");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("z[0] = Int(3)"));
+        assert!(stdout.contains("z[1] = Int(7)"));
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_local_topics_nontrivial(_executor: Rc<LocalExecutor>) {
+        let output = run_cli(&[
+            &fixture_path("simple_add_distributable.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add.input"),
+            "--output-stdout",
+            "--local-topics",
+            "w",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("w[0] = Int(3)"));
+        assert!(stdout.contains("w[1] = Int(7)"));
+        assert!(!stdout.contains("v[0] ="));
+        assert!(!stdout.contains("v[1] ="));
 
         assert!(
             output.status.success(),
