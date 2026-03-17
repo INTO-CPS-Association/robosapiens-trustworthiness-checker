@@ -127,7 +127,7 @@ mod integration_tests {
     use std::time::Duration;
     #[cfg(feature = "ros")]
     use tc_testutils::ros::qualified_ros_name;
-    use tracing::error;
+    use tracing::{error, info};
     use trustworthiness_checker::async_test;
 
     /// Helper function to get the path to the binary
@@ -146,6 +146,7 @@ mod integration_tests {
     /// Helper function to run the CLI with given arguments and return output
     async fn run_cli(args: &[&str]) -> Result<std::process::Output, std::io::Error> {
         let binary_path = get_binary_path();
+        info!("Running CLI command: {} {}", binary_path, args.join(" "));
 
         // Add timeout to prevent hanging
         let command_future = Command::new(binary_path)
@@ -855,14 +856,12 @@ mod integration_tests {
         );
     }
 
-    // TODO: TW: Fix this test - localisation does not work as intended.
-    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
     #[apply(async_test)]
     async fn test_distribution_graph_with_local_node(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.dsrv"),
+            &fixture_path("simple_add_distributable.dsrv"),
             "--input-file",
-            &fixture_path("simple_add_typed.input"),
+            &fixture_path("simple_add.input"),
             "--output-stdout",
             "--distribution-graph",
             &fixture_path("simple_add_distribution_graph.json"),
@@ -871,6 +870,12 @@ mod integration_tests {
         ])
         .await
         .expect("Failed to run CLI");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("w[0] = Int(3)"));
+        assert!(stdout.contains("w[1] = Int(7)"));
+        assert!(!stdout.contains("v[0] ="));
+        assert!(!stdout.contains("v[1] ="));
 
         // Should succeed with proper arguments
         assert!(
@@ -1280,14 +1285,14 @@ mod integration_tests {
         );
     }
 
-    // TODO: TW: Fix this test - localisation does not work as intended.
-    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
+    // This test command does not do anything with the provided config; it just checks that this
+    // combination of commandline argument parsing and builders is supported without errors/crashes
     #[apply(async_test)]
     async fn test_complex_distributed_configuration(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.dsrv"),
+            &fixture_path("simple_add_distributable.dsrv"),
             "--input-file",
-            &fixture_path("simple_add_typed.input"),
+            &fixture_path("simple_add.input"),
             "--output-stdout",
             "--distribution-graph",
             &fixture_path("simple_add_distribution_graph.json"),
@@ -1362,14 +1367,12 @@ mod integration_tests {
         );
     }
 
-    // TODO: TW: Fix this test - localisation does not work as intended.
-    #[ignore = "Localisation for this test is broken. Does not correctly change input/output vars. Falsely passes."]
     #[apply(async_test)]
     async fn test_async_runtime_with_distribution(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
-            &fixture_path("simple_add_typed.dsrv"),
+            &fixture_path("simple_add_distributable.dsrv"),
             "--input-file",
-            &fixture_path("simple_add_typed.input"),
+            &fixture_path("simple_add.input"),
             "--output-stdout",
             "--runtime",
             "async",
@@ -1380,6 +1383,12 @@ mod integration_tests {
         ])
         .await
         .expect("Failed to run CLI");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("w[0] = Int(3)"));
+        assert!(stdout.contains("w[1] = Int(7)"));
+        assert!(!stdout.contains("v[0] ="));
+        assert!(!stdout.contains("v[1] ="));
 
         assert!(
             output.status.success(),
