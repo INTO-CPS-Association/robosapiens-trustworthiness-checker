@@ -170,6 +170,7 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
         steps: &mut Vec<Weight>,
         map: &mut DepGraph,
         current_node: &NodeIndex,
+        current_idx: u64,
     ) {
         match sexpr {
             SExpr::Var(name) => {
@@ -183,22 +184,23 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
                 }
             }
             SExpr::SIndex(sexpr, idx) => {
-                steps.push(*idx);
-                deps_impl(sexpr, steps, map, current_node);
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_impl(sexpr, steps, map, current_node, new_idx);
             }
             SExpr::If(iff, then, els) => {
-                deps_impl(iff, steps, map, current_node);
-                deps_impl(then, steps, map, current_node);
-                deps_impl(els, steps, map, current_node);
+                deps_impl(iff, steps, map, current_node, current_idx);
+                deps_impl(then, steps, map, current_node, current_idx);
+                deps_impl(els, steps, map, current_node, current_idx);
             }
             SExpr::Val(_) | SExpr::MonitoredAt(_, _) | SExpr::Dist(_, _) => {}
             SExpr::List(vec) => {
                 vec.iter()
-                    .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node));
+                    .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node, current_idx));
             }
             SExpr::Map(m) => {
                 m.iter()
-                    .for_each(|(_, v)| deps_impl(v, steps, map, current_node));
+                    .for_each(|(_, v)| deps_impl(v, steps, map, current_node, current_idx));
             }
             SExpr::Dynamic(sexpr, _)
             | SExpr::RestrictedDynamic(sexpr, _, _)
@@ -215,7 +217,7 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
             | SExpr::Sin(sexpr)
             | SExpr::Cos(sexpr)
             | SExpr::Tan(sexpr)
-            | SExpr::Abs(sexpr) => deps_impl(sexpr, steps, map, current_node),
+            | SExpr::Abs(sexpr) => deps_impl(sexpr, steps, map, current_node, current_idx),
             SExpr::BinOp(sexpr1, sexpr2, _)
             | SExpr::Default(sexpr1, sexpr2)
             | SExpr::Update(sexpr1, sexpr2)
@@ -225,15 +227,15 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
             | SExpr::Latch(sexpr1, sexpr2)
             | SExpr::Init(sexpr1, sexpr2)
             | SExpr::MInsert(sexpr1, _, sexpr2) => {
-                deps_impl(sexpr1, steps, map, current_node);
-                deps_impl(sexpr2, steps, map, current_node);
+                deps_impl(sexpr1, steps, map, current_node, current_idx);
+                deps_impl(sexpr2, steps, map, current_node, current_idx);
             }
         }
     }
 
     let mut graph = DepGraph::empty_graph();
     let root_node = graph.graph.add_node(root_name.clone());
-    deps_impl(sexpr, &mut vec![], &mut graph, &root_node);
+    deps_impl(sexpr, &mut vec![], &mut graph, &root_node, 0);
     graph
 }
 
@@ -642,5 +644,19 @@ mod tests {
         assert!(graph.contains_edge(x, a));
         let weight = get_weights(&graph, x, a);
         assert_eq!(weight, vec![1]);
+    }
+
+    #[test]
+    fn test_double_sindex() {
+        // Tests that multiple indices are aggregated correctly.
+
+        // Parentheses unfortunately needed due to parser bugs
+        let mut spec = "in x\nout z\nz = (x[1])[1]";
+        let spec = test_parser(&mut spec).unwrap();
+        let dep = DepGraph::resolver_from_sexprs::<TestConfig>(spec.exprs);
+        assert_eq!(dep.longest_time_dependency(&"x".into()), 2);
+        let graph = get_graph(dep);
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 2);
     }
 }
