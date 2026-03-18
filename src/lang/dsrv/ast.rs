@@ -523,7 +523,7 @@ impl Display for SExpr {
         use SBinOp::*;
         use SExpr::*;
         match self {
-            If(b, e1, e2) => write!(f, "if {} then {} else {}", b, e1, e2),
+            If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Val(n) => write!(f, "{}", n),
             BinOp(e1, e2, NOp(NumericalBinOp::Add)) => write!(f, "({} + {})", e1, e2),
@@ -537,9 +537,9 @@ impl Display for SExpr {
             BinOp(e1, e2, SOp(StrBinOp::Concat)) => write!(f, "({} ++ {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Eq)) => write!(f, "({} == {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Le)) => write!(f, "({} <= {})", e1, e2),
-            BinOp(e1, e2, COp(CompBinOp::Lt)) => write!(f, "({} <= {})", e1, e2),
-            BinOp(e1, e2, COp(CompBinOp::Ge)) => write!(f, "({} <= {})", e1, e2),
-            BinOp(e1, e2, COp(CompBinOp::Gt)) => write!(f, "({} <= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Lt)) => write!(f, "({} < {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Ge)) => write!(f, "({} >= {})", e1, e2),
+            BinOp(e1, e2, COp(CompBinOp::Gt)) => write!(f, "({} > {})", e1, e2),
             Not(b) => write!(f, "!{}", b),
             Var(v) => write!(f, "{}", v),
             MonitoredAt(u, v) => {
@@ -610,8 +610,91 @@ pub mod generation {
 
     use crate::{
         DsrvSpecification, SExpr, VarName,
-        lang::dsrv::ast::{BoolBinOp, SBinOp},
+        lang::dsrv::ast::{BoolBinOp, NumericalBinOp, SBinOp, StrBinOp},
     };
+
+    // Mixed type expressions. Note that these are not fully recursively mixed-type as we switch to
+    // single type expressions within the individual branches of the mixed type expression
+    pub fn arb_mixed_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
+        let bool_leaf = prop_oneof![
+            any::<bool>().prop_map(|x| SExpr::Val(x.into())),
+            proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
+        ];
+
+        let int_cmp = prop_oneof![
+            (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Eq))
+            }),
+            (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Le))
+            }),
+            (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Lt))
+            }),
+            (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Ge))
+            }),
+            (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Gt))
+            }),
+        ];
+
+        let float_cmp = prop_oneof![
+            (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Eq))
+            }),
+            (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Le))
+            }),
+            (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Lt))
+            }),
+            (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Ge))
+            }),
+            (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
+                SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Gt))
+            }),
+        ];
+
+        let string_cmp = prop_oneof![
+            (
+                arb_string_sexpr(vars.clone()),
+                arb_string_sexpr(vars.clone())
+            )
+                .prop_map(|(a, b)| {
+                    SExpr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Eq))
+                }),
+        ];
+
+        let comparison_leaf = prop_oneof![int_cmp, float_cmp, string_cmp];
+
+        prop_oneof![bool_leaf, comparison_leaf].prop_recursive(5, 50, 10, |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::BOp(BoolBinOp::Or)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::BOp(BoolBinOp::And)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::BOp(BoolBinOp::Impl)
+                )),
+                (inner.clone(), inner.clone(), inner.clone()).prop_map(|(c, t, e)| SExpr::If(
+                    Box::new(c),
+                    Box::new(t),
+                    Box::new(e),
+                )),
+                inner.clone().prop_map(|a| SExpr::Not(Box::new(a))),
+            ]
+        })
+    }
 
     pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
         let leaf = prop_oneof![
@@ -635,6 +718,139 @@ pub mod generation {
                     Box::new(b),
                     SBinOp::BOp(BoolBinOp::And)
                 )),
+            ]
+        })
+    }
+
+    pub fn arb_int_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
+        let leaf = prop_oneof![
+            any::<i64>().prop_map(|x| SExpr::Val(x.into())),
+            proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
+        ];
+        leaf.prop_recursive(5, 50, 10, move |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Add)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Sub)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Mul)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Div)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Mod)
+                )),
+                (
+                    arb_boolean_sexpr(vars.clone()),
+                    inner.clone(),
+                    inner.clone()
+                )
+                    .prop_map(|(c, t, e)| SExpr::If(
+                        Box::new(c),
+                        Box::new(t),
+                        Box::new(e),
+                    )),
+            ]
+        })
+    }
+
+    pub fn arb_float_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
+        let leaf = prop_oneof![
+            any::<f64>()
+                .prop_filter("finite non-integer float", |x| x.is_finite()
+                    && x.fract() != 0.0)
+                .prop_map(|x| SExpr::Val(x.into())),
+            proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
+        ];
+        leaf.prop_recursive(5, 50, 10, move |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Add)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Sub)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Mul)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Div)
+                )),
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::NOp(NumericalBinOp::Mod)
+                )),
+                (
+                    arb_boolean_sexpr(vars.clone()),
+                    inner.clone(),
+                    inner.clone()
+                )
+                    .prop_map(|(c, t, e)| SExpr::If(
+                        Box::new(c),
+                        Box::new(t),
+                        Box::new(e),
+                    )),
+                inner.clone().prop_map(|a| SExpr::Sin(Box::new(a))),
+                inner.clone().prop_map(|a| SExpr::Cos(Box::new(a))),
+                inner.clone().prop_map(|a| SExpr::Tan(Box::new(a))),
+                inner.clone().prop_map(|a| SExpr::Abs(Box::new(a))),
+            ]
+        })
+    }
+
+    pub fn arb_string_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = SExpr> {
+        let leaf = prop_oneof![
+            "[a-zA-Z0-9 _-]{1,24}".prop_map(|s| SExpr::Val(Value::Str(s.into()))),
+            proptest::sample::select(vars.clone()).prop_map(|x| SExpr::Var(x.clone())),
+        ];
+
+        leaf.prop_recursive(5, 50, 10, move |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone()).prop_map(|(a, b)| SExpr::BinOp(
+                    Box::new(a),
+                    Box::new(b),
+                    SBinOp::SOp(StrBinOp::Concat)
+                )),
+                (
+                    arb_boolean_sexpr(vars.clone()),
+                    inner.clone(),
+                    inner.clone()
+                )
+                    .prop_map(|(c, t, e)| SExpr::If(
+                        Box::new(c),
+                        Box::new(t),
+                        Box::new(e)
+                    )),
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| SExpr::Default(Box::new(a), Box::new(b))),
+                inner.clone().prop_map(|a| SExpr::When(Box::new(a))),
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| SExpr::Update(Box::new(a), Box::new(b))),
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| SExpr::Latch(Box::new(a), Box::new(b))),
             ]
         })
     }
@@ -678,9 +894,13 @@ pub mod generation {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+    use tracing::info;
 
     use super::VarName;
-    use super::generation::arb_boolean_sexpr;
+    use super::generation::{
+        arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
+    };
+    use crate::lang::dsrv::lalr_parser::parse_sexpr;
 
     proptest! {
         #[test]
@@ -689,7 +909,52 @@ mod tests {
         }
 
         #[test]
+        fn test_prop_display_parse_roundtrip(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
+            let formatted = format!("{}", e);
+            let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
+            prop_assert_eq!(parsed, e);
+        }
+
+        #[test]
+        fn test_prop_display_parse_roundtrip_int(e in arb_int_sexpr(vec!["a".into(), "b".into()])) {
+            let formatted = format!("{}", e);
+            let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
+            prop_assert_eq!(parsed, e);
+        }
+
+        #[test]
+        fn test_prop_display_parse_roundtrip_float(e in arb_float_sexpr(vec!["a".into(), "b".into()])) {
+            let formatted = format!("{}", e);
+            let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
+            prop_assert_eq!(parsed, e);
+        }
+
+        #[test]
+        fn test_prop_display_parse_roundtrip_string(e in arb_string_sexpr(vec!["a".into(), "b".into()])) {
+            let formatted = format!("{}", e);
+            info!("Testing roundtrip on {formatted} ({e:?})");
+            let parsed = parse_sexpr(&formatted).expect(format!("Display output {formatted} should be parsable").as_str());
+            prop_assert_eq!(parsed, e);
+        }
+
+        #[test]
         fn test_prop_inputs_works(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
+            let valid_inputs: Vec<VarName> = vec!["a".into(), "b".into()];
+            let inputs = e.inputs();
+            for input in inputs.iter() {
+                assert!(valid_inputs.contains(input));
+            }
+        }
+
+        #[test]
+        fn test_prop_display_parse_roundtrip_mixed(e in arb_mixed_sexpr(vec!["a".into(), "b".into()])) {
+            let formatted = format!("{}", e);
+            let parsed = parse_sexpr(&formatted).expect("Mixed display output should be parsable");
+            prop_assert_eq!(parsed, e);
+        }
+
+        #[test]
+        fn test_prop_inputs_works_mixed(e in arb_mixed_sexpr(vec!["a".into(), "b".into()])) {
             let valid_inputs: Vec<VarName> = vec!["a".into(), "b".into()];
             let inputs = e.inputs();
             for input in inputs.iter() {

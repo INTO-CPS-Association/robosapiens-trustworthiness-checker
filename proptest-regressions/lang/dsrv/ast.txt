@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 53fcec7d516a60cf73794ddfe2d0b690e968d157f7f42efccb067f9ac8d98156 # shrinks to e = Val(Str(""))
+cc f2e49a894f1bc5754f6efb45895a936b673e8694599ded1fd27287fcdad4c8cb # shrinks to e = If(List([]), Val(Str("-")), Val(Str("a")))
+cc 25a7f4c39f30e1147ccea1757819565b14138816ec839010747b2cd1adcf9613 # shrinks to e = BinOp(Val(Str("_")), If(Val(Str("0")), Val(Str(" ")), Val(Str("-"))), SOp(Concat))
+cc c5fd0694e9d45d79b39d5ef8e6c0ae6a1d69cd378487d95cb92da4ecdea0d181 # shrinks to e = If(Val(Bool(false)), If(BinOp(BinOp(Val(Int(0)), BinOp(Val(Int(0)), Val(Int(502806347)), NOp(Div)), NOp(Add)), BinOp(BinOp(Val(Int(-1018672194283969689)), Var(VarName::new("a")), NOp(Mod)), Var(VarName::new("b")), NOp(Sub)), COp(Eq)), Var(VarName::new("a")), Val(Bool(false))), BinOp(Cos(Var(VarName::new("a"))), Abs(Val(Float(-3.6338761230343156e-237))), COp(Ge)))

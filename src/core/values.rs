@@ -237,7 +237,7 @@ impl Display for Value {
         match self {
             Value::Int(i) => write!(f, "{}", i),
             Value::Float(fl) => write!(f, "{}", fl),
-            Value::Str(s) => write!(f, "{}", s),
+            Value::Str(s) => write!(f, "{:?}", s),
             Value::Bool(b) => write!(f, "{}", b),
             Value::List(vals) => {
                 write!(f, "[")?;
