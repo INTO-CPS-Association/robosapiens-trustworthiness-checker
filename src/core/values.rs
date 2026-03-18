@@ -300,11 +300,11 @@ pub enum StreamType {
 impl Display for StreamType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StreamType::Int => write!(f, "int"),
-            StreamType::Float => write!(f, "float"),
-            StreamType::Str => write!(f, "str"),
-            StreamType::Bool => write!(f, "bool"),
-            StreamType::Unit => write!(f, "unit"),
+            StreamType::Int => write!(f, "Int"),
+            StreamType::Float => write!(f, "Float"),
+            StreamType::Str => write!(f, "Str"),
+            StreamType::Bool => write!(f, "Bool"),
+            StreamType::Unit => write!(f, "Unit"),
         }
     }
 }

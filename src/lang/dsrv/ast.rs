@@ -3,6 +3,7 @@ use ecow::{EcoString, EcoVec};
 use crate::core::{Specification, StreamTypeAscription, VarName};
 use crate::core::{StreamType, Value};
 use crate::distributed::distribution_graphs::NodeName;
+use std::fmt::Error;
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
@@ -602,6 +603,36 @@ impl Display for SExpr {
     }
 }
 
+impl Display for DsrvSpecification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.type_annotations.is_empty() {
+            for v in self.input_vars.iter() {
+                writeln!(f, "in {}", v)?;
+            }
+            for v in self.output_vars.iter() {
+                writeln!(f, "out {}", v)?;
+            }
+            for (v, e) in self.exprs.iter() {
+                writeln!(f, "{} = {}", v, e)?;
+            }
+        } else {
+            for v in self.input_vars.iter() {
+                let typ = self.type_annotations.get(v).ok_or(Error)?;
+                writeln!(f, "in {}: {}", v, typ)?;
+            }
+            for v in self.output_vars.iter() {
+                let typ = self.type_annotations.get(v).ok_or(Error)?;
+                writeln!(f, "out {}: {}", v, typ)?;
+            }
+            // TODO: should we have some support for annotating the types of auxiliary variables?
+            for (v, e) in self.exprs.iter() {
+                writeln!(f, "{} = {}", v, e)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub mod generation {
     use super::*;
@@ -900,6 +931,8 @@ mod tests {
     use super::generation::{
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
+    use crate::dsrv_fixtures::{spec_simple_add_monitor, spec_simple_add_monitor_typed};
+    use crate::dsrv_specification;
     use crate::lang::dsrv::lalr_parser::parse_sexpr;
 
     proptest! {
@@ -961,5 +994,21 @@ mod tests {
                 assert!(valid_inputs.contains(input));
             }
         }
+    }
+
+    #[test]
+    fn test_display_simple_add() {
+        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let res = format!("{}", spec_untyped);
+        let expected = "in x\nin y\nout z\nz = (x + y)\n";
+        assert_eq!(res, expected);
+    }
+
+    #[test]
+    fn test_display_simple_add_typed() {
+        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let res = format!("{}", spec_untyped);
+        let expected = "in x: Int\nin y: Int\nout z: Int\nz = (x + y)\n";
+        assert_eq!(res, expected);
     }
 }
