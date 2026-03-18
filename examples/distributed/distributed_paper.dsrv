@@ -1,0 +1,13 @@
+in ConveyorSystem
+in StackerCrane
+in VerticalLift
+in HorizontalCarousel
+out CSAlert
+out SCAlert
+out VLAlert
+out HCAlert
+CSAlert = ConveyorSystem < 0
+SCAlert = StackerCrane < 0 && StackerCrane > 30
+VLAlert = VerticalLift > 100
+HCAlert = HorizontalCarousel == 0
+
