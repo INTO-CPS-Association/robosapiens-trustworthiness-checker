@@ -3,9 +3,7 @@ use tracing::{debug, info};
 
 use crate::cli::args::OutputMode;
 use crate::distributed::distribution_graphs::NodeName;
-use crate::distributed::locality_receiver::LocalityReceiver;
 use crate::io::builders::output_handler_builder::OutputHandlerSpec;
-use crate::semantics::distributed::localisation::LocalitySpec;
 use crate::{
     VarName, distributed::distribution_graphs::LabelledDistributionGraph,
     io::builders::InputProviderSpec, runtime::distributed::SchedulerCommunication,
@@ -13,7 +11,7 @@ use crate::{
 
 use super::args::DistributionMode as CliDistributionMode;
 use super::args::{DistributionMode, InputMode, SchedulingType};
-use crate::core::{MQTT_HOSTNAME, interfaces::Runtime};
+use crate::core::interfaces::Runtime;
 use crate::runtime::builder::DistributionMode as BuilderDistributionMode;
 
 impl From<InputMode> for InputProviderSpec {
@@ -89,7 +87,6 @@ impl From<SchedulingType> for SchedulerCommunication {
     fn from(scheduling_type: SchedulingType) -> Self {
         match scheduling_type {
             SchedulingType::Mock => SchedulerCommunication::Null,
-            SchedulingType::Mqtt => SchedulerCommunication::MQTT,
         }
     }
 }
@@ -182,45 +179,6 @@ impl DistributionModeBuilder {
                         .map(|v| v.into())
                         .collect::<Vec<VarName>>(),
                 ))
-            }
-            (
-                DistributionMode {
-                    distributed_work: true,
-                    ..
-                },
-                _,
-            ) => {
-                let local_node = self.local_node.context("Local node not specified")?;
-                info!("Waiting for work assignment on node {}", local_node);
-                let receiver = match self.mqtt_port {
-                    Some(port) => crate::io::mqtt::MQTTLocalityReceiver::new_with_port(
-                        MQTT_HOSTNAME.to_string(),
-                        local_node.into(),
-                        port,
-                    ),
-                    None => crate::io::mqtt::MQTTLocalityReceiver::new(
-                        MQTT_HOSTNAME.to_string(),
-                        local_node.into(),
-                    ),
-                };
-                receiver
-                    .ready()
-                    .await
-                    .context("Failed to initialize MQTT locality receiver")?;
-                debug!("setting up distributed distribution mode with initial local work");
-                let locality = receiver
-                    .receive()
-                    .await
-                    .context("Work could not be received")?;
-                info!(
-                    "Received work once and for all: {:?}",
-                    locality.local_vars()
-                );
-                // Pass both locality and receiver for reconfigurable runtime
-                BuilderDistributionMode::LocalMonitorWithReceiverAndLocality(
-                    Box::new(locality),
-                    receiver,
-                )
             }
             (
                 DistributionMode {

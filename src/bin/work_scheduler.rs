@@ -5,9 +5,9 @@ use tracing::{info, instrument};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
+use trustworthiness_checker::distributed::scheduling::communication::NullSchedulerCommunicator;
 use trustworthiness_checker::distributed::scheduling::planners::core::StaticFixedSchedulerPlanner;
 use trustworthiness_checker::distributed::scheduling::{ReplanningCondition, Scheduler};
-use trustworthiness_checker::io::mqtt::MQTTSchedulerCommunicator;
 use trustworthiness_checker::io::mqtt::dist_graph_provider::StaticDistGraphProvider;
 
 /// Worker scheduler application for distributed monitoring
@@ -44,15 +44,14 @@ async fn async_main() -> anyhow::Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let mqtt_uri = "tcp://localhost:1883".to_string();
-
     info!("Work scheduler starting");
 
     // Load distribution graph
     let dist_graph = Rc::new(load_distribution_graph(args.distribution_graph).await?);
 
-    // Create MQTT communicator
-    let communicator = Box::new(MQTTSchedulerCommunicator::new(mqtt_uri));
+    // Create Mock communicator
+    // TODO: Switch to ROS communicator when implemented
+    let communicator = Box::new(NullSchedulerCommunicator {});
 
     info!("Distribution graph loaded, scheduling work...");
 

@@ -1162,14 +1162,15 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    async fn test_scheduling_mode_mqtt(_executor: Rc<LocalExecutor>) {
+    #[ignore = "Ignored as ROS scheduling not yet implemented"]
+    async fn test_scheduling_mode_ros(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
             &fixture_path("simple_add_typed.input"),
             "--output-stdout",
             "--scheduling-mode",
-            "mqtt",
+            "ros",
         ])
         .await
         .expect("Failed to run CLI");
@@ -1282,36 +1283,6 @@ mod integration_tests {
         assert!(
             !output.status.success(),
             "CLI command should have failed due to conflicting distribution modes"
-        );
-    }
-
-    // This test command does not do anything with the provided config; it just checks that this
-    // combination of commandline argument parsing and builders is supported without errors/crashes
-    #[apply(async_test)]
-    async fn test_complex_distributed_configuration(_executor: Rc<LocalExecutor>) {
-        let output = run_cli(&[
-            &fixture_path("simple_add_distributable.dsrv"),
-            "--input-file",
-            &fixture_path("simple_add.input"),
-            "--output-stdout",
-            "--distribution-graph",
-            &fixture_path("simple_add_distribution_graph.json"),
-            "--local-node",
-            "A",
-            "--scheduling-mode",
-            "mqtt",
-            "--mqtt-port",
-            "1885",
-            "--distribution-constraints",
-            "x",
-        ])
-        .await
-        .expect("Failed to run CLI");
-
-        assert!(
-            output.status.success(),
-            "CLI command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
         );
     }
 
@@ -2209,9 +2180,8 @@ mod integration_tests {
             let (_stdout, stderr, exit_status) = run_cli_streaming(
                 &[
                     &fixture_path("simple_add_typed.dsrv"),
-                    "--distributed-work",
-                    "--local-node",
-                    "a",
+                    "--local-topics",
+                    "z",
                     "--mqtt-input",
                     "--mqtt-port",
                     &format!("{}", mqtt_port),

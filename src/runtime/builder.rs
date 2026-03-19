@@ -165,13 +165,10 @@ impl<
 pub enum DistributionMode {
     CentralMonitor,
     LocalMonitor(Box<dyn LocalitySpec>), // Local topics
-    LocalMonitorWithReceiverAndLocality(
-        Box<dyn LocalitySpec>,
-        crate::io::mqtt::MQTTLocalityReceiver,
-    ), // Local topics with receiver for reconfiguration
-    /// Receiver for reconfiguration but no current local monitor; this is for dynamic
-    /// reconfiguration each timestep
-    ReconfigurableLocalMonitor(crate::io::mqtt::MQTTLocalityReceiver),
+    // Receiver for reconfiguration but no current local monitor; this is for dynamic
+    // reconfiguration each timestep
+    // TODO: reintroduce this as a shorthand for using the ReconfigurableSemiSyncRuntime
+    // ReconfigurableLocalMonitor(crate::io::mqtt::MQTTLocalityReceiver),
     DistributedCentralised(
         /// Location names
         Vec<String>,
@@ -199,12 +196,6 @@ impl Debug for DistributionMode {
         match self {
             DistributionMode::CentralMonitor => write!(f, "CentralMonitor"),
             DistributionMode::LocalMonitor(_) => write!(f, "LocalMonitor"),
-            DistributionMode::LocalMonitorWithReceiverAndLocality(_, _) => {
-                write!(f, "LocalMonitorWithReceiverAndLocality")
-            }
-            DistributionMode::ReconfigurableLocalMonitor(_) => {
-                write!(f, "LocalMonitorWithReceiver")
-            }
             DistributionMode::DistributedCentralised(locations) => {
                 write!(f, "DistributedCentralised({:?})", locations)
             }
@@ -494,9 +485,7 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                 let builder = builder.scheduler_mode(scheduler_mode);
                 let builder = match distribution_mode {
                     DistributionMode::CentralMonitor => builder,
-                    DistributionMode::LocalMonitor(_)
-                    | DistributionMode::LocalMonitorWithReceiverAndLocality(_, _)
-                    | DistributionMode::ReconfigurableLocalMonitor(_) => {
+                    DistributionMode::LocalMonitor(_) => {
                         todo!("Local monitor not implemented here yet")
                     }
                     DistributionMode::DistributedCentralised(locations) => {

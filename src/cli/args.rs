@@ -148,18 +148,17 @@ pub enum SchedulingType {
     /// Provides a simple, predictable scheduling behavior primarily
     /// used for testing and single-node deployments.
     Mock,
-    /// MQTT-based distributed scheduler for production environments
-    ///
-    /// Uses MQTT messaging for real-time coordination between monitoring
-    /// nodes, enabling dynamic work distribution and load balancing.
-    Mqtt,
+    // ROS-topic--based distributed scheduler for production environments
+    //
+    // Uses ROS topics messaging for real-time coordination between
+    // monitoring nodes, enabling dynamic work distribution and load balancing.
+    // TODO: Add
 }
 
 impl Into<&'static str> for SchedulingType {
     fn into(self) -> &'static str {
         match self {
             SchedulingType::Mock => "mock",
-            SchedulingType::Mqtt => "mqtt",
         }
     }
 }
@@ -168,7 +167,6 @@ impl Into<String> for SchedulingType {
     fn into(self) -> String {
         match self {
             SchedulingType::Mock => "mock".to_string(),
-            SchedulingType::Mqtt => "mqtt".to_string(),
         }
     }
 }
@@ -177,7 +175,6 @@ impl Into<OsStr> for SchedulingType {
     fn into(self) -> OsStr {
         match self {
             SchedulingType::Mock => (&"mock").into(),
-            SchedulingType::Mqtt => (&"mqtt").into(),
         }
     }
 }

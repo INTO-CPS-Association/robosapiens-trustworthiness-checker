@@ -99,8 +99,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     // Localise the model to contain only the local variables (if needed)
     let model = match &builder.distribution_mode {
-        DistributionMode::LocalMonitor(locality_mode)
-        | DistributionMode::LocalMonitorWithReceiverAndLocality(locality_mode, _) => {
+        DistributionMode::LocalMonitor(locality_mode) => {
             debug!("Localising model");
             let model = model.localise(locality_mode);
             info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Localised model");

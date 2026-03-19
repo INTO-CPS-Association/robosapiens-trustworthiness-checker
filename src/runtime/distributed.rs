@@ -23,10 +23,7 @@ use crate::{
         },
         solvers::brute_solver::BruteForceDistConstraintSolver,
     },
-    io::mqtt::{
-        MQTTSchedulerCommunicator,
-        dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
-    },
+    io::mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
         distributed::{
@@ -146,7 +143,6 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SchedulerCommunication {
     Null,
-    MQTT,
 }
 
 impl<S, AC> AbstractMonitorBuilder<AC::Spec, AC::Val> for DistAsyncMonitorBuilder<AC, S>
@@ -351,11 +347,7 @@ where
         let scheduler_communicator = match scheduler_mode {
             SchedulerCommunication::Null => {
                 Box::new(NullSchedulerCommunicator) as Box<dyn SchedulerCommunicator>
-            }
-            SchedulerCommunication::MQTT => {
-                Box::new(MQTTSchedulerCommunicator::new("localhost".into()))
-                    as Box<dyn SchedulerCommunicator>
-            }
+            } // TODO: ROS to be added
         };
         let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
             planner,

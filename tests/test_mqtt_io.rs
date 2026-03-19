@@ -17,16 +17,11 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use trustworthiness_checker::io::mqtt::MqttFactory;
-    use trustworthiness_checker::io::mqtt::MqttMessage;
     use winnow::Parser;
 
     use approx::assert_abs_diff_eq;
     use std::{collections::BTreeMap, rc::Rc};
     use tc_testutils::mqtt::{get_mqtt_outputs, start_mqtt};
-    use trustworthiness_checker::distributed::locality_receiver::LocalityReceiver;
-    use trustworthiness_checker::io::mqtt::MQTTLocalityReceiver;
-
-    use trustworthiness_checker::semantics::distributed::localisation::LocalitySpec;
 
     use trustworthiness_checker::dsrv_fixtures::{TestMonitorRunner, input_streams1};
     use trustworthiness_checker::{
@@ -347,54 +342,6 @@ mod integration_tests {
         x_publisher_task.await?;
         y_publisher_task.await?;
         info!("All publishers completed, shutting down MQTT server");
-
-        Ok(())
-    }
-
-    #[apply(async_test)]
-    async fn test_mqtt_locality_receiver(
-        executor: Rc<LocalExecutor<'static>>,
-    ) -> anyhow::Result<()> {
-        println!("Starting test");
-        let mqtt_server = start_mqtt().await;
-        println!("Got MQTT server");
-        let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
-            .await
-            .expect("Failed to get host port for MQTT server");
-        let mqtt_uri = format!("tcp://localhost:{}", mqtt_port);
-        let node_name = "test_node".to_string();
-
-        // Create locality receiver and wait for it to be ready
-        let locality_receiver = MQTTLocalityReceiver::new(mqtt_uri.clone(), node_name);
-        let _ = with_timeout(locality_receiver.ready(), 5, "locality_receiver.ready()").await?;
-
-        executor
-            .spawn(async move {
-                // Receiver is already ready, publish immediately
-                println!("Receiver is ready, publishing message");
-
-                let mqtt_client = MQTT_FACTORY
-                    .connect(&mqtt_uri)
-                    .await
-                    .expect("Failed to create MQTT client");
-                let topic = "start_monitors_at_test_node".to_string();
-                let message = serde_json::to_string(&vec!["x", "y"]).unwrap();
-                let message = MqttMessage::new(topic, message, 1);
-                mqtt_client.publish(message).await.unwrap();
-                println!("Published message");
-            })
-            .detach();
-
-        // Wait for the result
-        let locality_spec = with_timeout_res(
-            locality_receiver.receive(),
-            5,
-            "locality_receiver.receive()",
-        )
-        .await?;
-        println!("Received locality spec");
-
-        assert_eq!(locality_spec.local_vars(), vec!["x".into(), "y".into()]);
 
         Ok(())
     }

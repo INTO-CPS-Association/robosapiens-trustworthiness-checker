@@ -30,7 +30,7 @@ impl SchedulerCommunicator for NullSchedulerCommunicator {
     }
 }
 
-struct MockSchedulerCommunicator {
+pub struct MockSchedulerCommunicator {
     pub log: Vec<(NodeName, Vec<VarName>)>,
 }
 
