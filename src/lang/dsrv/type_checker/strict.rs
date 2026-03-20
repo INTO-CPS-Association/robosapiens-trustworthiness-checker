@@ -14,10 +14,10 @@ pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpe
         let expected = match ctx.get(var).cloned() {
             Some(t) => t,
             None => {
-                errors.push(SemanticError::MissingTypeAnnotation(format!(
-                    "Variable {:?} is missing a type annotation",
-                    var
-                )));
+                errors.push(SemanticError::MissingTypeAnnotation(
+                    format!("Variable {:?} is missing a type annotation", var),
+                    None,
+                ));
                 continue;
             }
         };
@@ -26,12 +26,13 @@ pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpe
         if let Ok(ref te) = typed_expr {
             let actual = extract_type(te);
             if actual != TCType::from_stream_type(&expected) {
-                errors.push(SemanticError::type_error(
+                errors.push(SemanticError::type_error_at(
                     TypeErrorKind::AnnotationTypeMismatch,
                     format!(
                         "Variable {:?} has declared type {:?}, but expression has type {:?}",
                         var, expected, actual
                     ),
+                    expr.span,
                 ));
             }
         }
@@ -58,7 +59,9 @@ pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpe
 mod tests {
     use super::*;
     use crate::core::StreamType;
+    use crate::lang::core::parser::SpecParser;
     use crate::lang::dsrv::ast::SExpr;
+    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lang::dsrv::parser::dsrv_specification;
     use crate::lang::dsrv::span::Span;
     use crate::{Specification, VarName};
@@ -148,6 +151,52 @@ mod tests {
                         && error.span() == Some(Span::new(expected_start, expected_end))
             )),
             "expected top-level operator error at {:?}, got {:?}",
+            Span::new(expected_start, expected_end),
+            errors
+        );
+    }
+
+    #[test]
+    fn lalr_top_level_type_error_uses_document_span() {
+        let input = "in x: Int\nout z: Int\nz = x + true";
+        let mut source = input;
+        let spec = LALRParser::parse(&mut source).expect("spec should parse");
+
+        let errors = type_check(spec).expect_err("spec should fail type checking");
+        let expected_start = input.find("x + true").expect("expression should exist") as u32;
+        let expected_end = expected_start + "x + true".len() as u32;
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+                        && error.span() == Some(Span::new(expected_start, expected_end))
+            )),
+            "expected LALR top-level operator error at {:?}, got {:?}",
+            Span::new(expected_start, expected_end),
+            errors
+        );
+    }
+
+    #[test]
+    fn annotation_mismatch_uses_expression_span() {
+        let input = "out z: Bool\nz = 1";
+        let mut source = input;
+        let spec = LALRParser::parse(&mut source).expect("spec should parse");
+
+        let errors = type_check(spec).expect_err("spec should fail type checking");
+        let expected_start = input.find('1').expect("expression should exist") as u32;
+        let expected_end = expected_start + 1;
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.kind() == &TypeErrorKind::AnnotationTypeMismatch
+                        && error.span() == Some(Span::new(expected_start, expected_end))
+            )),
+            "expected annotation mismatch at {:?}, got {:?}",
             Span::new(expected_start, expected_end),
             errors
         );

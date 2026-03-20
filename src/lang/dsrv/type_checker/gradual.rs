@@ -78,7 +78,7 @@ fn coerce_gradual_placeholders(te: SExprTE) -> SExprTE {
 
 fn can_widen_gradual_error(error: &SemanticError) -> bool {
     match error {
-        SemanticError::UndeclaredVariable(_) => true,
+        SemanticError::UndeclaredVariable(_, _) => true,
         SemanticError::TypeError(type_error) => matches!(
             type_error.kind(),
             TypeErrorKind::IfBranchTypeMismatch
@@ -458,7 +458,7 @@ mod tests {
         let errors = type_check_gradual(spec).expect_err("NoVal literal AST should be rejected");
         assert!(matches!(
             errors.as_slice(),
-            [SemanticError::UnsupportedLiteral(_)]
+            [SemanticError::UnsupportedLiteral(_, _)]
         ));
     }
 

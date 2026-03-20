@@ -79,16 +79,20 @@ impl TypeCheckableHelper<SExprTE> for Value {
             ),
             Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PartialStreamValue::Known(())))),
             Value::Deferred => {
-                errs.push(SemanticError::DeferredError(format!(
-                    "Stream expression {:?} not assigned a type before semantic analysis",
-                    self
-                )));
+                errs.push(SemanticError::DeferredError(
+                    format!(
+                        "Stream expression {:?} not assigned a type before semantic analysis",
+                        self
+                    ),
+                    None,
+                ));
                 Err(())
             }
             Value::NoVal => {
                 errs.push(SemanticError::UnsupportedLiteral(
                     "NoVal is an internal runtime value and is not a supported source literal"
                         .into(),
+                    None,
                 ));
                 Err(())
             }
@@ -666,10 +670,10 @@ impl TypeCheckableHelper<SExprTE> for VarName {
                 StreamType::Any => Ok(SExprTE::Any(SExprAny::Var(self.clone()))),
             },
             None => {
-                errs.push(SemanticError::UndeclaredVariable(format!(
-                    "Usage of undeclared variable: {:?}",
-                    self
-                )));
+                errs.push(SemanticError::UndeclaredVariable(
+                    format!("Usage of undeclared variable: {:?}", self),
+                    None,
+                ));
                 Err(())
             }
         }
@@ -1256,6 +1260,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     StreamTypeAscription::Unascribed => {
                         errs.push(SemanticError::MissingTypeAscription(
                             "Type ascription required for defer".into(),
+                            None,
                         ));
                         return Err(());
                     }
@@ -1340,6 +1345,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     StreamTypeAscription::Unascribed => {
                         errs.push(SemanticError::MissingTypeAscription(
                             "Type ascription required for dynamic".into(),
+                            None,
                         ));
                         return Err(());
                     }
@@ -1414,6 +1420,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     StreamTypeAscription::Unascribed => {
                         errs.push(SemanticError::MissingTypeAscription(
                             "Type ascription required for defer".into(),
+                            None,
                         ));
                         return Err(());
                     }
@@ -1966,12 +1973,14 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             SExpr::MonitoredAt(_, _) => {
                 errs.push(SemanticError::UnsupportedExpression(
                     "monitored_at is only supported in distributed untyped semantics".into(),
+                    None,
                 ));
                 Err(())
             }
             SExpr::Dist(_, _) => {
                 errs.push(SemanticError::UnsupportedExpression(
                     "dist is only supported in distributed untyped semantics".into(),
+                    None,
                 ));
                 Err(())
             }
@@ -2350,7 +2359,7 @@ mod tests {
         // Checks that if a Val is deferred during semantic analysis it produces a DeferredError
         let val = SExprV::Val(Value::Deferred);
         let result = val.type_check_with_default();
-        let expected: SemantResultStr = Err(vec![SemanticError::DeferredError("".into())]);
+        let expected: SemantResultStr = Err(vec![SemanticError::DeferredError("".into(), None)]);
         check_correct_error_type(&result, &expected);
     }
 
@@ -2654,7 +2663,8 @@ mod tests {
 
         let val = SExprV::Var("undeclared_name".into());
         let result = val.type_check_with_default();
-        let expected: SemantResultStr = Err(vec![SemanticError::UndeclaredVariable("".into())]);
+        let expected: SemantResultStr =
+            Err(vec![SemanticError::UndeclaredVariable("".into(), None)]);
         check_correct_error_type(&result, &expected);
     }
 

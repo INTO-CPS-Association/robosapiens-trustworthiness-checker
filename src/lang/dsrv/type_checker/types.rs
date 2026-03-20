@@ -125,12 +125,12 @@ impl UnresolvedTypeError {
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemanticError {
     TypeError(TypeError),
-    DeferredError(String),
-    UndeclaredVariable(String),
-    MissingTypeAnnotation(String),
-    MissingTypeAscription(String),
-    UnsupportedLiteral(String),
-    UnsupportedExpression(String),
+    DeferredError(String, Option<Span>),
+    UndeclaredVariable(String, Option<Span>),
+    MissingTypeAnnotation(String, Option<Span>),
+    MissingTypeAscription(String, Option<Span>),
+    UnsupportedLiteral(String, Option<Span>),
+    UnsupportedExpression(String, Option<Span>),
     UnresolvedType(UnresolvedTypeError),
 }
 
@@ -154,16 +154,28 @@ impl SemanticError {
     pub fn span(&self) -> Option<Span> {
         match self {
             Self::TypeError(error) => error.span(),
+            Self::DeferredError(_, span)
+            | Self::UndeclaredVariable(_, span)
+            | Self::MissingTypeAnnotation(_, span)
+            | Self::MissingTypeAscription(_, span)
+            | Self::UnsupportedLiteral(_, span)
+            | Self::UnsupportedExpression(_, span) => *span,
             Self::UnresolvedType(error) => error.span(),
-            _ => None,
         }
     }
 
     pub fn set_span_if_absent(&mut self, span: Span) {
         match self {
             Self::TypeError(error) => error.set_span_if_absent(span),
+            Self::DeferredError(_, error_span)
+            | Self::UndeclaredVariable(_, error_span)
+            | Self::MissingTypeAnnotation(_, error_span)
+            | Self::MissingTypeAscription(_, error_span)
+            | Self::UnsupportedLiteral(_, error_span)
+            | Self::UnsupportedExpression(_, error_span) => {
+                error_span.get_or_insert(span);
+            }
             Self::UnresolvedType(error) => error.set_span_if_absent(span),
-            _ => {}
         }
     }
 }
