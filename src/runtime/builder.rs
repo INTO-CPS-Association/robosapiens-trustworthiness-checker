@@ -441,19 +441,17 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                 >::new())
             }
             (Runtime::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(SemiSyncMonitorBuilder::<
-                    SemiSyncValueConfig,
-                    DsrvSpecification,
-                    UntimedDsrvSemantics<LALRParser>,
-                >::new())
+Box::new(SemiSyncMonitorBuilder::<
+    SemiSyncValueConfig,
+    UntimedDsrvSemantics<LALRParser>,
+>::new())
             }
             (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-                let mut builder = ReconfSemiSyncMonitorBuilder::<
-                    SemiSyncValueConfig,
-                    DsrvSpecification,
-                    UntimedDsrvSemantics<LALRParser>,
-                    LALRParser,
-                >::new();
+let mut builder = ReconfSemiSyncMonitorBuilder::<
+    SemiSyncValueConfig,
+    UntimedDsrvSemantics<LALRParser>,
+    LALRParser,
+>::new();
                 builder = builder.reconf_topic(reconf_topic);
                 builder =
                     builder.input_builder(input_provider_builder.expect(

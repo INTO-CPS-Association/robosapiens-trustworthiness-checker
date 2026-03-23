@@ -22,27 +22,25 @@ use std::{
 use tracing::{debug, error, info, warn};
 use unsync::spsc;
 
-pub struct SemiSyncMonitorBuilder<AC, S, MS>
+pub struct SemiSyncMonitorBuilder<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr>,
-    S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
     executor: Option<Rc<LocalExecutor<'static>>>,
-    model: Option<S>,
+    model: Option<AC::Spec>,
     input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
     _marker: std::marker::PhantomData<MS>,
 }
 
-impl<AC, S, MS> AbstractMonitorBuilder<S, AC::Val> for SemiSyncMonitorBuilder<AC, S, MS>
+impl<AC, MS> AbstractMonitorBuilder<AC::Spec, AC::Val> for SemiSyncMonitorBuilder<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
-    S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
-    type Mon = SemiSyncMonitor<AC, S, MS>;
+    type Mon = SemiSyncMonitor<AC, MS>;
 
     fn new() -> Self {
         Self {
@@ -59,7 +57,7 @@ where
         self
     }
 
-    fn model(mut self, model: S) -> Self {
+    fn model(mut self, model: AC::Spec) -> Self {
         self.model = Some(model);
         self
     }
@@ -74,7 +72,7 @@ where
         self
     }
 
-    fn build(self) -> SemiSyncMonitor<AC, S, MS> {
+    fn build(self) -> SemiSyncMonitor<AC, MS> {
         let executor = self.executor.unwrap();
         let model = self.model.unwrap();
         let input = self.input.unwrap();
@@ -335,29 +333,27 @@ where
     }
 }
 
-pub struct SemiSyncMonitor<AC, S, MS>
+pub struct SemiSyncMonitor<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr>,
-    S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
     _executor: Rc<LocalExecutor<'static>>,
-    model: S,
+    model: AC::Spec,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
     _marker: std::marker::PhantomData<MS>,
 }
 
-impl<AC, S, MS> SemiSyncMonitor<AC, S, MS>
+impl<AC, MS> SemiSyncMonitor<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
-    S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
-        model: S,
+        model: AC::Spec,
         input: Box<dyn InputProvider<Val = AC::Val>>,
         output: Box<dyn OutputHandler<Val = AC::Val>>,
     ) -> Self {
@@ -370,7 +366,7 @@ where
     }
 
     fn setup_input_streams(
-        model: &S,
+        model: &AC::Spec,
         input_provider: &mut dyn InputProvider<Val = AC::Val>,
     ) -> BTreeMap<VarName, OutputStream<AC::Val>> {
         model
@@ -390,7 +386,7 @@ where
     }
 
     fn setup_output_var_managers(
-        model: &S,
+        model: &AC::Spec,
     ) -> anyhow::Result<(
         Vec<(VarName, AC::Expr, spsc::Sender<AC::Val>)>,
         Vec<VarManager<AC>>,
@@ -609,24 +605,22 @@ where
     }
 }
 
-impl<AC, S, MS> Monitor<S, AC::Val> for SemiSyncMonitor<AC, S, MS>
+impl<AC, MS> Monitor<AC::Spec, AC::Val> for SemiSyncMonitor<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
-    S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
-    fn spec(&self) -> &S {
+    fn spec(&self) -> &AC::Spec {
         &self.model
     }
 }
 
 #[async_trait(?Send)]
-impl<AC, S, MS> Runnable for SemiSyncMonitor<AC, S, MS>
+impl<AC, MS> Runnable for SemiSyncMonitor<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
-    S: Specification<Expr = AC::Expr>,
     MS: MonitoringSemantics<AC>,
 {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
