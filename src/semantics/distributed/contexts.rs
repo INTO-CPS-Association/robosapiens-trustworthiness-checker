@@ -30,6 +30,7 @@ where
     type Val = AC::Val;
     type Expr = AC::Expr;
     type Ctx = AsyncCtx<Self>;
+    type Spec = AC::Spec;
 }
 
 pub struct DistributedContextBuilder<AC>
