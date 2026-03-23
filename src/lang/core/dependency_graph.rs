@@ -13,9 +13,6 @@ pub trait DependencyResolver<AC>
 where
     AC: AsyncConfig,
 {
-    // Generates the dependency structure from the given expressions
-    fn new(exprs: BTreeMap<VarName, AC::Expr>) -> Self;
-
     // Adds a new dependency to the resolver
     fn add_dependency(&mut self, var: &VarName, expr: &AC::Expr);
 
@@ -243,10 +240,6 @@ impl<AC> DependencyResolver<AC> for DepGraph
 where
     AC: AsyncConfig<Expr = SExpr>,
 {
-    fn new(exprs: BTreeMap<VarName, AC::Expr>) -> Self {
-        DepGraph::from_sexprs(exprs)
-    }
-
     fn add_dependency(&mut self, var: &VarName, expr: &AC::Expr) {
         let expr_deps = sexpr_dependencies(expr, var);
         self.merge_graphs(&expr_deps);
