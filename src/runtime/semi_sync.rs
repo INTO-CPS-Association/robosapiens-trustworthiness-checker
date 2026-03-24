@@ -217,16 +217,6 @@ where
     }
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<AC::Val> {
-        let history_length = if history_length > 0 {
-            warn!(
-                "Subtracting one from history_length (val = {}) to circumvent bug with the other async runtime. Will be fixed in the future but requires changing the combinators.",
-                history_length - 1,
-            );
-            history_length - 1
-        } else {
-            0
-        };
-
         let (tx, rx) = spsc::channel::<AC::Val>(history_length + 8);
         // Compute how many Deferreds are needed - needed because new history_len is longer than
         // retained_history.len()
@@ -236,7 +226,7 @@ where
         );
         let defer_v = <AC::Val as DeferrableStreamData>::deferred_value();
         // Push them to the history
-        std::iter::repeat(defer_v).take(missing).for_each(|v| {
+        std::iter::repeat_n(defer_v, missing).for_each(|v| {
             self.retained_history.push_front(v);
         });
         info!(
@@ -294,7 +284,7 @@ where
             self.samples_forwarded += 1;
 
             // Retain in history if needed
-            if self.retained_history.len() > 0 {
+            if !self.retained_history.is_empty() {
                 self.retained_history.pop_front();
                 self.retained_history.push_back(val.clone());
                 info!(
@@ -655,7 +645,6 @@ where
     AC::Val: DeferrableStreamData,
 {
     var_managers: Option<BTreeMap<VarName, VarManager<AC>>>,
-    history_length: Option<usize>,
     spec: Option<AC::Spec>,
 }
 
@@ -688,7 +677,6 @@ where
     fn new() -> Self {
         Self {
             var_managers: None,
-            history_length: None,
             spec: None,
         }
     }
@@ -701,11 +689,8 @@ where
         todo!()
     }
 
-    fn history_length(self, history_length: usize) -> Self {
-        Self {
-            history_length: Some(history_length),
-            ..self
-        }
+    fn history_length(self, _history_length: usize) -> Self {
+        todo!()
     }
 
     fn input_streams(self, _streams: Vec<OutputStream<<Self::AC as AsyncConfig>::Val>>) -> Self {
@@ -721,7 +706,6 @@ where
             Rc::new(RefCell::new(self.var_managers.expect(
                 "VarManagers must be set before building SemiSyncContext",
             ))),
-            self.history_length.unwrap_or(0),
             self.spec
                 .expect("Spec must be set before building SemiSyncContext"),
         );
@@ -743,15 +727,13 @@ where
 {
     // Rc RefCell because of the StreamContext interface for Var...
     var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>,
-    // History length for new calls to var
-    history_length: usize,
     // Unique identifier for this variable manager
     id: usize,
     // The specification for this context
     spec: AC::Spec,
     // Dependencies from the specification
     // TODO: Use to determine history_length
-    _deps: Box<dyn DependencyResolver<AC>>,
+    deps: Box<dyn DependencyResolver<AC>>,
 }
 
 impl<AC> SemiSyncContext<AC>
@@ -759,11 +741,7 @@ where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
 {
-    fn new(
-        var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>,
-        history_length: usize,
-        spec: AC::Spec,
-    ) -> Self {
+    fn new(var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>, spec: AC::Spec) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(
             "Creating SemiSyncContext {:?} with vars: {:?}",
@@ -773,10 +751,9 @@ where
         let deps = Box::new(DepGraph::resolver_from_spec(spec.clone()));
         Self {
             var_managers,
-            history_length,
             id,
             spec,
-            _deps: deps,
+            deps,
         }
     }
 
@@ -836,12 +813,13 @@ where
         })
     }
 
-    fn subcontext_common(&self, vs: EcoVec<VarName>, history_length: usize) -> Self {
+    fn subcontext_common(&self, vs: EcoVec<VarName>) -> Self {
         let mut managers = self.var_managers.borrow_mut();
         let new_managers = managers
             .iter_mut()
             .filter_map(|(var_name, manager)| {
                 if vs.contains(var_name) {
+                    let history_length = self.deps.longest_time_dependency(var_name) as usize;
                     let stream = manager.subscribe(history_length);
                     let input = manager.input;
                     Some((
@@ -860,7 +838,6 @@ where
         );
         let builder = SemiSyncContextBuilder::new()
             .var_managers(new_managers)
-            .history_length(history_length)
             .spec(self.spec.clone());
         builder.build()
     }
@@ -886,7 +863,8 @@ where
             self.id,
             manager.keys()
         );
-        let stream = manager.get_mut(x)?.subscribe(self.history_length);
+        let history_length = self.deps.longest_time_dependency(x) as usize;
+        let stream = manager.get_mut(x)?.subscribe(history_length);
         info!(
             self.id,
             ?x,
@@ -895,12 +873,8 @@ where
         Some(stream)
     }
 
-    fn subcontext(&self, history_length: usize) -> Self {
-        info!(
-            self.id,
-            ?history_length,
-            "SemiSyncContext::subcontext: Creating subcontext."
-        );
+    fn subcontext(&self, _history_length: usize) -> Self {
+        info!(self.id, "SemiSyncContext::subcontext: Creating subcontext.");
         // Note: Must be in separate variable to avoid double borrow
         let vars = self
             .var_managers
@@ -908,17 +882,16 @@ where
             .keys()
             .cloned()
             .collect::<EcoVec<VarName>>();
-        self.subcontext_common(vars, history_length)
+        self.subcontext_common(vars)
     }
 
-    fn restricted_subcontext(&self, vs: EcoVec<VarName>, history_length: usize) -> Self {
+    fn restricted_subcontext(&self, vs: EcoVec<VarName>, _history_length: usize) -> Self {
         info!(
             ?vs,
-            ?history_length,
             "SemiSyncContext::restricted_subcontext: Creating restricted subcontext with parent id: {}",
             self.id
         );
-        self.subcontext_common(vs, history_length)
+        self.subcontext_common(vs)
     }
 
     async fn tick(&mut self) {
@@ -1236,6 +1209,54 @@ mod tests {
                 (0, vec![Value::Deferred]),
                 (1, vec![Value::Deferred]),
                 (2, vec![5.into()]),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_defer_sindex(executor: Rc<LocalExecutor<'static>>) {
+        let spec = dsrv_specification(&mut spec_defer()).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into(), 3.into(), 4.into()];
+        let e = vec![
+            "x[2]".into(),
+            Value::Deferred,
+            Value::Deferred,
+            Value::Deferred,
+            Value::Deferred,
+        ];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 5,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![Value::Deferred]),
+                (1, vec![Value::Deferred]),
+                (2, vec![0.into()]),
+                (3, vec![1.into()]),
+                (4, vec![2.into()]),
             ],
         );
     }
