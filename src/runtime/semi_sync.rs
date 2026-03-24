@@ -4,6 +4,7 @@ use crate::{
         AbstractMonitorBuilder, DeferrableStreamData, InputProvider, Monitor, OutputHandler,
         Runnable, Specification,
     },
+    lang::core::{DepGraph, DependencyResolver},
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
     stream_utils::{self},
     utils::cancellation_token::CancellationToken,
@@ -414,6 +415,7 @@ where
     fn build_context(
         var_managers: Vec<VarManager<AC>>,
         input_streams: BTreeMap<VarName, OutputStream<AC::Val>>,
+        spec: AC::Spec,
     ) -> SemiSyncContext<AC> {
         let var_managers = var_managers
             .into_iter()
@@ -427,6 +429,7 @@ where
 
         SemiSyncContextBuilder::new()
             .var_managers(var_managers)
+            .spec(spec)
             .build()
     }
 
@@ -595,7 +598,7 @@ where
             .map(|vm| vm.subscribe(0))
             .collect::<Vec<OutputStream<AC::Val>>>();
         output_handler.provide_streams(subscriptions);
-        let context = Self::build_context(var_managers, input_streams);
+        let context = Self::build_context(var_managers, input_streams, model.clone());
         let expr_evals = expr_eval_components
             .into_iter()
             .map(|(var_name, expr, sender)| ExprEvalutor::new(var_name, expr, sender, &context))
@@ -653,6 +656,7 @@ where
 {
     var_managers: Option<BTreeMap<VarName, VarManager<AC>>>,
     history_length: Option<usize>,
+    spec: Option<AC::Spec>,
 }
 
 impl<AC> SemiSyncContextBuilder<AC>
@@ -663,6 +667,12 @@ where
     fn var_managers(self, var_managers: BTreeMap<VarName, VarManager<AC>>) -> Self {
         Self {
             var_managers: Some(var_managers),
+            ..self
+        }
+    }
+    fn spec(self, spec: AC::Spec) -> Self {
+        Self {
+            spec: Some(spec),
             ..self
         }
     }
@@ -679,6 +689,7 @@ where
         Self {
             var_managers: None,
             history_length: None,
+            spec: None,
         }
     }
 
@@ -711,13 +722,15 @@ where
                 "VarManagers must be set before building SemiSyncContext",
             ))),
             self.history_length.unwrap_or(0),
+            self.spec
+                .expect("Spec must be set before building SemiSyncContext"),
         );
         info!(
             "SemiSyncContextBuilder: Built SemiSyncContext with id {:?} and VarManagers: {:?}",
             ctx.id,
             ctx.var_managers.borrow().keys()
         );
-        return ctx;
+        ctx
     }
 }
 
@@ -734,6 +747,11 @@ where
     history_length: usize,
     // Unique identifier for this variable manager
     id: usize,
+    // The specification for this context
+    spec: AC::Spec,
+    // Dependencies from the specification
+    // TODO: Use to determine history_length
+    _deps: Box<dyn DependencyResolver<AC>>,
 }
 
 impl<AC> SemiSyncContext<AC>
@@ -744,6 +762,7 @@ where
     fn new(
         var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>,
         history_length: usize,
+        spec: AC::Spec,
     ) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(
@@ -751,10 +770,13 @@ where
             id,
             var_managers.borrow().keys()
         );
+        let deps = Box::new(DepGraph::resolver_from_spec(spec.clone()));
         Self {
             var_managers,
             history_length,
             id,
+            spec,
+            _deps: deps,
         }
     }
 
@@ -838,7 +860,8 @@ where
         );
         let builder = SemiSyncContextBuilder::new()
             .var_managers(new_managers)
-            .history_length(history_length);
+            .history_length(history_length)
+            .spec(self.spec.clone());
         builder.build()
     }
 }
