@@ -422,7 +422,6 @@ mod reconf_tests {
     use trustworthiness_checker::io::builders::{
         InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
     };
-    use trustworthiness_checker::lang::dsrv::ast::DsrvSpecification;
     use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder;
@@ -430,7 +429,6 @@ mod reconf_tests {
 
     type TestMonitorBuilder = ReconfSemiSyncMonitorBuilder<
         SemiSyncValueConfig,
-        DsrvSpecification,
         UntimedDsrvSemantics<LALRParser>,
         LALRParser,
     >;
