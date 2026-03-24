@@ -428,30 +428,28 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
         ) {
             (Runtime::Async, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(AsyncMonitorBuilder::<
-                    DsrvSpecification,
                     ValueConfig,
                     UntimedDsrvSemantics<LALRParser>,
                 >::new())
             }
             (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
                 Box::new(AsyncMonitorBuilder::<
-                    DsrvSpecification,
                     ValueConfig,
                     UntimedDsrvSemantics<CombExprParser>,
                 >::new())
             }
             (Runtime::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-Box::new(SemiSyncMonitorBuilder::<
-    SemiSyncValueConfig,
-    UntimedDsrvSemantics<LALRParser>,
->::new())
+                Box::new(SemiSyncMonitorBuilder::<
+                    SemiSyncValueConfig,
+                    UntimedDsrvSemantics<LALRParser>,
+                >::new())
             }
             (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-let mut builder = ReconfSemiSyncMonitorBuilder::<
-    SemiSyncValueConfig,
-    UntimedDsrvSemantics<LALRParser>,
-    LALRParser,
->::new();
+                let mut builder = ReconfSemiSyncMonitorBuilder::<
+                    SemiSyncValueConfig,
+                    UntimedDsrvSemantics<LALRParser>,
+                    LALRParser,
+                >::new();
                 builder = builder.reconf_topic(reconf_topic);
                 builder =
                     builder.input_builder(input_provider_builder.expect(
@@ -465,14 +463,12 @@ let mut builder = ReconfSemiSyncMonitorBuilder::<
             }
             (Runtime::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
-                    TypedDsrvSpecification,
                     TypedValueConfig,
                     TypedUntimedDsrvSemantics<LALRParser>,
                 >::new()))
             }
             (Runtime::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
                 Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
-                    TypedDsrvSpecification,
                     TypedValueConfig,
                     TypedUntimedDsrvSemantics<CombExprParser>,
                 >::new()))
@@ -491,7 +487,6 @@ let mut builder = ReconfSemiSyncMonitorBuilder::<
                 }
 
                 let builder = DistAsyncMonitorBuilder::<
-                    DsrvSpecification,
                     DistValueConfig,
                     DistributedSemantics<LALRParser>,
                 >::new();

@@ -1,5 +1,5 @@
 use crate::{
-    DsrvSpecification, InputProvider, Value,
+    InputProvider, Value,
     io::map::MapInputProvider,
     lang::dsrv::lalr_parser::LALRParser,
     runtime::{
@@ -21,7 +21,7 @@ pub type TestDistConfig = DistValueConfig;
 pub type TestSemantics = UntimedDsrvSemantics<LALRParser>;
 
 // Default monitor runner to use in tests
-pub type TestMonitorRunner = AsyncMonitorRunner<TestConfig, TestSemantics, DsrvSpecification>;
+pub type TestMonitorRunner = AsyncMonitorRunner<TestConfig, TestSemantics>;
 
 pub fn input_empty() -> MapInputProvider {
     MapInputProvider::new(BTreeMap::new())

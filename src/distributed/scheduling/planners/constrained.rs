@@ -5,7 +5,7 @@ use futures::{StreamExt, stream::LocalBoxStream};
 use tracing::info;
 
 use crate::{
-    Specification, Value,
+    Value,
     distributed::{
         distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
         solvers::brute_solver::BruteForceDistConstraintSolver,
@@ -18,23 +18,23 @@ use crate::{
 
 use super::core::SchedulerPlanner;
 
-pub struct StaticOptimizedSchedulerPlanner<S, M, AC>
+pub struct StaticOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    M: Specification<Expr = AC::Expr> + Localisable,
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC::Spec: Localisable,
 {
-    solver: Rc<BruteForceDistConstraintSolver<S, M, AC>>,
+    solver: Rc<BruteForceDistConstraintSolver<S, AC>>,
     chosen_dist_graph: OnceCell<Rc<LabelledDistributionGraph>>,
 }
 
-impl<S, M, AC> StaticOptimizedSchedulerPlanner<S, M, AC>
+impl<S, AC> StaticOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    M: Specification<Expr = AC::Expr> + Localisable,
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC::Spec: Localisable,
 {
-    pub fn new(solver: BruteForceDistConstraintSolver<S, M, AC>) -> Self {
+    pub fn new(solver: BruteForceDistConstraintSolver<S, AC>) -> Self {
         Self {
             solver: Rc::new(solver),
             chosen_dist_graph: OnceCell::new(),
@@ -43,11 +43,11 @@ where
 }
 
 #[async_trait(?Send)]
-impl<S, M, AC> SchedulerPlanner for StaticOptimizedSchedulerPlanner<S, M, AC>
+impl<S, AC> SchedulerPlanner for StaticOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    M: Specification<Expr = AC::Expr> + Localisable,
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC::Spec: Localisable,
 {
     async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
         if let Some(chosen_dist_graph) = self.chosen_dist_graph.get() {

@@ -112,7 +112,6 @@ pub async fn monitor_outputs_typed_async(
         spec.output_vars.clone(),
     ));
     let async_monitor = AsyncMonitorBuilder::<
-        _,
         TypedValueConfig,
         crate::semantics::TypedUntimedDsrvSemantics<LALRParser>,
     >::new()

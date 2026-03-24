@@ -917,15 +917,14 @@ where
 ///  - The S type parameter is the monitoring semantics used to evaluate the
 ///    expressions as streams.
 ///  - The M type parameter is the model/specification being monitored.
-pub struct AsyncMonitorRunner<AC, S, M>
+pub struct AsyncMonitorRunner<AC, S>
 where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
-    M: Specification<Expr = AC::Expr>,
 {
     #[allow(dead_code)]
     pub executor: Rc<LocalExecutor<'static>>,
-    model: M,
+    model: AC::Spec,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
     output_streams: Vec<OutputStream<AC::Val>>,
@@ -934,22 +933,16 @@ where
     semantics_t: PhantomData<S>,
 }
 
-pub struct AsyncMonitorBuilder<
-    M: Specification<Expr = AC::Expr>,
-    AC: AsyncConfig,
-    S: MonitoringSemantics<AC>,
-> {
+pub struct AsyncMonitorBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
-    pub(crate) model: Option<M>,
+    pub(crate) model: Option<AC::Spec>,
     pub(super) input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     pub(super) output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
     pub(super) context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     semantics_t: PhantomData<S>,
 }
 
-impl<M: Specification<Expr = AC::Expr>, AC: AsyncConfig, S: MonitoringSemantics<AC>>
-    AsyncMonitorBuilder<M, AC, S>
-{
+impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> AsyncMonitorBuilder<AC, S> {
     pub fn partial_clone(&self) -> Self {
         Self {
             executor: self.executor.clone(),
@@ -965,14 +958,14 @@ impl<M: Specification<Expr = AC::Expr>, AC: AsyncConfig, S: MonitoringSemantics<
     }
 }
 
-pub trait AbstractAsyncMonitorBuilder<M, AC: AsyncConfig>:
-    AbstractMonitorBuilder<M, AC::Val>
+pub trait AbstractAsyncMonitorBuilder<AC: AsyncConfig>:
+    AbstractMonitorBuilder<AC::Spec, AC::Val>
 {
     fn context_builder(self, context_builder: <AC::Ctx as StreamContext>::Builder) -> Self;
 }
 
-impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncConfig>
-    AbstractAsyncMonitorBuilder<M, AC> for AsyncMonitorBuilder<M, AC, S>
+impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractAsyncMonitorBuilder<AC>
+    for AsyncMonitorBuilder<AC, S>
 {
     fn context_builder(self, context_builder: <AC::Ctx as StreamContext>::Builder) -> Self {
         Self {
@@ -982,10 +975,10 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
     }
 }
 
-impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncConfig>
-    AbstractMonitorBuilder<M, AC::Val> for AsyncMonitorBuilder<M, AC, S>
+impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spec, AC::Val>
+    for AsyncMonitorBuilder<AC, S>
 {
-    type Mon = AsyncMonitorRunner<AC, S, M>;
+    type Mon = AsyncMonitorRunner<AC, S>;
 
     fn new() -> Self {
         AsyncMonitorBuilder {
@@ -1005,7 +998,7 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
         }
     }
 
-    fn model(self, model: M) -> Self {
+    fn model(self, model: AC::Spec) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -1145,15 +1138,14 @@ impl<M: Specification<Expr = AC::Expr>, S: MonitoringSemantics<AC>, AC: AsyncCon
     }
 }
 
-impl<AC, S, M> AsyncMonitorRunner<AC, S, M>
+impl<AC, S> AsyncMonitorRunner<AC, S>
 where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
-    M: Specification<Expr = AC::Expr>,
 {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
-        model: M,
+        model: AC::Spec,
         input: Box<dyn InputProvider<Val = AC::Val>>,
         output: Box<dyn OutputHandler<Val = AC::Val>>,
     ) -> Self {
@@ -1167,23 +1159,21 @@ where
 }
 
 #[async_trait(?Send)]
-impl<AC, S, M> Monitor<M, AC::Val> for AsyncMonitorRunner<AC, S, M>
+impl<AC, S> Monitor<AC::Spec, AC::Val> for AsyncMonitorRunner<AC, S>
 where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
-    M: Specification<Expr = AC::Expr>,
 {
-    fn spec(&self) -> &M {
+    fn spec(&self) -> &AC::Spec {
         &self.model
     }
 }
 
 #[async_trait(?Send)]
-impl<AC, S, M> Runnable for AsyncMonitorRunner<AC, S, M>
+impl<AC, S> Runnable for AsyncMonitorRunner<AC, S>
 where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
-    M: Specification<Expr = AC::Expr>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
