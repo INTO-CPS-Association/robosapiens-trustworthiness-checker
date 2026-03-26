@@ -1,9 +1,10 @@
+use crate::core::StreamType;
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
-use std::fmt::Debug;
 use std::rc::Rc;
+use std::{collections::BTreeMap, fmt::Debug};
 use strum_macros::Display;
 
 use super::{StreamData, VarName};
@@ -38,7 +39,7 @@ pub trait InputProvider {
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
 }
 
-pub trait Specification: Debug + Clone + 'static {
+pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     type Expr;
 
     fn input_vars(&self) -> Vec<VarName>;
@@ -55,6 +56,8 @@ pub trait Specification: Debug + Clone + 'static {
     fn var_expr(&self, var: &VarName) -> Option<Self::Expr>;
 
     fn add_input_var(&mut self, var: VarName);
+
+    fn type_annotations(&self) -> BTreeMap<VarName, StreamType>;
 }
 
 // This could alternatively implement Sink

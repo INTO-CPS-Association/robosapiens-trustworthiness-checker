@@ -517,6 +517,10 @@ impl Specification for DsrvSpecification {
             self.aux_info.clone(),
         );
     }
+
+    fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
+        self.type_annotations.clone()
+    }
 }
 
 impl Display for SExpr {
