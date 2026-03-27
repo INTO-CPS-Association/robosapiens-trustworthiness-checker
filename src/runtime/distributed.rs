@@ -190,6 +190,12 @@ where
             .as_ref()
             .expect("Dist graph mode not set")
             .clone();
+        let spec = self
+            .async_monitor_builder
+            .model
+            .as_ref()
+            .expect("Specification expected to be present")
+            .clone();
         let executor = self
             .async_monitor_builder
             .executor
@@ -346,10 +352,11 @@ where
         let scheduler_mode = self.scheduler_mode.unwrap_or(SchedulerCommunication::Null);
         let scheduler_communicator = match scheduler_mode {
             SchedulerCommunication::Null => {
-                Box::new(NullSchedulerCommunicator) as Box<dyn SchedulerCommunicator>
+                Box::new(NullSchedulerCommunicator) as Box<dyn SchedulerCommunicator<AC::Spec>>
             } // TODO: ROS to be added
         };
         let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
+            spec,
             planner,
             scheduler_communicator,
             dist_graph_provider,
@@ -404,16 +411,19 @@ where
 pub struct DistributedMonitorRunner<AC, S>
 where
     AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+    AC::Spec: Localisable,
     S: MonitoringSemantics<AC>,
 {
     pub(crate) async_monitor: AsyncMonitorRunner<AC, S>,
     // TODO: should we be responsible for building the stream of graphs
-    pub(crate) scheduler: Scheduler,
+    pub(crate) scheduler: Scheduler<AC::Spec>,
 }
 
 #[async_trait(?Send)]
 impl<S, AC> Monitor<AC::Spec, AC::Val> for DistributedMonitorRunner<AC, S>
 where
+    AC::Spec: Localisable,
+    S: MonitoringSemantics<AC>,
     AC: AsyncConfig<Ctx = DistributedContext<AC>>,
     S: MonitoringSemantics<AC>,
 {
@@ -425,6 +435,8 @@ where
 #[async_trait(?Send)]
 impl<S, AC> Runnable for DistributedMonitorRunner<AC, S>
 where
+    AC::Spec: Localisable,
+    S: MonitoringSemantics<AC>,
     AC: AsyncConfig<Ctx = DistributedContext<AC>>,
     S: MonitoringSemantics<AC>,
 {

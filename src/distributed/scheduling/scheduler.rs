@@ -6,11 +6,12 @@ use tracing::{error, info};
 use unsync::broadcast;
 
 use crate::{
-    OutputStream,
+    OutputStream, Specification,
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, graph_to_png,
     },
     io::mqtt::dist_graph_provider::DistGraphProvider,
+    semantics::distributed::localisation::Localisable,
 };
 
 use super::{
@@ -25,27 +26,28 @@ pub enum ReplanningCondition {
     Never,
 }
 
-pub struct Scheduler {
+pub struct Scheduler<M: Specification + Localisable> {
     replanning_condition: ReplanningCondition,
     dist_graph_output_stream: Option<LabelledDistGraphStream>,
     planner: Box<dyn SchedulerPlanner>,
-    schedule_executor: SchedulerExecutor,
+    scheduler_executor: SchedulerExecutor<M>,
     dist_graph_provider: Box<dyn DistGraphProvider>,
     dist_constraints_streams: Rc<RefCell<Option<Vec<OutputStream<bool>>>>>,
     dist_graph_sender: broadcast::Sender<Rc<LabelledDistributionGraph>>,
     suppress_output: bool,
 }
 
-impl Scheduler {
+impl<M: Specification + Localisable> Scheduler<M> {
     pub fn new(
+        spec: M,
         planner: Box<dyn SchedulerPlanner>,
-        communicator: Box<dyn SchedulerCommunicator>,
+        communicator: Box<dyn SchedulerCommunicator<M>>,
         dist_graph_provider: Box<dyn DistGraphProvider>,
         replanning_condition: ReplanningCondition,
         suppress_output: bool,
     ) -> Self {
         let mut tx = broadcast::channel(10);
-        let executor = SchedulerExecutor::new(communicator);
+        let scheduler_executor = SchedulerExecutor::new(spec, communicator);
         let mut rx_output = tx.subscribe();
         let dist_graph_output_stream: Option<LabelledDistGraphStream> = Some(Box::pin(stream! {
             while let Some(x) = rx_output.recv().await {
@@ -59,7 +61,7 @@ impl Scheduler {
             dist_graph_sender: tx,
             dist_constraints_streams: Rc::new(RefCell::new(None)),
             dist_graph_provider,
-            schedule_executor: executor,
+            scheduler_executor,
             replanning_condition,
             suppress_output,
         }
@@ -136,13 +138,15 @@ impl Scheduler {
                 if !self.suppress_output {
                     info!("Execute");
                 }
-                self.schedule_executor.execute(plan.clone()).await;
                 self.dist_graph_sender.send(plan.clone()).await;
-                if should_plan && !self.suppress_output {
-                    info!("Plotting graph");
-                    // TODO: should this error be propagated?
-                    if let Err(e) = graph_to_png(plan.clone(), "distributed_graph.png").await {
-                        error!("Failed to plot graph: {}", e);
+                if should_plan {
+                    self.scheduler_executor.execute(plan.clone()).await;
+                    if !self.suppress_output {
+                        info!("Plotting graph");
+                        // TODO: should this error be propagated?
+                        if let Err(e) = graph_to_png(plan.clone(), "distributed_graph.png").await {
+                            error!("Failed to plot graph: {}", e);
+                        }
                     }
                 }
             }
