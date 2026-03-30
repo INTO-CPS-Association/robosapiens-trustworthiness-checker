@@ -655,4 +655,21 @@ mod tests {
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 2);
     }
+
+    #[test]
+    fn test_double_sindex2() {
+        // Tests that multiple indices are aggregated correctly.
+        // In this case by treating indirect dependencies correctly.
+        // Here, it could be said that there is a dependency of 2 for x,
+        // but we don't since the dependecy is stored in an intermediate variable (y).
+
+        // Parentheses unfortunately needed due to parser bugs
+        let mut spec = "in x\nout y\nout z\ny = x[1]\nz = y[1]";
+        let spec = test_parser(&mut spec).unwrap();
+        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        assert_eq!(dep.longest_time_dependency(&"x".into()), 1);
+        let graph = get_graph(dep);
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 2);
+    }
 }
