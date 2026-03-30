@@ -4,6 +4,7 @@ use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::prelude::EdgeIndex;
 use petgraph::visit::{EdgeRef, IntoNodeReferences};
+use tracing::debug;
 
 use crate::semantics::AsyncConfig;
 use crate::{SExpr, Specification, VarName};
@@ -44,6 +45,7 @@ impl DepGraph {
             let expr_deps = sexpr_dependencies(&expr, &var);
             graph.merge_graphs(&expr_deps);
         }
+        debug!("Constructed dependency graph: {:?}", graph.as_dot_graph());
         graph
     }
 
@@ -172,6 +174,10 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
         current_node: &NodeIndex,
         current_idx: u64,
     ) {
+        debug!(
+            "Visiting {:?} with steps {:?} and current_idx {}",
+            sexpr, steps, current_idx
+        );
         match sexpr {
             SExpr::Var(name) => {
                 let node = map.graph.add_node(name.clone());
@@ -227,12 +233,14 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
             | SExpr::Latch(sexpr1, sexpr2)
             | SExpr::Init(sexpr1, sexpr2)
             | SExpr::MInsert(sexpr1, _, sexpr2) => {
-                deps_impl(sexpr1, steps, map, current_node, current_idx);
+                // Need to clone on lhs to ensure that these dependencies are not shared with rhs
+                deps_impl(sexpr1, &mut steps.clone(), map, current_node, current_idx);
                 deps_impl(sexpr2, steps, map, current_node, current_idx);
             }
         }
     }
 
+    debug!("sexr_dependencies for {}: {}", root_name, sexpr);
     let mut graph = DepGraph::empty_graph();
     let root_node = graph.graph.add_node(root_name.clone());
     deps_impl(sexpr, &mut vec![], &mut graph, &root_node, 0);
@@ -287,7 +295,7 @@ where
 mod tests {
     use super::*;
     use crate::DsrvSpecification;
-    use crate::dsrv_fixtures::TestConfig;
+    use crate::dsrv_fixtures::*;
     use crate::lang::core::parser::SpecParser;
     use crate::lang::dsrv::lalr_parser::LALRParser;
 
@@ -671,5 +679,15 @@ mod tests {
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_binary_regression() {
+        // Regression test for a bug where time dependencies of the lhs in binary operations were carried over to rhs.
+        let mut spec = spec_acc_monitor();
+        let spec = test_parser(&mut spec).unwrap();
+        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
+        assert_eq!(dep.longest_time_dependency(&"z".into()), 1);
     }
 }
