@@ -1,7 +1,7 @@
 use anyhow::Context;
 use tracing::{debug, info};
 
-use crate::cli::args::OutputMode;
+use crate::cli::args::{Cli, OutputMode};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::io::builders::output_handler_builder::OutputHandlerSpec;
 use crate::{
@@ -83,10 +83,14 @@ impl From<OutputMode> for OutputHandlerSpec {
     }
 }
 
-impl From<SchedulingType> for SchedulerCommunication {
-    fn from(scheduling_type: SchedulingType) -> Self {
-        match scheduling_type {
+impl Cli {
+    pub fn scheduler_communication(&self) -> SchedulerCommunication {
+        match self.scheduling_mode {
             SchedulingType::Mock => SchedulerCommunication::Null,
+            SchedulingType::Ros => SchedulerCommunication::Ros {
+                ros_node_name: self.scheduler_ros_node_name.clone(),
+                reconf_topic: self.scheduler_reconf_topic.clone(),
+            },
         }
     }
 }
@@ -153,17 +157,33 @@ impl DistributionModeBuilder {
                     distribution_graph: Some(file_path),
                     ..
                 },
-                _,
+                runtime,
             ) => {
-                debug!("centralised mode");
-                let local_node = self.local_node.context("Local node not specified")?;
+                debug!("distribution graph mode");
                 let f = smol::fs::read_to_string(&file_path)
                     .await
                     .context("Distribution graph file could not be read")?;
                 let distribution_graph: LabelledDistributionGraph =
                     serde_json::from_str(&f).context("Distribution graph could not be parsed")?;
 
-                BuilderDistributionMode::LocalMonitor(Box::new((local_node, distribution_graph)))
+                if matches!(runtime, Some(Runtime::Distributed)) {
+                    if let Some(dist_constraints) = self.dist_constraints {
+                        BuilderDistributionMode::DistributedPredefinedOptimized(
+                            distribution_graph,
+                            dist_constraints,
+                        )
+                    } else {
+                        BuilderDistributionMode::DistributedPredefinedStatic(distribution_graph)
+                    }
+                } else {
+                    let local_node = self.local_node.context(
+                        "--distribution-graph requires --local-node unless --runtime distributed is used",
+                    )?;
+                    BuilderDistributionMode::LocalMonitor(Box::new((
+                        local_node,
+                        distribution_graph,
+                    )))
+                }
             }
             (
                 DistributionMode {
@@ -232,6 +252,7 @@ impl DistributionModeBuilder {
                     .collect();
                 BuilderDistributionMode::DistributedOptimizedDynamic(locations, dist_constraints)
             }
+
             (
                 DistributionMode {
                     centralised: true, ..
@@ -240,5 +261,76 @@ impl DistributionModeBuilder {
             ) => BuilderDistributionMode::CentralMonitor,
             _ => unreachable!(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::distributed::SchedulerCommunication;
+    use clap::Parser;
+
+    #[test]
+    fn test_scheduler_communication_mock_mode_maps_to_null() {
+        let cli = Cli::parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--input-file",
+            "input.txt",
+            "--output-stdout",
+            "--scheduling-mode",
+            "mock",
+        ]);
+
+        assert!(matches!(
+            cli.scheduler_communication(),
+            SchedulerCommunication::Null
+        ));
+    }
+
+    #[test]
+    fn test_scheduler_communication_ros_mode_uses_default_values() {
+        let cli = Cli::parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--input-file",
+            "input.txt",
+            "--output-stdout",
+            "--scheduling-mode",
+            "ros",
+        ]);
+
+        assert_eq!(
+            cli.scheduler_communication(),
+            SchedulerCommunication::Ros {
+                ros_node_name: "tc_scheduler".to_string(),
+                reconf_topic: "reconfig".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_scheduler_communication_ros_mode_uses_explicit_values() {
+        let cli = Cli::parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--input-file",
+            "input.txt",
+            "--output-stdout",
+            "--scheduling-mode",
+            "ros",
+            "--scheduler-ros-node-name",
+            "custom_scheduler_node",
+            "--scheduler-reconf-topic",
+            "custom_reconfig_topic",
+        ]);
+
+        assert_eq!(
+            cli.scheduler_communication(),
+            SchedulerCommunication::Ros {
+                ros_node_name: "custom_scheduler_node".to_string(),
+                reconf_topic: "custom_reconfig_topic".to_string(),
+            }
+        );
     }
 }

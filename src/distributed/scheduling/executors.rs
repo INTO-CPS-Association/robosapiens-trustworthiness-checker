@@ -27,11 +27,16 @@ pub struct SchedulerExecutor<M: Specification + Localisable> {
 fn monitor_work_for_specification<M: Specification + Localisable>(
     spec: M,
 ) -> anyhow::Result<super::communication::MonitorWork<M>> {
-    let output_vars = spec.output_vars();
+    let io_vars: Vec<VarName> = spec
+        .input_vars()
+        .into_iter()
+        .chain(spec.output_vars().into_iter())
+        .collect();
+
     let type_info: BTreeMap<VarName, String> = spec
         .type_annotations()
         .into_iter()
-        .filter(|(var, _)| output_vars.contains(var))
+        .filter(|(var, _)| io_vars.contains(var))
         .map(|(var, typ): (VarName, StreamType)| {
             (
                 var.clone(),
@@ -45,6 +50,7 @@ fn monitor_work_for_specification<M: Specification + Localisable>(
             )
         })
         .collect();
+
     Ok(super::communication::MonitorWork {
         // Clone here due to use in contract
         spec: spec.clone(),

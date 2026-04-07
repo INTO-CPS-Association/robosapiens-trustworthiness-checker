@@ -109,7 +109,6 @@ pub struct DistributionMode {
         long,
         help = "Path to distribution graph JSON file for local monitoring"
     )]
-    #[clap(requires = "local_node")]
     pub distribution_graph: Option<String>,
 
     #[clap(long, help = "List of local topics to monitor in distributed mode")]
@@ -148,17 +147,18 @@ pub enum SchedulingType {
     /// Provides a simple, predictable scheduling behavior primarily
     /// used for testing and single-node deployments.
     Mock,
-    // ROS-topic--based distributed scheduler for production environments
-    //
-    // Uses ROS topics messaging for real-time coordination between
-    // monitoring nodes, enabling dynamic work distribution and load balancing.
-    // TODO: Add
+    /// ROS-topic--based distributed scheduler for production environments
+    ///
+    /// Uses ROS topic messaging for real-time coordination between
+    /// monitoring nodes, enabling dynamic work distribution.
+    Ros,
 }
 
 impl Into<&'static str> for SchedulingType {
     fn into(self) -> &'static str {
         match self {
             SchedulingType::Mock => "mock",
+            SchedulingType::Ros => "ros",
         }
     }
 }
@@ -167,6 +167,7 @@ impl Into<String> for SchedulingType {
     fn into(self) -> String {
         match self {
             SchedulingType::Mock => "mock".to_string(),
+            SchedulingType::Ros => "ros".to_string(),
         }
     }
 }
@@ -175,6 +176,7 @@ impl Into<OsStr> for SchedulingType {
     fn into(self) -> OsStr {
         match self {
             SchedulingType::Mock => (&"mock").into(),
+            SchedulingType::Ros => (&"ros").into(),
         }
     }
 }
@@ -222,6 +224,21 @@ pub struct Cli {
 
     #[clap(long, value_delimiter = ' ', num_args = 1.., help = "Distribution constraints for optimized scheduling")]
     pub distribution_constraints: Option<Vec<String>>,
+
+    #[arg(
+        long,
+        help = "ROS node name to use for scheduler communicator (used with --scheduling-mode ros)",
+        default_value = "tc_scheduler"
+    )]
+    pub scheduler_ros_node_name: String,
+
+    #[arg(
+        long,
+        help = "Base ROS topic for scheduler work/reconfiguration messages (used with --scheduling-mode ros)",
+        default_value = "reconfig",
+        requires = "scheduler_ros_node_name"
+    )]
+    pub scheduler_reconf_topic: String,
 
     #[arg(long, help = "Port number for MQTT broker connection")]
     pub mqtt_port: Option<u16>,

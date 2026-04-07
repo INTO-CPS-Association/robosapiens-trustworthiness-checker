@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 // #![deny(warnings)]
 use anyhow::{self, Context};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, error::ErrorKind, parser::ValueSource};
 use smol::LocalExecutor;
 use tracing::{debug, info};
 use tracing_subscriber::filter::EnvFilter;
@@ -50,7 +50,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             .init();
     }
 
-    let cli = Cli::parse();
+    let mut cmd = Cli::command();
+    let matches = cmd.clone().get_matches_from(std::env::args_os());
+    let cli = Cli::from_arg_matches(&matches)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
+        .context("Failed to parse CLI arguments")?;
 
     let builder = RuntimeBuilder::new();
 
@@ -63,15 +67,35 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.runtime(cli.runtime);
 
-    let builder = builder.parser(cli.parser);
+    let parser_was_explicit = matches
+        .value_source("parser")
+        .is_some_and(|source| source == ValueSource::CommandLine);
 
-    let builder = builder.reconf_topic(cli.reconf_topic);
+    let effective_parser = if matches!(
+        cli.runtime,
+        trustworthiness_checker::core::Runtime::Distributed
+    ) {
+        if parser_was_explicit && !matches!(cli.parser, ParserMode::Combinator) {
+            cmd.error(
+                ErrorKind::ArgumentConflict,
+                "--parser combinator is required when --runtime distributed is used",
+            )
+            .exit();
+        }
+        ParserMode::Combinator
+    } else {
+        cli.parser
+    };
+
+    let builder = builder.parser(effective_parser);
+
+    let builder = builder.reconf_topic(cli.reconf_topic.clone());
 
     let model_parser = match cli.language {
         Language::DSRV => tc::lang::dsrv::parser::dsrv_specification,
     };
 
-    let builder = builder.scheduler_mode(cli.scheduling_mode.clone());
+    let builder = builder.scheduler_mode(cli.scheduler_communication());
 
     debug!("Choosing distribution mode");
     let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode)
@@ -84,7 +108,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     debug!("Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
-    let model = match cli.parser {
+    let model = match effective_parser {
         ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
             .await
             .context("Model file could not be parsed")?,

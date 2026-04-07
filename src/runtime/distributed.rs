@@ -23,7 +23,10 @@ use crate::{
         },
         solvers::brute_solver::BruteForceDistConstraintSolver,
     },
-    io::mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
+    io::{
+        mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
+        testing::NullOutputHandler,
+    },
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
         distributed::{
@@ -34,6 +37,9 @@ use crate::{
 };
 
 use super::asynchronous::{AbstractAsyncMonitorBuilder, AsyncMonitorBuilder, AsyncMonitorRunner};
+
+#[cfg(feature = "ros")]
+use crate::io::ros::ros_scheduler_communicator::RosSchedulerCommunicator;
 
 #[derive(Debug, Clone)]
 pub enum DistGraphMode {
@@ -55,6 +61,12 @@ pub enum DistGraphMode {
     MQTTDynamicOptimized(
         /// Locations
         BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+    ),
+    PredefinedDynamicOptimized(
+        /// Predefined labelled distribution graph used as topology seed
+        LabelledDistributionGraph,
         /// Output variables containing distribution constraints
         Vec<VarName>,
     ),
@@ -128,6 +140,18 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncMonitorBuilder<AC, S>
             input: None,
         }
     }
+
+    pub fn predefined_optimized_dist_graph(
+        mut self,
+        graph: LabelledDistributionGraph,
+        dist_constraints: Vec<VarName>,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::PredefinedDynamicOptimized(
+            graph,
+            dist_constraints,
+        ));
+        self
+    }
 }
 impl<AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>, S: MonitoringSemantics<AC>>
     DistAsyncMonitorBuilder<AC, S>
@@ -143,6 +167,10 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SchedulerCommunication {
     Null,
+    Ros {
+        ros_node_name: String,
+        reconf_topic: String,
+    },
 }
 
 impl<S, AC> AbstractMonitorBuilder<AC::Spec, AC::Val> for DistAsyncMonitorBuilder<AC, S>
@@ -298,6 +326,8 @@ where
                     .expect("Failed to create MQTT dist graph provider"),
                 );
 
+                let replay_history = self.input.as_ref().and_then(|input| input.replay_history());
+
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),
                     monitor_builder: self.partial_clone(),
@@ -305,6 +335,7 @@ where
                     dist_constraints: dist_constraints.clone(),
                     input_vars,
                     output_vars,
+                    replay_history,
                 };
                 let planner: Box<dyn SchedulerPlanner> =
                     Box::new(StaticOptimizedSchedulerPlanner::new(solver));
@@ -329,6 +360,8 @@ where
                     .expect("Failed to create MQTT dist graph provider"),
                 );
 
+                let replay_history = self.input.as_ref().and_then(|input| input.replay_history());
+
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),
                     monitor_builder: self.partial_clone(),
@@ -336,6 +369,36 @@ where
                     dist_constraints: dist_constraints.clone(),
                     input_vars,
                     output_vars,
+                    replay_history,
+                };
+                let planner: Box<dyn SchedulerPlanner> =
+                    Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+
+                (
+                    planner,
+                    location_names,
+                    dist_graph_provider,
+                    dist_constraints,
+                    ReplanningCondition::ConstraintsFail,
+                )
+            }
+            DistGraphMode::PredefinedDynamicOptimized(graph, dist_constraints) => {
+                debug!("Creating predefined dynamic optimized dist graph provider");
+                let graph = Rc::new(graph);
+                let location_names = graph.dist_graph.graph.node_weights().cloned().collect();
+                let dist_graph_provider =
+                    Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
+
+                let replay_history = self.input.as_ref().and_then(|input| input.replay_history());
+
+                let solver = BruteForceDistConstraintSolver {
+                    executor: executor.clone(),
+                    monitor_builder: self.partial_clone(),
+                    context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
+                    dist_constraints: dist_constraints.clone(),
+                    input_vars,
+                    output_vars,
+                    replay_history,
                 };
                 let planner: Box<dyn SchedulerPlanner> =
                     Box::new(StaticOptimizedSchedulerPlanner::new(solver));
@@ -353,10 +416,35 @@ where
         let scheduler_communicator = match scheduler_mode {
             SchedulerCommunication::Null => {
                 Box::new(NullSchedulerCommunicator) as Box<dyn SchedulerCommunicator<AC::Spec>>
-            } // TODO: ROS to be added
+            }
+            SchedulerCommunication::Ros {
+                #[allow(unused_variables)]
+                ros_node_name,
+                #[allow(unused_variables)]
+                reconf_topic,
+            } => {
+                #[cfg(feature = "ros")]
+                {
+                    Box::new(
+                        RosSchedulerCommunicator::new(
+                            executor.clone(),
+                            locations.clone(),
+                            ros_node_name,
+                            reconf_topic,
+                        )
+                        .expect("Failed to create ROS scheduler communicator"),
+                    ) as Box<dyn SchedulerCommunicator<AC::Spec>>
+                }
+                #[cfg(not(feature = "ros"))]
+                {
+                    panic!(
+                        "Scheduler communication mode 'ros' requires building with feature 'ros'"
+                    );
+                }
+            }
         };
         let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
-            spec,
+            spec.clone(),
             planner,
             scheduler_communicator,
             dist_graph_provider,
@@ -365,25 +453,43 @@ where
         ))));
         let dist_graph_stream = scheduler.borrow_mut().as_mut().unwrap().take_graph_stream();
         let scheduler_clone = scheduler.clone();
+        let dist_constraints_for_callback = dist_constraints.clone();
         let context_builder = self
             .context_builder
             .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
-            .node_names(locations)
+            .node_names(locations.clone())
             .add_callback(Box::new(move |ctx| {
                 let mut scheduler_borrow = scheduler_clone.borrow_mut();
                 let scheduler_ref = (&mut *scheduler_borrow).as_mut().unwrap();
                 scheduler_ref.provide_dist_constraints_streams(
-                    dist_constraints
+                    dist_constraints_for_callback
                         .iter()
                         .map(|x| to_typed_stream(ctx.var(x).unwrap()))
                         .collect(),
                 )
             }));
-        let async_monitor = self
+
+        let localised_spec = if dist_constraints.is_empty() {
+            spec
+        } else {
+            spec.localise(&dist_constraints)
+        };
+
+        let mut async_builder = self
             .async_monitor_builder
             .maybe_input(self.input)
             .context_builder(context_builder)
-            .build();
+            .model(localised_spec);
+
+        if !dist_constraints.is_empty() {
+            let null_output = Box::new(NullOutputHandler::new(
+                executor.clone(),
+                dist_constraints.clone(),
+            ));
+            async_builder = async_builder.output(null_output);
+        }
+
+        let async_monitor = async_builder.build();
 
         DistributedMonitorRunner {
             async_monitor,

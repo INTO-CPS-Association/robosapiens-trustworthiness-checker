@@ -2,6 +2,7 @@ use crate::core::{InputProvider, OutputStream, Value, VarName};
 pub use crate::lang::untimed_input::UntimedInputFileData;
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
+use std::collections::{BTreeMap, BTreeSet};
 
 // Returns an iterator over the values for a given key in the UntimedInputFileData.
 // None if no keys are present.
@@ -40,6 +41,27 @@ impl InputProvider for UntimedInputFileData {
             stream::repeat_with(|| Ok(())).boxed_local()
         }
     }
+
+    fn replay_history(&self) -> Option<BTreeMap<usize, BTreeMap<VarName, Value>>> {
+        Some(self.clone())
+    }
+}
+
+pub fn replay_history_for_vars(
+    data: &UntimedInputFileData,
+    vars: &[VarName],
+) -> UntimedInputFileData {
+    let var_set = vars.iter().cloned().collect::<BTreeSet<_>>();
+    data.iter()
+        .map(|(t, row)| {
+            let filtered: BTreeMap<VarName, Value> = row
+                .iter()
+                .filter(|(name, _)| var_set.contains(*name))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            (*t, filtered)
+        })
+        .collect()
 }
 
 #[cfg(test)]

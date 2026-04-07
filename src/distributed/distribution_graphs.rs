@@ -377,10 +377,24 @@ pub async fn graph_to_png(
         }
     })?;
     info!("Command status: {:?}", status);
-    fs::rename(png_path, file_path)
-        .await
-        .map_err(|e| GraphPlottingError::RenameError(e, dot_path.to_string()))?;
-    Ok(())
+    match fs::rename(png_path, file_path).await {
+        Ok(()) => Ok(()),
+        Err(rename_err) => {
+            // Fallback for cross-device moves (e.g. /tmp on different mount):
+            // copy the generated PNG to target path, then remove temp file.
+            fs::copy(png_path, file_path)
+                .await
+                .map_err(|e| GraphPlottingError::IOError(e, file_path.to_string()))?;
+            fs::remove_file(png_path)
+                .await
+                .map_err(|e| GraphPlottingError::IOError(e, png_path.to_string()))?;
+            info!(
+                "rename failed for graph png ({}), used copy+remove fallback",
+                rename_err
+            );
+            Ok(())
+        }
+    }
 }
 
 enum VarAssignmentsIter {
@@ -510,10 +524,23 @@ impl Iterator for PossibleLabelledDistGraphs {
                             .collect(),
                     )
                 })
-                .chain(once((
-                    self.base_graph.central_monitor,
-                    self.central_var_names.clone(),
-                )))
+                .chain(once((self.base_graph.central_monitor, {
+                    let mut merged = self
+                        .var_names
+                        .iter()
+                        .filter(|var| {
+                            assignment[*var]
+                                == self.base_graph.graph[self.base_graph.central_monitor]
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    for v in self.central_var_names.iter().cloned() {
+                        if !merged.contains(&v) {
+                            merged.push(v);
+                        }
+                    }
+                    merged
+                })))
                 .collect();
             GenericLabelledDistributionGraph {
                 dist_graph: self.base_graph.clone(),

@@ -1162,8 +1162,7 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    #[ignore = "Ignored as ROS scheduling not yet implemented"]
-    async fn test_scheduling_mode_ros(_executor: Rc<LocalExecutor>) {
+    async fn test_scheduling_mode_ros_with_defaults(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
@@ -1179,6 +1178,54 @@ mod integration_tests {
             output.status.success(),
             "CLI command failed: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_scheduling_mode_ros_with_explicit_scheduler_args(_executor: Rc<LocalExecutor>) {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--scheduling-mode",
+            "ros",
+            "--scheduler-ros-node-name",
+            "custom_scheduler_node",
+            "--scheduler-reconf-topic",
+            "custom_reconfig_topic",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_scheduler_reconf_topic_requires_scheduler_ros_node_name(
+        _executor: Rc<LocalExecutor>,
+    ) {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--scheduling-mode",
+            "mock",
+            "--scheduler-reconf-topic",
+            "custom_reconfig_topic",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        // Should fail because --scheduler-reconf-topic requires --scheduler-ros-node-name
+        assert!(
+            !output.status.success(),
+            "CLI command should have failed because --scheduler-reconf-topic requires --scheduler-ros-node-name"
         );
     }
 

@@ -10,6 +10,7 @@ use crate::{
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     define_config,
+    distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::dsrv::{
         lalr_parser::LALRParser,
@@ -189,6 +190,16 @@ pub enum DistributionMode {
         /// Variables which represent the constraints which determine the static distribution
         Vec<VarName>,
     ),
+    DistributedPredefinedStatic(
+        /// Predefined labelled distribution graph with static assignments
+        LabelledDistributionGraph,
+    ),
+    DistributedPredefinedOptimized(
+        /// Predefined labelled distribution graph used for topology
+        LabelledDistributionGraph,
+        /// Variables which represent the constraints which determine dynamic assignments
+        Vec<VarName>,
+    ),
 }
 
 impl Debug for DistributionMode {
@@ -214,6 +225,16 @@ impl Debug for DistributionMode {
                     f,
                     "DistributedOptimizedDynamic({:?}, {:?})",
                     locations, dist_constraints
+                )
+            }
+            DistributionMode::DistributedPredefinedStatic(graph) => {
+                write!(f, "DistributedPredefinedStatic({:?})", graph)
+            }
+            DistributionMode::DistributedPredefinedOptimized(graph, dist_constraints) => {
+                write!(
+                    f,
+                    "DistributedPredefinedOptimized({:?}, {:?})",
+                    graph, dist_constraints
                 )
             }
         }
@@ -469,17 +490,15 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                     "Setting up distributed runtime with distribution_mode = {:?}",
                     distribution_mode
                 );
-                if matches!(parser, ParserMode::Combinator) {
-                    // Because we would need to duplicate all this DistAsyncMonitorBuilder code or
-                    // implement an AnonymousDistAsyncMonitorBuilder...
+                if matches!(parser, ParserMode::Lalr) {
                     warn!(
-                        "Combinator parser not supported for DUPs with Distributed Runtime. Defaulting to LALR parser."
+                        "LALR parser not supported for DUPs with Distributed Runtime. Defaulting to Combinator parser."
                     );
                 }
 
                 let builder = DistAsyncMonitorBuilder::<
                     DistValueConfig,
-                    DistributedSemantics<LALRParser>,
+                    DistributedSemantics<CombExprParser>,
                 >::new();
 
                 let builder = builder.scheduler_mode(scheduler_mode);
@@ -515,6 +534,12 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                             .map(|loc| (loc.clone().into(), loc))
                             .collect();
                         builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
+                    }
+                    DistributionMode::DistributedPredefinedStatic(graph) => {
+                        builder.static_dist_graph(graph)
+                    }
+                    DistributionMode::DistributedPredefinedOptimized(graph, dist_constraints) => {
+                        builder.predefined_optimized_dist_graph(graph, dist_constraints)
                     }
                 };
 

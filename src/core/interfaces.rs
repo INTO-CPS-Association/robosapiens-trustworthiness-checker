@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::{collections::BTreeMap, fmt::Debug};
 use strum_macros::Display;
 
-use super::{StreamData, VarName};
+use super::{StreamData, Value, VarName};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -37,6 +37,18 @@ pub trait InputProvider {
     /// error (Err) or has successfully provided one batch of values (Ok).
     /// Awaiting the control_stream attempts to progress the InputProvider by one step.
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
+
+    /// Optional replay snapshot accessor.
+    ///
+    /// Input providers that can expose deterministic historical values for replay
+    /// (e.g. file-backed providers) may override this to return a full
+    /// time-indexed snapshot map.
+    ///
+    /// The default implementation returns `None`, indicating replay history is
+    /// not available.
+    fn replay_history(&self) -> Option<BTreeMap<usize, BTreeMap<VarName, Value>>> {
+        None
+    }
 }
 
 pub trait Specification: Debug + std::fmt::Display + Clone + 'static {

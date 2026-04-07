@@ -139,14 +139,12 @@ impl<M: Specification + Localisable> Scheduler<M> {
                     info!("Execute");
                 }
                 self.dist_graph_sender.send(plan.clone()).await;
-                if should_plan {
-                    self.scheduler_executor.execute(plan.clone()).await;
-                    if !self.suppress_output {
-                        info!("Plotting graph");
-                        // TODO: should this error be propagated?
-                        if let Err(e) = graph_to_png(plan.clone(), "distributed_graph.png").await {
-                            error!("Failed to plot graph: {}", e);
-                        }
+                self.scheduler_executor.execute(plan.clone()).await;
+                if should_plan && !self.suppress_output {
+                    info!("Plotting graph");
+                    // TODO: should this error be propagated?
+                    if let Err(e) = graph_to_png(plan.clone(), "distributed_graph.png").await {
+                        error!("Failed to plot graph: {}", e);
                     }
                 }
             }

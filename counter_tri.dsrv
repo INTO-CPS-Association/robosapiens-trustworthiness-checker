@@ -1,0 +1,12 @@
+out x: Int
+out y: Int
+out z: Int
+out graphConstraintX: Bool
+out graphConstraintY: Bool
+
+x = default(x[1], 0) + 1
+y = default(y[1], 0) + 1
+z = default(z[1], 0) + 1
+
+graphConstraintX = if z % 2 == 0 then monitored_at(x, node1) else monitored_at(x, node2)
+graphConstraintY = if z % 2 == 0 then monitored_at(y, node2) else monitored_at(y, node1)
