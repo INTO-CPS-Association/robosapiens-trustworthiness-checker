@@ -1,0 +1,7 @@
+out x: Int
+out y: Int
+out z: Int
+
+x = default(x[1], 0) + 1
+y = default(y[1], 0) + 1
+z = default(z[1], 0) + 1

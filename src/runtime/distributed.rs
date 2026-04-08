@@ -326,7 +326,16 @@ where
                     .expect("Failed to create MQTT dist graph provider"),
                 );
 
-                let replay_history = self.input.as_ref().and_then(|input| input.replay_history());
+                let replay_history = self
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.replay_history_handle())
+                    .or_else(|| {
+                        self.input
+                            .as_ref()
+                            .and_then(|input| input.replay_history())
+                            .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
+                    });
 
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),
@@ -360,7 +369,16 @@ where
                     .expect("Failed to create MQTT dist graph provider"),
                 );
 
-                let replay_history = self.input.as_ref().and_then(|input| input.replay_history());
+                let replay_history = self
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.replay_history_handle())
+                    .or_else(|| {
+                        self.input
+                            .as_ref()
+                            .and_then(|input| input.replay_history())
+                            .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
+                    });
 
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),
@@ -389,7 +407,16 @@ where
                 let dist_graph_provider =
                     Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
 
-                let replay_history = self.input.as_ref().and_then(|input| input.replay_history());
+                let replay_history = self
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.replay_history_handle())
+                    .or_else(|| {
+                        self.input
+                            .as_ref()
+                            .and_then(|input| input.replay_history())
+                            .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
+                    });
 
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),

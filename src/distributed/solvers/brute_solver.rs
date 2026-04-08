@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::rc::Rc;
 
 use smol::{
     LocalExecutor,
@@ -8,15 +8,12 @@ use tracing::{debug, info};
 
 use crate::{
     InputProvider, OutputStream, Value, VarName,
-    core::{AbstractMonitorBuilder, Runnable, Specification},
+    core::{AbstractMonitorBuilder, Runnable},
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
         possible_labelled_dist_graphs,
     },
-    io::{
-        file::{UntimedInputFileData, replay_history_for_vars},
-        testing::ManualOutputHandler,
-    },
+    io::{replay_history::ReplayHistory, testing::ManualOutputHandler},
     runtime::{asynchronous::AbstractAsyncMonitorBuilder, distributed::DistAsyncMonitorBuilder},
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics,
@@ -39,7 +36,7 @@ where
     pub dist_constraints: Vec<VarName>,
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
-    pub replay_history: Option<UntimedInputFileData>,
+    pub replay_history: Option<ReplayHistory>,
 }
 
 impl<S, AC> BruteForceDistConstraintSolver<S, AC>
@@ -58,18 +55,11 @@ where
             self.input_vars, self.output_vars
         );
 
-        let model_input_vars = monitor_builder
-            .async_monitor_builder
-            .model
-            .as_ref()
-            .expect("Model must be set on monitor builder")
-            .input_vars();
-
         let replay_input_data = self
             .replay_history
             .as_ref()
-            .map(|data| replay_history_for_vars(data, &model_input_vars))
-            .unwrap_or_else(BTreeMap::new);
+            .and_then(|history| history.snapshot())
+            .unwrap_or_default();
 
         let input_provider: Box<dyn InputProvider<Val = Value>> = Box::new(replay_input_data);
         let mut output_handler =

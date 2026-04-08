@@ -141,6 +141,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .executor(executor.clone())
         .model(model)
         .lang(cli.language)
+        .runtime(cli.runtime)
         .mqtt_port(mqtt_port)
         .redis_port(redis_port);
     let builder = builder.input_provider_builder(input_provider_builder);

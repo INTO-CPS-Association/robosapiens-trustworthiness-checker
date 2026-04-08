@@ -3,8 +3,10 @@ use std::rc::Rc;
 use smol::LocalExecutor;
 use tracing::debug_span;
 
-use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
+use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME, Runtime};
+use crate::io::file::FileInputProvider;
 use crate::io::mqtt::MqttFactory;
+use crate::io::replay_history::ReplayHistory;
 use crate::io::testing::ManualInputProvider;
 use crate::runtime::builder::ValueConfig;
 use crate::{self as tc, Value};
@@ -42,6 +44,7 @@ pub struct InputProviderBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     redis_port: Option<u16>,
     mqtt_port: Option<u16>,
+    replay_history: ReplayHistory,
 }
 
 impl InputProviderBuilder {
@@ -53,6 +56,7 @@ impl InputProviderBuilder {
             executor: None,
             redis_port: None,
             mqtt_port: None,
+            replay_history: ReplayHistory::disabled(),
         }
     }
 
@@ -102,6 +106,20 @@ impl InputProviderBuilder {
         self
     }
 
+    pub fn replay_history(mut self, replay_history: ReplayHistory) -> Self {
+        self.replay_history = replay_history;
+        self
+    }
+
+    pub fn runtime(mut self, runtime: Runtime) -> Self {
+        self.replay_history = if matches!(runtime, Runtime::Distributed) {
+            ReplayHistory::store_all()
+        } else {
+            ReplayHistory::disabled()
+        };
+        self
+    }
+
     pub async fn async_build(self) -> Box<dyn InputProvider<Val = Value>> {
         let _async_build = debug_span!("async_build for input provider").entered();
         match self.spec {
@@ -109,11 +127,13 @@ impl InputProviderBuilder {
                 let input_file_parser = match self.lang.unwrap_or(Language::DSRV) {
                     Language::DSRV => tc::lang::untimed_input::untimed_input_file,
                 };
-                Box::new(
-                    tc::parse_file(input_file_parser, &path)
-                        .await
-                        .expect("Input file could not be parsed"),
-                ) as Box<dyn InputProvider<Val = Value>>
+                let data = tc::parse_file(input_file_parser, &path)
+                    .await
+                    .expect("Input file could not be parsed");
+                Box::new(FileInputProvider::with_replay_history(
+                    data,
+                    self.replay_history.clone(),
+                )) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::Ros(_json_string) => {
                 #[cfg(feature = "ros")]
@@ -123,8 +143,12 @@ impl InputProviderBuilder {
                     let input_mapping = json_to_mapping(&_json_string)
                         .expect("Input mapping file could not be parsed");
                     Box::new(
-                        ROSInputProvider::new(self.executor.clone().expect(""), input_mapping)
-                            .expect("ROS input provider could not be created"),
+                        ROSInputProvider::new_with_replay_history(
+                            self.executor.clone().expect(""),
+                            input_mapping,
+                            self.replay_history.clone(),
+                        )
+                        .expect("ROS input provider could not be created"),
                     )
                 }
                 #[cfg(not(feature = "ros"))]

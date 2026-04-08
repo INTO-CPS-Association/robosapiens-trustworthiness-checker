@@ -1,4 +1,5 @@
 use crate::core::StreamType;
+use crate::io::replay_history::ReplayHistory;
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
@@ -47,6 +48,11 @@ pub trait InputProvider {
     /// The default implementation returns `None`, indicating replay history is
     /// not available.
     fn replay_history(&self) -> Option<BTreeMap<usize, BTreeMap<VarName, Value>>> {
+        None
+    }
+
+    /// Optional live replay-history handle accessor.
+    fn replay_history_handle(&self) -> Option<ReplayHistory> {
         None
     }
 }

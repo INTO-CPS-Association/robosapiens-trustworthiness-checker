@@ -16,29 +16,45 @@ use unsync::spsc;
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
 
+use crate::io::replay_history::{ReplayHistory, ReplaySnapshot};
 use crate::stream_utils::channel_to_output_stream;
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
 use crate::{InputProvider, OutputStream, Value, core::VarName};
 
 pub type Topic = String;
-// A map between channel names and the MQTT channels they
-// correspond to
+// A map between channel names and the ROS topics they correspond to
 pub type VarTopicMap = BTreeMap<VarName, Topic>;
 pub type InverseVarTopicMap = BTreeMap<Topic, VarName>;
 
 pub const QOS: i32 = 1;
 pub const CHANNEL_SIZE: usize = 10;
 
+/// Replay-history-aware ROS input provider.
+///
+/// This provider fowards ros input for consumption by the runtime but,
+/// when the replay history is enabled,
+/// additionally records a deterministic, time-indexed replay snapshot:
+/// `clock -> { var -> Value }`.
+///
+/// Semantics:
+/// - Each successful receive on one variable advances the global clock by 1.
+/// - At each clock tick:
+///   - the received variable gets the concrete incoming value
+///   - all other variables are recorded as `Value::NoVal`
+/// - `replay_history()` returns a clone of the recorded snapshot.
 pub struct ROSInputProvider {
     pub var_map: BTreeMap<VarName, VariableMappingData>,
 
-    // Streams that can be taken ownership of by calling `input_stream`
+    // Streams that can be taken ownership of by calling `var_stream`.
     available_streams: BTreeMap<VarName, OutputStream<Value>>,
-    // Channels used to send to the `available_streams`
+    // Channels used to send to the `available_streams`.
     senders: Option<BTreeMap<VarName, spsc::Sender<Value>>>,
     ros_streams: BTreeMap<VarName, OutputStream<Value>>,
     cancellation_token: CancellationToken,
+
+    // Configurable replay history implementation (store all, or disabled).
+    replay_history: ReplayHistory,
 }
 
 impl ROSMsgType {
@@ -51,21 +67,21 @@ impl ROSMsgType {
     ) -> Result<OutputStream<Value>, r2r::Error> {
         Ok(match self {
             ROSMsgType::Bool => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::Bool>(topic, qos)?
-                            .map(|val| Value::Bool(val.data)),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::Bool>(topic, qos)?
+                    .map(|val| Value::Bool(val.data)),
+            ),
             ROSMsgType::String => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::String>(topic, qos)?
-                            .map(|val| Value::Str(val.data.into())),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::String>(topic, qos)?
+                    .map(|val| Value::Str(val.data.into())),
+            ),
             ROSMsgType::Int64 => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::Int64>(topic, qos)?
-                            .map(|val| Value::Int(val.data)),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::Int64>(topic, qos)?
+                    .map(|val| Value::Int(val.data)),
+            ),
             ROSMsgType::Int32 => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::Int32>(topic, qos)?
-                            .map(|val| Value::Int(val.data.into())),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::Int32>(topic, qos)?
+                    .map(|val| Value::Int(val.data.into())),
+            ),
             ROSMsgType::Int32List => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Int32MultiArray>(topic, qos)?
                     .map(|val| {
@@ -74,68 +90,68 @@ impl ROSMsgType {
                             .try_into()
                             .expect("Failed to serialize ROS2 Int32MultiArray msg to internal representation")
                     }),
-                    ),
+            ),
             ROSMsgType::Int16 => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::Int16>(topic, qos)?
-                            .map(|val| Value::Int(val.data.into())),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::Int16>(topic, qos)?
+                    .map(|val| Value::Int(val.data.into())),
+            ),
             ROSMsgType::Int8 => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::Int8>(topic, qos)?
-                            .map(|val| Value::Int(val.data.into())),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::Int8>(topic, qos)?
+                    .map(|val| Value::Int(val.data.into())),
+            ),
             ROSMsgType::Float64 => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::Float64>(topic, qos)?
-                            .map(|val| Value::Float(val.data)),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::Float64>(topic, qos)?
+                    .map(|val| Value::Float(val.data)),
+            ),
             ROSMsgType::Float32 => Box::pin(
-                        node.subscribe::<r2r::std_msgs::msg::Float32>(topic, qos)?
-                            .map(|val| Value::Float(val.data.into())),
-                    ),
+                node.subscribe::<r2r::std_msgs::msg::Float32>(topic, qos)?
+                    .map(|val| Value::Float(val.data.into())),
+            ),
             ROSMsgType::HumanModelPart => Box::pin(
-                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelPart>(topic, qos)?
-                            .map(|val| {
-                                serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 HumanModelPart msg to JSON")
-                                    .try_into()
-                                    .expect("Failed to serialize ROS2 HumanModelPart msg to internal representation")
-                            }),
-                    ),
+                node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelPart>(topic, qos)?
+                    .map(|val| {
+                        serde_json::to_value(val)
+                            .expect("Failed to serialize ROS2 HumanModelPart msg to JSON")
+                            .try_into()
+                            .expect("Failed to serialize ROS2 HumanModelPart msg to internal representation")
+                    }),
+            ),
             ROSMsgType::HumanModel => Box::pin(
-                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModel>(topic, qos)?
-                            .map(|val| {
-                                serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 HumanModel msg to JSON")
-                                    .try_into()
-                                    .expect("Failed to serialize ROS2 HumanModel msg to internal representation")
-                            }),
-                    ),
+                node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModel>(topic, qos)?
+                    .map(|val| {
+                        serde_json::to_value(val)
+                            .expect("Failed to serialize ROS2 HumanModel msg to JSON")
+                            .try_into()
+                            .expect("Failed to serialize ROS2 HumanModel msg to internal representation")
+                    }),
+            ),
             ROSMsgType::HumanModelList => Box::pin(
-                        node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelList >(topic, qos)?
-                            .map(|val| {
-                                serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 HumanModelList msg to JSON")
-                                    .try_into()
-                                    .expect("Failed to serialize ROS2 HumanModelList msg to internal representation")
-                            }),
-                    ),
+                node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelList>(topic, qos)?
+                    .map(|val| {
+                        serde_json::to_value(val)
+                            .expect("Failed to serialize ROS2 HumanModelList msg to JSON")
+                            .try_into()
+                            .expect("Failed to serialize ROS2 HumanModelList msg to internal representation")
+                    }),
+            ),
             ROSMsgType::RVData => Box::pin(
-                        node.subscribe::<r2r::id_pose_msgs::msg::RVData>(topic, qos)?
-                            .map(|val| {
-                                serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 RVData msg to JSON")
-                                    .try_into()
-                                    .expect("Failed to serialize ROS2 RVData msg to internal representation")
-                            }),
-                    ),
+                node.subscribe::<r2r::id_pose_msgs::msg::RVData>(topic, qos)?
+                    .map(|val| {
+                        serde_json::to_value(val)
+                            .expect("Failed to serialize ROS2 RVData msg to JSON")
+                            .try_into()
+                            .expect("Failed to serialize ROS2 RVData msg to internal representation")
+                    }),
+            ),
             ROSMsgType::RVDataArray => Box::pin(
-                        node.subscribe::<r2r::id_pose_msgs::msg::RVDataArray>(topic, qos)?
-                            .map(|val| {
-                                serde_json::to_value(val)
-                                    .expect("Failed to serialize ROS2 RVDataArray msg to JSON")
-                                    .try_into()
-                                    .expect("Failed to serialize ROS2 RVDataArray msg to internal representation")
-                            }),
-                    ),
+                node.subscribe::<r2r::id_pose_msgs::msg::RVDataArray>(topic, qos)?
+                    .map(|val| {
+                        serde_json::to_value(val)
+                            .expect("Failed to serialize ROS2 RVDataArray msg to JSON")
+                            .try_into()
+                            .expect("Failed to serialize ROS2 RVDataArray msg to internal representation")
+                    }),
+            ),
         })
     }
 }
@@ -145,6 +161,15 @@ impl ROSInputProvider {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_topics: ROSStreamMapping,
+    ) -> Result<Self, r2r::Error> {
+        Self::new_with_replay_history(executor, var_topics, ReplayHistory::disabled())
+    }
+
+    #[instrument(level = Level::INFO, skip(var_topics, replay_history))]
+    pub fn new_with_replay_history(
+        executor: Rc<LocalExecutor<'static>>,
+        var_topics: ROSStreamMapping,
+        replay_history: ReplayHistory,
     ) -> Result<Self, r2r::Error> {
         // Create a ROS node to subscribe to all of the input topics
         let ctx = r2r::Context::create()?;
@@ -157,6 +182,7 @@ impl ROSInputProvider {
         let cancellation_token = CancellationToken::new();
         let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
         let cancellation_token_task = cancellation_token.clone();
+
         let var_topics_shallow: BTreeMap<VarName, Topic> = var_topics
             .iter()
             .map(|(k, v)| (k.clone().into(), v.topic.clone()))
@@ -172,6 +198,7 @@ impl ROSInputProvider {
             let stream = var_data
                 .msg_type
                 .node_output_stream(&mut node, &var_data.topic, qos)?;
+
             // Apply a drop guard to the stream to ensure that the
             // subscriber ROS node does not go away whilst the stream
             // is still being consumed
@@ -204,6 +231,7 @@ impl ROSInputProvider {
             available_streams,
             senders,
             cancellation_token,
+            replay_history,
         })
     }
 
@@ -289,22 +317,31 @@ impl ROSInputProvider {
         mut ros_streams: BTreeMap<VarName, OutputStream<Value>>,
         mut senders: BTreeMap<VarName, spsc::Sender<Value>>,
         cancellation_token: CancellationToken,
+        replay_history: ReplayHistory,
     ) -> OutputStream<anyhow::Result<()>> {
         Box::pin(stream! {
             let ros_input_span = info_span!("ROSInputProvider run_logic");
             let _enter = ros_input_span.enter();
+
             loop {
                 futures::select! {
                     (var, val) = Self::receive_from_any_stream(&mut ros_streams).fuse() => {
                         match val {
                             Some(value) => {
                                 debug!("ROSInputProvider: Received value for variable {}", var);
+
+                                // Persist replay state via configured implementation.
+                                replay_history.record_sparse_event(
+                                    senders.keys().cloned(),
+                                    &var,
+                                    value.clone(),
+                                );
+
                                 if let Err(e) = Self::handle_received_value(var, value, &mut senders).await {
                                     debug!("ROSInputProvider: Error handling received value: {:?}", e);
                                     yield Err(e);
                                     return;
-                                }
-                                else {
+                                } else {
                                     yield Ok(());
                                 }
                             }
@@ -333,6 +370,7 @@ impl ROSInputProvider {
 #[async_trait(?Send)]
 impl InputProvider for ROSInputProvider {
     type Val = Value;
+
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         let stream = self.available_streams.remove(var)?;
         Some(stream)
@@ -342,6 +380,16 @@ impl InputProvider for ROSInputProvider {
         let senders = std::mem::take(&mut self.senders).expect("Senders already taken");
         let cancellation_token = self.cancellation_token.clone();
         let ros_streams = std::mem::take(&mut self.ros_streams);
-        Self::create_run_stream(ros_streams, senders, cancellation_token).await
+        let replay_history = self.replay_history.clone();
+
+        Self::create_run_stream(ros_streams, senders, cancellation_token, replay_history).await
+    }
+
+    fn replay_history(&self) -> Option<ReplaySnapshot> {
+        self.replay_history.snapshot()
+    }
+
+    fn replay_history_handle(&self) -> Option<ReplayHistory> {
+        Some(self.replay_history.clone())
     }
 }

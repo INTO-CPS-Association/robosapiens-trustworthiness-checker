@@ -604,7 +604,10 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
         } else {
             // Normal handling for non-reconfigurable runtimes
             let builder = if let Some(input_provider_builder) = self.input_provider_builder {
-                let input = input_provider_builder.async_build().await;
+                let input = input_provider_builder
+                    .runtime(self.runtime)
+                    .async_build()
+                    .await;
                 builder.input(input)
             } else if let Some(input) = self.input {
                 builder.input(input)
