@@ -128,6 +128,20 @@ pub struct DistributionMode {
     #[clap(requires = "distribution_constraints")]
     pub mqtt_dynamic_optimized: Option<Vec<String>>,
 
+    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "Node locations for ROS-based centralised distributed monitoring")]
+    pub ros_centralised_distributed: Option<Vec<String>>,
+
+    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "Node locations for ROS-based randomized distributed monitoring")]
+    pub ros_randomized_distributed: Option<Vec<String>>,
+
+    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "Node locations for ROS-based static optimized distributed monitoring")]
+    #[clap(requires = "distribution_constraints")]
+    pub ros_static_optimized: Option<Vec<String>>,
+
+    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "Node locations for ROS-based dynamic optimized distributed monitoring")]
+    #[clap(requires = "distribution_constraints")]
+    pub ros_dynamic_optimized: Option<Vec<String>>,
+
     #[clap(
         long,
         help = "Wait for work assignment from scheduler in distributed mode"
@@ -252,4 +266,11 @@ pub struct Cli {
         default_value = "reconfig"
     )]
     pub reconf_topic: String,
+
+    #[arg(
+        long,
+        help = "Topic name used by ROS distribution graph provider",
+        default_value = "/dist_graph"
+    )]
+    pub ros_dist_graph_topic: String,
 }

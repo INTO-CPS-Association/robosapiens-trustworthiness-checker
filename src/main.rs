@@ -102,7 +102,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .maybe_mqtt_port(mqtt_port)
         .maybe_local_node(cli.local_node)
         .runtime(cli.runtime)
-        .maybe_dist_constraints(cli.distribution_constraints);
+        .maybe_dist_constraints(cli.distribution_constraints)
+        .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
     debug!("Building distribution mode");
     let distribution_mode = distribution_mode_builder.build().await?;
     debug!("Distribution mode built");

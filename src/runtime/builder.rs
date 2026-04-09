@@ -190,6 +190,34 @@ pub enum DistributionMode {
         /// Variables which represent the constraints which determine the static distribution
         Vec<VarName>,
     ),
+    DistributedRosCentralised(
+        /// Location names
+        Vec<String>,
+        /// Topic used by ROS distribution graph provider
+        String,
+    ),
+    DistributedRosRandom(
+        /// Location names
+        Vec<String>,
+        /// Topic used by ROS distribution graph provider
+        String,
+    ),
+    DistributedRosOptimizedStatic(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+        /// Topic used by ROS distribution graph provider
+        String,
+    ),
+    DistributedRosOptimizedDynamic(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+        /// Topic used by ROS distribution graph provider
+        String,
+    ),
     DistributedPredefinedStatic(
         /// Predefined labelled distribution graph with static assignments
         LabelledDistributionGraph,
@@ -225,6 +253,30 @@ impl Debug for DistributionMode {
                     f,
                     "DistributedOptimizedDynamic({:?}, {:?})",
                     locations, dist_constraints
+                )
+            }
+            DistributionMode::DistributedRosCentralised(locations, topic) => {
+                write!(f, "DistributedRosCentralised({:?}, {:?})", locations, topic)
+            }
+            DistributionMode::DistributedRosRandom(locations, topic) => {
+                write!(f, "DistributedRosRandom({:?}, {:?})", locations, topic)
+            }
+            DistributionMode::DistributedRosOptimizedStatic(locations, dist_constraints, topic) => {
+                write!(
+                    f,
+                    "DistributedRosOptimizedStatic({:?}, {:?}, {:?})",
+                    locations, dist_constraints, topic
+                )
+            }
+            DistributionMode::DistributedRosOptimizedDynamic(
+                locations,
+                dist_constraints,
+                topic,
+            ) => {
+                write!(
+                    f,
+                    "DistributedRosOptimizedDynamic({:?}, {:?}, {:?})",
+                    locations, dist_constraints, topic
                 )
             }
             DistributionMode::DistributedPredefinedStatic(graph) => {
@@ -534,6 +586,42 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                             .map(|loc| (loc.clone().into(), loc))
                             .collect();
                         builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
+                    }
+                    DistributionMode::DistributedRosCentralised(locations, topic) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.ros_centralised_dist_graph(locations, topic)
+                    }
+                    DistributionMode::DistributedRosRandom(locations, topic) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.ros_random_dist_graph(locations, topic)
+                    }
+                    DistributionMode::DistributedRosOptimizedStatic(
+                        locations,
+                        dist_constraints,
+                        topic,
+                    ) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.ros_optimized_static_dist_graph(locations, dist_constraints, topic)
+                    }
+                    DistributionMode::DistributedRosOptimizedDynamic(
+                        locations,
+                        dist_constraints,
+                        topic,
+                    ) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.ros_optimized_dynamic_dist_graph(locations, dist_constraints, topic)
                     }
                     DistributionMode::DistributedPredefinedStatic(graph) => {
                         builder.static_dist_graph(graph)

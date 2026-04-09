@@ -1,3 +1,5 @@
+pub mod dist_graph_provider;
+pub use dist_graph_provider::ROSDistGraphProvider;
 pub mod input_provider;
 pub use input_provider::ROSInputProvider;
 pub mod ros_topic_stream_mapping;

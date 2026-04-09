@@ -101,6 +101,7 @@ pub struct DistributionModeBuilder {
     local_node: Option<NodeName>,
     dist_constraints: Option<Vec<VarName>>,
     mqtt_port: Option<u16>,
+    ros_dist_graph_topic: String,
     runtime: Option<Runtime>,
 }
 
@@ -111,6 +112,7 @@ impl DistributionModeBuilder {
             local_node: None,
             dist_constraints: None,
             mqtt_port: None,
+            ros_dist_graph_topic: "/dist_graph".to_string(),
             runtime: None,
         }
     }
@@ -142,6 +144,11 @@ impl DistributionModeBuilder {
 
     pub fn maybe_mqtt_port(mut self, mqtt_port: Option<u16>) -> Self {
         self.mqtt_port = mqtt_port;
+        self
+    }
+
+    pub fn ros_dist_graph_topic(mut self, ros_dist_graph_topic: String) -> Self {
+        self.ros_dist_graph_topic = ros_dist_graph_topic;
         self
     }
 
@@ -252,6 +259,104 @@ impl DistributionModeBuilder {
                     .collect();
                 BuilderDistributionMode::DistributedOptimizedDynamic(locations, dist_constraints)
             }
+            (
+                DistributionMode {
+                    ros_centralised_distributed: Some(_locations),
+                    ..
+                },
+                _,
+            ) => {
+                #[cfg(not(feature = "ros"))]
+                panic!("ROS distribution modes require building with feature 'ros'");
+                #[cfg(feature = "ros")]
+                {
+                    debug!(
+                        "setting up ROS distributed centralised mode using dist graph topic: {}",
+                        self.ros_dist_graph_topic
+                    );
+                    BuilderDistributionMode::DistributedRosCentralised(
+                        _locations,
+                        self.ros_dist_graph_topic.clone(),
+                    )
+                }
+            }
+            (
+                DistributionMode {
+                    ros_randomized_distributed: Some(_locations),
+                    ..
+                },
+                _,
+            ) => {
+                #[cfg(not(feature = "ros"))]
+                panic!("ROS distribution modes require building with feature 'ros'");
+                #[cfg(feature = "ros")]
+                {
+                    debug!(
+                        "setting up ROS distributed random mode using dist graph topic: {}",
+                        self.ros_dist_graph_topic
+                    );
+                    BuilderDistributionMode::DistributedRosRandom(
+                        _locations,
+                        self.ros_dist_graph_topic.clone(),
+                    )
+                }
+            }
+            (
+                DistributionMode {
+                    ros_static_optimized: Some(_locations),
+                    ..
+                },
+                _,
+            ) => {
+                #[cfg(not(feature = "ros"))]
+                panic!("ROS distribution modes require building with feature 'ros'");
+                #[cfg(feature = "ros")]
+                {
+                    info!(
+                        "setting up ROS static optimization mode using dist graph topic: {}",
+                        self.ros_dist_graph_topic
+                    );
+                    let dist_constraints = self
+                        .dist_constraints
+                        .context("Distribution constraints must be provided")?
+                        .into_iter()
+                        .map(|x| x.into())
+                        .collect();
+                    BuilderDistributionMode::DistributedRosOptimizedStatic(
+                        _locations,
+                        dist_constraints,
+                        self.ros_dist_graph_topic.clone(),
+                    )
+                }
+            }
+            (
+                DistributionMode {
+                    ros_dynamic_optimized: Some(_locations),
+                    ..
+                },
+                _,
+            ) => {
+                #[cfg(not(feature = "ros"))]
+                panic!("ROS distribution modes require building with feature 'ros'");
+                #[cfg(feature = "ros")]
+                {
+                    info!(
+                        "setting up ROS dynamic optimization mode using dist graph topic: {}",
+                        self.ros_dist_graph_topic
+                    );
+                    let dist_constraints = self
+                        .dist_constraints
+                        .context("Distribution constraints must be provided")?
+                        .into_iter()
+                        .map(|x| x.into())
+                        .collect();
+                    BuilderDistributionMode::DistributedRosOptimizedDynamic(
+                        _locations,
+                        dist_constraints,
+                        self.ros_dist_graph_topic.clone(),
+                    )
+                }
+            }
 
             (
                 DistributionMode {
@@ -267,8 +372,16 @@ impl DistributionModeBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "ros")]
+    use crate::async_test;
     use crate::runtime::distributed::SchedulerCommunication;
     use clap::Parser;
+    #[cfg(feature = "ros")]
+    use macro_rules_attribute::apply;
+    #[cfg(feature = "ros")]
+    use smol::LocalExecutor;
+    #[cfg(feature = "ros")]
+    use std::rc::Rc;
 
     #[test]
     fn test_scheduler_communication_mock_mode_maps_to_null() {
@@ -332,5 +445,131 @@ mod tests {
                 reconf_topic: "custom_reconfig_topic".to_string(),
             }
         );
+    }
+
+    #[cfg(feature = "ros")]
+    #[apply(async_test)]
+    async fn test_distribution_mode_builder_ros_centralised_maps_correctly(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
+            mqtt_dynamic_optimized: None,
+            ros_centralised_distributed: Some(vec!["r1".to_string(), "r2".to_string()]),
+            ros_randomized_distributed: None,
+            ros_static_optimized: None,
+            ros_dynamic_optimized: None,
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode);
+        let mode = builder.build().await.expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedRosCentralised(locs, topic)
+                if locs == vec!["r1".to_string(), "r2".to_string()] && topic == "/dist_graph"
+        ));
+    }
+
+    #[cfg(feature = "ros")]
+    #[apply(async_test)]
+    async fn test_distribution_mode_builder_ros_random_maps_correctly(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
+            mqtt_dynamic_optimized: None,
+            ros_centralised_distributed: None,
+            ros_randomized_distributed: Some(vec!["r1".to_string(), "r2".to_string()]),
+            ros_static_optimized: None,
+            ros_dynamic_optimized: None,
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode);
+        let mode = builder.build().await.expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedRosRandom(locs, topic)
+                if locs == vec!["r1".to_string(), "r2".to_string()] && topic == "/dist_graph"
+        ));
+    }
+
+    #[cfg(feature = "ros")]
+    #[apply(async_test)]
+    async fn test_distribution_mode_builder_ros_static_optimized_maps_correctly(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
+            mqtt_dynamic_optimized: None,
+            ros_centralised_distributed: None,
+            ros_randomized_distributed: None,
+            ros_static_optimized: Some(vec!["r1".to_string(), "r2".to_string()]),
+            ros_dynamic_optimized: None,
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode)
+            .dist_constraints(vec!["c1".to_string(), "c2".to_string()]);
+        let mode = builder.build().await.expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedRosOptimizedStatic(locs, constraints, topic)
+                if locs == vec!["r1".to_string(), "r2".to_string()]
+                && constraints == vec![VarName::new("c1"), VarName::new("c2")]
+                && topic == "/dist_graph"
+        ));
+    }
+
+    #[cfg(feature = "ros")]
+    #[apply(async_test)]
+    async fn test_distribution_mode_builder_ros_dynamic_optimized_maps_correctly(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
+            mqtt_dynamic_optimized: None,
+            ros_centralised_distributed: None,
+            ros_randomized_distributed: None,
+            ros_static_optimized: None,
+            ros_dynamic_optimized: Some(vec!["r1".to_string(), "r2".to_string()]),
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode)
+            .dist_constraints(vec!["c1".to_string(), "c2".to_string()]);
+        let mode = builder.build().await.expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedRosOptimizedDynamic(locs, constraints, topic)
+                if locs == vec!["r1".to_string(), "r2".to_string()]
+                && constraints == vec![VarName::new("c1"), VarName::new("c2")]
+                && topic == "/dist_graph"
+        ));
     }
 }
