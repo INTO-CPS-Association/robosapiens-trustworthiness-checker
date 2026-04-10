@@ -10,6 +10,7 @@ use smol::LocalExecutor;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use tracing::debug;
+use tracing::info;
 use tracing::info_span;
 use tracing::{Level, instrument};
 use unsync::spsc;
@@ -187,6 +188,10 @@ impl ROSInputProvider {
             .iter()
             .map(|(k, v)| (k.clone().into(), v.topic.clone()))
             .collect();
+        info!(
+            "ROSInputProvider: Got variable-topic mapping: {:?}",
+            var_topics_shallow
+        );
         let (senders, available_streams) = Self::create_senders_receiver(var_topics_shallow.iter());
         let senders = Some(senders);
 
@@ -261,13 +266,18 @@ impl ROSInputProvider {
     async fn receive_from_any_stream(
         ros_streams: &mut BTreeMap<VarName, OutputStream<Value>>,
     ) -> (VarName, Option<Value>) {
-        ros_streams
+        let vals = ros_streams
             .iter_mut()
             .map(|(var_name, stream)| stream.next().map(|val| (var_name.clone(), val)))
             .collect::<stream::FuturesUnordered<_>>()
             .next()
             .await
-            .expect("No streams available")
+            .expect("No streams available");
+        info!(
+            "ROSInputProvider: Received value from stream for variable {:?}: {:?}",
+            vals.0, vals.1
+        );
+        vals
     }
 
     async fn handle_received_value(
