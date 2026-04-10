@@ -33,7 +33,7 @@ serde_json = "1.0.149"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = { version = "0.13.3", default-features = false, features = [
+paho-mqtt = { version = "0.14.0", default-features = false, features = [
     "bundled",
     "ssl",
 ] }

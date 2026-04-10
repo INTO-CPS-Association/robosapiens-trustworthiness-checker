@@ -18,10 +18,10 @@ bench = false
 lalrpop = "0.23.1"
 
 [dependencies]
-winnow = { version = "0.7.15", features = ["simd"] }
+winnow = { version = "0.7.5", features = ["simd"] } # TODO: Update and fix breaking changes in v1.0.0
 futures = "0.3.32"
 
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive"] }
 async-stream = "0.3.6"
 r2r = { version = "0.9.5", optional = true }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
@@ -32,7 +32,7 @@ serde_json5 = "0.2.1"
 paho-mqtt = { version = "0.13.3", default-features = false, features = [
     "bundled",
     "ssl",
-] }
+] } # TODO: Update and fix breaking changes in v0.14.0
 async-trait = "0.1.89"
 tracing = { version = "0.1.44", features = [
     "attributes",
