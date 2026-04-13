@@ -1,0 +1,18 @@
+{
+  "CSAlert": {
+    "topic": "/CSAlert",
+    "msg_type": "Bool"
+  },
+  "SCAlert": {
+    "topic": "/SCAlert",
+    "msg_type": "Bool"
+  },
+  "VLAlert": {
+    "topic": "/VLAlert",
+    "msg_type": "Bool"
+  },
+  "HCAlert": {
+    "topic": "/HCAlert",
+    "msg_type": "Bool"
+  }
+}
