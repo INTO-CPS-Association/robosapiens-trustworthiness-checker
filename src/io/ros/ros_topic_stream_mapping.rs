@@ -21,6 +21,8 @@ pub enum ROSMsgType {
     HumanModelList,
     RVData,
     RVDataArray,
+    /// ROS2 `nav_msgs/msg/Odometry`
+    Odom,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -47,6 +49,7 @@ pub fn string_to_ros_msg_type(typ: &str) -> Result<ROSMsgType, anyhow::Error> {
         "HumanModelList" => Ok(ROSMsgType::HumanModelList),
         "RVData" => Ok(ROSMsgType::RVData),
         "RVDataArray" => Ok(ROSMsgType::RVDataArray),
+        "Odom" => Ok(ROSMsgType::Odom),
         typ => Err(anyhow!("Unsupported type {}", typ)),
     }
 }

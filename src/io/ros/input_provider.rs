@@ -153,6 +153,17 @@ impl ROSMsgType {
                             .expect("Failed to serialize ROS2 RVDataArray msg to internal representation")
                     }),
             ),
+            ROSMsgType::Odom => Box::pin(
+                node.subscribe::<r2r::nav_msgs::msg::Odometry>(topic, qos)?
+                    .map(|val| {
+                        serde_json::to_value(val)
+                            .expect("Failed to serialize ROS2 Odometry msg to JSON")
+                            .try_into()
+                            .expect(
+                                "Failed to serialize ROS2 Odometry msg to internal representation",
+                            )
+                    }),
+            ),
         })
     }
 }
