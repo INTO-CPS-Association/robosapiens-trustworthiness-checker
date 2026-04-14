@@ -13,7 +13,10 @@ use crate::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use ecow::EcoVec;
-use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
+use futures::{
+    FutureExt, StreamExt,
+    future::{LocalBoxFuture, join_all},
+};
 use smol::LocalExecutor;
 use std::{
     cell::RefCell,
@@ -470,20 +473,28 @@ where
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<StreamState> {
         let mut to_remove = vec![];
-        for expr_eval in expr_evals.iter_mut() {
-            match expr_eval.eval_value().await {
+        let futures = expr_evals.iter_mut().map(|expr_eval| async {
+            let name = expr_eval.var_name.clone();
+            let res = expr_eval.eval_value().await;
+            (name, res)
+        });
+
+        let results = join_all(futures).await;
+
+        for (name, res) in results {
+            match res {
                 Ok(StreamState::Pending) => {
-                    info!(?expr_eval.var_name, "eval_expr_evals: ExprEvaluator pending");
+                    info!(?name, "eval_expr_evals: ExprEvaluator pending");
                 }
                 Ok(StreamState::Finished) => {
-                    info!(?expr_eval.var_name, "eval_expr_evals: ExprEvaluator finished");
-                    to_remove.push(expr_eval.var_name.clone());
+                    info!(?name, "eval_expr_evals: ExprEvaluator finished");
+                    to_remove.push(name);
                 }
                 Err(e) => {
-                    error!(?expr_eval.var_name, ?e, "eval_expr_evals: Error in ExprEvaluator");
+                    error!(?name, ?e, "eval_expr_evals: Error in ExprEvaluator");
                     return Err(anyhow!(
                         "Error in ExprEvaluator for variable {}: {}",
-                        expr_eval.var_name,
+                        name,
                         e
                     ));
                 }
@@ -783,22 +794,14 @@ where
 
         let mut managers = self.var_managers.borrow_mut();
         let mut to_remove = vec![];
-        // Forward inputs first to avoid deadlocks
-        for (name, manager) in managers.iter_mut() {
-            if manager.input {
-                let state = forward_one::<AC>(name, manager).await?;
-                if state == StreamState::Finished {
-                    to_remove.push(name.clone());
-                }
-            }
-        }
-        // Forward rest
-        for (name, manager) in managers.iter_mut() {
-            if !manager.input {
-                let state = forward_one::<AC>(name, manager).await?;
-                if state == StreamState::Finished {
-                    to_remove.push(name.clone());
-                }
+        let input_futures = managers.iter_mut().map(|(name, manager)| async {
+            let res = forward_one::<AC>(name, manager).await;
+            (name.clone(), res)
+        });
+        let input_results = join_all(input_futures).await;
+        for (name, res) in input_results {
+            if res? == StreamState::Finished {
+                to_remove.push(name);
             }
         }
         managers.retain(|name, _| !to_remove.contains(name));
@@ -1259,5 +1262,51 @@ mod tests {
                 (4, vec![2.into()]),
             ],
         );
+    }
+
+    #[apply(async_test)]
+    async fn test_eval_order_regression(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        // This test is designed to catch a regression where the order of evaluation of outputs
+        // was causing a deadlock
+
+        // Naming is important here... Regression was caused by waiting for a before b
+        let mut spec = "in x\nout a\naux b\nb = x\na = b";
+        let spec = dsrv_specification(&mut spec).unwrap();
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let input_streams = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestMonitor {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, Vec<Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "outputs")
+                .await
+                .unwrap();
+
+        assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, vec![0.into(), 0.into()]),
+                (1, vec![1.into(), 1.into()]),
+                (2, vec![2.into(), 2.into()]),
+            ],
+        );
+        Ok(())
     }
 }
