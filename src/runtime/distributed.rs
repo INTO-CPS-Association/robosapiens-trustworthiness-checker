@@ -14,7 +14,7 @@ use crate::{
             ReplanningCondition, Scheduler,
             communication::{NullSchedulerCommunicator, SchedulerCommunicator},
             planners::{
-                constrained::StaticOptimizedSchedulerPlanner,
+                constrained::{DynamicOptimizedSchedulerPlanner, StaticOptimizedSchedulerPlanner},
                 core::{
                     CentralisedSchedulerPlanner, SchedulerPlanner, StaticFixedSchedulerPlanner,
                 },
@@ -467,7 +467,7 @@ where
                     replay_history,
                 };
                 let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+                    Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
 
                 (
                     planner,
@@ -640,7 +640,7 @@ where
                         replay_history,
                     };
                     let planner: Box<dyn SchedulerPlanner> =
-                        Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+                        Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
 
                     (
                         planner,
@@ -683,7 +683,7 @@ where
                     replay_history,
                 };
                 let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+                    Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
 
                 (
                     planner,

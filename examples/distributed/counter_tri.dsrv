@@ -9,8 +9,8 @@ y = default(y[1], 0) + 1
 z = default(z[1], 0) + 1
 
 graphConstraintX = if z % 2 == 0
-                   then monitored_at(x, node1)
-                   else monitored_at(x, node2)
+                   then monitored_at(x, node2)
+                   else monitored_at(x, node3)
 graphConstraintY = if z % 2 == 0
-                   then monitored_at(y, node2)
-                   else monitored_at(y, node1)
+                   then monitored_at(y, node3)
+                   else monitored_at(y, node2)

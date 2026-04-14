@@ -19,7 +19,11 @@ pub struct RandomSchedulerPlanner {
 
 #[async_trait(?Send)]
 impl SchedulerPlanner for RandomSchedulerPlanner {
-    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
+    async fn plan(
+        &self,
+        graph: Rc<DistributionGraph>,
+        _scheduler_tick: usize,
+    ) -> Option<Rc<LabelledDistributionGraph>> {
         info!("Received distribution graph: generating random labelling");
         let node_indicies = graph.graph.node_indices().collect::<Vec<_>>();
         let location_map: BTreeMap<VarName, NodeIndex> = self

@@ -109,39 +109,67 @@ impl<M: Specification + Localisable> Scheduler<M> {
         let mut monitor_stream = dist_graph_stream.zip(dist_constraits_hold_stream);
 
         let mut plan = None;
+        let mut scheduler_tick: usize = 0;
 
         info!("In Scheduler loop");
 
         // Monitor + Analyse phase in let
         while let Some((graph, constraints_hold)) = monitor_stream.next().await {
             if !self.suppress_output {
-                info!("Monitored and analysed");
+                info!(
+                    tick = scheduler_tick,
+                    constraints_hold, "Monitored and analysed"
+                );
             }
 
             // Plan phase
             let should_plan = match self.replanning_condition {
-                ReplanningCondition::ConstraintsFail => !constraints_hold,
+                // Plan on first iteration (no plan yet), or whenever constraints fail
+                ReplanningCondition::ConstraintsFail => plan.is_none() || !constraints_hold,
                 ReplanningCondition::Always => true,
                 // Even if replanning is disabled, we need to plan at least once
                 // so we have an initial plan
                 ReplanningCondition::Never => plan.is_none(),
             };
+            if !self.suppress_output {
+                info!(
+                    tick = scheduler_tick,
+                    constraints_hold,
+                    should_plan,
+                    replanning_condition = ?self.replanning_condition,
+                    "Planning decision"
+                );
+            }
             if should_plan {
                 if !self.suppress_output {
-                    info!("Plan");
+                    info!(tick = scheduler_tick, "Plan");
                 }
-                plan = Some(self.planner.plan(graph).await);
+                plan = Some(self.planner.plan(graph, scheduler_tick).await);
             }
 
             // Execute phase
             if let Some(Some(ref plan)) = plan {
+                let is_bootstrap_tick = scheduler_tick == 0;
+
                 if !self.suppress_output {
-                    info!("Execute");
+                    info!(tick = scheduler_tick, is_bootstrap_tick, "Execute");
                 }
+
+                // Publish dist graph so downstream consumers can progress
                 self.dist_graph_sender.send(plan.clone()).await;
-                self.scheduler_executor.execute(plan.clone()).await;
+
+                // Bootstrap tick is used to initialize planning state and execute plan only
+                if !is_bootstrap_tick {
+                    self.scheduler_executor.execute(plan.clone()).await;
+                } else if !self.suppress_output {
+                    info!(
+                        tick = scheduler_tick,
+                        "Skipping external work execution during bootstrap"
+                    );
+                }
+
                 if should_plan && !self.suppress_output {
-                    info!("Plotting graph");
+                    info!(tick = scheduler_tick, "Plotting graph");
                     // TODO: should this error be propagated?
                     if let Err(e) = graph_to_png(plan.clone(), "distributed_graph.png").await {
                         error!("Failed to plot graph: {}", e);
@@ -150,14 +178,19 @@ impl<M: Specification + Localisable> Scheduler<M> {
             }
 
             if !self.suppress_output {
-                info!("MAPE-K iteration end");
+                info!(tick = scheduler_tick, "MAPE-K iteration end");
             }
+
+            scheduler_tick = scheduler_tick.saturating_add(1);
         }
 
         if !self.suppress_output {
-            info!("Scheduler ended");
+            info!("Scheduler ended, staying alive");
         }
 
-        Ok(())
+        // Stay alive forever to keep the output topics open
+        loop {
+            smol::future::yield_now().await;
+        }
     }
 }

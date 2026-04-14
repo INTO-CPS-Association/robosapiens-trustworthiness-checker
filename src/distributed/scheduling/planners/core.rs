@@ -12,7 +12,11 @@ use crate::{
 
 #[async_trait(?Send)]
 pub trait SchedulerPlanner {
-    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>>;
+    async fn plan(
+        &self,
+        graph: Rc<DistributionGraph>,
+        scheduler_tick: usize,
+    ) -> Option<Rc<LabelledDistributionGraph>>;
 }
 
 pub struct StaticFixedSchedulerPlanner {
@@ -21,7 +25,11 @@ pub struct StaticFixedSchedulerPlanner {
 
 #[async_trait(?Send)]
 impl SchedulerPlanner for StaticFixedSchedulerPlanner {
-    async fn plan(&self, _graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
+    async fn plan(
+        &self,
+        _graph: Rc<DistributionGraph>,
+        _scheduler_tick: usize,
+    ) -> Option<Rc<LabelledDistributionGraph>> {
         Some(self.fixed_graph.clone())
     }
 }
@@ -33,14 +41,18 @@ pub struct CentralisedSchedulerPlanner {
 
 #[async_trait(?Send)]
 impl SchedulerPlanner for CentralisedSchedulerPlanner {
-    async fn plan(&self, graph: Rc<DistributionGraph>) -> Option<Rc<LabelledDistributionGraph>> {
+    async fn plan(
+        &self,
+        graph: Rc<DistributionGraph>,
+        _scheduler_tick: usize,
+    ) -> Option<Rc<LabelledDistributionGraph>> {
         let labels = graph
             .graph
             .node_indices()
             .map(|i| {
                 let node = graph.graph.node_weight(i).unwrap();
                 (
-                    i.clone(),
+                    i,
                     if *node == self.central_node {
                         self.var_names.clone()
                     } else {
@@ -49,6 +61,7 @@ impl SchedulerPlanner for CentralisedSchedulerPlanner {
                 )
             })
             .collect::<BTreeMap<_, _>>();
+
         let labelled_graph = Rc::new(LabelledDistributionGraph {
             dist_graph: graph,
             var_names: self.var_names.clone(),

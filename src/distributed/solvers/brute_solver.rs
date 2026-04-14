@@ -115,10 +115,28 @@ where
     }
 
     /// Finds all possible labelled distribution graphs given a set of distribution constraints
-    /// and a distribution graph
+    /// and a distribution graph.
     pub fn possible_labelled_dist_graph_stream(
         self: Rc<Self>,
         graph: Rc<DistributionGraph>,
+    ) -> LabelledDistGraphStream {
+        let latest_step: Option<usize> = self
+            .replay_history
+            .as_ref()
+            .and_then(|history| history.snapshot())
+            .and_then(|snap| snap.keys().max().copied());
+
+        self.possible_labelled_dist_graph_stream_with_target_step(graph, latest_step)
+    }
+
+    /// Finds possible labelled distribution graphs and evaluates constraints at a specific replay step.
+    ///
+    /// - `target_step = Some(k)`: evaluate constraints at replay step `k`.
+    /// - `target_step = None`: evaluate constraints at the first available output row.
+    pub fn possible_labelled_dist_graph_stream_with_target_step(
+        self: Rc<Self>,
+        graph: Rc<DistributionGraph>,
+        target_step: Option<usize>,
     ) -> LabelledDistGraphStream {
         let dist_constraints = self.dist_constraints.clone();
         let builder = self.monitor_builder.partial_clone();
@@ -144,7 +162,10 @@ where
         let localised_spec = model.localise(&dist_constraints);
         let builder = builder.model(localised_spec);
 
-        info!("Starting optimized distributed graph generation");
+        info!(
+            "Starting optimized distributed graph generation (target_step={:?})",
+            target_step
+        );
 
         Box::pin(async_stream::stream! {
             for (i, labelled_graph) in possible_labelled_dist_graphs(
@@ -162,11 +183,26 @@ where
                     labelled_graph.clone(),
                 );
 
-                let first_output: Vec<bool> = output_stream.next().await.unwrap_or_default();
-                let dist_constraints_hold = first_output.iter().all(|x| *x);
+                let evaluation_row: Option<Vec<bool>> = if let Some(step) = target_step {
+                    output_stream.nth(step).await
+                } else {
+                    output_stream.next().await
+                };
+
+                let dist_constraints_hold = evaluation_row
+                    .as_ref()
+                    .is_some_and(|row| !row.is_empty() && row.iter().all(|x| *x));
+
+                info!(
+                    "Candidate graph evaluation: index={}, target_step={:?}, row={:?}, constraints_hold={}",
+                    i,
+                    target_step,
+                    evaluation_row,
+                    dist_constraints_hold
+                );
 
                 if dist_constraints_hold {
-                    info!("Found matching graph!");
+                    info!("Found matching graph! index={}, target_step={:?}", i, target_step);
                     yield labelled_graph;
                 }
             }
