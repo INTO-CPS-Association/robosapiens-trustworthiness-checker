@@ -274,7 +274,6 @@ where
     // Retained history of values (if needed)
     retained_history: RetainedHistory<AC::Val>,
     id: usize,
-    input: bool,
 }
 
 impl<AC> VarManager<AC>
@@ -282,7 +281,7 @@ where
     AC: AsyncConfig<Expr = SExpr>,
     AC::Val: DeferrableStreamData,
 {
-    fn new(var_name: VarName, value_stream: OutputStream<AC::Val>, input: bool) -> Self {
+    fn new(var_name: VarName, value_stream: OutputStream<AC::Val>) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(?var_name, "Creating VarManager {}", id);
         Self {
@@ -292,17 +291,12 @@ where
             new_subscribers: Vec::new(),
             retained_history: RetainedHistory::new(0),
             id,
-            input,
         }
     }
 
-    fn new_from_receiver(
-        var_name: VarName,
-        receiver: spsc::Receiver<AC::Val>,
-        input: bool,
-    ) -> Self {
+    fn new_from_receiver(var_name: VarName, receiver: spsc::Receiver<AC::Val>) -> Self {
         let value_stream = stream_utils::channel_to_output_stream(receiver);
-        Self::new(var_name, value_stream, input)
+        Self::new(var_name, value_stream)
     }
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<AC::Val> {
@@ -498,8 +492,7 @@ where
             .map(|var_name| {
                 let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
                     spsc::channel(128);
-                let var_manager =
-                    VarManager::<AC>::new_from_receiver(var_name.clone(), receiver, false);
+                let var_manager = VarManager::<AC>::new_from_receiver(var_name.clone(), receiver);
                 let expr = model.var_expr(var_name).ok_or_else(|| {
                     anyhow!(
                         "No expression found for output variable {} when setting up Monitor",
@@ -522,7 +515,7 @@ where
             .chain(
                 input_streams
                     .into_iter()
-                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream, true)),
+                    .map(|(var_name, stream)| VarManager::<AC>::new(var_name, stream)),
             )
             .map(|vm| (vm.var_name.clone(), vm))
             .collect();
@@ -940,10 +933,9 @@ where
                 if vs.contains(var_name) {
                     let history_length = self.deps.longest_time_dependency(var_name) as usize;
                     let stream = manager.subscribe(history_length);
-                    let input = manager.input;
                     Some((
                         var_name.clone(),
-                        VarManager::<AC>::new(var_name.clone(), stream, input),
+                        VarManager::<AC>::new(var_name.clone(), stream),
                     ))
                 } else {
                     None
@@ -1481,11 +1473,11 @@ mod tests {
         let stream_map = BTreeMap::from([
             (
                 "x".into(),
-                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream, true),
+                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream),
             ),
             (
                 "z".into(),
-                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream, false),
+                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream),
             ),
         ]);
         let mut context1 = SemiSyncContext::<SemiSyncValueConfig>::new(
@@ -1513,11 +1505,11 @@ mod tests {
         let stream_map = BTreeMap::from([
             (
                 "x".into(),
-                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream, true),
+                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream),
             ),
             (
                 "z".into(),
-                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream, false),
+                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream),
             ),
         ]);
         let mut context2 =
