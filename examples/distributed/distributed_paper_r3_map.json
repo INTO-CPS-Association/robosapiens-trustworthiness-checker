@@ -1,0 +1,22 @@
+{
+  "R3Odom": {
+    "topic": "/tb3/odom",
+    "msg_type": "Odom"
+  },
+  "ConveyorSystem": {
+    "topic": "/ConveyorSystem",
+    "msg_type": "Int32"
+  },
+  "StackerCrane": {
+    "topic": "/StackerCrane",
+    "msg_type": "Int32"
+  },
+  "VerticalLift": {
+    "topic": "/VerticalLift",
+    "msg_type": "Int32"
+  },
+  "HorizontalCarousel": {
+    "topic": "/HorizontalCarousel",
+    "msg_type": "Int32"
+  }
+}

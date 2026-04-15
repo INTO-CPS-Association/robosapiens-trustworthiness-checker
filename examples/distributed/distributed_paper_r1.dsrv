@@ -1,0 +1,87 @@
+// Run with:
+// cargo run --profile dev-fast --features ros -- examples/distributed/distributed_paper_r1.dsrv --input-ros-file examples/distributed/distributed_paper_r1_map.json
+
+in R1Odom
+
+in ConveyorSystem
+in StackerCrane
+in VerticalLift
+in HorizontalCarousel
+
+out CS1Alert
+out SC1Alert
+out VL1Alert
+out HC1Alert
+
+// Axis-aligned bounding box (AABB) of RX and Machine Y
+out aabbR1C 
+out aabbR1S 
+out aabbR1V
+out aabbR1H 
+
+out R1Coord
+
+// Robot positions
+aux R1Pose
+aux R1X
+aux R1Y
+
+// Machine static coords:
+aux CX 
+aux CY 
+aux SX 
+aux SY 
+aux VX 
+aux VY 
+aux HX 
+aux HY 
+
+// AABB constant
+aux D
+
+aux CPred
+aux SPred
+aux VPred
+aux HPred
+
+// Extract the position of Robots from odometry data
+R1Pose = Map.get(Map.get(Map.get(R1Odom, "pose"), "pose"), "position")
+R1X = Map.get(R1Pose, "x")
+R1Y = Map.get(R1Pose, "y")
+
+// Coordinates of machines (static)
+CX = 3.5
+CY = 3.0
+SX = 3.5
+SY = -6.0
+VX = -4.0
+VY = -6.0
+HX = -4.0
+HY = 3.0
+
+// Bounding box = 10 units wide = robot is maximum five units away from center
+D = 5.0 // Or 10.0 / 2.0
+
+// Probabilistic predicates for machine states:
+CPred = ConveyorSystem < 0
+SPred = StackerCrane < 0 && StackerCrane > 30
+VPred = VerticalLift > 100
+HPred = HorizontalCarousel == 0
+
+// AABB for circles. Esentially (with subst. values):
+// -1.5 <= x <= 8.5 && -2.0 <= y <= 8.0 for ConveyorSystem
+aabbR1C = abs(R1X - CX) <= D && abs(R1Y - CY) <= D 
+
+aabbR1S = abs(R1X - SX) <= D && abs(R1Y - SY) <= D 
+
+aabbR1V = abs(R1X - VX) <= D && abs(R1Y - VY) <= D 
+
+aabbR1H = abs(R1X - HX) <= D && abs(R1Y - HY) <= D 
+
+CS1Alert = CPred && aabbR1C
+SC1Alert = SPred && aabbR1S
+VL1Alert = VPred && aabbR1V
+HC1Alert = HPred && aabbR1H
+
+// Logging...
+R1Coord = Map("x": R1X, "y": R1Y)
