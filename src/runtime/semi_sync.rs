@@ -169,6 +169,94 @@ where
     }
 }
 
+/// Manages retained history for a variable stream
+/// Is essentially a circular buffer that can only increase in capacity, plus some more logic.
+struct RetainedHistory<T: DeferrableStreamData> {
+    history: VecDeque<T>,
+    capacity: usize,
+    samples_seen: usize,
+}
+
+impl<T: DeferrableStreamData> RetainedHistory<T> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            history: VecDeque::new(),
+            capacity,
+            samples_seen: 0,
+        }
+    }
+
+    fn prune_old(&mut self) {
+        while self.history.len() > self.capacity {
+            self.history.pop_front();
+        }
+    }
+
+    /// Adds a new value to the history, maintaining the capacity limit
+    fn push(&mut self, value: T) {
+        self.samples_seen += 1;
+
+        if self.capacity == 0 {
+            return;
+        }
+
+        self.history.push_back(value);
+        self.prune_old();
+    }
+
+    /// Gets the last N values from history, padding with deferred values if needed
+    fn get_last_n_with_pad(&self, n: usize) -> Vec<T> {
+        let available = self.history.len();
+        let to_send = match n {
+            0 => return Vec::new(),
+            // Case below means that we have received context from somewhere else - e.g., context_transfer
+            n if available >= self.samples_seen => std::cmp::min(available, n),
+            n => std::cmp::min(self.samples_seen, n),
+        };
+
+        let mut result = Vec::with_capacity(to_send);
+
+        // Add deferred values if we need padding
+        let padding_needed = to_send.saturating_sub(available);
+        for _ in 0..padding_needed {
+            result.push(T::deferred_value());
+        }
+
+        // Add actual history values
+        let skip = available.saturating_sub(to_send - padding_needed);
+        result.extend(self.history.iter().skip(skip).cloned());
+
+        result
+    }
+
+    /// Increases the capacity, padding with deferred values if needed
+    fn increase_capacity(&mut self, new_capacity: usize) {
+        if new_capacity <= self.capacity {
+            return;
+        }
+
+        let padding_needed = std::cmp::min(
+            new_capacity.saturating_sub(self.capacity),
+            self.samples_seen.saturating_sub(self.history.len()),
+        );
+
+        for _ in 0..padding_needed {
+            self.history.push_front(T::deferred_value());
+        }
+
+        self.capacity = new_capacity;
+    }
+
+    fn get_all(&self) -> Vec<T> {
+        self.history.iter().cloned().collect()
+    }
+
+    fn set_all(&mut self, values: impl IntoIterator<Item = T>) {
+        self.history = values.into_iter().collect();
+        self.prune_old();
+    }
+}
+
 // TODO: Fix that we have the boolean parameter input to define an ordering. Should not be defined
 // inside the VarManager but somewhere with logic in the context.
 struct VarManager<AC>
@@ -184,8 +272,7 @@ where
     subscribers: Vec<spsc::Sender<AC::Val>>,
     new_subscribers: Vec<(spsc::Sender<AC::Val>, usize)>, // (Sender, history_length)
     // Retained history of values (if needed)
-    retained_history: VecDeque<AC::Val>,
-    samples_forwarded: usize,
+    retained_history: RetainedHistory<AC::Val>,
     id: usize,
     input: bool,
 }
@@ -203,9 +290,8 @@ where
             value_stream,
             subscribers: Vec::new(),
             new_subscribers: Vec::new(),
-            retained_history: VecDeque::new(),
+            retained_history: RetainedHistory::new(0),
             id,
-            samples_forwarded: 0,
             input,
         }
     }
@@ -221,21 +307,14 @@ where
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<AC::Val> {
         let (tx, rx) = spsc::channel::<AC::Val>(history_length + 8);
-        // Compute how many Deferreds are needed - needed because new history_len is longer than
-        // retained_history.len()
-        let missing = std::cmp::min(
-            history_length.saturating_sub(self.retained_history.len()),
-            self.samples_forwarded,
-        );
-        let defer_v = <AC::Val as DeferrableStreamData>::deferred_value();
-        // Push them to the history
-        std::iter::repeat_n(defer_v, missing).for_each(|v| {
-            self.retained_history.push_front(v);
-        });
+
+        // Increase capacity if the new subscriber needs more history
+        self.retained_history.increase_capacity(history_length);
+
         info!(
             ?self.var_name,
             history_length,
-            ?self.retained_history,
+            history_items = ?self.retained_history.history.len(),
             "VarManager {} subscribe: Preparing subscription.",
             self.id,
         );
@@ -246,35 +325,68 @@ where
         stream_utils::channel_to_output_stream(rx)
     }
 
+    /// Processes new subscribers and sends them the requested history
+    fn process_new_subscribers(&mut self) {
+        while let Some((mut tx, history_length)) = self.new_subscribers.pop() {
+            let history_to_send = self.retained_history.get_last_n_with_pad(history_length);
+            debug!(
+                ?self.var_name,
+                ?history_length,
+                ?history_to_send,
+                "VarManager {} process_new_subscribers: Sending retained history to new subscriber.",
+                self.id,
+            );
+
+            for v in history_to_send {
+                // Should never fail as the capacity is always sufficient
+                if let Err(e) = tx.try_send(v) {
+                    error!(
+                        ?self.var_name,
+                        ?e,
+                        "VarManager {} process_new_subscribers: Error sending retained history value to new subscriber.",
+                        self.id,
+                    );
+                    panic!(
+                        "Error sending retained history value to new subscriber: {}",
+                        e
+                    );
+                }
+            }
+
+            self.subscribers.push(tx);
+        }
+    }
+
+    /// Forwards a value to all subscribers and removes disconnected ones
+    async fn broadcast_to_subscribers(&mut self, val: AC::Val) {
+        let mut disconnected = vec![];
+        for (idx, subscriber) in self.subscribers.iter_mut().enumerate() {
+            if subscriber.send(val.clone()).await.is_err() {
+                // The only type of error is disconnection
+                info!(
+                    "VarManager {} broadcast_to_subscribers: Subscriber {} disconnected.",
+                    self.id, idx
+                );
+                disconnected.push(idx);
+            }
+        }
+
+        // Remove disconnected subscribers in reverse order to preserve indices
+        for idx in disconnected.into_iter().rev() {
+            self.subscribers.remove(idx);
+        }
+    }
+
     async fn forward_value(&mut self) -> anyhow::Result<StreamState> {
         info!(
             ?self.var_name,
+            history_capacity = self.retained_history.capacity,
             "VarManager {} forward_value: Waiting for next value.",
             self.id,
         );
 
-        // Forward the requested history to subscribers
-        while let Some((mut tx, history_length)) = self.new_subscribers.pop() {
-            let to_send = std::cmp::min(self.samples_forwarded, history_length);
-            self.retained_history.iter().skip(
-                self.retained_history
-                    .len()
-                    .saturating_sub(to_send),
-            ).for_each(|v| {
-                    // Should never fail as the capacity is always sufficient
-                    if let Err(e) = tx.try_send(v.clone()) {
-                        error!(
-                            ?self.var_name,
-                            ?e,
-                            "VarManager {} subscribe: Error sending retained history value to new subscriber.",
-                            self.id,
-                        );
-                        panic!("Error sending retained history value to new subscriber: {}", e);
-                    }
-                });
-            // Now add to subscribers
-            self.subscribers.push(tx);
-        }
+        // Process any new subscribers that need history
+        self.process_new_subscribers();
 
         if let Some(val) = self.value_stream.next().await {
             info!(
@@ -284,46 +396,41 @@ where
                 self.id,
                 self.subscribers.len()
             );
-            self.samples_forwarded += 1;
 
-            // Retain in history if needed
-            if !self.retained_history.is_empty() {
-                self.retained_history.pop_front();
-                self.retained_history.push_back(val.clone());
-                info!(
-                    ?self.var_name,
-                    ?self.retained_history,
-                    "VarManager {} forward_value: Updated retained history.",
-                    self.id,
-                );
-            }
+            // Add to retained history
+            self.retained_history.push(val.clone());
 
-            let mut disconnected = vec![];
-            for (idx, subscriber) in self.subscribers.iter_mut().enumerate() {
-                if let Err(_) = subscriber.send(val.clone()).await {
-                    // The only type of error is disconnection
-                    info!(
-                        "VarManager {} forward_value: Subscriber {} disconnected.",
-                        self.id, idx
-                    );
-                    disconnected.push(idx);
-                }
-            }
-            // Remove disconnected subscribers
-            for idx in disconnected.into_iter().rev() {
-                self.subscribers.remove(idx);
-            }
+            info!(
+                ?self.var_name,
+                "VarManager {} forward_value: Updated retained history.",
+                self.id,
+            );
+
+            // Broadcast to all subscribers
+            self.broadcast_to_subscribers(val).await;
 
             // Stream not done yet
             Ok(StreamState::Pending)
         } else {
             info!(?self.var_name, "VarManager {} stream finished", self.id);
-            // TODO: Make this more clean
             // Close the channels early to let receivers know we are done
-            self.subscribers = vec![];
-            self.new_subscribers = vec![];
+            self.subscribers.clear();
+            self.new_subscribers.clear();
             Ok(StreamState::Finished)
         }
+    }
+
+    // Gets the retained history for the VarManager
+    fn get_retained_history(&self) -> Vec<AC::Val> {
+        self.retained_history.get_all()
+    }
+
+    fn set_retained_history(&mut self, history: impl IntoIterator<Item = AC::Val>) {
+        self.retained_history.set_all(history);
+    }
+
+    fn set_history_to_retain(&mut self, history_to_retain: usize) {
+        self.retained_history.capacity = history_to_retain;
     }
 }
 
@@ -743,7 +850,6 @@ where
     // The specification for this context
     spec: AC::Spec,
     // Dependencies from the specification
-    // TODO: Use to determine history_length
     deps: Box<dyn DependencyResolver<AC>>,
 }
 
@@ -760,6 +866,16 @@ where
             var_managers.borrow().keys()
         );
         let deps = Box::new(DepGraph::resolver_from_spec(spec.clone()));
+        var_managers.borrow_mut().iter_mut().for_each(|(name, vm)| {
+            let dep = deps.longest_time_dependency(&name);
+            debug!(
+                "SemiSyncContext ID {:?}: Setting history to retain for variable {} to {} based on dependencies.",
+                id,
+                name,
+                dep
+            );
+            vm.set_history_to_retain(dep as usize);
+        });
         Self {
             var_managers,
             id,
@@ -794,11 +910,11 @@ where
 
         let mut managers = self.var_managers.borrow_mut();
         let mut to_remove = vec![];
-        let input_futures = managers.iter_mut().map(|(name, manager)| async {
+        let futs = managers.iter_mut().map(|(name, manager)| async {
             let res = forward_one::<AC>(name, manager).await;
             (name.clone(), res)
         });
-        let input_results = join_all(input_futures).await;
+        let input_results = join_all(futs).await;
         for (name, res) in input_results {
             if res? == StreamState::Finished {
                 to_remove.push(name);
@@ -844,6 +960,48 @@ where
             .spec(self.spec.clone());
         builder.build()
     }
+
+    // Gets the retained history for all the variables inside the context.
+    fn get_retained_history(&self) -> BTreeMap<VarName, Vec<AC::Val>> {
+        let managers = self.var_managers.borrow();
+
+        let history: BTreeMap<_, Vec<AC::Val>> = managers
+            .iter()
+            .map(|(var_name, manager)| (var_name.clone(), manager.get_retained_history()))
+            .collect();
+        history
+    }
+
+    // Sets the retained history for the variables in the context based on the provided history.
+    fn set_retained_history(&mut self, history: BTreeMap<VarName, Vec<AC::Val>>) {
+        let mut managers = self.var_managers.borrow_mut();
+        for (var_name, history) in history.into_iter() {
+            if let Some(manager) = managers.get_mut(&var_name) {
+                manager.set_retained_history(history);
+            } else {
+                info!(
+                    "SemiSyncContext ID {:?}: Tried to set retained history for variable {} but it is not in the context. Most likely due to different specs.",
+                    self.id, var_name
+                );
+            }
+        }
+    }
+
+    // Transfers the retained history from this context to the VarManagers of the `other` context.
+    // New subscribers will receive that history if relevant.
+    pub fn context_transfer(&self, other: &mut Self) {
+        let history = self.get_retained_history();
+        info!(
+            "SemiSyncContext ID {:?}: Transferring context to SemiSyncContext ID {:?} with history: {:?}",
+            self.id,
+            other.id,
+            history
+                .keys()
+                .map(|k| (k, history[k].len()))
+                .collect::<BTreeMap<_, _>>()
+        );
+        other.set_retained_history(history);
+    }
 }
 
 #[async_trait(?Send)]
@@ -861,16 +1019,12 @@ where
             self.id, x
         );
         let mut manager = self.var_managers.borrow_mut();
-        debug!(
-            "SemiSyncContext ID {:?}: VarManagers available {:?}",
-            self.id,
-            manager.keys()
-        );
         let history_length = self.deps.longest_time_dependency(x) as usize;
         let stream = manager.get_mut(x)?.subscribe(history_length);
         info!(
             self.id,
             ?x,
+            ?history_length,
             "SemiSyncContext::var: Created new output stream for variable"
         );
         Some(stream)
@@ -927,19 +1081,20 @@ where
 #[cfg(test)]
 mod tests {
 
-    use crate::async_test;
     use crate::core::Runnable;
     use crate::dsrv_fixtures::*;
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::runtime::builder::SemiSyncValueConfig;
-    use crate::runtime::semi_sync::SemiSyncMonitor;
-    use crate::semantics::UntimedDsrvSemantics;
+    use crate::runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor, VarManager};
+    use crate::semantics::{StreamContext, UntimedDsrvSemantics};
+    use crate::{OutputStream, async_test};
     use crate::{Value, dsrv_specification};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
@@ -1308,5 +1463,90 @@ mod tests {
             ],
         );
         Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_context_transfer(executor: Rc<LocalExecutor<'static>>) {
+        // Tests that context transfers work purely from a Context perspective (without actually
+        // involving the monitor or outputs)
+
+        // Note: The values used in these tests don't actually matter.
+
+        // Note: z has time index of 1 which means we should maintain history for it
+        let spec = dsrv_specification(&mut spec_acc_monitor()).unwrap();
+        let x_stream: OutputStream<Value> =
+            Box::pin(futures::stream::iter((0..3).map(|x| x.into())));
+        let z_stream: OutputStream<Value> =
+            Box::pin(futures::stream::iter((0..3).map(|z| z.into())));
+        let stream_map = BTreeMap::from([
+            (
+                "x".into(),
+                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream, true),
+            ),
+            (
+                "z".into(),
+                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream, false),
+            ),
+        ]);
+        let mut context1 = SemiSyncContext::<SemiSyncValueConfig>::new(
+            Rc::new(RefCell::new(stream_map)),
+            spec.clone(),
+        );
+        let x_out = context1.var(&"x".into()).unwrap();
+        let z_out = context1.var(&"z".into()).unwrap();
+
+        context1.forward_values().await.unwrap();
+        context1.forward_values().await.unwrap();
+        context1.forward_values().await.unwrap();
+        let x_vals: Vec<_> = with_timeout(x_out.take(3).collect(), 1, "x stream")
+            .await
+            .unwrap();
+        let z_vals: Vec<_> = with_timeout(z_out.take(3).collect(), 1, "z stream")
+            .await
+            .unwrap();
+        assert_eq!(x_vals, vec![0.into(), 1.into(), 2.into()]);
+        assert_eq!(z_vals, vec![0.into(), 1.into(), 2.into()]);
+        let x_stream: OutputStream<Value> =
+            Box::pin(futures::stream::iter((0..3).map(|x| x.into())));
+        let z_stream: OutputStream<Value> =
+            Box::pin(futures::stream::iter((0..3).map(|z| z.into())));
+        let stream_map = BTreeMap::from([
+            (
+                "x".into(),
+                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream, true),
+            ),
+            (
+                "z".into(),
+                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream, false),
+            ),
+        ]);
+        let mut context2 =
+            SemiSyncContext::<SemiSyncValueConfig>::new(Rc::new(RefCell::new(stream_map)), spec);
+        context1.context_transfer(&mut context2);
+        let history = context2.get_retained_history();
+        // New context has one in hist for z and 0 for x:
+        assert_eq!(
+            history,
+            BTreeMap::from([("x".into(), vec![]), ("z".into(), vec![2.into()])])
+        );
+        let x_out = context2.var(&"x".into()).unwrap();
+        let z_out = context2.var(&"z".into()).unwrap();
+        // Need to forward a new values in order to also make VarManagers send history
+        // (This could be changed if var was async)
+        context2.forward_values().await.unwrap();
+        context2.forward_values().await.unwrap();
+        context2.forward_values().await.unwrap();
+
+        let x_vals: Vec<_> = with_timeout(x_out.take(3).collect(), 1, "context transfer stream")
+            .await
+            .unwrap();
+        let z_vals: Vec<_> = with_timeout(z_out.take(4).collect(), 1, "z stream")
+            .await
+            .unwrap();
+
+        // z carries the history value, x does not
+        assert_eq!(x_vals, vec![0.into(), 1.into(), 2.into()]);
+        // Note: The streams are now "out of sync". A runtime would still need to forward the necessary amount
+        assert_eq!(z_vals, vec![2.into(), 0.into(), 1.into(), 2.into()]);
     }
 }

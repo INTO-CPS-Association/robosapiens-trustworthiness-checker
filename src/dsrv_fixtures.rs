@@ -476,24 +476,6 @@ pub fn spec_dynamic() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn spec_future_indexing() -> &'static str {
-    "in x
-     in y
-     out z
-     out a
-     z = x[1]
-     a = y"
-}
-
-#[allow(dead_code)]
-pub fn spec_past_indexing() -> &'static str {
-    "in x
-     in y
-     out z
-     z = x[1]"
-}
-
-#[allow(dead_code)]
 pub fn input_streams_indexing() -> impl InputProvider<Val = Value> {
     let mut input_values = BTreeMap::new();
 
