@@ -46,11 +46,6 @@ out aabbR2H
 out aabbR3H 
 out aabbR4H 
 
-out R1Coord
-out R2Coord
-out R3Coord
-out R4Coord
-
 // Robot positions
 aux R1Pose
 aux R1X
@@ -155,8 +150,3 @@ HC2Alert = HPred && aabbR2H
 HC3Alert = HPred && aabbR3H
 HC4Alert = HPred && aabbR4H
 
-// Logging...
-R1Coord = Map("x": R1X, "y": R1Y)
-R2Coord = Map("x": R2X, "y": R2Y)
-R3Coord = Map("x": R3X, "y": R3Y)
-R4Coord = Map("x": R4X, "y": R4Y)

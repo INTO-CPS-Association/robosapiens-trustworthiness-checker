@@ -19,8 +19,6 @@ out aabbR3S
 out aabbR3V
 out aabbR3H 
 
-out R3Coord
-
 // Robot positions
 aux R3Pose
 aux R3X
@@ -82,6 +80,3 @@ CS3Alert = CPred && aabbR3C
 SC3Alert = SPred && aabbR3S
 VL3Alert = VPred && aabbR3V
 HC3Alert = HPred && aabbR3H
-
-// Logging...
-R3Coord = Map("x": R3X, "y": R3Y)

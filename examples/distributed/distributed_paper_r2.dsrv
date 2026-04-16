@@ -19,8 +19,6 @@ out aabbR2S
 out aabbR2V
 out aabbR2H 
 
-out R2Coord
-
 // Robot positions
 aux R2Pose
 aux R2X
@@ -82,6 +80,3 @@ CS2Alert = CPred && aabbR2C
 SC2Alert = SPred && aabbR2S
 VL2Alert = VPred && aabbR2V
 HC2Alert = HPred && aabbR2H
-
-// Logging...
-R2Coord = Map("x": R2X, "y": R2Y)

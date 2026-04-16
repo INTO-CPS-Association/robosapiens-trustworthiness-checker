@@ -19,8 +19,6 @@ out aabbR4S
 out aabbR4V
 out aabbR4H 
 
-out R4Coord
-
 // Robot positions
 aux R4Pose
 aux R4X
@@ -82,6 +80,3 @@ CS4Alert = CPred && aabbR4C
 SC4Alert = SPred && aabbR4S
 VL4Alert = VPred && aabbR4V
 HC4Alert = HPred && aabbR4H
-
-// Logging...
-R4Coord = Map("x": R4X, "y": R4Y)

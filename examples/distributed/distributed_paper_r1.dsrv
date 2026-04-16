@@ -19,8 +19,6 @@ out aabbR1S
 out aabbR1V
 out aabbR1H 
 
-out R1Coord
-
 // Robot positions
 aux R1Pose
 aux R1X
@@ -82,6 +80,3 @@ CS1Alert = CPred && aabbR1C
 SC1Alert = SPred && aabbR1S
 VL1Alert = VPred && aabbR1V
 HC1Alert = HPred && aabbR1H
-
-// Logging...
-R1Coord = Map("x": R1X, "y": R1Y)
