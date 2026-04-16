@@ -20,10 +20,10 @@ use futures::{
 use smol::LocalExecutor;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 use unsync::spsc;
 
 pub struct SemiSyncMonitorBuilder<AC, MS>
@@ -112,11 +112,11 @@ where
     sender: spsc::Sender<AC::Val>,
     // Stream that evaluates the expression
     eval_stream: OutputStream<AC::Val>,
+    var_name: VarName,
 
     _marker: std::marker::PhantomData<MS>,
 
     // Kept for debugging
-    var_name: VarName,
     _expr: AC::Expr,
 }
 
@@ -571,6 +571,7 @@ where
 
     async fn eval_expr_evals(
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
+        aux_vars: &BTreeSet<VarName>,
     ) -> anyhow::Result<StreamState> {
         let mut to_remove = vec![];
         let futures = expr_evals.iter_mut().map(|expr_eval| async {
@@ -602,11 +603,16 @@ where
         }
         expr_evals.retain(|expr_eval| !to_remove.contains(&expr_eval.var_name));
 
-        Ok(if expr_evals.is_empty() {
-            StreamState::Finished
-        } else {
-            StreamState::Pending
-        })
+        // If any non-aux eval'er is active:
+        if expr_evals
+            .iter()
+            .any(|expr_eval| !aux_vars.contains(&expr_eval.var_name))
+        {
+            return Ok(StreamState::Pending);
+        }
+        // Else done
+        info!("All ExprEvalutors finished");
+        Ok(StreamState::Finished)
     }
 
     pub async fn step(
@@ -614,7 +620,11 @@ where
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<StreamState> {
         info!("SemiSyncMonitor work_task: Waiting for next tick...");
-        let result = futures::join!(ctx.forward_values(), Self::eval_expr_evals(expr_evals));
+        let aux_vars = ctx.aux_vars.clone();
+        let result = futures::join!(
+            ctx.forward_values(),
+            Self::eval_expr_evals(expr_evals, &aux_vars)
+        );
 
         // A bit verbose but it is nice for debugging...
         match result {
@@ -844,6 +854,7 @@ where
     spec: AC::Spec,
     // Dependencies from the specification
     deps: Box<dyn DependencyResolver<AC>>,
+    aux_vars: BTreeSet<VarName>,
 }
 
 impl<AC> SemiSyncContext<AC>
@@ -869,11 +880,13 @@ where
             );
             vm.set_history_to_retain(dep as usize);
         });
+        let aux_vars = spec.aux_vars();
         Self {
             var_managers,
             id,
             spec,
             deps,
+            aux_vars,
         }
     }
 
@@ -914,15 +927,16 @@ where
             }
         }
         managers.retain(|name, _| !to_remove.contains(name));
-        Ok(if managers.is_empty() {
-            warn!(
-                "SemiSyncContext ID: {:?}: All VarManagers finished",
-                self.id
-            );
-            StreamState::Finished
-        } else {
-            StreamState::Pending
-        })
+        // If any non-aux manager is active:
+        if managers.keys().any(|key| !self.aux_vars.contains(key)) {
+            return Ok(StreamState::Pending);
+        }
+        // Else done
+        info!(
+            "SemiSyncContext ID: {:?}: All VarManagers finished",
+            self.id
+        );
+        Ok(StreamState::Finished)
     }
 
     fn subcontext_common(&self, vs: EcoVec<VarName>) -> Self {
