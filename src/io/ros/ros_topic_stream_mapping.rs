@@ -25,7 +25,7 @@ pub enum ROSMsgType {
     Odom,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct VariableMappingData {
     pub topic: String,
     pub msg_type: ROSMsgType,
@@ -105,7 +105,7 @@ pub fn json_to_mapping(json: &str) -> Result<ROSStreamMapping, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::io::ros::ros_topic_stream_mapping::{json_to_mapping, ROSMsgType, ROSStreamMapping};
+    use crate::io::ros::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, json_to_mapping};
     use test_log::test;
 
     #[test]

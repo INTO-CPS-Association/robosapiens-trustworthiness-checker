@@ -1,7 +1,8 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use smol::LocalExecutor;
-use tracing::debug_span;
+use tracing::{debug_span, warn};
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME, Runtime};
 use crate::io::file::FileInputProvider;
@@ -120,8 +121,32 @@ impl InputProviderBuilder {
         self
     }
 
+    // CLI topics must be an exact match, i.e., all stream variables have a defined topic, and no
+    // extra topics are allowed (since this likely indicates a user error).
+    fn validate_cli_topics(
+        topics: &BTreeSet<VarName>,
+        input_vars: &BTreeSet<VarName>,
+    ) -> anyhow::Result<()> {
+        if !(topics == input_vars) {
+            let inputs_diff: BTreeSet<_> = input_vars.difference(&topics).cloned().collect();
+            let topics_diff: BTreeSet<_> = topics.difference(&input_vars).cloned().collect();
+            return Err(anyhow::anyhow!(
+                "Provided topics do not match input variables. Missing topics for variables: {:?}. Extra topics: {:?}",
+                inputs_diff,
+                topics_diff
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn async_build(self) -> Box<dyn InputProvider<Val = Value>> {
         let _async_build = debug_span!("async_build for input provider").entered();
+        let input_vars: BTreeSet<_> = self
+            .input_vars
+            .clone()
+            .expect("Input vars must be provided")
+            .into_iter()
+            .collect();
         match self.spec {
             InputProviderSpec::File(path) => {
                 let input_file_parser = match self.lang.unwrap_or(Language::DSRV) {
@@ -139,9 +164,53 @@ impl InputProviderBuilder {
                 #[cfg(feature = "ros")]
                 {
                     use crate::io::ros::input_provider::ROSInputProvider;
-                    use crate::io::ros::ros_topic_stream_mapping::json_to_mapping;
-                    let input_mapping = json_to_mapping(&_json_string)
+                    use crate::io::ros::ros_topic_stream_mapping::{
+                        VariableMappingData, json_to_mapping,
+                    };
+
+                    // ROS mapping must contain all input variables in the spec, and is allowed to
+                    // contain additional variables (but they will be ignored, with a warning).
+                    fn filter_ros_mapping(
+                        mapping: BTreeMap<String, VariableMappingData>,
+                        input_vars: &BTreeSet<VarName>,
+                    ) -> anyhow::Result<BTreeMap<String, VariableMappingData>> {
+                        let keys = mapping
+                            .keys()
+                            .map(|k| VarName::new(k))
+                            .collect::<BTreeSet<_>>();
+                        let missing_keys: Vec<_> =
+                            input_vars.difference(&keys.into()).cloned().collect();
+                        if !missing_keys.is_empty() {
+                            return Err(anyhow::anyhow!(
+                                "ROS mapping is missing topics for the following variables: {:?}",
+                                missing_keys
+                            ));
+                        }
+                        let mut ignored_mapping = BTreeMap::new();
+                        let mut used_mapping = BTreeMap::new();
+                        for (k, v) in mapping {
+                            if input_vars.contains(&VarName::new(k.as_str())) {
+                                used_mapping.insert(k, v);
+                            } else {
+                                ignored_mapping.insert(k, v);
+                            }
+                        }
+                        if ignored_mapping.len() > 0 {
+                            warn!(
+                                "Some ROS topics from mapping file are not used in the spec and will be ignored. Mapping: {:?}. Spec vars: {:?}",
+                                ignored_mapping, input_vars
+                            );
+                        }
+                        Ok(used_mapping)
+                    }
+
+                    let input_mapping_raw = json_to_mapping(&_json_string)
                         .expect("Input mapping file could not be parsed");
+                    let input_mapping: BTreeMap<_, _> =
+                        filter_ros_mapping(input_mapping_raw, &input_vars).expect(
+                            "ROS mapping file does not contain all variables from the spec",
+                        );
+
                     Box::new(
                         ROSInputProvider::new_with_replay_history(
                             self.executor.clone().expect(""),
@@ -160,7 +229,7 @@ impl InputProviderBuilder {
             // Topic, not just a list of topics (because this makes no difference compared to just
             // using --mqtt-input).
             InputProviderSpec::MQTT(topics) => {
-                let var_topics = match topics {
+                let var_topics: BTreeMap<_, _> = match topics {
                     Some(topics) => topics
                         .iter()
                         .map(|topic| (VarName::new(topic), topic.clone()))
@@ -172,6 +241,11 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
+                Self::validate_cli_topics(
+                    &var_topics.keys().cloned().collect::<BTreeSet<_>>(),
+                    &input_vars,
+                )
+                .expect("Provided MQTT topics do not match input variables");
                 let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
                     self.executor.unwrap().clone(),
                     MQTT_FACTORY,
@@ -191,7 +265,7 @@ impl InputProviderBuilder {
             // Topic, not just a list of topics (because this makes no difference compared to just
             // using --redis-input).
             InputProviderSpec::Redis(topics) => {
-                let var_topics = match topics {
+                let var_topics: BTreeMap<_, _> = match topics {
                     Some(topics) => topics
                         .iter()
                         .map(|topic| (VarName::new(topic), topic.clone()))
@@ -203,6 +277,11 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
+                Self::validate_cli_topics(
+                    &var_topics.keys().cloned().collect::<BTreeSet<_>>(),
+                    &input_vars,
+                )
+                .expect("Provided Redis topics do not match input variables");
                 let mut redis_input_provider = tc::io::redis::RedisInputProvider::new(
                     REDIS_HOSTNAME,
                     self.redis_port,

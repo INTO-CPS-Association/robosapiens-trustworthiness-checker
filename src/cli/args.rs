@@ -95,7 +95,7 @@ pub struct OutputMode {
 /// Controls how monitoring is distributed across multiple nodes.
 /// Supports centralized monitoring (default) as well as various distributed
 /// strategies including MQTT-based coordination and optimization algorithms.
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Debug)]
 #[group(required = false, multiple = false)]
 pub struct DistributionMode {
     #[clap(
@@ -200,7 +200,7 @@ impl Into<OsStr> for SchedulingType {
 /// This tool monitors system behavior against formal specifications written in DSRV,
 /// supporting both centralized and distributed monitoring modes with various input/output
 /// mechanisms including MQTT, Redis, ROS, and file-based sources.
-#[derive(Parser, Clone)]
+#[derive(Parser, Clone, Debug)]
 #[command(name = "trustworthiness-checker")]
 #[command(about = "A runtime verification tool for distributed systems")]
 #[command(

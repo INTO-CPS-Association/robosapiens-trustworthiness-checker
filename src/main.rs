@@ -55,6 +55,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let cli = Cli::from_arg_matches(&matches)
         .map_err(|e| anyhow::anyhow!(e.to_string()))
         .context("Failed to parse CLI arguments")?;
+    debug!("CLI arguments: {:?}", cli);
 
     let builder = RuntimeBuilder::new();
 
@@ -106,7 +107,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
     debug!("Building distribution mode");
     let distribution_mode = distribution_mode_builder.build().await?;
-    debug!("Distribution mode built");
+    debug!(?distribution_mode, "Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
     let model = match effective_parser {
@@ -125,7 +126,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // Localise the model to contain only the local variables (if needed)
     let model = match &builder.distribution_mode {
         DistributionMode::LocalMonitor(locality_mode) => {
-            debug!("Localising model");
+            debug!(?locality_mode, "Localising model");
             let model = model.localise(locality_mode);
             info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Localised model");
             model
