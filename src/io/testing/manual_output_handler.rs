@@ -2,7 +2,7 @@ use std::{mem, rc::Rc};
 
 use crate::utils::cancellation_token::{CancellationToken, DropGuard};
 use async_stream::stream;
-use async_unsync::{bounded, oneshot};
+use async_unsync::oneshot;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::{LocalBoxFuture, join_all};
@@ -203,102 +203,13 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
     }
 }
 
-pub struct AsyncManualOutputHandler<V: StreamData> {
-    #[allow(dead_code)]
-    executor: Rc<LocalExecutor<'static>>,
-    var_names: Vec<VarName>,
-    stream_senders: Option<Vec<oneshot::Sender<OutputStream<V>>>>,
-    stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
-    output_sender: Option<bounded::Sender<(VarName, V)>>,
-    output_receiver: Option<bounded::Receiver<(VarName, V)>>,
-}
-
-impl<V: StreamData> OutputHandler for AsyncManualOutputHandler<V> {
-    type Val = V;
-
-    fn var_names(&self) -> Vec<VarName> {
-        self.var_names.clone()
-    }
-
-    fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
-        for (stream, sender) in streams.into_iter().zip(self.stream_senders.take().unwrap()) {
-            assert!(sender.send(stream).is_ok());
-        }
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let receivers = mem::take(&mut self.stream_receivers).expect("Stream receivers not found");
-        let streams: Vec<_> = receivers
-            .into_iter()
-            .map(|mut r| r.try_recv().unwrap())
-            .collect();
-        let output_sender = mem::take(&mut self.output_sender).expect("Output sender not found");
-        let var_names = self.var_names.clone();
-
-        Box::pin(async move {
-            futures::future::join_all(
-                streams
-                    .into_iter()
-                    .zip(var_names)
-                    .map(|(stream, var_name)| {
-                        let mut stream = stream;
-                        let output_sender = output_sender.clone();
-                        async move {
-                            while let Some(data) = stream.next().await {
-                                let _ = output_sender.send((var_name.clone(), data)).await;
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .await;
-
-            Ok(())
-        })
-    }
-}
-
-impl<V: StreamData> AsyncManualOutputHandler<V> {
-    pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: Vec<VarName>) -> Self {
-        let (stream_senders, stream_receivers): (
-            Vec<oneshot::Sender<OutputStream<V>>>,
-            Vec<oneshot::Receiver<OutputStream<V>>>,
-        ) = var_names
-            .iter()
-            .map(|_| oneshot::channel().into_split())
-            .unzip();
-        let (output_sender, output_receiver) = bounded::channel(10).into_split();
-        Self {
-            executor,
-            var_names,
-            stream_senders: Some(stream_senders),
-            stream_receivers: Some(stream_receivers),
-            output_receiver: Some(output_receiver),
-            output_sender: Some(output_sender),
-        }
-    }
-
-    pub fn get_output(&mut self) -> OutputStream<(VarName, V)> {
-        let mut out = self
-            .output_receiver
-            .take()
-            .expect("Output receiver missing");
-        Box::pin(stream! {
-            while let Some(data) = out.recv().await {
-                yield data;
-            }
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::async_test;
     use std::cmp::Ordering;
-    use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{OutputStream, Value, VarName};
+    use crate::{OutputStream, Value};
     use futures::StreamExt;
     use futures::select;
     use futures::stream;
@@ -379,49 +290,6 @@ mod tests {
 
         assert_eq!(output, xy_expected);
 
-        task.await.expect("Failed to run handler");
-    }
-
-    #[apply(async_test)]
-    async fn async_test_combined_output(executor: Rc<LocalExecutor<'static>>) {
-        // Helper to create a named stream with delay
-        fn create_stream(
-            name: &str,
-            multiplier: i64,
-            offset: i64,
-        ) -> (VarName, OutputStream<Value>) {
-            let var_name = name.into();
-            // Delay to force expected ordering of the streams
-            let stream =
-                Box::pin(stream::iter(0..10).map(move |x| (multiplier * x + offset).into()));
-            (var_name, stream)
-        }
-
-        // Prepare input streams
-        let (x_name, x_stream) = create_stream("x", 2, 0);
-        let (y_name, y_stream) = create_stream("y", 2, 1);
-
-        // Prepare expected output
-        let expected_output: BTreeSet<_> = (0..10)
-            .flat_map(|x| {
-                vec![
-                    (x_name.clone(), (x * 2).into()),
-                    (y_name.clone(), (x * 2 + 1).into()),
-                ]
-            })
-            .collect();
-
-        // Initialize the handler
-        let mut handler =
-            AsyncManualOutputHandler::new(executor.clone(), vec![x_name.clone(), y_name.clone()]);
-        handler.provide_streams(vec![x_stream, y_stream].into_iter().collect::<Vec<_>>());
-
-        // Run the handler and validate output
-        let output_stream = handler.get_output();
-        let task = executor.spawn(handler.run());
-        let results = output_stream.collect::<BTreeSet<_>>().await;
-
-        assert_eq!(results, expected_output);
         task.await.expect("Failed to run handler");
     }
 
