@@ -1,0 +1,18 @@
+{
+    "x": {
+        "topic": "/x",
+        "msg_type": "Int32"
+    },
+    "y": {
+        "topic": "/y",
+        "msg_type": "Int32"
+    },
+    "z": {
+        "topic": "/z",
+        "msg_type": "Int32"
+    },
+    "c": {
+        "topic": "/c",
+        "msg_type": "Bool"
+    }
+}

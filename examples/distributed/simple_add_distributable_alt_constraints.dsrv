@@ -1,0 +1,18 @@
+in x
+in y
+in z
+in c
+out w
+out v
+out distW
+out distV
+
+w = x + y
+v = z + w
+
+distW = if c
+        then monitored_at(w, A)
+        else monitored_at(w, B)
+distV = if c
+        then monitored_at(v, B)
+        else monitored_at(v, A)

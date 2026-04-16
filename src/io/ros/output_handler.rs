@@ -339,8 +339,13 @@ impl ROSOutputHandler {
                     );
                     Either::Left(await_stream(stream))
                 } else {
-                    let topic_name = topic_name
-                        .expect("topic_name must be provided for non-auxiliary variables");
+                    let topic_name = topic_name.expect(
+                        format!(
+                            "topic_name must be provided for non-auxiliary variable {}",
+                            var_name,
+                        )
+                        .as_str(),
+                    );
                     let msg_type =
                         msg_type.expect("msg_type must be provided for non-auxiliary variables");
                     let publisher = create_value_publisher(&mut node, &topic_name, &msg_type)

@@ -1,0 +1,14 @@
+in x
+in y
+in z
+in c
+out w
+out v
+out distW
+out distV
+
+w = x + y
+v = z + w
+
+distW = monitored_at(w, A)
+distV = monitored_at(v, B)

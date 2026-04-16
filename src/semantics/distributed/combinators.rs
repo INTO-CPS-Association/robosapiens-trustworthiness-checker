@@ -21,7 +21,7 @@ where
 
     Box::pin(stream! {
         while let Some(graph) = graph_stream.next().await {
-            let idx = graph.get_node_index_by_name(&node_name).expect("Label not inside graph");
+            let idx = graph.get_node_index_by_name(&node_name).expect(format!("Label not inside graph {}", node_name).as_str());
             let res = graph.node_labels
                 .get(&idx)
                 .is_some_and(|vec| vec.iter().any(|name| *name == var_name));
@@ -59,8 +59,8 @@ mod tests {
 
     use super::*;
     use crate::async_test;
-    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::dsrv_fixtures::TestDistConfig;
+    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{

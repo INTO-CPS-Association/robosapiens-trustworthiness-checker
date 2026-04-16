@@ -1,13 +1,13 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use async_trait::async_trait;
-use futures::{future::LocalBoxFuture, join};
+use futures::{StreamExt, future::LocalBoxFuture, join};
 use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
     InputProvider, Monitor, Specification, Value, VarName,
-    core::{AbstractMonitorBuilder, OutputHandler, Runnable, to_typed_stream},
+    core::{AbstractMonitorBuilder, OutputHandler, Runnable},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         scheduling::{
@@ -746,7 +746,13 @@ where
                 scheduler_ref.provide_dist_constraints_streams(
                     dist_constraints_for_callback
                         .iter()
-                        .map(|x| to_typed_stream(ctx.var(x).unwrap()))
+                        .map(|x| {
+                            let stream = ctx.var(x).unwrap();
+                            Box::pin(stream.map(|v| match v {
+                                Value::Bool(b) => b,
+                                _ => false,
+                            })) as crate::OutputStream<bool>
+                        })
                         .collect(),
                 )
             }));

@@ -1,7 +1,9 @@
 in x
 in y
 in z
+in c
 out w
 out v
+
 w = x + y
 v = z + w
