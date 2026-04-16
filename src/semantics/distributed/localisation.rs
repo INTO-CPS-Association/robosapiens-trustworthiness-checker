@@ -210,6 +210,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_localise_spec_with_aux() {
+        // Tests that localisation correctly handles auxiliary variables
+        // Note that these must be specified similarly to output variables
+        let spec = dsrv_specification
+            .parse(
+                "   in x
+                    in y
+                    in z
+                    out w
+                    out v
+                    aux tmp
+                    w = x + y
+                    tmp = z + w
+                    v = tmp",
+            )
+            .expect("Failed to parse specification");
+
+        let local_spec1 = spec.localise(&vec!["w".into()]);
+        let local_spec2 = spec.localise(&vec!["v".into(), "tmp".into()]);
+
+        assert_eq!(
+            local_spec1,
+            DsrvSpecification::new(
+                vec!["x".into(), "y".into()],
+                vec!["w".into()],
+                vec![(
+                    "w".into(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var("x".into())),
+                        Box::new(SExpr::Var("y".into())),
+                        "+".into()
+                    )
+                )]
+                .into_iter()
+                .collect(),
+                BTreeMap::new(),
+                vec![],
+            )
+        );
+
+        assert_eq!(
+            local_spec2,
+            DsrvSpecification::new(
+                vec!["z".into(), "w".into()],
+                vec!["v".into(), "tmp".into()],
+                vec![
+                    (
+                        "tmp".into(),
+                        SExpr::BinOp(
+                            Box::new(SExpr::Var("z".into())),
+                            Box::new(SExpr::Var("w".into())),
+                            "+".into(),
+                        ),
+                    ),
+                    ("v".into(), SExpr::Var("tmp".into())),
+                ]
+                .into_iter()
+                .collect(),
+                BTreeMap::new(),
+                vec!["tmp".into()],
+            )
+        );
+    }
+
     proptest! {
         #[test]
         fn test_localise_specification_prop(
