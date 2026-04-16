@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use smol::LocalExecutor;
-use tracing::{debug_span, warn};
+use tracing::debug_span;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME, Runtime};
 use crate::io::file::FileInputProvider;
@@ -167,6 +167,7 @@ impl InputProviderBuilder {
                     use crate::io::ros::ros_topic_stream_mapping::{
                         VariableMappingData, json_to_mapping,
                     };
+                    use tracing::warn;
 
                     // ROS mapping must contain all input variables in the spec, and is allowed to
                     // contain additional variables (but they will be ignored, with a warning).
