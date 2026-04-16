@@ -100,26 +100,13 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             mem::take(&mut self.stream_receivers).expect("Stream receivers already taken");
 
         debug!(num_streams = receivers.len(), "Running ManualOutputHandler");
-        // Create a list of streams for each of the receivers or an error
-        // if this is not possible
+        // Create a list of streams for each of the receivers or an error (short-circuits if any
+        // of the receivers fails)
         // (Should always be possible if `provide_streams` was called)
-        let streams: anyhow::Result<Vec<_>> =
-            receivers
-                .into_iter()
-                .map(|mut r| r.try_recv())
-                .fold(Ok(Vec::new()), |mut acc, res| {
-                    acc = match acc {
-                        Ok(mut acc) => match res {
-                            Ok(x) => {
-                                acc.push(x);
-                                Ok(acc)
-                            }
-                            Err(e) => Err(anyhow::anyhow!(e)),
-                        },
-                        Err(e) => Err(e),
-                    };
-                    acc
-                });
+        let streams: anyhow::Result<Vec<_>> = receivers
+            .into_iter()
+            .map(|mut r| r.try_recv().map_err(anyhow::Error::from))
+            .collect();
 
         let (result_tx, result_rx) = oneshot::channel().into_split();
         let output_cancellation = self.output_cancellation.clone();
