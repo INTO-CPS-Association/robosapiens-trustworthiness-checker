@@ -3,6 +3,7 @@ use ecow::{EcoString, EcoVec};
 use crate::core::{Specification, StreamTypeAscription, VarName};
 use crate::core::{StreamType, Value};
 use crate::distributed::distribution_graphs::NodeName;
+use std::collections::BTreeSet;
 use std::fmt::Error;
 use std::{
     collections::BTreeMap,
@@ -495,6 +496,10 @@ impl Specification for DsrvSpecification {
 
     fn output_vars(&self) -> Vec<VarName> {
         self.output_vars.clone()
+    }
+
+    fn aux_vars(&self) -> BTreeSet<VarName> {
+        self.aux_info.iter().cloned().collect()
     }
 
     fn var_expr(&self, var: &VarName) -> Option<SExpr> {

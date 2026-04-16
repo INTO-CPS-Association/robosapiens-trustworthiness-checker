@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::{collections::BTreeMap, fmt::Debug};
 use strum_macros::Display;
@@ -63,6 +64,8 @@ pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     fn input_vars(&self) -> Vec<VarName>;
 
     fn output_vars(&self) -> Vec<VarName>;
+
+    fn aux_vars(&self) -> BTreeSet<VarName>;
 
     fn var_names(&self) -> Vec<VarName> {
         self.input_vars()
