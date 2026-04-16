@@ -132,13 +132,17 @@ impl OutputHandlerBuilder {
                     fn filter_ros_mapping(
                         mapping: BTreeMap<String, VariableMappingData>,
                         output_vars: &BTreeSet<VarName>,
+                        aux_info: BTreeSet<VarName>,
                     ) -> anyhow::Result<BTreeMap<String, VariableMappingData>> {
                         let keys = mapping
                             .keys()
                             .map(|k| VarName::new(k))
                             .collect::<BTreeSet<_>>();
-                        let missing_keys: Vec<_> =
-                            output_vars.difference(&keys.into()).cloned().collect();
+                        let missing_keys: Vec<_> = output_vars
+                            .difference(&keys.into())
+                            .filter(|var| !aux_info.contains(*var))
+                            .cloned()
+                            .collect();
                         if !missing_keys.is_empty() {
                             return Err(anyhow::anyhow!(
                                 "ROS mapping is missing topics for the following variables: {:?}",
@@ -156,8 +160,9 @@ impl OutputHandlerBuilder {
                         }
                         if ignored_mapping.len() > 0 {
                             warn!(
-                                "Some ROS topics from mapping file are not used in the spec and will be ignored. Mapping: {:?}. Spec vars: {:?}",
-                                ignored_mapping, output_vars
+                                "Some ROS topics from output mapping file are not used in the spec and will be ignored:\nIgnored map vars: {:?}.\nUsing output vars: {:?}",
+                                ignored_mapping.keys(),
+                                output_vars
                             );
                         }
                         Ok(used_mapping)
@@ -165,10 +170,12 @@ impl OutputHandlerBuilder {
 
                     let output_mapping_raw = json_to_mapping(&_json_string)
                         .expect("Output mapping file could not be parsed");
-                    let output_mapping: BTreeMap<_, _> =
-                        filter_ros_mapping(output_mapping_raw, &output_vars).expect(
-                            "ROS mapping file does not contain all variables from the spec",
-                        );
+                    let output_mapping: BTreeMap<_, _> = filter_ros_mapping(
+                        output_mapping_raw,
+                        &output_vars,
+                        aux_info.clone().into_iter().collect(),
+                    )
+                    .expect("ROS mapping file does not contain all variables from the spec");
                     // TODO: OutputHandler should not need both output_vars and
                     // output_mapping, since the mapping already contains the exact variable names.
                     Box::new(

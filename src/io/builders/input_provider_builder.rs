@@ -198,8 +198,9 @@ impl InputProviderBuilder {
                         }
                         if ignored_mapping.len() > 0 {
                             warn!(
-                                "Some ROS topics from mapping file are not used in the spec and will be ignored. Mapping: {:?}. Spec vars: {:?}",
-                                ignored_mapping, input_vars
+                                "Some ROS topics from input mapping file are not used in the spec and will be ignored:\nIgnored map vars: {:?}.\nUsing input vars: {:?}",
+                                ignored_mapping.keys(),
+                                input_vars
                             );
                         }
                         Ok(used_mapping)
