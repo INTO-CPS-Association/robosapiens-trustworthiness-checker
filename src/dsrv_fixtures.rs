@@ -216,6 +216,13 @@ pub fn spec_typed_dynamic_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_sindex() -> &'static str {
+    "in x\n\
+     out z\n\
+     z = x[1]"
+}
+
+#[allow(dead_code)]
 pub fn spec_count_monitor() -> &'static str {
     "out x\n\
      x = 1 + default(x[1], 0)"
