@@ -116,6 +116,7 @@ where
 
 pub struct DistAsyncMonitorBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub async_monitor_builder: AsyncMonitorBuilder<AC, S>,
+    var_msg_types: Option<BTreeMap<VarName, String>>,
     input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     pub context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
@@ -214,6 +215,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncMonitorBuilder<AC, S>
             context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
             dist_graph_mode: self.dist_graph_mode.as_ref().map(|b| b.clone()),
             scheduler_mode: self.scheduler_mode.as_ref().map(|b| b.clone()),
+            var_msg_types: self.var_msg_types.as_ref().cloned(),
             input: None,
         }
     }
@@ -261,6 +263,7 @@ where
     fn new() -> Self {
         DistAsyncMonitorBuilder {
             async_monitor_builder: AsyncMonitorBuilder::new(),
+            var_msg_types: None,
             context_builder: None,
             dist_graph_mode: None,
             input: None,
@@ -283,6 +286,11 @@ where
         self
     }
 
+    fn var_msg_types(mut self, var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self.var_msg_types = Some(var_msg_types);
+        self
+    }
+
     fn output(mut self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
         debug!("Setting output handler");
         self.async_monitor_builder = self.async_monitor_builder.output(output);
@@ -301,6 +309,11 @@ where
             .as_ref()
             .expect("Specification expected to be present")
             .clone();
+        let var_msg_types = self
+            .var_msg_types
+            .as_ref()
+            .cloned()
+            .expect("Variable message types not set");
         let executor = self
             .async_monitor_builder
             .executor
@@ -727,6 +740,7 @@ where
         };
         let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
             spec.clone(),
+            var_msg_types,
             planner,
             scheduler_communicator,
             dist_graph_provider,

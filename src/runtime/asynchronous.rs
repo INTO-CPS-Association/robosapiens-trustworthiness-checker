@@ -1019,6 +1019,10 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
         }
     }
 
+    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self
+    }
+
     fn build(self) -> Self::Mon {
         debug!("AsyncMonitorBuilder: Starting build process");
         let executor = self.executor.expect("Executor not supplied");

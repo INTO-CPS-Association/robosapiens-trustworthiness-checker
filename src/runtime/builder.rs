@@ -1,5 +1,5 @@
-use std::fmt::Debug;
 use std::rc::Rc;
+use std::{collections::BTreeMap, fmt::Debug};
 
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
@@ -68,6 +68,11 @@ pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
         output: Box<dyn OutputHandler<Val = V>>,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
+    fn maybe_var_msg_types(
+        self: Box<Self>,
+        var_msg_types: Option<BTreeMap<VarName, String>>,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+
     fn build(self: Box<Self>) -> Box<dyn Runnable>;
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>>;
@@ -114,12 +119,25 @@ impl<
         Box::new(MonBuilder::output(*self, output))
     }
 
+    fn maybe_var_msg_types(
+        self: Box<Self>,
+        var_msg_types: Option<BTreeMap<VarName, String>>,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+        match var_msg_types {
+            Some(map) => Box::new(MonBuilder::var_msg_types(*self, map)),
+            None => self,
+        }
+    }
+
     fn build(self: Box<Self>) -> Box<dyn Runnable> {
         Box::new(MonBuilder::build(*self))
     }
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>> {
-        Box::pin(async move { Box::new(MonBuilder::async_build(self).await) as Box<dyn Runnable> })
+        Box::pin(async move {
+            let mon = <MonBuilder as AbstractMonitorBuilder<M, V>>::async_build(self).await;
+            Box::new(mon) as Box<dyn Runnable>
+        })
     }
 }
 
@@ -152,6 +170,10 @@ impl<
 
     fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
         Self(self.0.output(output))
+    }
+
+    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self
     }
 
     fn build(self) -> Self::Mon {
@@ -307,6 +329,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub scheduler_mode: SchedulerCommunication,
     pub parser: ParserMode,
     pub reconf_topic: String,
+    pub var_msg_types: Option<BTreeMap<VarName, String>>,
 }
 
 impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
@@ -367,6 +390,20 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         Self { parser, ..self }
     }
 
+    pub fn var_msg_types(self, var_msg_types: BTreeMap<VarName, String>) -> Self {
+        Self {
+            var_msg_types: Some(var_msg_types),
+            ..self
+        }
+    }
+
+    pub fn maybe_var_msg_types(self, var_msg_types: Option<BTreeMap<VarName, String>>) -> Self {
+        match var_msg_types {
+            Some(var_msg_types) => self.var_msg_types(var_msg_types),
+            None => self,
+        }
+    }
+
     pub fn reconf_topic(self, reconf_topic: String) -> Self {
         Self {
             reconf_topic,
@@ -394,6 +431,7 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
             distribution_mode_builder: None,
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
+            var_msg_types: None,
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
@@ -426,6 +464,10 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
             output: Some(output),
             ..self
         }
+    }
+
+    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self
     }
 
     fn build(self) -> Self::Mon {
@@ -713,6 +755,7 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
             }
         };
 
+        let builder = builder.maybe_var_msg_types(self.var_msg_types);
         builder.async_build().await
     }
 }

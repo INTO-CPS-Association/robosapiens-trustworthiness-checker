@@ -145,6 +145,19 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
         }
     }
 
+    fn var_msg_types(self, var_mapping: BTreeMap<VarName, String>) -> Self;
+
+    fn maybe_var_msg_types(self, var_mapping: Option<BTreeMap<VarName, String>>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(var_mapping) = var_mapping {
+            self.var_msg_types(var_mapping)
+        } else {
+            self
+        }
+    }
+
     fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
 
     fn maybe_output(self, output: Option<Box<dyn OutputHandler<Val = V>>>) -> Self

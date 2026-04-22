@@ -1,16 +1,17 @@
 use clap::Parser;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use tracing::{info, instrument};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
 use trustworthiness_checker::distributed::scheduling::communication::NullSchedulerCommunicator;
 use trustworthiness_checker::distributed::scheduling::planners::core::StaticFixedSchedulerPlanner;
 use trustworthiness_checker::distributed::scheduling::{ReplanningCondition, Scheduler};
 use trustworthiness_checker::io::mqtt::dist_graph_provider::StaticDistGraphProvider;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
+use trustworthiness_checker::{DsrvSpecification, Specification};
 
 /// Worker scheduler application for distributed monitoring
 ///
@@ -75,6 +76,15 @@ async fn async_main() -> anyhow::Result<()> {
     // TODO: Switch to ROS communicator when implemented
     let communicator = Box::new(NullSchedulerCommunicator {});
 
+    // Mock types for scheduler communicator
+    // TODO: for ROS should be loaded from the commandline, otherwise should be ignored
+    let types = spec.var_names().into_iter().map(|_| "Int32".into());
+    let var_msg_types = spec
+        .var_names()
+        .into_iter()
+        .zip(types)
+        .collect::<BTreeMap<_, _>>();
+
     info!("Distribution graph loaded, scheduling work...");
 
     let planner = Box::new(StaticFixedSchedulerPlanner {
@@ -86,6 +96,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Run the static work scheduler
     let scheduler: Scheduler<DsrvSpecification> = Scheduler::new(
         spec,
+        var_msg_types,
         planner,
         communicator,
         dist_graph_provider,

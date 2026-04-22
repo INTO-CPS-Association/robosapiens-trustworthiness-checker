@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 // #![deny(warnings)]
@@ -8,6 +9,7 @@ use tracing::{debug, info};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
+use trustworthiness_checker::VarName;
 use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
 use trustworthiness_checker::io::InputProviderBuilder;
@@ -20,7 +22,7 @@ use trustworthiness_checker::{self as tc, io::file::parse_file};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
-use trustworthiness_checker::cli::args::{Cli, Language, ParserMode};
+use trustworthiness_checker::cli::args::{Cli, Language, OutputMode, ParserMode};
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -99,11 +101,12 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = builder.scheduler_mode(cli.scheduler_communication());
 
     debug!("Choosing distribution mode");
+    let dist_constraints = cli.distribution_constraints;
     let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode)
         .maybe_mqtt_port(mqtt_port)
         .maybe_local_node(cli.local_node)
         .runtime(cli.runtime)
-        .maybe_dist_constraints(cli.distribution_constraints)
+        .maybe_dist_constraints(dist_constraints.clone())
         .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
     debug!("Building distribution mode");
     let distribution_mode = distribution_mode_builder.build().await?;
@@ -134,12 +137,22 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         _ => model,
     };
 
-    let output_var_names = model.output_vars.clone();
+    // Filtered output variable names excluding distribution constraints
+    let output_var_names = model
+        .output_vars
+        .iter()
+        .filter(|&var_name| {
+            !dist_constraints
+                .clone()
+                .map_or(false, |c| c.contains(&var_name.into()))
+        })
+        .cloned()
+        .collect();
     let aux_info = model.aux_info.clone();
     let builder = builder.model(model.clone());
 
     // Create the input provider builder
-    let input_provider_builder = InputProviderBuilder::new(cli.input_mode)
+    let input_provider_builder = InputProviderBuilder::new(cli.input_mode.clone())
         .executor(executor.clone())
         .model(model)
         .lang(cli.language)
@@ -149,12 +162,63 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = builder.input_provider_builder(input_provider_builder);
 
     // Create the output handler
-    let output_handler_builder = OutputHandlerBuilder::new(cli.output_mode)
+    let output_handler_builder = OutputHandlerBuilder::new(cli.output_mode.clone())
         .executor(executor.clone())
         .output_var_names(output_var_names)
         .mqtt_port(mqtt_port)
         .redis_port(redis_port)
         .aux_info(aux_info);
+
+    // Get variable message types mapping
+    let var_msg_types: Option<BTreeMap<VarName, String>> = match &cli.output_mode {
+        OutputMode {
+            output_ros_file: Some(output_ros_file),
+            ..
+        } => {
+            // TODO: use cfg-if feature in next Rust version instead of this
+            // more verbose syntax
+            #[cfg(feature = "ros")]
+            {
+                // TODO: refactor to avoid reading the file twice (not done
+                // currently as this would couple the output handler building
+                // and the runtime building)
+
+                use trustworthiness_checker::io::ros::json_to_mapping;
+                use trustworthiness_checker::io::ros::ros_topic_stream_mapping::ros_variable_map_to_string_variable_map;
+
+                let output_json = std::fs::read_to_string(output_ros_file)
+                    .expect("Output mapping file could not be read");
+                let output_mapping =
+                    json_to_mapping(&output_json).expect("Output mapping file could not be parsed");
+                let output_mapping = ros_variable_map_to_string_variable_map(output_mapping)
+                    .expect(
+                        "ROS output topic mapping could not be converted to string variable map",
+                    );
+
+                let input_mapping = match &cli.input_mode.input_ros_file {
+                    Some(input_ros_file) => {
+                        let input_json = std::fs::read_to_string(input_ros_file)
+                            .expect("Input mapping file could not be read");
+                        let input_mapping = json_to_mapping(&input_json)
+                            .expect("Input mapping file could not be parsed");
+                        ros_variable_map_to_string_variable_map(input_mapping).expect(
+                            "ROS input topic mapping could not be converted to string variable map",
+                        )
+                    }
+                    None => BTreeMap::new(),
+                };
+
+                let merged_mapping = input_mapping.into_iter().chain(output_mapping).collect();
+                Some(merged_mapping)
+            }
+            #[cfg(not(feature = "ros"))]
+            {
+                unimplemented!("Attempted to set a ROS topic mapping when ROS support not enabled")
+            }
+        }
+        _ => None,
+    };
+    let builder = builder.maybe_var_msg_types(var_msg_types);
 
     let builder = builder.output_handler_builder(output_handler_builder);
 

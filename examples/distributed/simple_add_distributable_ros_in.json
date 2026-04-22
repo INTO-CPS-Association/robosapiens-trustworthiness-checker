@@ -11,6 +11,14 @@
         "topic": "/z",
         "msg_type": "Int32"
     },
+    "w": {
+        "topic": "/w",
+        "msg_type": "Int32"
+    },
+    "v": {
+        "topic": "/v",
+        "msg_type": "Int32"
+    },
     "c": {
         "topic": "/c",
         "msg_type": "Bool"

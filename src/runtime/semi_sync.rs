@@ -91,6 +91,10 @@ where
         }
     }
 
+    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self
+    }
+
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
         Box::pin(async move { (*self).build() })
     }

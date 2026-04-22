@@ -165,6 +165,10 @@ where
             }
         })
     }
+
+    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self
+    }
 }
 
 impl<AC, MS, P> ReconfSemiSyncMonitorBuilder<AC, MS, P>
@@ -458,7 +462,7 @@ where
                             .collect();
                         if !missing.is_empty() {
                             return Err(anyhow!(
-                                "Missing msg_types for vars: {:?}. Required for ROS2 InputProvider",
+                                "Missing msg_types for vars: {:?}. Required for ROS2 OutputHandler",
                                 missing
                             ));
                         }

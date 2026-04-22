@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JValue;
 use tracing::debug;
 
+use crate::VarName;
+
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone)]
 pub enum ROSMsgType {
     Bool,
@@ -52,6 +54,40 @@ pub fn string_to_ros_msg_type(typ: &str) -> Result<ROSMsgType, anyhow::Error> {
         "Odom" => Ok(ROSMsgType::Odom),
         typ => Err(anyhow!("Unsupported type {}", typ)),
     }
+}
+
+pub fn ros_msg_type_to_string(typ: ROSMsgType) -> Result<String, anyhow::Error> {
+    match typ {
+        ROSMsgType::Bool => Ok("Bool".to_string()),
+        ROSMsgType::String => Ok("String".to_string()),
+        ROSMsgType::Int64 => Ok("Int64".to_string()),
+        ROSMsgType::Int32 => Ok("Int32".to_string()),
+        ROSMsgType::Int32List => Ok("Int32List".to_string()),
+        ROSMsgType::Int16 => Ok("Int16".to_string()),
+        ROSMsgType::Int8 => Ok("Int8".to_string()),
+        ROSMsgType::Float64 => Ok("Float64".to_string()),
+        ROSMsgType::Float32 => Ok("Float32".to_string()),
+        ROSMsgType::HumanModelPart => Ok("HumanModelPart".to_string()),
+        ROSMsgType::HumanModel => Ok("HumanModel".to_string()),
+        ROSMsgType::HumanModelList => Ok("HumanModelList".to_string()),
+        ROSMsgType::RVData => Ok("RVData".to_string()),
+        ROSMsgType::RVDataArray => Ok("RVDataArray".to_string()),
+        ROSMsgType::Odom => Ok("Odom".to_string()),
+    }
+}
+
+pub fn ros_variable_map_to_string_variable_map(
+    map: ROSStreamMapping,
+) -> Result<BTreeMap<VarName, String>, anyhow::Error> {
+    map.into_iter()
+        .map(
+            |(var_name_str, VariableMappingData { topic: _, msg_type })| {
+                let var_name = var_name_str.try_into()?;
+                let typ_str = ros_msg_type_to_string(msg_type)?;
+                Ok((var_name, typ_str))
+            },
+        )
+        .collect()
 }
 
 pub fn json_to_mapping(json: &str) -> Result<ROSStreamMapping, anyhow::Error> {

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, mem, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, mem, rc::Rc};
 
 use async_stream::stream;
 use futures::{StreamExt, future::join_all};
@@ -6,7 +6,7 @@ use tracing::{error, info};
 use unsync::broadcast;
 
 use crate::{
-    OutputStream, Specification,
+    OutputStream, Specification, VarName,
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, graph_to_png,
     },
@@ -40,6 +40,7 @@ pub struct Scheduler<M: Specification + Localisable> {
 impl<M: Specification + Localisable> Scheduler<M> {
     pub fn new(
         spec: M,
+        var_msg_types: BTreeMap<VarName, String>,
         planner: Box<dyn SchedulerPlanner>,
         communicator: Box<dyn SchedulerCommunicator<M>>,
         dist_graph_provider: Box<dyn DistGraphProvider>,
@@ -47,7 +48,7 @@ impl<M: Specification + Localisable> Scheduler<M> {
         suppress_output: bool,
     ) -> Self {
         let mut tx = broadcast::channel(10);
-        let scheduler_executor = SchedulerExecutor::new(spec, communicator);
+        let scheduler_executor = SchedulerExecutor::new(spec, var_msg_types, communicator);
         let mut rx_output = tx.subscribe();
         let dist_graph_output_stream: Option<LabelledDistGraphStream> = Some(Box::pin(stream! {
             while let Some(x) = rx_output.recv().await {

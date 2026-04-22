@@ -55,8 +55,13 @@ fn ros_value_sender(
     // TODO: check that this is the correct profile
     let qos = r2r::QosProfile::default();
     debug!("Created ROS publisher node 'tc_ros_output'");
+    let normalized_topic_name = if topic_name.starts_with('/') {
+        topic_name.clone()
+    } else {
+        format!("/{}", topic_name)
+    };
     let publisher = node
-        .create_publisher::<r2r::std_msgs::msg::String>(topic_name.as_str(), qos)
+        .create_publisher::<r2r::std_msgs::msg::String>(normalized_topic_name.as_str(), qos)
         .map_err(|e| anyhow::anyhow!("Failed to create ROS publisher: {:?}", e))?;
 
     Ok(Box::pin(async move {
@@ -70,7 +75,7 @@ fn ros_value_sender(
                 value = futures::FutureExt::fuse(work_rx.recv()) => {
                     match value {
                         Some(value) => {
-                            info!("Received request to send reconf message {value} for topic {topic_name}");
+                            info!("Received request to send reconf message {} for topic {}", value, normalized_topic_name);
                             let msg = r2r::std_msgs::msg::String { data: value.to_string() };
                             publisher.publish(&msg)
                                 .map_err(|e| anyhow::anyhow!("Failed to publish reconf message: {:?}", e))?;
@@ -105,7 +110,11 @@ impl RosSchedulerCommunicator {
             .unzip();
 
         for (node_name, work_rx) in node_names.iter().cloned().zip(work_rxs.into_iter()) {
-            let topic_name = format!("{}_{}", reconf_base_topic, node_name);
+            let topic_name = format!(
+                "{}_{}",
+                reconf_base_topic.trim_start_matches('/'),
+                node_name
+            );
             executor
                 .spawn(ros_value_sender(
                     &mut node,
@@ -143,7 +152,10 @@ impl<M: Specification> SchedulerCommunicator<M> for RosSchedulerCommunicator {
             .work_txs
             .get(&node)
             .ok_or_else(|| anyhow::anyhow!("Node not found: {node}"))?;
-        info!("sending reconfig message for node {node}");
+        info!(
+            "sending reconfig message for node {} with payload {}",
+            node, work
+        );
         tx.send(work).await?;
         Ok(())
     }
