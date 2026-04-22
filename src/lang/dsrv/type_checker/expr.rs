@@ -320,7 +320,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
                     _ if ty1 == ty2 => (ste1, ste2, ty1),
                     _ => {
                         errs.push(SemanticError::type_error(TypeErrorKind::OperatorTypeMismatch, format!(
-                            "Cannot apply comparison {:?} to expressions of different types: {:?} and {:?}",
+                            "Cannot apply comparison {:?} to expressions of different types: {} and {}",
                             op, ty1, ty2
                         )));
                         return Err(());
@@ -332,10 +332,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
                 if *op != CompBinOp::Eq && !ordering_ok {
                     errs.push(SemanticError::type_error(
                         TypeErrorKind::OperatorTypeMismatch,
-                        format!(
-                            "Cannot apply ordering comparison {:?} to type {:?}",
-                            op, ty1
-                        ),
+                        format!("Cannot apply ordering comparison {:?} to type {}", op, ty1),
                     ));
                     return Err(());
                 }
@@ -351,8 +348,10 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
                 errs.push(SemanticError::type_error(
                     TypeErrorKind::OperatorTypeMismatch,
                     format!(
-                        "Cannot apply binary function {:?} to expressions of type {:?} and {:?}",
-                        op, ste1, ste2
+                        "Cannot apply binary function {} to expressions of type {} and {}",
+                        op,
+                        ste1.display_with_type(),
+                        ste2.display_with_type()
                     ),
                 ));
                 Err(())
@@ -409,7 +408,7 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr) {
                                 errs.push(SemanticError::type_error(
                                     TypeErrorKind::DefaultTypeMismatch,
                                     format!(
-                                        "Cannot create default-expression with two different list types: {:?} and {:?}",
+                                        "Cannot create default-expression with two different list types: {} and {}",
                                         t1, t2
                                     ),
                                 ));
@@ -430,7 +429,7 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr) {
                                 errs.push(SemanticError::type_error(
                                     TypeErrorKind::DefaultTypeMismatch,
                                     format!(
-                                        "Cannot create default-expression with two different map types: {:?} and {:?}",
+                                        "Cannot create default-expression with two different map types: {} and {}",
                                         t1, t2
                                     ),
                                 ));
@@ -447,7 +446,7 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr) {
                             errs.push(SemanticError::type_error(
                                 TypeErrorKind::DefaultTypeMismatch,
                                 format!(
-                                    "Cannot create default-expression with two different struct types: {:?} and {:?}",
+                                    "Cannot create default-expression with two different struct types: {} and {}",
                                     t1, t2
                                 ),
                             ));
@@ -458,8 +457,9 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr) {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::DefaultTypeMismatch,
                             format!(
-                                "Cannot create default-expression with two different types: {:?} and {:?}",
-                                stenum1, stenum2
+                                "Cannot create default-expression with two different types: {} and {}",
+                                stenum1.display_with_type(),
+                                stenum2.display_with_type()
                             ),
                         ));
                         Err(())
@@ -529,7 +529,7 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr, &SpannedExpr)
                                 errs.push(SemanticError::type_error(
                                     TypeErrorKind::IfBranchTypeMismatch,
                                     format!(
-                                        "Cannot create if-expression with two different list types: {:?} and {:?}",
+                                        "Cannot create if-expression with two different list types: {} and {}",
                                         t1, t2
                                     ),
                                 ));
@@ -550,7 +550,7 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr, &SpannedExpr)
                                 errs.push(SemanticError::type_error(
                                     TypeErrorKind::IfBranchTypeMismatch,
                                     format!(
-                                        "Cannot create if-expression with two different map types: {:?} and {:?}",
+                                        "Cannot create if-expression with two different map types: {} and {}",
                                         t1, t2
                                     ),
                                 ));
@@ -567,7 +567,7 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr, &SpannedExpr)
                             errs.push(SemanticError::type_error(
                                 TypeErrorKind::IfBranchTypeMismatch,
                                 format!(
-                                    "Cannot create if-expression with two different struct types: {:?} and {:?}",
+                                    "Cannot create if-expression with two different struct types: {} and {}",
                                     t1, t2
                                 ),
                             ));
@@ -578,8 +578,9 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, &SpannedExpr, &SpannedExpr)
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::IfBranchTypeMismatch,
                             format!(
-                                "Cannot create if-expression with two different types: {:?} and {:?}",
-                                stenum1, stenum2
+                                "Cannot create if-expression with two different types: {} and {}",
+                                stenum1.display_with_type(),
+                                stenum2.display_with_type()
                             ),
                         ));
                         Err(())
@@ -671,7 +672,7 @@ impl TypeCheckableHelper<SExprTE> for VarName {
             },
             None => {
                 errs.push(SemanticError::UndeclaredVariable(
-                    format!("Usage of undeclared variable: {:?}", self),
+                    format!("Usage of undeclared variable: {}", self),
                     None,
                 ));
                 Err(())
@@ -749,7 +750,7 @@ where
             errs.push(SemanticError::type_error(
                 TypeErrorKind::StructFieldTypeMismatch,
                 format!(
-                    "Struct field {:?} has type {:?}, expected {:?}",
+                    "Struct field {:?} has type {}, expected {}",
                     field, actual, expected
                 ),
             ));
@@ -891,7 +892,7 @@ where
             errs.push(SemanticError::type_error(
                 TypeErrorKind::MapValueTypeMismatch,
                 format!(
-                    "Map value type mismatch: expected {:?} (from first value), got {:?}",
+                    "Map value type mismatch: expected {} (from first value), got {}",
                     first_type, value_type
                 ),
             ));
@@ -1027,7 +1028,7 @@ fn typed_struct_get(
             errs.push(SemanticError::type_error(
                 TypeErrorKind::StructUnresolvedFieldType,
                 format!(
-                    "Struct field {:?} has unresolved field type {:?}",
+                    "Struct field {:?} has unresolved field type {}",
                     key, field_type
                 ),
             ));
@@ -1135,7 +1136,7 @@ fn type_check_same_typed_stream_op(
                     errs.push(SemanticError::type_error(
                         TypeErrorKind::ListElementTypeMismatch,
                         format!(
-                            "Stream operation requires matching list types, got {:?} and {:?}",
+                            "Stream operation requires matching list types, got {} and {}",
                             t1, t2
                         ),
                     ));
@@ -1159,7 +1160,7 @@ fn type_check_same_typed_stream_op(
                     errs.push(SemanticError::type_error(
                         TypeErrorKind::MapValueTypeMismatch,
                         format!(
-                            "Stream operation requires matching map types, got {:?} and {:?}",
+                            "Stream operation requires matching map types, got {} and {}",
                             t1, t2
                         ),
                     ));
@@ -1179,7 +1180,7 @@ fn type_check_same_typed_stream_op(
                 errs.push(SemanticError::type_error(
                     TypeErrorKind::StructOperationTypeMismatch,
                     format!(
-                        "Stream operation requires matching struct types, got {:?} and {:?}",
+                        "Stream operation requires matching struct types, got {} and {}",
                         t1, t2
                     ),
                 ));
@@ -1187,10 +1188,14 @@ fn type_check_same_typed_stream_op(
             }
         }
         (a, b) => {
-            errs.push(SemanticError::type_error(TypeErrorKind::OperatorTypeMismatch, format!(
-                "Stream operation requires both arguments to have the same type, got {:?} and {:?}",
-                a, b
-            )));
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::OperatorTypeMismatch,
+                format!(
+                    "Stream operation requires both arguments to have the same type, got {} and {}",
+                    a.display_with_type(),
+                    b.display_with_type()
+                ),
+            ));
             Err(())
         }
     }
@@ -1221,10 +1226,7 @@ impl TypeCheckableHelper<SExprTE> for (SpannedExpr, StreamTypeAscription) {
                 } else {
                     errs.push(SemanticError::type_error(
                         TypeErrorKind::AnnotationTypeMismatch,
-                        format!(
-                            "Type mismatch: expected {:?}, got {:?}",
-                            expected_ty, actual_ty
-                        ),
+                        format!("Type mismatch: expected {}, got {}", expected_ty, actual_ty),
                     ));
                     Err(())
                 }
@@ -1272,7 +1274,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     ty => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ExpectedDynamicString,
-                            format!("Expected Dynamic to be applied to a Str, got {:?}", ty),
+                            format!(
+                                "Expected Dynamic to be applied to a Str, got {}",
+                                ty.display_with_type()
+                            ),
                         ));
                         return Err(());
                     }
@@ -1331,8 +1336,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ExpectedDynamicString,
                             format!(
-                                "Expected RestrictedDynamic to be applied to a Str, got {:?}",
-                                ty
+                                "Expected RestrictedDynamic to be applied to a Str, got {}",
+                                ty.display_with_type()
                             ),
                         ));
                         return Err(());
@@ -1432,7 +1437,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     ty => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ExpectedDynamicString,
-                            format!("Expected Defer to be applied to a Str, got {:?}", ty),
+                            format!(
+                                "Expected Defer to be applied to a Str, got {}",
+                                ty.display_with_type()
+                            ),
                         ));
                         return Err(());
                     }
@@ -1543,7 +1551,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             errs.push(SemanticError::type_error(
                                 TypeErrorKind::ListElementTypeMismatch,
                                 format!(
-                                    "List element type mismatch: expected {:?} (from first element), got {:?}",
+                                    "List element type mismatch: expected {} (from first element), got {}",
                                     first_type, elem_type
                                 ),
                             ));
@@ -1567,7 +1575,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListIndexTypeMismatch,
-                            format!("LIndex index must be Int, got {:?}", other),
+                            format!(
+                                "LIndex index must be Int, got {}",
+                                other.display_with_type()
+                            ),
                         ));
                         return Err(());
                     }
@@ -1612,7 +1623,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 errs.push(SemanticError::unresolved_type(
                                     UnresolvedTypeKind::ListIndexElementType,
                                     format!(
-                                        "Cannot index list with unresolved element type {:?}",
+                                        "Cannot index list with unresolved element type {}",
                                         elem_type
                                     ),
                                 ));
@@ -1647,7 +1658,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListOperationTypeMismatch,
-                            format!("LIndex requires a List, got {:?}", other),
+                            format!("LIndex requires a List, got {}", other.display_with_type()),
                         ));
                         Err(())
                     }
@@ -1672,7 +1683,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             }
                             None => {
                                 errs.push(SemanticError::type_error(TypeErrorKind::ListElementTypeMismatch, format!(
-                                    "LAppend element type mismatch: list has element type {:?}, but got {:?}",
+                                    "LAppend element type mismatch: list has element type {}, but got {}",
                                     elem_type, actual_elem_type
                                 )));
                                 Err(())
@@ -1682,7 +1693,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListOperationTypeMismatch,
-                            format!("LAppend requires a List as first argument, got {:?}", other),
+                            format!(
+                                "LAppend requires a List as first argument, got {}",
+                                other.display_with_type()
+                            ),
                         ));
                         Err(())
                     }
@@ -1703,10 +1717,13 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 Ok(SExprTE::List(tl1.typed_concat(&tl2)))
                             }
                             None => {
-                                errs.push(SemanticError::type_error(TypeErrorKind::ListElementTypeMismatch, format!(
-                                    "LConcat requires lists of the same type, got {:?} and {:?}",
-                                    t1, t2
-                                )));
+                                errs.push(SemanticError::type_error(
+                                    TypeErrorKind::ListElementTypeMismatch,
+                                    format!(
+                                        "LConcat requires lists of the same type, got {} and {}",
+                                        t1, t2
+                                    ),
+                                ));
                                 Err(())
                             }
                         }
@@ -1715,8 +1732,9 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListOperationTypeMismatch,
                             format!(
-                                "LConcat requires two Lists, got {:?} and {:?}",
-                                other1, other2
+                                "LConcat requires two Lists, got {} and {}",
+                                other1.display_with_type(),
+                                other2.display_with_type()
                             ),
                         ));
                         Err(())
@@ -1751,7 +1769,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 errs.push(SemanticError::unresolved_type(
                                     UnresolvedTypeKind::ListHeadElementType,
                                     format!(
-                                        "Cannot take head of list with unresolved element type {:?}",
+                                        "Cannot take head of list with unresolved element type {}",
                                         elem_type
                                     ),
                                 ));
@@ -1777,7 +1795,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListOperationTypeMismatch,
-                            format!("LHead requires a List, got {:?}", other),
+                            format!("LHead requires a List, got {}", other.display_with_type()),
                         ));
                         Err(())
                     }
@@ -1791,7 +1809,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListOperationTypeMismatch,
-                            format!("LTail requires a List, got {:?}", other),
+                            format!("LTail requires a List, got {}", other.display_with_type()),
                         ));
                         Err(())
                     }
@@ -1805,7 +1823,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListOperationTypeMismatch,
-                            format!("LLen requires a List, got {:?}", other),
+                            format!("LLen requires a List, got {}", other.display_with_type()),
                         ));
                         Err(())
                     }
@@ -1857,7 +1875,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             }
                             None => {
                                 errs.push(SemanticError::type_error(TypeErrorKind::ListElementTypeMismatch, format!(
-                                    "Init requires both arguments to have the same type, got List<{:?}> and List<{:?}>",
+                                    "Init requires both arguments to have the same type, got List<{}> and List<{}>",
                                     t1, t2
                                 )));
                                 Err(())
@@ -1875,7 +1893,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             }
                             None => {
                                 errs.push(SemanticError::type_error(TypeErrorKind::MapValueTypeMismatch, format!(
-                                    "Init requires both arguments to have the same type, got Map<{:?}> and Map<{:?}>",
+                                    "Init requires both arguments to have the same type, got Map<{}> and Map<{}>",
                                     t1, t2
                                 )));
                                 Err(())
@@ -1889,17 +1907,21 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             Ok(SExprTE::Struct(st1.typed_init(&st2)))
                         } else {
                             errs.push(SemanticError::type_error(TypeErrorKind::StructOperationTypeMismatch, format!(
-                                "Init requires both arguments to have the same type, got {:?} and {:?}",
+                                "Init requires both arguments to have the same type, got {} and {}",
                                 t1, t2
                             )));
                             Err(())
                         }
                     }
                     (Ok(ste1), Ok(ste2)) => {
-                        errs.push(SemanticError::type_error(TypeErrorKind::OperatorTypeMismatch, format!(
-                            "Init requires both arguments to have the same type, got {:?} and {:?}",
-                            ste1, ste2
-                        )));
+                        errs.push(SemanticError::type_error(
+                            TypeErrorKind::OperatorTypeMismatch,
+                            format!(
+                                "Init requires both arguments to have the same type, got {} and {}",
+                                ste1.display_with_type(),
+                                ste2.display_with_type()
+                            ),
+                        ));
                         Err(())
                     }
                     _ => Err(()),
@@ -1913,8 +1935,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::NumericArgumentTypeMismatch,
                             format!(
-                                "Sin can only be applied to float expressions, got {:?}",
-                                other
+                                "Sin can only be applied to float expressions, got {}",
+                                other.display_with_type()
                             ),
                         ));
                         Err(())
@@ -1929,8 +1951,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::NumericArgumentTypeMismatch,
                             format!(
-                                "Cos can only be applied to float expressions, got {:?}",
-                                other
+                                "Cos can only be applied to float expressions, got {}",
+                                other.display_with_type()
                             ),
                         ));
                         Err(())
@@ -1945,8 +1967,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::NumericArgumentTypeMismatch,
                             format!(
-                                "Tan can only be applied to float expressions, got {:?}",
-                                other
+                                "Tan can only be applied to float expressions, got {}",
+                                other.display_with_type()
                             ),
                         ));
                         Err(())
@@ -1962,8 +1984,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::NumericArgumentTypeMismatch,
                             format!(
-                                "Abs can only be applied to numeric expressions, got {:?}",
-                                other
+                                "Abs can only be applied to numeric expressions, got {}",
+                                other.display_with_type()
                             ),
                         ));
                         Err(())
@@ -2022,7 +2044,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::MapOperationTypeMismatch,
-                            format!("MGet requires a Map or Struct, got {:?}", other),
+                            format!(
+                                "MGet requires a Map or Struct, got {}",
+                                other.display_with_type()
+                            ),
                         ));
                         Err(())
                     }
@@ -2038,8 +2063,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::StructExpected,
                             format!(
-                                "Dot field access requires a Struct in typed semantics, got {:?}",
-                                other
+                                "Dot field access requires a Struct in typed semantics, got {}",
+                                other.display_with_type()
                             ),
                         ));
                         Err(())
@@ -2064,7 +2089,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             }
                             None => {
                                 errs.push(SemanticError::type_error(TypeErrorKind::MapValueTypeMismatch, format!(
-                                    "MInsert value type mismatch: map has value type {:?}, but got {:?}",
+                                    "MInsert value type mismatch: map has value type {}, but got {}",
                                     value_type, actual_value_type
                                 )));
                                 Err(())
@@ -2091,7 +2116,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             errs.push(SemanticError::type_error(
                                 TypeErrorKind::StructFieldTypeMismatch,
                                 format!(
-                                    "Struct field {:?} has type {:?}, but got {:?}",
+                                    "Struct field {:?} has type {}, but got {}",
                                     key, field_type, actual_value_type
                                 ),
                             ));
@@ -2104,7 +2129,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::MapOperationTypeMismatch,
-                            format!("MInsert requires a Map as first argument, got {:?}", other),
+                            format!(
+                                "MInsert requires a Map as first argument, got {}",
+                                other.display_with_type()
+                            ),
                         ));
                         Err(())
                     }
@@ -2119,7 +2147,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::MapOperationTypeMismatch,
-                            format!("MRemove requires a Map, got {:?}", other),
+                            format!("MRemove requires a Map, got {}", other.display_with_type()),
                         ));
                         Err(())
                     }
@@ -2139,7 +2167,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::MapOperationTypeMismatch,
-                            format!("MHasKey requires a Map, got {:?}", other),
+                            format!("MHasKey requires a Map, got {}", other.display_with_type()),
                         ));
                         Err(())
                     }
@@ -3040,6 +3068,149 @@ mod tests {
         assert!(lines.contains(&"out d: Int"));
         assert!(lines.contains(&"z = (x + y)"));
         assert!(lines.contains(&"d = dynamic(s: Int)"));
+    }
+
+    #[test]
+    fn test_display_with_type_for_container_types() {
+        let list = SExprTE::List(TypedListExpr {
+            element_type: TCType::Int,
+            kind: TypedListExprKind::Literal(vec![
+                SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(1))),
+                SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(2))),
+            ]),
+        });
+        let map = SExprTE::Map(TypedMapExpr {
+            value_type: TCType::Bool,
+            kind: TypedMapExprKind::Literal(BTreeMap::from([(
+                "ok".into(),
+                SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(true))),
+            )])),
+        });
+        let structure = SExprTE::Struct(TypedStructExpr {
+            typ_map: eco_vec![
+                ("id".into(), TCType::Int),
+                ("flags".into(), TCType::List(Box::new(TCType::Bool))),
+            ],
+            allow_extra_fields: false,
+            kind: TypedStructExprKind::Literal(vec![
+                (
+                    "id".into(),
+                    SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(7))),
+                ),
+                (
+                    "flags".into(),
+                    SExprTE::List(TypedListExpr {
+                        element_type: TCType::Bool,
+                        kind: TypedListExprKind::Literal(vec![
+                            SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(true))),
+                            SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(false))),
+                        ]),
+                    }),
+                ),
+            ]),
+        });
+
+        assert_eq!(
+            format!("{}", list.display_with_type()),
+            "List(1, 2): List<Int>"
+        );
+        assert_eq!(
+            format!("{}", map.display_with_type()),
+            "Map(\"ok\": true): Map<Bool>"
+        );
+        assert_eq!(
+            format!("{}", structure.display_with_type()),
+            "Struct(\"id\": 7, \"flags\": List(true, false)): Struct<id: Int, flags: List<Bool>>"
+        );
+    }
+
+    #[test]
+    fn test_typed_spec_display_roundtrips_container_outputs() {
+        let input_vars = BTreeSet::from(["tick".into()]);
+        let output_vars = BTreeSet::from(["xs".into(), "m".into(), "robot".into()]);
+
+        let exprs = BTreeMap::from([
+            (
+                "xs".into(),
+                SExprTE::List(TypedListExpr {
+                    element_type: TCType::Int,
+                    kind: TypedListExprKind::Literal(vec![
+                        SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(1))),
+                        SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(2))),
+                    ]),
+                }),
+            ),
+            (
+                "m".into(),
+                SExprTE::Map(TypedMapExpr {
+                    value_type: TCType::Bool,
+                    kind: TypedMapExprKind::Literal(BTreeMap::from([(
+                        "ok".into(),
+                        SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(true))),
+                    )])),
+                }),
+            ),
+            (
+                "robot".into(),
+                SExprTE::Struct(TypedStructExpr {
+                    typ_map: eco_vec![
+                        ("id".into(), TCType::Int),
+                        ("flags".into(), TCType::List(Box::new(TCType::Bool))),
+                    ],
+                    allow_extra_fields: false,
+                    kind: TypedStructExprKind::Literal(vec![
+                        (
+                            "id".into(),
+                            SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(7))),
+                        ),
+                        (
+                            "flags".into(),
+                            SExprTE::List(TypedListExpr {
+                                element_type: TCType::Bool,
+                                kind: TypedListExprKind::Literal(vec![
+                                    SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(true))),
+                                    SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(false))),
+                                ]),
+                            }),
+                        ),
+                    ]),
+                }),
+            ),
+        ]);
+
+        let type_annotations = BTreeMap::from([
+            ("tick".into(), StreamType::Int),
+            ("xs".into(), StreamType::List(Box::new(StreamType::Int))),
+            ("m".into(), StreamType::Map(Box::new(StreamType::Bool))),
+            (
+                "robot".into(),
+                StreamType::Struct(
+                    eco_vec![
+                        ("id".into(), StreamType::Int),
+                        ("flags".into(), StreamType::List(Box::new(StreamType::Bool))),
+                    ],
+                    false,
+                ),
+            ),
+        ]);
+
+        let spec = TypedDsrvSpecification {
+            input_vars,
+            stream_vars: output_vars.clone(),
+            output_vars,
+            aux_vars: BTreeSet::new(),
+            exprs,
+            type_annotations,
+        };
+
+        let rendered = format!("{}", spec);
+        let mut input = rendered.as_str();
+        let parsed = crate::lang::dsrv::parser::dsrv_specification(&mut input).unwrap_or_else(
+            |err| panic!("container typed Display output should parse as a DsrvSpecification:\n{rendered}\n{err:?}"),
+        );
+
+        assert_eq!(parsed.type_annotations, spec.type_annotations);
+        assert_eq!(parsed.exprs.len(), spec.exprs.len());
     }
 
     fn arb_typed_roundtrip_spec() -> impl Strategy<Value = TypedDsrvSpecification> {

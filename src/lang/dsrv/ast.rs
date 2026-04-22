@@ -103,6 +103,17 @@ pub enum SBinOp {
     COp(CompBinOp),
 }
 
+impl Display for SBinOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SBinOp::NOp(op) => write!(f, "{:?}", op),
+            SBinOp::BOp(op) => write!(f, "{:?}", op),
+            SBinOp::SOp(op) => write!(f, "{:?}", op),
+            SBinOp::COp(op) => write!(f, "{:?}", op),
+        }
+    }
+}
+
 // Helper function to specify binary operations from a string
 impl From<&str> for SBinOp {
     fn from(s: &str) -> Self {

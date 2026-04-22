@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
-use ecow::eco_vec;
 use ecow::EcoString;
 use ecow::EcoVec;
+use ecow::eco_vec;
 use tracing::debug;
-use winnow::combinator::*;
-use winnow::token::literal;
 use winnow::Parser;
 use winnow::Result;
+use winnow::combinator::*;
+use winnow::token::literal;
 
 use super::super::core::parser::*;
 use super::ast::*;
@@ -1083,12 +1083,12 @@ fn atom(source: &str, s: &mut &str) -> Result<SpannedExpr> {
                     |i: &mut &str| when(source, i),
                     |i: &mut &str| latch(source, i),
                     |i: &mut &str| init(source, i),
-                |i: &mut &str| is_defined(source, i),
-                |i: &mut &str| sexpr_list(source, i),
-                |i: &mut &str| sget(source, i),
-            )),
-            alt((
-                |i: &mut &str| sexpr_map(source, i),
+                    |i: &mut &str| is_defined(source, i),
+                    |i: &mut &str| sexpr_list(source, i),
+                    |i: &mut &str| sget(source, i),
+                )),
+                alt((
+                    |i: &mut &str| sexpr_map(source, i),
                     |i: &mut &str| sexpr_struct(source, i),
                     |i: &mut &str| object_literal(source, i),
                     |i: &mut &str| var(source, i),
@@ -1240,82 +1240,108 @@ pub fn sexpr_with_source(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     .parse_next(s)
 }
 
-fn struct_type_field(s: &mut &str) -> Result<(EcoString, StreamType)> {
-    seq!((
-        _: whitespace,
-        ident,
-        _: loop_ms_or_lb_or_lc,
-        _: literal(":"),
-        _: loop_ms_or_lb_or_lc,
-        stream_type,
-        _: whitespace,
+fn primitive_stream_type(s: &mut &str) -> Result<StreamType> {
+    alt((
+        literal("Int"),
+        literal("Float"),
+        literal("Bool"),
+        literal("Str"),
+        literal("Unit"),
+        literal("Any"),
     ))
-    .map(|(name, typ): (&str, StreamType)| (name.into(), typ))
+    .map(|typ| match typ {
+        "Int" => StreamType::Int,
+        "Float" => StreamType::Float,
+        "Bool" => StreamType::Bool,
+        "Str" => StreamType::Str,
+        "Unit" => StreamType::Unit,
+        "Any" => StreamType::Any,
+        _ => unreachable!(),
+    })
+    .parse_next(s)
+}
+
+fn list_stream_type(s: &mut &str) -> Result<StreamType> {
+    seq!(
+        _: literal("List"),
+        _: loop_ms_or_lb_or_lc,
+        _: '<',
+        stream_type,
+        _: loop_ms_or_lb_or_lc,
+        _: '>',
+    )
+    .map(|(inner,)| StreamType::List(Box::new(inner)))
+    .parse_next(s)
+}
+
+fn map_stream_type(s: &mut &str) -> Result<StreamType> {
+    seq!(
+        _: literal("Map"),
+        _: loop_ms_or_lb_or_lc,
+        _: '<',
+        stream_type,
+        _: loop_ms_or_lb_or_lc,
+        _: '>',
+    )
+    .map(|(inner,)| StreamType::Map(Box::new(inner)))
+    .parse_next(s)
+}
+
+fn struct_stream_type_field(s: &mut &str) -> Result<Option<(EcoString, StreamType)>> {
+    alt((
+        literal("...").value(None),
+        seq!(
+            ident,
+            _: loop_ms_or_lb_or_lc,
+            _: ':',
+            _: loop_ms_or_lb_or_lc,
+            stream_type,
+        )
+        .map(|(name, typ)| Some((EcoString::from(name), typ))),
+    ))
+    .parse_next(s)
+}
+
+fn struct_stream_type(s: &mut &str) -> Result<StreamType> {
+    delimited(
+        seq!(literal("Struct"), loop_ms_or_lb_or_lc, '<'),
+        separated(
+            0..,
+            struct_stream_type_field,
+            seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+        ),
+        seq!(loop_ms_or_lb_or_lc, '>'),
+    )
+    .map(|fields: Vec<Option<(EcoString, StreamType)>>| {
+        let allow_extra = fields.iter().any(Option::is_none);
+        let fields = fields.into_iter().flatten().collect();
+        StreamType::Struct(fields, allow_extra)
+    })
     .parse_next(s)
 }
 
 fn stream_type(s: &mut &str) -> Result<StreamType> {
-    alt((
-        seq!(_: literal("List"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
-            .map(|(inner,)| StreamType::List(Box::new(inner))),
-        seq!(_: literal("Map"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
-            .map(|(inner,)| StreamType::Map(Box::new(inner))),
-        seq!(
-            _: literal("Struct"),
-            _: loop_ms_or_lb_or_lc,
-            _: '<',
-            _: loop_ms_or_lb_or_lc,
-            _: literal("..."),
-            _: loop_ms_or_lb_or_lc,
-            _: '>',
-        )
-        .map(|()| StreamType::Struct(EcoVec::new(), true)),
-        seq!(
-            _: literal("Struct"),
-            _: loop_ms_or_lb_or_lc,
-            _: '<',
-            separated(1.., struct_type_field, seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc)),
-            _: loop_ms_or_lb_or_lc,
-            _: ',',
-            _: loop_ms_or_lb_or_lc,
-            _: literal("..."),
-            _: loop_ms_or_lb_or_lc,
-            _: '>',
-        )
-        .map(|(fields,): (Vec<(EcoString, StreamType)>,)| {
-            StreamType::Struct(fields.into(), true)
-        }),
-        seq!(
-            _: literal("Struct"),
-            _: loop_ms_or_lb_or_lc,
-            _: '<',
-            separated(0.., struct_type_field, seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc)),
-            _: loop_ms_or_lb_or_lc,
-            _: '>',
-        )
-        .map(|(fields,): (Vec<(EcoString, StreamType)>,)| {
-            StreamType::Struct(fields.into(), false)
-        }),
+    delimited(
+        whitespace,
         alt((
-            literal("Int").map(|_| StreamType::Int),
-            literal("Float").map(|_| StreamType::Float),
-            literal("Bool").map(|_| StreamType::Bool),
-            literal("Str").map(|_| StreamType::Str),
-            literal("Unit").map(|_| StreamType::Unit),
-            literal("Any").map(|_| StreamType::Any),
+            list_stream_type,
+            map_stream_type,
+            struct_stream_type,
+            primitive_stream_type,
         )),
-    ))
+        whitespace,
+    )
     .parse_next(s)
 }
 
 pub(crate) fn type_annotation(s: &mut &str) -> Result<StreamType> {
-    seq!((
+    seq!(
         _: whitespace,
         _: literal(":"),
         _: loop_ms_or_lb_or_lc,
         stream_type,
         _: whitespace,
-    ))
+    )
     .map(|(typ,)| typ)
     .parse_next(s)
 }
@@ -1463,9 +1489,6 @@ pub fn dsrv_specification_with_source(
     })
     .parse_next(s)
 }
-
-
-
 
 #[cfg(test)]
 mod tests {

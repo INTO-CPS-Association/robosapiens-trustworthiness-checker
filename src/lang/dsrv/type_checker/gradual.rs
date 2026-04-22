@@ -135,7 +135,7 @@ pub fn type_check_gradual(
                                     progressed = true;
                                 } else {
                                     errors.push(SemanticError::type_error(TypeErrorKind::AnnotationTypeMismatch, format!(
-                                        "Variable {:?} has declared type {:?}, but expression has inconsistent type {:?}",
+                                        "Variable {} has declared type {}, but expression has inconsistent type {}",
                                         var, expected_ty, actual
                                     )));
                                 }

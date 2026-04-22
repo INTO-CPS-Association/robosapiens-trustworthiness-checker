@@ -15,7 +15,7 @@ pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpe
             Some(t) => t,
             None => {
                 errors.push(SemanticError::MissingTypeAnnotation(
-                    format!("Variable {:?} is missing a type annotation", var),
+                    format!("Variable {} is missing a type annotation", var),
                     None,
                 ));
                 continue;
@@ -29,7 +29,7 @@ pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpe
                 errors.push(SemanticError::type_error_at(
                     TypeErrorKind::AnnotationTypeMismatch,
                     format!(
-                        "Variable {:?} has declared type {:?}, but expression has type {:?}",
+                        "Variable {} has declared type {}, but expression has type {}",
                         var, expected, actual
                     ),
                     expr.span,

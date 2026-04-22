@@ -6,7 +6,7 @@ use contracts::requires;
 use ecow::{EcoString, EcoVec};
 use itertools::Itertools;
 
-use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SExpr, StrBinOp};
+use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SExpr, SpannedExpr, StrBinOp};
 use crate::core::{PartialStreamValue, StreamType};
 use crate::{Specification, Value, VarName};
 use std::collections::{BTreeMap, BTreeSet};
@@ -119,8 +119,8 @@ impl std::fmt::Display for TCType {
             TCType::Str => write!(f, "Str"),
             TCType::Bool => write!(f, "Bool"),
             TCType::Unit => write!(f, "Unit"),
-            TCType::List(typ) => write!(f, "List({})", typ),
-            TCType::Map(typ) => write!(f, "Map({})", typ),
+            TCType::List(typ) => write!(f, "List<{}>", typ),
+            TCType::Map(typ) => write!(f, "Map<{}>", typ),
             TCType::Struct(inner, allow_extra) => {
                 let mut fields = inner
                     .iter()
@@ -686,6 +686,20 @@ pub enum SExprTE {
     Any(SExprAny),
 }
 
+pub struct SExprTEWithType<'a>(&'a SExprTE);
+
+impl SExprTE {
+    pub fn display_with_type(&self) -> SExprTEWithType<'_> {
+        SExprTEWithType(self)
+    }
+}
+
+impl Display for SExprTEWithType<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.0, extract_type(self.0))
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct TypedDsrvSpecification {
     pub input_vars: BTreeSet<VarName>,
@@ -775,10 +789,120 @@ impl Display for SExprTE {
             SExprTE::Str(e) => write!(f, "{}", e),
             SExprTE::Bool(e) => write!(f, "{}", e),
             SExprTE::Unit(e) => write!(f, "{}", e),
-            SExprTE::List(e) => write!(f, "{:?}", e),
-            SExprTE::Map(e) => write!(f, "{:?}", e),
-            SExprTE::Struct(e) => write!(f, "{:?}", e),
-            SExprTE::Any(e) => write!(f, "{:?}", e),
+            SExprTE::List(e) => write!(f, "{}", e),
+            SExprTE::Map(e) => write!(f, "{}", e),
+            SExprTE::Struct(e) => write!(f, "{}", e),
+            SExprTE::Any(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl Display for SExprAny {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SExprAny::Var(v) => write!(f, "{}", v),
+            SExprAny::Val(v) => write!(f, "{}", v),
+            SExprAny::Expr(e) => write!(f, "{}", SpannedExpr::from(e.clone())),
+        }
+    }
+}
+
+impl Display for TypedListExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use TypedListExprKind::*;
+        match &self.kind {
+            If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
+            SIndex(e, i) => write!(f, "{}[{}]", e, i),
+            Var(v) => write!(f, "{}", v),
+            Default(e, v) => write!(f, "default({}, {})", e, v),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
+            Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
+            Defer(e, _, _) => write!(f, "defer({}: {})", e, self.list_tc_type()),
+            Dynamic(e, _) => write!(f, "dynamic({}: {})", e, self.list_tc_type()),
+            RestrictedDynamic(e, env, _) => {
+                let env = env.iter().map(|v| format!("{}", v)).join(", ");
+                write!(f, "dynamic({}: {}, {{{}}})", e, self.list_tc_type(), env)
+            }
+            Literal(items) => {
+                let items = items.iter().map(|e| format!("{}", e)).join(", ");
+                write!(f, "List({})", items)
+            }
+            LTail(e) => write!(f, "List.tail({})", e),
+            LConcat(e1, e2) => write!(f, "List.concat({}, {})", e1, e2),
+            LAppend(e, v) => write!(f, "List.append({}, {})", e, v),
+            LHeadList(e) => write!(f, "List.head({})", e),
+            LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
+            MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
+            SGetStruct(e, key) => write!(f, "Struct.get({}, {:?})", e, key),
+        }
+    }
+}
+
+impl Display for TypedMapExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use TypedMapExprKind::*;
+        match &self.kind {
+            Var(v) => write!(f, "{}", v),
+            Literal(entries) => {
+                let entries = entries
+                    .iter()
+                    .map(|(k, v)| format!("{:?}: {}", k, v))
+                    .join(", ");
+                write!(f, "Map({})", entries)
+            }
+            Default(e, v) => write!(f, "default({}, {})", e, v),
+            If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
+            Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
+            SIndex(e, i) => write!(f, "{}[{}]", e, i),
+            Defer(e, _, _) => write!(f, "defer({}: {})", e, self.map_tc_type()),
+            Dynamic(e, _) => write!(f, "dynamic({}: {})", e, self.map_tc_type()),
+            RestrictedDynamic(e, env, _) => {
+                let env = env.iter().map(|v| format!("{}", v)).join(", ");
+                write!(f, "dynamic({}: {}, {{{}}})", e, self.map_tc_type(), env)
+            }
+            MInsert(e, key, v) => write!(f, "Map.insert({}, {:?}, {})", e, key, v),
+            MRemove(e, key) => write!(f, "Map.remove({}, {:?})", e, key),
+            MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
+            SGetStruct(e, key) => write!(f, "Struct.get({}, {:?})", e, key),
+            LHeadList(e) => write!(f, "List.head({})", e),
+            LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
+        }
+    }
+}
+
+impl Display for TypedStructExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use TypedStructExprKind::*;
+        let typ = TCType::Struct(self.typ_map.clone(), self.allow_extra_fields);
+        match &self.kind {
+            Var(v) => write!(f, "{}", v),
+            Literal(entries) => {
+                let entries = entries
+                    .iter()
+                    .map(|(k, v)| format!("{:?}: {}", k, v))
+                    .join(", ");
+                write!(f, "Struct({})", entries)
+            }
+            Default(e, v) => write!(f, "default({}, {})", e, v),
+            If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
+            Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
+            SIndex(e, i) => write!(f, "{}[{}]", e, i),
+            Defer(e, _, _) => write!(f, "defer({}: {})", e, typ),
+            Dynamic(e, _) => write!(f, "dynamic({}: {})", e, typ),
+            RestrictedDynamic(e, env, _) => {
+                let env = env.iter().map(|v| format!("{}", v)).join(", ");
+                write!(f, "dynamic({}: {}, {{{}}})", e, typ, env)
+            }
+            SUpdate(e, key, v) => write!(f, "Struct.update({}, {:?}, {})", e, key, v),
+            SGet(e, key) => write!(f, "Struct.get({}, {:?})", e, key),
+            MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
+            LHeadList(e) => write!(f, "List.head({})", e),
+            LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
         }
     }
 }
