@@ -1,0 +1,34 @@
+{
+  "CS3Alert": {
+    "topic": "/CS3Alert",
+    "msg_type": "Int32"
+  },
+  "SC3Alert": {
+    "topic": "/SC3Alert",
+    "msg_type": "Int32"
+  },
+  "VL3Alert": {
+    "topic": "/VL3Alert",
+    "msg_type": "Int32"
+  },
+  "HC3Alert": {
+    "topic": "/HC3Alert",
+    "msg_type": "Int32"
+  },
+  "aabbR3C": {
+    "topic": "/aabbR3C",
+    "msg_type": "Bool"
+  },
+  "aabbR3S": {
+    "topic": "/aabbR3S",
+    "msg_type": "Bool"
+  },
+  "aabbR3V": {
+    "topic": "/aabbR3V",
+    "msg_type": "Bool"
+  },
+  "aabbR3H": {
+    "topic": "/aabbR3H",
+    "msg_type": "Bool"
+  }
+}

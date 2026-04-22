@@ -1,0 +1,34 @@
+{
+  "CS1Alert": {
+    "topic": "/CS1Alert",
+    "msg_type": "Int32"
+  },
+  "SC1Alert": {
+    "topic": "/SC1Alert",
+    "msg_type": "Int32"
+  },
+  "VL1Alert": {
+    "topic": "/VL1Alert",
+    "msg_type": "Int32"
+  },
+  "HC1Alert": {
+    "topic": "/HC1Alert",
+    "msg_type": "Int32"
+  },
+  "aabbR1C": {
+    "topic": "/aabbR1C",
+    "msg_type": "Bool"
+  },
+  "aabbR1S": {
+    "topic": "/aabbR1S",
+    "msg_type": "Bool"
+  },
+  "aabbR1V": {
+    "topic": "/aabbR1V",
+    "msg_type": "Bool"
+  },
+  "aabbR1H": {
+    "topic": "/aabbR1H",
+    "msg_type": "Bool"
+  }
+}

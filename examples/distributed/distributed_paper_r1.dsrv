@@ -76,7 +76,7 @@ aabbR1V = abs(R1X - VX) <= D && abs(R1Y - VY) <= D
 
 aabbR1H = abs(R1X - HX) <= D && abs(R1Y - HY) <= D 
 
-CS1Alert = CPred && aabbR1C
-SC1Alert = SPred && aabbR1S
-VL1Alert = VPred && aabbR1V
-HC1Alert = HPred && aabbR1H
+CS1Alert = if aabbR1C then if CPred then 1 else 0 else -1
+SC1Alert = if aabbR1S then if SPred then 1 else 0 else -1
+VL1Alert = if aabbR1V then if VPred then 1 else 0 else -1
+HC1Alert = if aabbR1H then if HPred then 1 else 0 else -1

@@ -46,6 +46,8 @@ out aabbR2H
 out aabbR3H 
 out aabbR4H 
 
+out globalProp
+
 // Robot positions
 aux R1Pose
 aux R1X
@@ -133,20 +135,25 @@ aabbR2H = abs(R2X - HX) <= D && abs(R2Y - HY) <= D
 aabbR3H = abs(R3X - HX) <= D && abs(R3Y - HY) <= D
 aabbR4H = abs(R4X - HX) <= D && abs(R4Y - HY) <= D
 
-CS1Alert = CPred && aabbR1C
-CS2Alert = CPred && aabbR2C
-CS3Alert = CPred && aabbR3C
-CS4Alert = CPred && aabbR4C
-SC1Alert = SPred && aabbR1S
-SC2Alert = SPred && aabbR2S
-SC3Alert = SPred && aabbR3S
-SC4Alert = SPred && aabbR4S
-VL1Alert = VPred && aabbR1V
-VL2Alert = VPred && aabbR2V
-VL3Alert = VPred && aabbR3V
-VL4Alert = VPred && aabbR4V
-HC1Alert = HPred && aabbR1H
-HC2Alert = HPred && aabbR2H
-HC3Alert = HPred && aabbR3H
-HC4Alert = HPred && aabbR4H
+CS1Alert = if aabbR1C then if CPred then 1 else 0 else -1
+CS2Alert = if aabbR2C then if CPred then 1 else 0 else -1
+CS3Alert = if aabbR3C then if CPred then 1 else 0 else -1
+CS4Alert = if aabbR4C then if CPred then 1 else 0 else -1
+SC1Alert = if aabbR1S then if SPred then 1 else 0 else -1
+SC2Alert = if aabbR2S then if SPred then 1 else 0 else -1
+SC3Alert = if aabbR3S then if SPred then 1 else 0 else -1
+SC4Alert = if aabbR4S then if SPred then 1 else 0 else -1
+VL1Alert = if aabbR1V then if VPred then 1 else 0 else -1
+VL2Alert = if aabbR2V then if VPred then 1 else 0 else -1
+VL3Alert = if aabbR3V then if VPred then 1 else 0 else -1
+VL4Alert = if aabbR4V then if VPred then 1 else 0 else -1
+HC1Alert = if aabbR1H then if HPred then 1 else 0 else -1
+HC2Alert = if aabbR2H then if HPred then 1 else 0 else -1
+HC3Alert = if aabbR3H then if HPred then 1 else 0 else -1
+HC4Alert = if aabbR4H then if HPred then 1 else 0 else -1
 
+// globalProp == is it possible to cover all robots
+globalProp = (aabbR1C || aabbR2C || aabbR3C || aabbR4C) && 
+             (aabbR1S || aabbR2S || aabbR3S || aabbR4S) &&
+             (aabbR1V || aabbR2V || aabbR3V || aabbR4V) &&
+             (aabbR1H || aabbR2H || aabbR3H || aabbR4H) 

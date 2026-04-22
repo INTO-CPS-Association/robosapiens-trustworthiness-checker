@@ -1,67 +1,67 @@
 {
   "CS1Alert": {
     "topic": "/CS1Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "SC1Alert": {
     "topic": "/SC1Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "VL1Alert": {
     "topic": "/VL1Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "HC1Alert": {
     "topic": "/HC1Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "CS2Alert": {
     "topic": "/CS2Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "SC2Alert": {
     "topic": "/SC2Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "VL2Alert": {
     "topic": "/VL2Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "HC2Alert": {
     "topic": "/HC2Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "CS3Alert": {
     "topic": "/CS3Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "SC3Alert": {
     "topic": "/SC3Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "VL3Alert": {
     "topic": "/VL3Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "HC3Alert": {
     "topic": "/HC3Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "CS4Alert": {
     "topic": "/CS4Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "SC4Alert": {
     "topic": "/SC4Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "VL4Alert": {
     "topic": "/VL4Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "HC4Alert": {
     "topic": "/HC4Alert",
-    "msg_type": "Bool"
+    "msg_type": "Int32"
   },
   "aabbR1C": {
     "topic": "/aabbR1C",

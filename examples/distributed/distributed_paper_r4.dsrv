@@ -76,7 +76,7 @@ aabbR4V = abs(R4X - VX) <= D && abs(R4Y - VY) <= D
 
 aabbR4H = abs(R4X - HX) <= D && abs(R4Y - HY) <= D 
 
-CS4Alert = CPred && aabbR4C
-SC4Alert = SPred && aabbR4S
-VL4Alert = VPred && aabbR4V
-HC4Alert = HPred && aabbR4H
+CS4Alert = if aabbR4C then if CPred then 1 else 0 else -1
+SC4Alert = if aabbR4S then if SPred then 1 else 0 else -1
+VL4Alert = if aabbR4V then if VPred then 1 else 0 else -1
+HC4Alert = if aabbR4H then if HPred then 1 else 0 else -1

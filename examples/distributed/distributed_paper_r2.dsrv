@@ -76,7 +76,7 @@ aabbR2V = abs(R2X - VX) <= D && abs(R2Y - VY) <= D
 
 aabbR2H = abs(R2X - HX) <= D && abs(R2Y - HY) <= D 
 
-CS2Alert = CPred && aabbR2C
-SC2Alert = SPred && aabbR2S
-VL2Alert = VPred && aabbR2V
-HC2Alert = HPred && aabbR2H
+CS2Alert = if aabbR2C then if CPred then 1 else 0 else -1
+SC2Alert = if aabbR2S then if SPred then 1 else 0 else -1
+VL2Alert = if aabbR2V then if VPred then 1 else 0 else -1
+HC2Alert = if aabbR2H then if HPred then 1 else 0 else -1

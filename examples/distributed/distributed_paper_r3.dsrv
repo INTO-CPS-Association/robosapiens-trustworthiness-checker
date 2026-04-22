@@ -76,7 +76,7 @@ aabbR3V = abs(R3X - VX) <= D && abs(R3Y - VY) <= D
 
 aabbR3H = abs(R3X - HX) <= D && abs(R3Y - HY) <= D 
 
-CS3Alert = CPred && aabbR3C
-SC3Alert = SPred && aabbR3S
-VL3Alert = VPred && aabbR3V
-HC3Alert = HPred && aabbR3H
+CS3Alert = if aabbR3C then if CPred then 1 else 0 else -1
+SC3Alert = if aabbR3S then if SPred then 1 else 0 else -1
+VL3Alert = if aabbR3V then if VPred then 1 else 0 else -1
+HC3Alert = if aabbR3H then if HPred then 1 else 0 else -1
