@@ -348,7 +348,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
                 errs.push(SemanticError::type_error(
                     TypeErrorKind::OperatorTypeMismatch,
                     format!(
-                        "Cannot apply binary function {} to expressions of type {} and {}",
+                        "Cannot apply binary function {} to expressions of types: {} and {}",
                         op,
                         ste1.display_with_type(),
                         ste2.display_with_type()
