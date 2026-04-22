@@ -126,5 +126,9 @@
   "aabbR4H": {
     "topic": "/aabbR4H",
     "msg_type": "Bool"
+  },
+  "globalProp": {
+    "topic": "/globalProp",
+    "msg_type": "Bool"
   }
 }
