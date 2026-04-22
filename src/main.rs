@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::rc::Rc;
 
 // #![deny(warnings)]
@@ -6,6 +7,7 @@ use anyhow::{self, Context};
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind, parser::ValueSource};
 use smol::LocalExecutor;
 use tracing::{debug, info};
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
@@ -29,34 +31,13 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-    if cfg!(feature = "span-tracing") {
-        tracing_subscriber::registry()
-            .with(
-                fmt::layer()
-                    .with_writer(std::io::stderr)
-                    .with_span_events(FmtSpan::FULL)
-                    .with_file(true)
-                    .with_line_number(true),
-            )
-            .with(EnvFilter::from_default_env())
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(
-                fmt::layer()
-                    .with_writer(std::io::stderr)
-                    .with_file(true)
-                    .with_line_number(true),
-            )
-            .with(EnvFilter::from_default_env())
-            .init();
-    }
-
     let mut cmd = Cli::command();
     let matches = cmd.clone().get_matches_from(std::env::args_os());
     let cli = Cli::from_arg_matches(&matches)
         .map_err(|e| anyhow::anyhow!(e.to_string()))
         .context("Failed to parse CLI arguments")?;
+
+    let _log_guard = init_tracing(cli.log_file.as_deref())?;
     debug!("CLI arguments: {:?}", cli);
 
     let builder = RuntimeBuilder::new();
@@ -250,4 +231,52 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let monitor = builder.async_build().await;
 
     monitor.run().await
+}
+
+fn init_tracing(log_file: Option<&str>) -> anyhow::Result<WorkerGuard> {
+    let (writer, guard) = match log_file {
+        Some(path) => {
+            let path = Path::new(path);
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    anyhow::ensure!(
+                        parent.exists(),
+                        "Log directory does not exist: {}",
+                        parent.display()
+                    );
+                    anyhow::ensure!(
+                        parent.is_dir(),
+                        "Log path parent is not a directory: {}",
+                        parent.display()
+                    );
+                }
+            }
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            tracing_appender::non_blocking(file)
+        }
+        None => tracing_appender::non_blocking(std::io::stderr()),
+    };
+
+    let fmt_layer = if cfg!(feature = "span-tracing") {
+        fmt::layer()
+            .with_writer(writer)
+            .with_span_events(FmtSpan::FULL)
+            .with_file(true)
+            .with_line_number(true)
+    } else {
+        fmt::layer()
+            .with_writer(writer)
+            .with_file(true)
+            .with_line_number(true)
+    };
+
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(EnvFilter::from_default_env())
+        .init();
+
+    Ok(guard)
 }

@@ -218,6 +218,9 @@ pub struct Cli {
     #[command(flatten)]
     pub output_mode: OutputMode,
 
+    #[arg(long, help = "Write tracing logs to this file")]
+    pub log_file: Option<String>,
+
     #[arg(long, help = "Parser mode to use for model parsing", default_value_t = ParserMode::Lalr)]
     pub parser: ParserMode,
     #[arg(long, help = "Specification language to use", default_value_t = Language::DSRV)]
