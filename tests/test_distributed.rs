@@ -59,10 +59,18 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
+    let var_msg_types = BTreeMap::from([
+        ("x".into(), "Int32".to_string()),
+        ("y".into(), "Int32".to_string()),
+        ("z".into(), "Int32".to_string()),
+        ("w".into(), "Int32".to_string()),
+    ]);
+
     let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
+        .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
         .build();
@@ -116,10 +124,18 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
+    let var_msg_types = BTreeMap::from([
+        ("x".into(), "Int32".to_string()),
+        ("y".into(), "Int32".to_string()),
+        ("z".into(), "Int32".to_string()),
+        ("w".into(), "Int32".to_string()),
+    ]);
+
     let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
+        .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
         .build();
@@ -173,10 +189,18 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
+    let var_msg_types = BTreeMap::from([
+        ("x".into(), "Int32".to_string()),
+        ("y".into(), "Int32".to_string()),
+        ("z".into(), "Int32".to_string()),
+        ("w".into(), "Int32".to_string()),
+    ]);
+
     let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
+        .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
         .build();
@@ -230,10 +254,18 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
+    let var_msg_types = BTreeMap::from([
+        ("x".into(), "Int32".to_string()),
+        ("y".into(), "Int32".to_string()),
+        ("z".into(), "Int32".to_string()),
+        ("w".into(), "Int32".to_string()),
+    ]);
+
     let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
+        .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
         .build();
@@ -287,10 +319,18 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
 
     let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
 
+    let var_msg_types = BTreeMap::from([
+        ("x".into(), "Int32".to_string()),
+        ("y".into(), "Int32".to_string()),
+        ("z".into(), "Int32".to_string()),
+        ("w".into(), "Int32".to_string()),
+    ]);
+
     let monitor = TestDistMonitorBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
+        .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
         .build();
