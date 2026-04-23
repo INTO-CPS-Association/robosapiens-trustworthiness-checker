@@ -122,4 +122,59 @@ mod tests {
         assert_eq!(serialized, expected);
         Ok(())
     }
+
+    #[test]
+    fn test_serialize_typed_string_expression_monitor_work() -> anyhow::Result<()> {
+        let mut spec_src = "in x: Str\nin y: Str\nout z: Str\nz = x ++ \"_suffix\"";
+        let spec = dsrv_specification(&mut spec_src).map_err(|e| anyhow::anyhow!(e))?;
+
+        let type_info: WorkTypeInfo = BTreeMap::from([
+            (VarName::from("x"), String::from("String")),
+            (VarName::from("y"), String::from("String")),
+            (VarName::from("z"), String::from("String")),
+        ]);
+
+        let work = MonitorWork { spec, type_info };
+        let serialized = serde_json::to_value(&work)?;
+
+        let expected = serde_json::json!({
+            "spec": "in x: Str\nin y: Str\nout z: Str\nz = (x ++ \"_suffix\")\n",
+            "type_info": {
+                "x": "String",
+                "y": "String",
+                "z": "String"
+            }
+        });
+
+        assert_eq!(serialized, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_serialize_map_monitor_work() -> anyhow::Result<()> {
+        let mut spec_src = "in records\nout z\nz = Map.get(List.get(records, 0), \"target\")";
+        let spec = dsrv_specification(&mut spec_src).map_err(|e| anyhow::anyhow!(e))?;
+
+        let type_info: WorkTypeInfo = BTreeMap::from([
+            (
+                VarName::from("records"),
+                String::from("Vec<Map<String, i32>>"),
+            ),
+            (VarName::from("z"), String::from("Int32")),
+        ]);
+
+        let work = MonitorWork { spec, type_info };
+        let serialized = serde_json::to_value(&work)?;
+
+        let expected = serde_json::json!({
+            "spec": "in records\nout z\nz = Map.get(List.get(records, 0), \"target\")\n",
+            "type_info": {
+                "records": "Vec<Map<String, i32>>",
+                "z": "Int32"
+            }
+        });
+
+        assert_eq!(serialized, expected);
+        Ok(())
+    }
 }

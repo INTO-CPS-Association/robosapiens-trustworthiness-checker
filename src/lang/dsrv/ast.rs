@@ -597,13 +597,13 @@ impl Display for SExpr {
             LLen(lst) => write!(f, "List.len({})", lst),
             Map(map) => {
                 let map_str: Vec<String> =
-                    map.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
-                write!(f, "{{{}}}", map_str.join(", "))
+                    map.iter().map(|(k, v)| format!("{:?}: {}", k, v)).collect();
+                write!(f, "Map({})", map_str.join(", "))
             }
-            MGet(map, k) => write!(f, "Map.get({}, {})", map, k),
-            MInsert(map, k, v) => write!(f, "Map.insert({}, {}, {})", map, k, v),
-            MRemove(map, k) => write!(f, "Map.remove({}, {})", map, k),
-            MHasKey(map, k) => write!(f, "Map.has_key({}, {})", map, k),
+            MGet(map, k) => write!(f, "Map.get({}, {:?})", map, k),
+            MInsert(map, k, v) => write!(f, "Map.insert({}, {:?}, {})", map, k, v),
+            MRemove(map, k) => write!(f, "Map.remove({}, {:?})", map, k),
+            MHasKey(map, k) => write!(f, "Map.has_key({}, {:?})", map, k),
             Sin(v) => write!(f, "sin({})", v),
             Cos(v) => write!(f, "cos({})", v),
             Tan(v) => write!(f, "tan({})", v),
@@ -933,6 +933,8 @@ pub mod generation {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use proptest::prelude::*;
     use tracing::info;
 
@@ -940,9 +942,11 @@ mod tests {
     use super::generation::{
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
+    use crate::SExpr;
     use crate::dsrv_fixtures::{spec_simple_add_monitor, spec_simple_add_monitor_typed};
     use crate::dsrv_specification;
     use crate::lang::dsrv::lalr_parser::parse_sexpr;
+    use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
 
     proptest! {
         #[test]
@@ -1019,5 +1023,79 @@ mod tests {
         let res = format!("{}", spec_untyped);
         let expected = "in x: Int\nin y: Int\nout z: Int\nz = (x + y)\n";
         assert_eq!(res, expected);
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip_map_key_quoting_mget_both_parsers() {
+        let expr = SExpr::MGet(Box::new(SExpr::Var("records".into())), "target".into());
+        let formatted = format!("{}", expr);
+
+        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        assert_eq!(parsed_lalr, expr);
+
+        let mut input = formatted.as_str();
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(parsed_comb, expr);
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip_map_key_quoting_minsert_both_parsers() {
+        let expr = SExpr::MInsert(
+            Box::new(SExpr::Var("m".into())),
+            "key".into(),
+            Box::new(SExpr::Val(42.into())),
+        );
+        let formatted = format!("{}", expr);
+
+        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        assert_eq!(parsed_lalr, expr);
+
+        let mut input = formatted.as_str();
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(parsed_comb, expr);
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip_map_key_quoting_mremove_both_parsers() {
+        let expr = SExpr::MRemove(Box::new(SExpr::Var("m".into())), "key".into());
+        let formatted = format!("{}", expr);
+
+        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        assert_eq!(parsed_lalr, expr);
+
+        let mut input = formatted.as_str();
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(parsed_comb, expr);
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip_map_key_quoting_mhas_key_both_parsers() {
+        let expr = SExpr::MHasKey(Box::new(SExpr::Var("m".into())), "key".into());
+        let formatted = format!("{}", expr);
+
+        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        assert_eq!(parsed_lalr, expr);
+
+        let mut input = formatted.as_str();
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(parsed_comb, expr);
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip_map_literal_key_quoting_both_parsers() {
+        let expr = SExpr::Map(BTreeMap::from([("quoted".into(), SExpr::Val(true.into()))]));
+        let formatted = format!("{}", expr);
+
+        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        assert_eq!(parsed_lalr, expr);
+
+        let mut input = formatted.as_str();
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(parsed_comb, expr);
     }
 }
