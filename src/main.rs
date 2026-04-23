@@ -151,10 +151,34 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let aux_info = model.aux_info.clone();
     let builder = builder.model(model.clone());
 
+    // For distributed runtime with distribution constraints, create a localised model
+    // to restrict input subscriptions the constraint variables only (and their true input
+    // dependencies).
+    let localized_model = if matches!(
+        cli.runtime,
+        trustworthiness_checker::core::Runtime::Distributed
+    ) {
+        match &dist_constraints {
+            Some(constraints) if !constraints.is_empty() => {
+                let localized_constraint_vars: Vec<VarName> =
+                    constraints.iter().cloned().map(VarName::from).collect();
+                model.localise(&localized_constraint_vars)
+            }
+            _ => model.clone(),
+        }
+    } else {
+        model.clone()
+    };
+
+    info!(
+        input_vars = ?localized_model.input_vars,
+        "Localized model selected for input provider"
+    );
+
     // Create the input provider builder
     let input_provider_builder = InputProviderBuilder::new(cli.input_mode.clone())
         .executor(executor.clone())
-        .model(model)
+        .model(localized_model)
         .lang(cli.language)
         .runtime(cli.runtime)
         .mqtt_port(mqtt_port)

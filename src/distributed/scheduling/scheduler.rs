@@ -159,13 +159,19 @@ impl<M: Specification + Localisable> Scheduler<M> {
                 // Publish dist graph so downstream consumers can progress
                 self.dist_graph_sender.send(plan.clone()).await;
 
-                // Bootstrap tick is used to initialize planning state and execute plan only
-                if !is_bootstrap_tick {
+                // Bootstrap tick is used to initialize planning state only.
+                // Dispatch external work only:
+                //  - on the initial post-bootstrap tick (tick 1), or
+                //  - when replanning occurred on this tick.
+                let should_execute = !is_bootstrap_tick && (scheduler_tick == 1 || should_plan);
+
+                if should_execute {
                     self.scheduler_executor.execute(plan.clone()).await;
                 } else if !self.suppress_output {
                     info!(
                         tick = scheduler_tick,
-                        "Skipping external work execution during bootstrap"
+                        should_plan,
+                        "Skipping external work execution (no replanning and not initial post-bootstrap tick)"
                     );
                 }
 
