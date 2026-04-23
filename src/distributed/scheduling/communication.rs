@@ -156,10 +156,7 @@ mod tests {
         let spec = dsrv_specification(&mut spec_src).map_err(|e| anyhow::anyhow!(e))?;
 
         let type_info: WorkTypeInfo = BTreeMap::from([
-            (
-                VarName::from("records"),
-                String::from("Vec<Map<String, i32>>"),
-            ),
+            (VarName::from("records"), String::from("Odom")),
             (VarName::from("z"), String::from("Int32")),
         ]);
 
@@ -169,7 +166,7 @@ mod tests {
         let expected = serde_json::json!({
             "spec": "in records\nout z\nz = Map.get(List.get(records, 0), \"target\")\n",
             "type_info": {
-                "records": "Vec<Map<String, i32>>",
+                "records": "Odom",
                 "z": "Int32"
             }
         });
