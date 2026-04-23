@@ -196,7 +196,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // Get variable message types mapping
     let var_msg_types: Option<BTreeMap<VarName, String>> = match &cli.output_mode {
         OutputMode {
-            output_ros_file: Some(output_ros_file),
+            output_ros_file: Some(_output_ros_file),
             ..
         } => {
             // TODO: use cfg-if feature in next Rust version instead of this
@@ -210,7 +210,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
                 use trustworthiness_checker::io::ros::json_to_mapping;
                 use trustworthiness_checker::io::ros::ros_topic_stream_mapping::ros_variable_map_to_string_variable_map;
 
-                let output_json = std::fs::read_to_string(output_ros_file)
+                let output_json = std::fs::read_to_string(_output_ros_file)
                     .expect("Output mapping file could not be read");
                 let output_mapping =
                     json_to_mapping(&output_json).expect("Output mapping file could not be parsed");

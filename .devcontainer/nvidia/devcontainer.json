@@ -1,50 +1,50 @@
 {
-	"name": "RoboSapiens Adaptive Platform (NVIDIA GPU)",
-	"dockerComposeFile": "../../docker/docker-compose.yaml",
-	"service": "devnvidia",
-	"runServices": [
-		"devnvidia"
-	],
-	// ],
-	"workspaceFolder": "/ws",
-	"shutdownAction": "stopCompose",
-	"mounts": [
-		"source=${localWorkspaceFolder}/,target=/ws,type=bind,consistency=cached"
-	],
-	// "postCreateCommand": "pip install -r requirements.txt",
-	"customizations": {
-		"vscode": {
-			"settings": {
-				"terminal.integrated.defaultProfile.linux": "bash",
-				"terminal.integrated.profiles.linux": {
-					"bash": {
-						"path": "/bin/bash"
-					}
-				},
-				"rust-analyzer.cargo.features": [
-					"ros"
-				],
-				"rust-analyzer.runnables.extraEnv": {
-					"ROS_VERSION": 2,
-					"ROS_PYTHON_VERSION": 3,
-					"ROS_DISTRO": "humble",
-					"LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
-					"AMENT_PREFIX_PATH": "/opt/ros/humble",
-					"PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-				},
-				"rust-analyzer.server.extraEnv": {
-					"ROS_VERSION": 2,
-					"ROS_PYTHON_VERSION": 3,
-					"ROS_DISTRO": "humble",
-					"LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
-					"AMENT_PREFIX_PATH": "/opt/ros/humble",
-					"PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-				}
-			},
-			"extensions": [
-				"1YiB.rust-bundle",
-				"fill-labs.dependi"
-			]
-		}
-	}
+  "name": "RoboSapiens Adaptive Platform (NVIDIA GPU)",
+  "dockerComposeFile": "../../docker/docker-compose.yaml",
+  "service": "devnvidia",
+  "runServices": [
+    "devnvidia"
+  ],
+  // ],
+  "workspaceFolder": "/ws",
+  "shutdownAction": "stopCompose",
+  "mounts": [
+    "source=${localWorkspaceFolder}/,target=/ws,type=bind,consistency=cached"
+  ],
+  // "postCreateCommand": "pip install -r requirements.txt",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "/bin/bash"
+          }
+        },
+        "rust-analyzer.cargo.features": [
+          "ros"
+        ],
+        "rust-analyzer.runnables.extraEnv": {
+          "ROS_VERSION": 2,
+          "ROS_PYTHON_VERSION": 3,
+          "ROS_DISTRO": "humble",
+          "LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+          "AMENT_PREFIX_PATH": "/opt/ros/humble",
+          "PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        },
+        "rust-analyzer.server.extraEnv": {
+          "ROS_VERSION": 2,
+          "ROS_PYTHON_VERSION": 3,
+          "ROS_DISTRO": "humble",
+          "LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+          "AMENT_PREFIX_PATH": "/opt/ros/humble",
+          "PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        }
+      },
+      "extensions": [
+        "1YiB.rust-bundle",
+        "fill-labs.dependi"
+      ]
+    }
+  }
 }
