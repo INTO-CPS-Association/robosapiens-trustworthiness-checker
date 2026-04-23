@@ -51,10 +51,10 @@ fn monitor_work_for_specification<M: Specification + Localisable>(
     })
 }
 
-#[requires(local_topics.iter().all(|v| spec.var_names().contains(v) && var_msg_types.contains_key(v)))]
+#[requires(local_topics.iter().all(|v| spec.var_names().contains(v) && (spec.aux_vars().contains(v) || var_msg_types.contains_key(v))))]
 #[ensures(ret.as_ref().is_ok() -> {
     ret.as_ref().is_ok_and(|work| work.spec.output_vars().iter().all(|v| local_topics.contains(v)
-       && var_msg_types.contains_key(v)))})]
+       && (spec.aux_vars().contains(v) || var_msg_types.contains_key(v))))})]
 fn local_monitor_work<M: Specification + Localisable>(
     spec: M,
     var_msg_types: BTreeMap<VarName, String>,
@@ -108,6 +108,7 @@ mod tests {
     use crate::distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph};
     use crate::distributed::scheduling::communication::{MockSchedulerCommunicator, WorkTypeInfo};
     use crate::lang::dsrv::parser::dsrv_specification;
+    use crate::semantics::distributed::localisation::Localisable;
     use macro_rules_attribute::apply;
     use std::sync::{Arc, Mutex};
 
@@ -177,5 +178,20 @@ mod tests {
         assert!(!work.type_info.contains_key(&"z".into()));
         assert!(!work.type_info.contains_key(&"unused".into()));
         Ok(())
+    }
+
+    #[test]
+    fn local_monitor_work_fails_when_local_aux_type_info_is_missing() {
+        let mut spec_src = "in x: Int\nout z: Int\naux u: Int\nu = x\nz = u + 1";
+        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let local_spec = spec.localise(&vec!["z".into(), "u".into()]);
+
+        let var_msg_types: WorkTypeInfo = BTreeMap::from([
+            ("x".into(), "Int32".to_string()),
+            ("z".into(), "Int32".to_string()),
+            // Intentionally missing "u"
+        ]);
+
+        let _ = local_monitor_work(local_spec, var_msg_types, vec!["z".into(), "u".into()]);
     }
 }
