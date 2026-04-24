@@ -1,0 +1,65 @@
+{
+  "dist_graph": {
+    "central_monitor": 0,
+    "graph": {
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edge_property": "directed",
+      "edges": [
+        [
+          0,
+          1,
+          1
+        ],
+        [
+          1,
+          0,
+          1
+        ]
+      ]
+    }
+  },
+  "var_names": [
+    "R1Odom",
+    "ConveyorSystem",
+    "CS1Alert",
+    "aabbR1C ",
+    "R1Pose",
+    "R1X",
+    "R1Y",
+    "CX",
+    "CY",
+    "D",
+    "CPred"
+  ],
+  "node_labels": {
+    "0": [
+      "R1Odom",
+      "ConveyorSystem",
+      "CS1Alert",
+      "aabbR1C",
+      "R1Pose",
+      "R1X",
+      "R1Y",
+      "CX",
+      "CY",
+      "D",
+      "CPred"
+    ],
+    "1": [
+      "R1Odom",
+      "ConveyorSystem",
+      "CS1Alert",
+      "aabbR1C",
+      "R1Pose",
+      "R1X",
+      "R1Y",
+      "CX",
+      "CY",
+      "D",
+      "CPred"
+    ]
+  }
+}
