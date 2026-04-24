@@ -179,19 +179,4 @@ mod tests {
         assert!(!work.type_info.contains_key(&"unused".into()));
         Ok(())
     }
-
-    #[test]
-    fn local_monitor_work_fails_when_local_aux_type_info_is_missing() {
-        let mut spec_src = "in x: Int\nout z: Int\naux u: Int\nu = x\nz = u + 1";
-        let spec = dsrv_specification(&mut spec_src).unwrap();
-        let local_spec = spec.localise(&vec!["z".into(), "u".into()]);
-
-        let var_msg_types: WorkTypeInfo = BTreeMap::from([
-            ("x".into(), "Int32".to_string()),
-            ("z".into(), "Int32".to_string()),
-            // Intentionally missing "u"
-        ]);
-
-        let _ = local_monitor_work(local_spec, var_msg_types, vec!["z".into(), "u".into()]);
-    }
 }

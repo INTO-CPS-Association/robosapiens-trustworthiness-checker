@@ -6,8 +6,8 @@ use tracing::debug;
 
 use crate::lang::dsrv::ast::DsrvSpecification;
 
-use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
+use crate::{SExpr, Specification, VarName};
 
 pub trait LocalitySpec: Debug {
     fn local_vars(&self) -> Vec<VarName>;
@@ -47,13 +47,157 @@ pub trait Localisable {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self;
 }
 
+fn replace_var(var: &VarName, var_expr: &SExpr, repl_expr: &SExpr) -> SExpr {
+    // Replaces all occurrences of var in the repl_expr with var_expr
+    match repl_expr {
+        SExpr::Var(v) if v == var => var_expr.clone(),
+        SExpr::Var(_) => repl_expr.clone(),
+        SExpr::BinOp(lhs, rhs, op) => SExpr::BinOp(
+            Box::new(replace_var(var, var_expr, lhs)),
+            Box::new(replace_var(var, var_expr, rhs)),
+            op.clone(),
+        ),
+        SExpr::If(sexpr, sexpr1, sexpr2) => SExpr::If(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+            Box::new(replace_var(var, var_expr, sexpr2)),
+        ),
+        SExpr::SIndex(sexpr, idx) => {
+            SExpr::SIndex(Box::new(replace_var(var, var_expr, sexpr)), *idx)
+        }
+        SExpr::Val(value) => SExpr::Val(value.clone()),
+        SExpr::Dynamic(sexpr, stream_type_ascription) => SExpr::Dynamic(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            stream_type_ascription.clone(),
+        ),
+        SExpr::RestrictedDynamic(sexpr, stream_type_ascription, eco_vec) => {
+            SExpr::RestrictedDynamic(
+                Box::new(replace_var(var, var_expr, sexpr)),
+                stream_type_ascription.clone(),
+                eco_vec.clone(),
+            )
+        }
+        SExpr::Defer(sexpr, stream_type_ascription, eco_vec) => SExpr::Defer(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            stream_type_ascription.clone(),
+            eco_vec.clone(),
+        ),
+        SExpr::Update(sexpr, sexpr1) => SExpr::Update(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::Default(sexpr, sexpr1) => SExpr::Default(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::When(sexpr) => SExpr::When(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::Latch(sexpr, sexpr1) => SExpr::Latch(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::Init(sexpr, sexpr1) => SExpr::Init(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::Not(sexpr) => SExpr::Not(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::List(eco_vec) => {
+            let vec = eco_vec
+                .iter()
+                .map(|e| replace_var(var, var_expr, e))
+                .collect();
+            SExpr::List(vec)
+        }
+        SExpr::LIndex(sexpr, sexpr1) => SExpr::LIndex(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::LAppend(sexpr, sexpr1) => SExpr::LAppend(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::LConcat(sexpr, sexpr1) => SExpr::LConcat(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::LHead(sexpr) => SExpr::LHead(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::LTail(sexpr) => SExpr::LTail(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::LLen(sexpr) => SExpr::LLen(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::Map(btree_map) => SExpr::Map(
+            btree_map
+                .iter()
+                .map(|(k, v)| (k.clone(), replace_var(var, var_expr, v)))
+                .collect(),
+        ),
+        SExpr::MGet(sexpr, eco_string) => SExpr::MGet(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            eco_string.clone(),
+        ),
+        SExpr::MInsert(sexpr, eco_string, sexpr1) => SExpr::MInsert(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            eco_string.clone(),
+            Box::new(replace_var(var, var_expr, sexpr1)),
+        ),
+        SExpr::MRemove(sexpr, eco_string) => SExpr::MRemove(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            eco_string.clone(),
+        ),
+        SExpr::MHasKey(sexpr, eco_string) => SExpr::MHasKey(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            eco_string.clone(),
+        ),
+        SExpr::Sin(sexpr) => SExpr::Sin(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::Cos(sexpr) => SExpr::Cos(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::Tan(sexpr) => SExpr::Tan(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::Abs(sexpr) => SExpr::Abs(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::MonitoredAt(var_name, node_name) => {
+            if var_name == var {
+                panic!("Localisation of monitored_at expression with aux variable not allowed")
+            } else {
+                SExpr::MonitoredAt(var_name.clone(), node_name.clone())
+            }
+        }
+        SExpr::Dist(_, _) => {
+            unimplemented!("Dist currently unsupported")
+        }
+    }
+}
+
+fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
+    // Inlines auxiliary variables by replacing them with their definitions in the expressions
+    let mut new_spec = spec.clone();
+    let aux_vars = spec.aux_vars();
+    for aux in aux_vars.iter() {
+        // TODO: Does not handle recursion - we should check if aux_expr contains aux
+        let aux_expr = spec.exprs.get(aux).expect(
+            format!(
+                "Aux variable {:?} does not have a definition in the expressions",
+                aux
+            )
+            .as_str(),
+        );
+        for (_, repl_expr) in new_spec.exprs.iter_mut() {
+            let new_expr = replace_var(aux, aux_expr, &*repl_expr);
+            *repl_expr = new_expr;
+        }
+    }
+    for aux in aux_vars.iter() {
+        new_spec.exprs.remove(aux);
+        new_spec.output_vars.retain(|v| v != aux);
+        new_spec.type_annotations.remove(aux);
+    }
+    new_spec.aux_info = vec![];
+    new_spec
+}
+
 impl Localisable for DsrvSpecification {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self {
+        let spec = inline_aux(self.clone());
         let local_vars = locality_spec.local_vars();
-        let mut exprs = self.exprs.clone();
-        let mut output_vars = self.output_vars.clone();
-        let mut aux_info = self.aux_info.clone();
-        let input_vars = self.input_vars.clone();
+        let mut exprs = spec.exprs.clone();
+        let mut output_vars = spec.output_vars.clone();
+        let mut aux_info = spec.aux_info.clone();
+        let input_vars = spec.input_vars.clone();
 
         let mut to_remove = vec![];
         for v in output_vars.iter() {
@@ -81,7 +225,7 @@ impl Localisable for DsrvSpecification {
             new_input_vars,
             output_vars,
             exprs,
-            self.type_annotations.clone(),
+            spec.type_annotations.clone(),
             aux_info,
         )
     }
@@ -229,7 +373,7 @@ mod tests {
             .expect("Failed to parse specification");
 
         let local_spec1 = spec.localise(&vec!["w".into()]);
-        let local_spec2 = spec.localise(&vec!["v".into(), "tmp".into()]);
+        let local_spec2 = spec.localise(&vec!["v".into()]);
 
         assert_eq!(
             local_spec1,
@@ -255,23 +399,120 @@ mod tests {
             local_spec2,
             DsrvSpecification::new(
                 vec!["z".into(), "w".into()],
-                vec!["v".into(), "tmp".into()],
-                vec![
-                    (
-                        "tmp".into(),
-                        SExpr::BinOp(
-                            Box::new(SExpr::Var("z".into())),
-                            Box::new(SExpr::Var("w".into())),
-                            "+".into(),
-                        ),
-                    ),
-                    ("v".into(), SExpr::Var("tmp".into())),
-                ]
+                vec!["v".into()],
+                vec![(
+                    "v".into(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var("z".into())),
+                        Box::new(SExpr::Var("w".into())),
+                        "+".into()
+                    )
+                )]
                 .into_iter()
                 .collect(),
                 BTreeMap::new(),
-                vec!["tmp".into()],
+                vec![],
             )
+        );
+    }
+
+    #[test]
+    fn test_replace_var_simple() {
+        let x: VarName = "x".into();
+        let expr = SExpr::Var(x.clone());
+        let replacement = SExpr::Val(42.into());
+
+        let result = replace_var(&x, &replacement, &expr);
+
+        assert_eq!(result, replacement);
+    }
+
+    #[test]
+    fn test_replace_var_nested() {
+        let x: VarName = "x".into();
+        let y: VarName = "y".into();
+
+        let expr = SExpr::BinOp(
+            Box::new(SExpr::Var(x.clone())),
+            Box::new(SExpr::BinOp(
+                Box::new(SExpr::Var(y.clone())),
+                Box::new(SExpr::Var(x.clone())),
+                "+".into(),
+            )),
+            "*".into(),
+        );
+
+        let replacement = SExpr::Val(1.into());
+
+        let result = replace_var(&x, &replacement, &expr);
+
+        let expected = SExpr::BinOp(
+            Box::new(SExpr::Val(1.into())),
+            Box::new(SExpr::BinOp(
+                Box::new(SExpr::Var(y)),
+                Box::new(SExpr::Val(1.into())),
+                "+".into(),
+            )),
+            "*".into(),
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_inline_aux_single_aux() {
+        let x: VarName = "x".into();
+        let y: VarName = "y".into();
+        let tmp: VarName = "tmp".into();
+        let z: VarName = "z".into();
+
+        let spec = DsrvSpecification::new(
+            vec![x.clone(), y.clone()],
+            vec![tmp.clone(), z.clone()],
+            vec![
+                (
+                    tmp.clone(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var(x.clone())),
+                        Box::new(SExpr::Var(y.clone())),
+                        "+".into(),
+                    ),
+                ),
+                (
+                    z.clone(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var(tmp.clone())),
+                        Box::new(SExpr::Var(x.clone())),
+                        "*".into(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            BTreeMap::new(),
+            vec![tmp.clone()],
+        );
+
+        let result = inline_aux(spec);
+
+        let expected_exprs = vec![(
+            z.clone(),
+            SExpr::BinOp(
+                Box::new(SExpr::BinOp(
+                    Box::new(SExpr::Var(x.clone())),
+                    Box::new(SExpr::Var(y.clone())),
+                    "+".into(),
+                )),
+                Box::new(SExpr::Var(x.clone())),
+                "*".into(),
+            ),
+        )]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            result,
+            DsrvSpecification::new(vec![x, y], vec![z], expected_exprs, BTreeMap::new(), vec![])
         );
     }
 

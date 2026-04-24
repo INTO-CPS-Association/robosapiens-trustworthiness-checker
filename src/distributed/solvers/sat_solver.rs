@@ -2576,79 +2576,6 @@ dist3 = if ((!!c3) == c3) then monitored_at(s3, C) else monitored_at(s3, A)
             prop_assert_eq!(&sat_labelled.var_names, &brute_labelled.var_names);
             prop_assert_eq!(sat_projection, brute_projection);
         }
-
-        // TODO: investigate and fix
-        #[test]
-        fn prop_sat_localisation_sensitive_spec_expected_divergence_regression(
-            _dummy in Just(()),
-        ) {
-            let spec = r#"
-in c1
-in c2
-in c3
-out s1
-out s2
-out s3
-out d1
-out d2
-out d3
-aux h1
-aux h2
-h1 = if c1 then monitored_at(s1, A) else monitored_at(s1, B)
-h2 = if c2 then monitored_at(s2, B) else monitored_at(s2, C)
-d1 = h1
-d2 = h2
-d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
-"#
-            .trim()
-            .to_string();
-
-            let output_vars = vec![
-                VarName::new("s1"),
-                VarName::new("s2"),
-                VarName::new("s3"),
-                VarName::new("d1"),
-                VarName::new("d2"),
-                VarName::new("d3"),
-            ];
-            let dist_constraints = vec![
-                VarName::new("d1"),
-                VarName::new("d2"),
-                VarName::new("d3"),
-            ];
-
-            let graph = graph_3_nodes_with_weights(1, 1, 1);
-
-            let replay_snapshot = std::collections::BTreeMap::from([(
-                0usize,
-                std::collections::BTreeMap::from([
-                    (VarName::new("c1"), Value::Bool(false)),
-                    (VarName::new("c2"), Value::Bool(false)),
-                    (VarName::new("c3"), Value::Bool(false)),
-                ]),
-            )]);
-
-            let (sat_opt, brute_opt) = solve_sat_and_bruteforce_once_optional(
-                graph,
-                spec,
-                output_vars,
-                dist_constraints,
-                replay_snapshot,
-            );
-
-            // NOTE: Expected divergence (documented regression):
-            // With current brute localisation semantics, helper vars `h1`/`h2` become unresolved
-            // local inputs after localisation of only `d1,d2,d3`, so brute can evaluate to no
-            // feasible assignment for this fixed case.
-            //
-            // SAT path currently compiles the localised constraints differently and may still find
-            // a satisfiable assignment. This test documents that behavioral difference explicitly.
-            prop_assert!(
-                sat_opt.is_some() != brute_opt.is_some(),
-                "Expected SAT/brute divergence for localisation-sensitive regression case under current semantics"
-            );
-        }
-
     }
 
     #[test]
@@ -2683,7 +2610,7 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
 
         assert_eq!(
             localised.input_vars,
-            vec![VarName::new("c3"), VarName::new("h1"), VarName::new("h2")]
+            vec!["c1".into(), "c2".into(), "c3".into()]
         );
         assert!(localised.var_expr(&VarName::new("h1")).is_none());
         assert!(localised.var_expr(&VarName::new("h2")).is_none());
