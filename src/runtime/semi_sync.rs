@@ -1476,7 +1476,7 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn test_context_transfer(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_context_transfer(_executor: Rc<LocalExecutor<'static>>) {
         // Tests that context transfers work purely from a Context perspective (without actually
         // involving the monitor or outputs)
 
