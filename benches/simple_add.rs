@@ -15,7 +15,7 @@ use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor_typed;
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[derive(Clone)]
 struct LocalSmolExecutor {

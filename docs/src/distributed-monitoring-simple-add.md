@@ -2,7 +2,7 @@
 
 Launch scheduler node:
 ```bash
-RUST_LOG=INFO cargo run --features ros -- examples/distributed/simple_add_distributable_alt_constraints.dsrv --runtime distributed --distribution-graph examples/distributed/simple_add_alt_constraints_distribution_graph.json --distribution-constraints distW distV --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/simple_add_distributable_ros_in_full.json --output-ros-file examples/distributed/simple_add_distributable_ros_out.json
+RUST_LOG=INFO cargo run --features ros -- examples/distributed/simple_add_distributable_alt_constraints.dsrv --runtime distributed --distribution-graph examples/distributed/simple_add_alt_constraints_distribution_graph.json --dist-constraint-solver sat --distribution-constraints distW distV --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/simple_add_distributable_ros_in_full.json --output-ros-file examples/distributed/simple_add_distributable_ros_out.json
 ```
 
 Subscribe to `w` and `v` topics:

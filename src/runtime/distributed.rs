@@ -15,13 +15,19 @@ use crate::{
             communication::{NullSchedulerCommunicator, SchedulerCommunicator},
             planners::{
                 constrained::{DynamicOptimizedSchedulerPlanner, StaticOptimizedSchedulerPlanner},
+                constrained_sat::{
+                    DynamicOptimizedSchedulerPlannerSat, StaticOptimizedSchedulerPlannerSat,
+                },
                 core::{
                     CentralisedSchedulerPlanner, SchedulerPlanner, StaticFixedSchedulerPlanner,
                 },
                 random::RandomSchedulerPlanner,
             },
         },
-        solvers::brute_solver::BruteForceDistConstraintSolver,
+        solvers::{
+            brute_solver::BruteForceDistConstraintSolver,
+            sat_solver::SatMonitoredAtDistConstraintSolver,
+        },
     },
     io::{
         mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
@@ -67,6 +73,18 @@ pub enum DistGraphMode {
         /// Output variables containing distribution constraints
         Vec<VarName>,
     ),
+    MQTTStaticOptimizedSat(
+        /// Locations
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+    ),
+    MQTTDynamicOptimizedSat(
+        /// Locations
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+    ),
     ROSCentralised(
         /// Locations (logical node -> RVData source_robot_id)
         BTreeMap<NodeName, String>,
@@ -95,7 +113,29 @@ pub enum DistGraphMode {
         /// ROS topic used by distribution graph provider
         String,
     ),
+    ROSStaticOptimizedSat(
+        /// Locations (logical node -> RVData source_robot_id)
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+        /// ROS topic used by distribution graph provider
+        String,
+    ),
+    ROSDynamicOptimizedSat(
+        /// Locations (logical node -> RVData source_robot_id)
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+        /// ROS topic used by distribution graph provider
+        String,
+    ),
     PredefinedDynamicOptimized(
+        /// Predefined labelled distribution graph used as topology seed
+        LabelledDistributionGraph,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+    ),
+    PredefinedDynamicOptimizedSat(
         /// Predefined labelled distribution graph used as topology seed
         LabelledDistributionGraph,
         /// Output variables containing distribution constraints
@@ -163,6 +203,30 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncMonitorBuilder<AC, S>
         self
     }
 
+    pub fn mqtt_optimized_static_dist_graph_sat(
+        mut self,
+        locations: BTreeMap<NodeName, String>,
+        dist_constraints: Vec<VarName>,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::MQTTStaticOptimizedSat(
+            locations,
+            dist_constraints,
+        ));
+        self
+    }
+
+    pub fn mqtt_optimized_dynamic_dist_graph_sat(
+        mut self,
+        locations: BTreeMap<NodeName, String>,
+        dist_constraints: Vec<VarName>,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::MQTTDynamicOptimizedSat(
+            locations,
+            dist_constraints,
+        ));
+        self
+    }
+
     pub fn ros_centralised_dist_graph(
         mut self,
         locations: BTreeMap<NodeName, String>,
@@ -209,6 +273,34 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncMonitorBuilder<AC, S>
         self
     }
 
+    pub fn ros_optimized_static_dist_graph_sat(
+        mut self,
+        locations: BTreeMap<NodeName, String>,
+        dist_constraints: Vec<VarName>,
+        dist_graph_topic: String,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::ROSStaticOptimizedSat(
+            locations,
+            dist_constraints,
+            dist_graph_topic,
+        ));
+        self
+    }
+
+    pub fn ros_optimized_dynamic_dist_graph_sat(
+        mut self,
+        locations: BTreeMap<NodeName, String>,
+        dist_constraints: Vec<VarName>,
+        dist_graph_topic: String,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::ROSDynamicOptimizedSat(
+            locations,
+            dist_constraints,
+            dist_graph_topic,
+        ));
+        self
+    }
+
     pub fn partial_clone(&self) -> Self {
         Self {
             async_monitor_builder: self.async_monitor_builder.partial_clone(),
@@ -226,6 +318,18 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncMonitorBuilder<AC, S>
         dist_constraints: Vec<VarName>,
     ) -> Self {
         self.dist_graph_mode = Some(DistGraphMode::PredefinedDynamicOptimized(
+            graph,
+            dist_constraints,
+        ));
+        self
+    }
+
+    pub fn predefined_optimized_dist_graph_sat(
+        mut self,
+        graph: LabelledDistributionGraph,
+        dist_constraints: Vec<VarName>,
+    ) -> Self {
+        self.dist_graph_mode = Some(DistGraphMode::PredefinedDynamicOptimizedSat(
             graph,
             dist_constraints,
         ));
@@ -250,6 +354,39 @@ pub enum SchedulerCommunication {
         ros_node_name: String,
         reconf_topic: String,
     },
+}
+
+impl<S, AC> DistAsyncMonitorBuilder<AC, S>
+where
+    S: MonitoringSemantics<AC>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC::Spec: Localisable,
+{
+    fn extract_replay_history(&self) -> Option<crate::io::replay_history::ReplayHistory> {
+        self.input
+            .as_ref()
+            .and_then(|input| input.replay_history_handle())
+            .or_else(|| {
+                self.input
+                    .as_ref()
+                    .and_then(|input| input.replay_history())
+                    .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
+            })
+    }
+
+    fn make_sat_solver(
+        &self,
+        dist_constraints: Vec<VarName>,
+        output_vars: Vec<VarName>,
+        spec: &AC::Spec,
+    ) -> SatMonitoredAtDistConstraintSolver<S, AC> {
+        SatMonitoredAtDistConstraintSolver::new(
+            dist_constraints,
+            output_vars,
+            spec.to_string(),
+            self.extract_replay_history(),
+        )
+    }
 }
 
 impl<S, AC> AbstractMonitorBuilder<AC::Spec, AC::Val> for DistAsyncMonitorBuilder<AC, S>
@@ -326,12 +463,7 @@ where
             .as_ref()
             .expect("Var names not set")
             .output_vars();
-        let input_vars = self
-            .async_monitor_builder
-            .model
-            .as_ref()
-            .unwrap()
-            .input_vars();
+
         let output_vars = self
             .async_monitor_builder
             .model
@@ -416,28 +548,49 @@ where
                     .expect("Failed to create MQTT dist graph provider"),
                 );
 
-                let replay_history = self
-                    .input
-                    .as_ref()
-                    .and_then(|input| input.replay_history_handle())
-                    .or_else(|| {
-                        self.input
-                            .as_ref()
-                            .and_then(|input| input.replay_history())
-                            .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
-                    });
+                let replay_history = self.extract_replay_history();
 
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),
                     monitor_builder: self.partial_clone(),
                     context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
                     dist_constraints: dist_constraints.clone(),
-                    input_vars,
-                    output_vars,
+                    input_vars: self
+                        .async_monitor_builder
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .input_vars(),
+                    output_vars: output_vars.clone(),
                     replay_history,
                 };
                 let planner: Box<dyn SchedulerPlanner> =
                     Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+
+                (
+                    planner,
+                    location_names,
+                    dist_graph_provider,
+                    dist_constraints,
+                    ReplanningCondition::Never,
+                )
+            }
+            DistGraphMode::MQTTStaticOptimizedSat(locations, dist_constraints) => {
+                debug!("Creating static optimized SAT dist graph provider");
+                let location_names = locations.keys().cloned().collect();
+                let dist_graph_provider = Box::new(
+                    dist_graph_provider::MQTTDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        locations,
+                    )
+                    .expect("Failed to create MQTT dist graph provider"),
+                );
+
+                let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
+                    self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
+                let planner: Box<dyn SchedulerPlanner> =
+                    Box::new(StaticOptimizedSchedulerPlannerSat::new(solver));
 
                 (
                     planner,
@@ -459,28 +612,49 @@ where
                     .expect("Failed to create MQTT dist graph provider"),
                 );
 
-                let replay_history = self
-                    .input
-                    .as_ref()
-                    .and_then(|input| input.replay_history_handle())
-                    .or_else(|| {
-                        self.input
-                            .as_ref()
-                            .and_then(|input| input.replay_history())
-                            .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
-                    });
+                let replay_history = self.extract_replay_history();
 
                 let solver = BruteForceDistConstraintSolver {
                     executor: executor.clone(),
                     monitor_builder: self.partial_clone(),
                     context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
                     dist_constraints: dist_constraints.clone(),
-                    input_vars,
-                    output_vars,
+                    input_vars: self
+                        .async_monitor_builder
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .input_vars(),
+                    output_vars: output_vars.clone(),
                     replay_history,
                 };
                 let planner: Box<dyn SchedulerPlanner> =
                     Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
+
+                (
+                    planner,
+                    location_names,
+                    dist_graph_provider,
+                    dist_constraints,
+                    ReplanningCondition::ConstraintsFail,
+                )
+            }
+            DistGraphMode::MQTTDynamicOptimizedSat(locations, dist_constraints) => {
+                debug!("Creating dynamic optimized SAT dist graph provider");
+                let location_names = locations.keys().cloned().collect();
+                let dist_graph_provider = Box::new(
+                    dist_graph_provider::MQTTDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        locations,
+                    )
+                    .expect("Failed to create MQTT dist graph provider"),
+                );
+
+                let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
+                    self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
+                let planner: Box<dyn SchedulerPlanner> =
+                    Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
 
                 (
                     planner,
@@ -572,30 +746,62 @@ where
                     )
                     .expect("Failed to create ROS dist graph provider");
 
-                    let replay_history = self
-                        .input
-                        .as_ref()
-                        .and_then(|input| input.replay_history_handle())
-                        .or_else(|| {
-                            self.input
-                                .as_ref()
-                                .and_then(|input| input.replay_history())
-                                .map(
-                                    crate::io::replay_history::ReplayHistory::store_all_with_snapshot,
-                                )
-                        });
+                    let replay_history = self.extract_replay_history();
 
                     let solver = BruteForceDistConstraintSolver {
                         executor: executor.clone(),
                         monitor_builder: self.partial_clone(),
                         context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
                         dist_constraints: _dist_constraints.clone(),
-                        input_vars,
-                        output_vars,
+                        input_vars: self
+                            .async_monitor_builder
+                            .model
+                            .as_ref()
+                            .unwrap()
+                            .input_vars(),
+                        output_vars: output_vars.clone(),
                         replay_history,
                     };
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+
+                    (
+                        planner,
+                        location_names,
+                        Box::new(provider) as Box<dyn DistGraphProvider>,
+                        _dist_constraints,
+                        ReplanningCondition::Never,
+                    )
+                }
+                #[cfg(not(feature = "ros"))]
+                {
+                    panic!("ROS dist graph mode requires building with feature 'ros'");
+                }
+            }
+            DistGraphMode::ROSStaticOptimizedSat(
+                _locations,
+                _dist_constraints,
+                _dist_graph_topic,
+            ) => {
+                debug!(
+                    "Creating ROS static optimized SAT dist graph provider with topic: {}",
+                    _dist_graph_topic
+                );
+                #[cfg(feature = "ros")]
+                {
+                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        _locations,
+                        _dist_graph_topic,
+                    )
+                    .expect("Failed to create ROS dist graph provider");
+
+                    let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
+                        self.make_sat_solver(_dist_constraints.clone(), output_vars.clone(), &spec);
+                    let planner: Box<dyn SchedulerPlanner> =
+                        Box::new(StaticOptimizedSchedulerPlannerSat::new(solver));
 
                     (
                         planner,
@@ -630,30 +836,62 @@ where
                     )
                     .expect("Failed to create ROS dist graph provider");
 
-                    let replay_history = self
-                        .input
-                        .as_ref()
-                        .and_then(|input| input.replay_history_handle())
-                        .or_else(|| {
-                            self.input
-                                .as_ref()
-                                .and_then(|input| input.replay_history())
-                                .map(
-                                    crate::io::replay_history::ReplayHistory::store_all_with_snapshot,
-                                )
-                        });
+                    let replay_history = self.extract_replay_history();
 
                     let solver = BruteForceDistConstraintSolver {
                         executor: executor.clone(),
                         monitor_builder: self.partial_clone(),
                         context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
                         dist_constraints: _dist_constraints.clone(),
-                        input_vars,
-                        output_vars,
+                        input_vars: self
+                            .async_monitor_builder
+                            .model
+                            .as_ref()
+                            .unwrap()
+                            .input_vars(),
+                        output_vars: output_vars.clone(),
                         replay_history,
                     };
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
+
+                    (
+                        planner,
+                        location_names,
+                        Box::new(provider) as Box<dyn DistGraphProvider>,
+                        _dist_constraints,
+                        ReplanningCondition::ConstraintsFail,
+                    )
+                }
+                #[cfg(not(feature = "ros"))]
+                {
+                    panic!("ROS dist graph mode requires building with feature 'ros'");
+                }
+            }
+            DistGraphMode::ROSDynamicOptimizedSat(
+                _locations,
+                _dist_constraints,
+                _dist_graph_topic,
+            ) => {
+                debug!(
+                    "Creating ROS dynamic optimized SAT dist graph provider with topic: {}",
+                    _dist_graph_topic
+                );
+                #[cfg(feature = "ros")]
+                {
+                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                        executor.clone(),
+                        "central".to_string().into(),
+                        _locations,
+                        _dist_graph_topic,
+                    )
+                    .expect("Failed to create ROS dist graph provider");
+
+                    let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
+                        self.make_sat_solver(_dist_constraints.clone(), output_vars.clone(), &spec);
+                    let planner: Box<dyn SchedulerPlanner> =
+                        Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
 
                     (
                         planner,
@@ -691,12 +929,37 @@ where
                     monitor_builder: self.partial_clone(),
                     context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
                     dist_constraints: dist_constraints.clone(),
-                    input_vars,
-                    output_vars,
+                    input_vars: self
+                        .async_monitor_builder
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .input_vars(),
+                    output_vars: output_vars.clone(),
                     replay_history,
                 };
                 let planner: Box<dyn SchedulerPlanner> =
                     Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
+
+                (
+                    planner,
+                    location_names,
+                    dist_graph_provider,
+                    dist_constraints,
+                    ReplanningCondition::ConstraintsFail,
+                )
+            }
+            DistGraphMode::PredefinedDynamicOptimizedSat(graph, dist_constraints) => {
+                debug!("Creating predefined dynamic optimized SAT dist graph provider");
+                let graph = Rc::new(graph);
+                let location_names = graph.dist_graph.graph.node_weights().cloned().collect();
+                let dist_graph_provider =
+                    Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
+
+                let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
+                    self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
+                let planner: Box<dyn SchedulerPlanner> =
+                    Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
 
                 (
                     planner,

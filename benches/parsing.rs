@@ -5,7 +5,7 @@ use trustworthiness_checker::dsrv_specification;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_str;
 
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 // Create many small terms separated by &&
 fn create_small_varied_expressions(rng: &mut StdRng, size: usize) -> String {

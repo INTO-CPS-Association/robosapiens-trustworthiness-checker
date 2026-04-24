@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::args::DistributionMode as CliDistributionMode;
-use super::args::{DistributionMode, InputMode, SchedulingType};
+use super::args::{DistributionMode, DistributionSolver, InputMode, SchedulingType};
 use crate::core::interfaces::Runtime;
 use crate::runtime::builder::DistributionMode as BuilderDistributionMode;
 
@@ -103,6 +103,7 @@ pub struct DistributionModeBuilder {
     mqtt_port: Option<u16>,
     ros_dist_graph_topic: String,
     runtime: Option<Runtime>,
+    dist_constraint_solver: DistributionSolver,
 }
 
 impl DistributionModeBuilder {
@@ -114,6 +115,7 @@ impl DistributionModeBuilder {
             mqtt_port: None,
             ros_dist_graph_topic: "/dist_graph".to_string(),
             runtime: None,
+            dist_constraint_solver: DistributionSolver::BruteForce,
         }
     }
 
@@ -157,8 +159,43 @@ impl DistributionModeBuilder {
         self
     }
 
+    pub fn dist_constraint_solver(mut self, dist_constraint_solver: DistributionSolver) -> Self {
+        self.dist_constraint_solver = dist_constraint_solver;
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<BuilderDistributionMode> {
-        Ok(match (self.distribution_mode, self.runtime) {
+        let distribution_mode = self.distribution_mode.clone();
+
+        let wants_dist_constraint_optimization_mode = matches!(
+            distribution_mode,
+            DistributionMode {
+                mqtt_static_optimized: Some(_),
+                ..
+            } | DistributionMode {
+                mqtt_dynamic_optimized: Some(_),
+                ..
+            } | DistributionMode {
+                ros_static_optimized: Some(_),
+                ..
+            } | DistributionMode {
+                ros_dynamic_optimized: Some(_),
+                ..
+            } | DistributionMode {
+                distribution_graph: Some(_),
+                ..
+            }
+        ) && self.dist_constraints.is_some();
+
+        if matches!(self.dist_constraint_solver, DistributionSolver::Sat)
+            && !wants_dist_constraint_optimization_mode
+        {
+            anyhow::bail!(
+                "--dist-constraint-solver sat requires an optimized distribution mode with --distribution-constraints"
+            );
+        }
+
+        Ok(match (distribution_mode, self.runtime) {
             (
                 DistributionMode {
                     distribution_graph: Some(file_path),
@@ -175,10 +212,20 @@ impl DistributionModeBuilder {
 
                 if matches!(runtime, Some(Runtime::Distributed)) {
                     if let Some(dist_constraints) = self.dist_constraints {
-                        BuilderDistributionMode::DistributedPredefinedOptimized(
-                            distribution_graph,
-                            dist_constraints,
-                        )
+                        match self.dist_constraint_solver {
+                            DistributionSolver::BruteForce => {
+                                BuilderDistributionMode::DistributedPredefinedOptimized(
+                                    distribution_graph,
+                                    dist_constraints,
+                                )
+                            }
+                            DistributionSolver::Sat => {
+                                BuilderDistributionMode::DistributedPredefinedOptimizedSat(
+                                    distribution_graph,
+                                    dist_constraints,
+                                )
+                            }
+                        }
                     } else {
                         BuilderDistributionMode::DistributedPredefinedStatic(distribution_graph)
                     }
@@ -235,13 +282,26 @@ impl DistributionModeBuilder {
                 _,
             ) => {
                 info!("setting up static optimization mode");
-                let dist_constraints = self
+                let dist_constraints: Vec<VarName> = self
                     .dist_constraints
                     .context("Distribution constraints must be provided")?
                     .into_iter()
                     .map(|x| x.into())
                     .collect();
-                BuilderDistributionMode::DistributedOptimizedStatic(locations, dist_constraints)
+                match self.dist_constraint_solver {
+                    DistributionSolver::BruteForce => {
+                        BuilderDistributionMode::DistributedOptimizedStatic(
+                            locations,
+                            dist_constraints,
+                        )
+                    }
+                    DistributionSolver::Sat => {
+                        BuilderDistributionMode::DistributedOptimizedStaticSat(
+                            locations,
+                            dist_constraints,
+                        )
+                    }
+                }
             }
             (
                 DistributionMode {
@@ -250,14 +310,27 @@ impl DistributionModeBuilder {
                 },
                 _,
             ) => {
-                info!("setting up static optimization mode");
-                let dist_constraints = self
+                info!("setting up dynamic optimization mode");
+                let dist_constraints: Vec<VarName> = self
                     .dist_constraints
                     .context("Distribution constraints must be provided")?
                     .into_iter()
                     .map(|x| x.into())
                     .collect();
-                BuilderDistributionMode::DistributedOptimizedDynamic(locations, dist_constraints)
+                match self.dist_constraint_solver {
+                    DistributionSolver::BruteForce => {
+                        BuilderDistributionMode::DistributedOptimizedDynamic(
+                            locations,
+                            dist_constraints,
+                        )
+                    }
+                    DistributionSolver::Sat => {
+                        BuilderDistributionMode::DistributedOptimizedDynamicSat(
+                            locations,
+                            dist_constraints,
+                        )
+                    }
+                }
             }
             (
                 DistributionMode {
@@ -316,17 +389,28 @@ impl DistributionModeBuilder {
                         "setting up ROS static optimization mode using dist graph topic: {}",
                         self.ros_dist_graph_topic
                     );
-                    let dist_constraints = self
+                    let dist_constraints: Vec<VarName> = self
                         .dist_constraints
                         .context("Distribution constraints must be provided")?
                         .into_iter()
                         .map(|x| x.into())
                         .collect();
-                    BuilderDistributionMode::DistributedRosOptimizedStatic(
-                        _locations,
-                        dist_constraints,
-                        self.ros_dist_graph_topic.clone(),
-                    )
+                    match self.dist_constraint_solver {
+                        DistributionSolver::BruteForce => {
+                            BuilderDistributionMode::DistributedRosOptimizedStatic(
+                                _locations,
+                                dist_constraints,
+                                self.ros_dist_graph_topic.clone(),
+                            )
+                        }
+                        DistributionSolver::Sat => {
+                            BuilderDistributionMode::DistributedRosOptimizedStaticSat(
+                                _locations,
+                                dist_constraints,
+                                self.ros_dist_graph_topic.clone(),
+                            )
+                        }
+                    }
                 }
             }
             (
@@ -344,17 +428,28 @@ impl DistributionModeBuilder {
                         "setting up ROS dynamic optimization mode using dist graph topic: {}",
                         self.ros_dist_graph_topic
                     );
-                    let dist_constraints = self
+                    let dist_constraints: Vec<VarName> = self
                         .dist_constraints
                         .context("Distribution constraints must be provided")?
                         .into_iter()
                         .map(|x| x.into())
                         .collect();
-                    BuilderDistributionMode::DistributedRosOptimizedDynamic(
-                        _locations,
-                        dist_constraints,
-                        self.ros_dist_graph_topic.clone(),
-                    )
+                    match self.dist_constraint_solver {
+                        DistributionSolver::BruteForce => {
+                            BuilderDistributionMode::DistributedRosOptimizedDynamic(
+                                _locations,
+                                dist_constraints,
+                                self.ros_dist_graph_topic.clone(),
+                            )
+                        }
+                        DistributionSolver::Sat => {
+                            BuilderDistributionMode::DistributedRosOptimizedDynamicSat(
+                                _locations,
+                                dist_constraints,
+                                self.ros_dist_graph_topic.clone(),
+                            )
+                        }
+                    }
                 }
             }
 
@@ -567,6 +662,134 @@ mod tests {
         assert!(matches!(
             mode,
             BuilderDistributionMode::DistributedRosOptimizedDynamic(locs, constraints, topic)
+                if locs == vec!["r1".to_string(), "r2".to_string()]
+                && constraints == vec![VarName::new("c1"), VarName::new("c2")]
+                && topic == "/dist_graph"
+        ));
+    }
+
+    #[test]
+    fn test_distribution_mode_builder_mqtt_static_optimized_sat_maps_correctly() {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: Some(vec!["n1".to_string(), "n2".to_string()]),
+            mqtt_dynamic_optimized: None,
+            ros_centralised_distributed: None,
+            ros_randomized_distributed: None,
+            ros_static_optimized: None,
+            ros_dynamic_optimized: None,
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode)
+            .dist_constraint_solver(DistributionSolver::Sat)
+            .dist_constraints(vec!["c1".to_string(), "c2".to_string()]);
+        let mode = smol::block_on(builder.build()).expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedOptimizedStaticSat(locs, constraints)
+                if locs == vec!["n1".to_string(), "n2".to_string()]
+                && constraints == vec![VarName::new("c1"), VarName::new("c2")]
+        ));
+    }
+
+    #[test]
+    fn test_distribution_mode_builder_mqtt_dynamic_optimized_sat_maps_correctly() {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
+            mqtt_dynamic_optimized: Some(vec!["n1".to_string(), "n2".to_string()]),
+            ros_centralised_distributed: None,
+            ros_randomized_distributed: None,
+            ros_static_optimized: None,
+            ros_dynamic_optimized: None,
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode)
+            .dist_constraint_solver(DistributionSolver::Sat)
+            .dist_constraints(vec!["c1".to_string(), "c2".to_string()]);
+        let mode = smol::block_on(builder.build()).expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedOptimizedDynamicSat(locs, constraints)
+                if locs == vec!["n1".to_string(), "n2".to_string()]
+                && constraints == vec![VarName::new("c1"), VarName::new("c2")]
+        ));
+    }
+
+    #[cfg(feature = "ros")]
+    #[apply(async_test)]
+    async fn test_distribution_mode_builder_ros_static_optimized_sat_maps_correctly(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
+            mqtt_dynamic_optimized: None,
+            ros_centralised_distributed: None,
+            ros_randomized_distributed: None,
+            ros_static_optimized: Some(vec!["r1".to_string(), "r2".to_string()]),
+            ros_dynamic_optimized: None,
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode)
+            .dist_constraint_solver(DistributionSolver::Sat)
+            .dist_constraints(vec!["c1".to_string(), "c2".to_string()]);
+        let mode = builder.build().await.expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedRosOptimizedStaticSat(locs, constraints, topic)
+                if locs == vec!["r1".to_string(), "r2".to_string()]
+                && constraints == vec![VarName::new("c1"), VarName::new("c2")]
+                && topic == "/dist_graph"
+        ));
+    }
+
+    #[cfg(feature = "ros")]
+    #[apply(async_test)]
+    async fn test_distribution_mode_builder_ros_dynamic_optimized_sat_maps_correctly(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let distribution_mode = DistributionMode {
+            centralised: false,
+            distribution_graph: None,
+            local_topics: None,
+            mqtt_centralised_distributed: None,
+            mqtt_randomized_distributed: None,
+            mqtt_static_optimized: None,
+            mqtt_dynamic_optimized: None,
+            ros_centralised_distributed: None,
+            ros_randomized_distributed: None,
+            ros_static_optimized: None,
+            ros_dynamic_optimized: Some(vec!["r1".to_string(), "r2".to_string()]),
+            distributed_work: false,
+        };
+
+        let builder = DistributionModeBuilder::new(distribution_mode)
+            .dist_constraint_solver(DistributionSolver::Sat)
+            .dist_constraints(vec!["c1".to_string(), "c2".to_string()]);
+        let mode = builder.build().await.expect("build should succeed");
+
+        assert!(matches!(
+            mode,
+            BuilderDistributionMode::DistributedRosOptimizedDynamicSat(locs, constraints, topic)
                 if locs == vec!["r1".to_string(), "r2".to_string()]
                 && constraints == vec![VarName::new("c1"), VarName::new("c2")]
                 && topic == "/dist_graph"

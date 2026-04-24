@@ -57,7 +57,7 @@ async-unsync = "0.3.0"
 smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.2"
 async-compat = {version = "0.2.5", optional = true}
-jemallocator = "0.5.4"
+tikv-jemallocator = "0.6.0"
 ecow = { version = "0.2.6", features = ["serde"] }
 async_cell = "0.2.3"
 async-channel = "2.5.0"
@@ -70,6 +70,7 @@ thiserror = "2.0.18"
 rand = "0.10.0"
 unsync = "0.1.2"
 itertools = "0.14.0"
+sat-solver = "0.2.1"
 redis = { version = "1.0.5", default-features = false, features = ["smol-comp"] }
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 fs2 = "0.4.3"

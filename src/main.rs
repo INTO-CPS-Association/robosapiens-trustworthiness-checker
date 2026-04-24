@@ -27,7 +27,7 @@ use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{Cli, Language, OutputMode, ParserMode};
 
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
@@ -88,6 +88,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .maybe_local_node(cli.local_node)
         .runtime(cli.runtime)
         .maybe_dist_constraints(dist_constraints.clone())
+        .dist_constraint_solver(cli.dist_constraint_solver)
         .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
     debug!("Building distribution mode");
     let distribution_mode = distribution_mode_builder.build().await?;

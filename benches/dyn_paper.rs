@@ -16,7 +16,7 @@ use trustworthiness_checker::dsrv_fixtures::{
 };
 
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[derive(Clone)]
 struct LocalSmolExecutor {

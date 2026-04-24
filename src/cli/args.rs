@@ -3,6 +3,13 @@ use strum_macros::Display;
 
 use crate::core::{Runtime, Semantics};
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum DistributionSolver {
+    BruteForce,
+    Sat,
+}
+
 /// Specification languages supported for runtime verification
 ///
 /// Different formal specification languages that can be used to define
@@ -241,6 +248,13 @@ pub struct Cli {
 
     #[clap(long, value_delimiter = ' ', num_args = 1.., help = "Distribution constraints for optimized scheduling")]
     pub distribution_constraints: Option<Vec<String>>,
+
+    #[arg(
+        long,
+        default_value_t = DistributionSolver::BruteForce,
+        help = "Solver used for distributed optimized scheduling"
+    )]
+    pub dist_constraint_solver: DistributionSolver,
 
     #[arg(
         long,

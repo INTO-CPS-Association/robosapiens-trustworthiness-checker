@@ -212,6 +212,18 @@ pub enum DistributionMode {
         /// Variables which represent the constraints which determine the static distribution
         Vec<VarName>,
     ),
+    DistributedOptimizedStaticSat(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+    ),
+    DistributedOptimizedDynamicSat(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+    ),
     DistributedRosCentralised(
         /// Location names
         Vec<String>,
@@ -240,11 +252,33 @@ pub enum DistributionMode {
         /// Topic used by ROS distribution graph provider
         String,
     ),
+    DistributedRosOptimizedStaticSat(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+        /// Topic used by ROS distribution graph provider
+        String,
+    ),
+    DistributedRosOptimizedDynamicSat(
+        /// Location names
+        Vec<String>,
+        /// Variables which represent the constraints which determine the static distribution
+        Vec<VarName>,
+        /// Topic used by ROS distribution graph provider
+        String,
+    ),
     DistributedPredefinedStatic(
         /// Predefined labelled distribution graph with static assignments
         LabelledDistributionGraph,
     ),
     DistributedPredefinedOptimized(
+        /// Predefined labelled distribution graph used for topology
+        LabelledDistributionGraph,
+        /// Variables which represent the constraints which determine dynamic assignments
+        Vec<VarName>,
+    ),
+    DistributedPredefinedOptimizedSat(
         /// Predefined labelled distribution graph used for topology
         LabelledDistributionGraph,
         /// Variables which represent the constraints which determine dynamic assignments
@@ -277,6 +311,20 @@ impl Debug for DistributionMode {
                     locations, dist_constraints
                 )
             }
+            DistributionMode::DistributedOptimizedStaticSat(locations, dist_constraints) => {
+                write!(
+                    f,
+                    "DistributedOptimizedStaticSat({:?}, {:?})",
+                    locations, dist_constraints
+                )
+            }
+            DistributionMode::DistributedOptimizedDynamicSat(locations, dist_constraints) => {
+                write!(
+                    f,
+                    "DistributedOptimizedDynamicSat({:?}, {:?})",
+                    locations, dist_constraints
+                )
+            }
             DistributionMode::DistributedRosCentralised(locations, topic) => {
                 write!(f, "DistributedRosCentralised({:?}, {:?})", locations, topic)
             }
@@ -301,6 +349,28 @@ impl Debug for DistributionMode {
                     locations, dist_constraints, topic
                 )
             }
+            DistributionMode::DistributedRosOptimizedStaticSat(
+                locations,
+                dist_constraints,
+                topic,
+            ) => {
+                write!(
+                    f,
+                    "DistributedRosOptimizedStaticSat({:?}, {:?}, {:?})",
+                    locations, dist_constraints, topic
+                )
+            }
+            DistributionMode::DistributedRosOptimizedDynamicSat(
+                locations,
+                dist_constraints,
+                topic,
+            ) => {
+                write!(
+                    f,
+                    "DistributedRosOptimizedDynamicSat({:?}, {:?}, {:?})",
+                    locations, dist_constraints, topic
+                )
+            }
             DistributionMode::DistributedPredefinedStatic(graph) => {
                 write!(f, "DistributedPredefinedStatic({:?})", graph)
             }
@@ -308,6 +378,13 @@ impl Debug for DistributionMode {
                 write!(
                     f,
                     "DistributedPredefinedOptimized({:?}, {:?})",
+                    graph, dist_constraints
+                )
+            }
+            DistributionMode::DistributedPredefinedOptimizedSat(graph, dist_constraints) => {
+                write!(
+                    f,
+                    "DistributedPredefinedOptimizedSat({:?}, {:?})",
                     graph, dist_constraints
                 )
             }
@@ -629,6 +706,26 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                             .collect();
                         builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
                     }
+                    DistributionMode::DistributedOptimizedStaticSat(
+                        locations,
+                        dist_constraints,
+                    ) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.mqtt_optimized_static_dist_graph_sat(locations, dist_constraints)
+                    }
+                    DistributionMode::DistributedOptimizedDynamicSat(
+                        locations,
+                        dist_constraints,
+                    ) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.mqtt_optimized_dynamic_dist_graph_sat(locations, dist_constraints)
+                    }
                     DistributionMode::DistributedRosCentralised(locations, topic) => {
                         let locations = locations
                             .into_iter()
@@ -665,12 +762,46 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                             .collect();
                         builder.ros_optimized_dynamic_dist_graph(locations, dist_constraints, topic)
                     }
+                    DistributionMode::DistributedRosOptimizedStaticSat(
+                        locations,
+                        dist_constraints,
+                        topic,
+                    ) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.ros_optimized_static_dist_graph_sat(
+                            locations,
+                            dist_constraints,
+                            topic,
+                        )
+                    }
+                    DistributionMode::DistributedRosOptimizedDynamicSat(
+                        locations,
+                        dist_constraints,
+                        topic,
+                    ) => {
+                        let locations = locations
+                            .into_iter()
+                            .map(|loc| (loc.clone().into(), loc))
+                            .collect();
+                        builder.ros_optimized_dynamic_dist_graph_sat(
+                            locations,
+                            dist_constraints,
+                            topic,
+                        )
+                    }
                     DistributionMode::DistributedPredefinedStatic(graph) => {
                         builder.static_dist_graph(graph)
                     }
                     DistributionMode::DistributedPredefinedOptimized(graph, dist_constraints) => {
                         builder.predefined_optimized_dist_graph(graph, dist_constraints)
                     }
+                    DistributionMode::DistributedPredefinedOptimizedSat(
+                        graph,
+                        dist_constraints,
+                    ) => builder.predefined_optimized_dist_graph_sat(graph, dist_constraints),
                 };
 
                 Box::new(builder)

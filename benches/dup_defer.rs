@@ -11,7 +11,7 @@ use trustworthiness_checker::dsrv_fixtures::input_streams_add_defer;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
 
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[derive(Clone)]
 struct LocalSmolExecutor {
