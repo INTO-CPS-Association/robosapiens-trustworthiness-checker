@@ -12,7 +12,7 @@ use crate::{
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
     },
-    lang::dsrv::{ast::SExpr, parser::dsrv_specification},
+    lang::dsrv::ast::SExpr,
     semantics::{AsyncConfig, MonitoringSemantics, distributed::localisation::Localisable},
 };
 
@@ -27,12 +27,11 @@ use crate::{
 pub struct SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value>,
-    AC::Spec: Localisable,
+    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
 {
     pub dist_constraints: Vec<VarName>,
     pub output_vars: Vec<VarName>,
-    pub parsed_spec: DsrvSpecification,
+    pub spec: AC::Spec,
     pub dist_constraint_set: HashSet<VarName>,
     pub replay_history: Option<crate::io::replay_history::ReplayHistory>,
     _semantics: std::marker::PhantomData<S>,
@@ -42,24 +41,21 @@ where
 impl<S, AC> SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value>,
+    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(
         dist_constraints: Vec<VarName>,
         output_vars: Vec<VarName>,
-        spec_text: String,
+        spec: DsrvSpecification,
         replay_history: Option<crate::io::replay_history::ReplayHistory>,
     ) -> Self {
-        let mut spec_src = spec_text.as_str();
-        let parsed_spec = dsrv_specification(&mut spec_src)
-            .unwrap_or_else(|e| panic!("Failed to parse DSRV spec text for SAT solver: {e}"));
         let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();
 
         Self {
             dist_constraints,
             output_vars,
-            parsed_spec,
+            spec,
             dist_constraint_set,
             replay_history,
             _semantics: std::marker::PhantomData,
@@ -72,7 +68,7 @@ where
         graph: Rc<DistributionGraph>,
     ) -> LabelledDistGraphStream {
         info!("Starting SAT monitored_at-only distribution solving");
-        let spec = self.parsed_spec.localise(&self.dist_constraints);
+        let spec = self.spec.localise(&self.dist_constraints);
 
         let mut state = CnfCompilerState::new(&graph);
         state.declared_dist_constraints = self.dist_constraint_set.clone();
@@ -101,15 +97,15 @@ where
         while changed {
             changed = false;
 
-            let full_spec_input_vars = self.parsed_spec.input_vars();
+            let full_spec_input_vars = self.spec.input_vars();
             for v in full_spec_input_vars {
                 if replay_bindings_full_spec.contains_key(&v) {
                     continue;
                 }
-                if let Some(expr) = self.parsed_spec.var_expr(&v) {
+                if let Some(expr) = self.spec.var_expr(&v) {
                     let mut st_full = CnfCompilerState::new(&graph);
                     st_full.value_bindings = replay_bindings_full_spec.clone();
-                    if let Some(val) = eval_const_expr(expr, &self.parsed_spec, &st_full) {
+                    if let Some(val) = eval_const_expr(expr, &self.spec, &st_full) {
                         if val != Value::NoVal {
                             replay_bindings_full_spec.insert(v.clone(), val);
                             changed = true;
@@ -118,14 +114,14 @@ where
                 }
             }
 
-            for v in self.parsed_spec.output_vars() {
+            for v in self.spec.output_vars() {
                 if replay_bindings_full_spec.contains_key(&v) {
                     continue;
                 }
-                if let Some(expr) = self.parsed_spec.var_expr(&v) {
+                if let Some(expr) = self.spec.var_expr(&v) {
                     let mut st_full = CnfCompilerState::new(&graph);
                     st_full.value_bindings = replay_bindings_full_spec.clone();
-                    if let Some(val) = eval_const_expr(expr, &self.parsed_spec, &st_full) {
+                    if let Some(val) = eval_const_expr(expr, &self.spec, &st_full) {
                         if val != Value::NoVal {
                             replay_bindings_full_spec.insert(v.clone(), val);
                             changed = true;
@@ -134,14 +130,14 @@ where
                 }
             }
 
-            for v in self.parsed_spec.aux_vars() {
+            for v in self.spec.aux_vars() {
                 if replay_bindings_full_spec.contains_key(&v) {
                     continue;
                 }
-                if let Some(expr) = self.parsed_spec.var_expr(&v) {
+                if let Some(expr) = self.spec.var_expr(&v) {
                     let mut st_full = CnfCompilerState::new(&graph);
                     st_full.value_bindings = replay_bindings_full_spec.clone();
-                    if let Some(val) = eval_const_expr(expr, &self.parsed_spec, &st_full) {
+                    if let Some(val) = eval_const_expr(expr, &self.spec, &st_full) {
                         if val != Value::NoVal {
                             replay_bindings_full_spec.insert(v.clone(), val);
                             changed = true;
@@ -901,14 +897,21 @@ fn compile_expr_to_lit(
                     .var_expr(&v)
                     .ok_or_else(|| SatCompileError::UnknownConstraintVar(v.clone()))?;
                 compile_expr_to_lit(inlined, spec, st)
-            } else {
-                // After localisation, helper vars can appear as bare inputs without
-                // corresponding expressions. Align with brute-force behavior by
-                // treating unknown bare vars as false in SAT constraints.
+            } else if spec.input_vars.contains(&v) {
+                // Unresolved input booleans are treated as symbolic SAT variables.
+                // This preserves satisfiability exploration when replay data does not
+                // bind all inputs yet.
                 let x = i32::try_from(st.fresh_var())
                     .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
-                st.add_clause1(-x);
                 Ok(x)
+            } else {
+                Err(SatCompileError::UnsupportedExpr(format!(
+                    "Unsupported unresolved variable in SAT constraint compilation: `{}`. \
+This SAT solver requires non-input variables in distribution constraints to be resolvable \
+(after localisation and replay substitution). Nested/indirect aux-variable chains that \
+leave unresolved vars are currently unsupported.",
+                    v
+                )))
             }
         }
 
@@ -1085,15 +1088,13 @@ mod tests {
 
     #[apply(crate::async_test)]
     async fn sat_solver_finds_valid_assignment(_executor: Rc<LocalExecutor<'static>>) {
-        let spec = "in x\nout c\nc = monitored_at(x, A)";
+        let mut spec_src = "in x\nout c\nc = monitored_at(x, A)";
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
         >::new(
-            vec!["c".into()],
-            vec!["x".into(), "c".into()],
-            spec.to_string(),
-            None,
+            vec!["c".into()], vec!["x".into(), "c".into()], spec, None
         ));
 
         let graph = simple_dist_graph();
@@ -1111,15 +1112,13 @@ mod tests {
 
     #[test]
     fn sat_solver_panics_on_unsat_constraints() {
-        let spec = "in x\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
+        let mut spec_src = "in x\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
         >::new(
-            vec!["c".into()],
-            vec!["x".into(), "c".into()],
-            spec.to_string(),
-            None,
+            vec!["c".into()], vec!["x".into(), "c".into()], spec, None
         ));
 
         let graph = simple_dist_graph();
@@ -1133,15 +1132,16 @@ mod tests {
 
     #[apply(crate::async_test)]
     async fn sat_solver_handles_if_then_else_monitored_at(_executor: Rc<LocalExecutor<'static>>) {
-        let spec =
+        let mut spec_src =
             "in c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
         >::new(
             vec!["distW".into()],
             vec!["w".into(), "distW".into()],
-            spec.to_string(),
+            spec,
             None,
         ));
 
@@ -1165,15 +1165,13 @@ mod tests {
 
     #[test]
     fn sat_solver_panics_on_unsupported_dist_constraint() {
-        let spec = "in x\nout c\nc = dist(A, B)";
+        let mut spec_src = "in x\nout c\nc = dist(A, B)";
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
         >::new(
-            vec!["c".into()],
-            vec!["x".into(), "c".into()],
-            spec.to_string(),
-            None,
+            vec!["c".into()], vec!["x".into(), "c".into()], spec, None
         ));
 
         let graph = simple_dist_graph();
@@ -1189,7 +1187,7 @@ mod tests {
     async fn sat_solver_supports_const_map_operations_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = r#"in m
+        let mut spec_src = r#"in m
 out x
 out c1
 out c2
@@ -1201,6 +1199,7 @@ c2 = (Map.get(Map("k": 2), "k") == 2)
 c3 = Map.has_key(Map.insert(Map("a": 1), "b", 3), "b")
 c4 = !Map.has_key(Map.remove(Map("z": 7), "z"), "z")
 c5 = monitored_at(x, A)"#;
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
@@ -1220,7 +1219,7 @@ c5 = monitored_at(x, A)"#;
                 "c4".into(),
                 "c5".into(),
             ],
-            spec.to_string(),
+            spec,
             None,
         ));
         let graph = simple_dist_graph();
@@ -1236,7 +1235,7 @@ c5 = monitored_at(x, A)"#;
     async fn sat_solver_supports_const_list_operations_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = r#"in xs
+        let mut spec_src = r#"in xs
 out x
 out c1
 out c2
@@ -1250,6 +1249,7 @@ c3 = (List.concat(List(1), List(2, 3)) == List(1, 2, 3))
 c4 = (List.head(List(7, 8)) == 7)
 c5 = (List.tail(List(7, 8)) == List(8))
 c6 = (List.len(List(9, 10, 11)) == 3) && monitored_at(x, A)"#;
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
@@ -1271,7 +1271,7 @@ c6 = (List.len(List(9, 10, 11)) == 3) && monitored_at(x, A)"#;
                 "c5".into(),
                 "c6".into(),
             ],
-            spec.to_string(),
+            spec,
             None,
         ));
         let graph = simple_dist_graph();
@@ -1291,10 +1291,11 @@ c6 = (List.len(List(9, 10, 11)) == 3) && monitored_at(x, A)"#;
 
         use crate::io::replay_history::{ReplayHistory, StoreAllReplayHistory};
 
-        let spec = r#"in m
+        let mut spec_src = r#"in m
 out x
 out c
 c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
 
         let mut row = BTreeMap::<VarName, Value>::new();
         row.insert(
@@ -1313,7 +1314,7 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
         >::new(
             vec!["c".into()],
             vec!["x".into(), "c".into()],
-            spec.to_string(),
+            spec,
             Some(replay_history),
         ));
 
@@ -1335,10 +1336,11 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
 
         use crate::io::replay_history::{ReplayHistory, StoreAllReplayHistory};
 
-        let spec = r#"in xs
+        let mut spec_src = r#"in xs
 out x
 out c
 c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_at(x, A)"#;
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
 
         let mut row = BTreeMap::<VarName, Value>::new();
         row.insert(
@@ -1357,7 +1359,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         >::new(
             vec!["c".into()],
             vec!["x".into(), "c".into()],
-            spec.to_string(),
+            spec,
             Some(replay_history),
         ));
 
@@ -1493,7 +1495,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     }
 
     #[test]
-    fn sat_compiler_unresolved_vars_compile_to_deterministic_false_literals() {
+    fn sat_compiler_allows_unresolved_input_vars_as_symbolic_literals() {
         let spec_src = "in b\nin c\nout d\nd = (b && c)";
         let mut s = spec_src;
         let spec = dsrv_specification(&mut s).expect("spec should parse");
@@ -1510,29 +1512,10 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
         let mut st = CnfCompilerState::new(&graph);
 
-        let lit1 =
-            compile_expr_to_lit(SExpr::Var(VarName::new("b")), &spec, &mut st).expect("compiles");
-        let lit2 =
-            compile_expr_to_lit(SExpr::Var(VarName::new("b")), &spec, &mut st).expect("compiles");
-        let lit3 =
-            compile_expr_to_lit(SExpr::Var(VarName::new("c")), &spec, &mut st).expect("compiles");
-
-        assert_ne!(lit1, lit2, "fresh literal expected for unresolved var");
-        assert_ne!(
-            lit1, lit3,
-            "different unresolved vars should produce independent fresh literals"
-        );
+        let res = compile_expr_to_lit(SExpr::Var(VarName::new("b")), &spec, &mut st);
         assert!(
-            st.cnf.iter().any(|c| c == &vec![-lit1]),
-            "first unresolved var literal should be constrained to false"
-        );
-        assert!(
-            st.cnf.iter().any(|c| c == &vec![-lit2]),
-            "second unresolved var literal should be constrained to false"
-        );
-        assert!(
-            st.cnf.iter().any(|c| c == &vec![-lit3]),
-            "third unresolved var literal should be constrained to false"
+            res.is_ok(),
+            "unresolved input vars in SAT constraints should compile to symbolic literals"
         );
     }
 
@@ -1697,7 +1680,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
         use crate::io::replay_history::{ReplayHistory, StoreAllReplayHistory};
 
-        let spec = r#"in m
+        let mut spec_src = r#"in m
 in xs
 in n
 out x
@@ -1706,6 +1689,7 @@ c = (Map.get(m, "k") == 7)
     && (List.get(xs, 1) == 42)
     && (n == 5)
     && monitored_at(x, A)"#;
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
 
         let mut row0 = BTreeMap::<VarName, Value>::new();
         row0.insert(
@@ -1739,7 +1723,7 @@ c = (Map.get(m, "k") == 7)
         >::new(
             vec!["c".into()],
             vec!["x".into(), "c".into()],
-            spec.to_string(),
+            spec,
             Some(replay_history),
         ));
 
@@ -1757,7 +1741,7 @@ c = (Map.get(m, "k") == 7)
     async fn sat_solver_supports_const_non_eq_comparison_operations_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = r#"out x
+        let mut spec_src = r#"out x
 out c1
 out c2
 out c3
@@ -1774,6 +1758,7 @@ c5 = (1.0 <= 1)
 c6 = (2.0 >= 2)
 c7 = ("a" < "b")
 c8 = (true >= false) && monitored_at(x, A)"#;
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -1800,7 +1785,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
                 "c7".into(),
                 "c8".into(),
             ],
-            spec.to_string(),
+            spec,
             None,
         ));
 
@@ -1818,15 +1803,16 @@ c8 = (true >= false) && monitored_at(x, A)"#;
     async fn sat_solver_excludes_dist_constraint_vars_from_assignments(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec =
+        let mut spec_src =
             "in c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
         >::new(
             vec!["distW".into()],
             vec!["w".into(), "distW".into()],
-            spec.to_string(),
+            spec,
             None,
         ));
 
@@ -1930,8 +1916,10 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         let constrain_count = 20usize;
 
         let graph = clique_graph_with_nodes(node_count);
-        let (spec, output_vars, dist_constraints) =
+        let (spec_src, output_vars, dist_constraints) =
             make_large_sat_spec(node_count, stream_count, constrain_count);
+        let mut spec_src_ref = spec_src.as_str();
+        let spec = dsrv_specification(&mut spec_src_ref).expect("spec should parse");
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -1989,8 +1977,10 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         let constrain_count = 20usize;
 
         let graph = clique_graph_with_nodes(node_count);
-        let (spec, output_vars, dist_constraints) =
+        let (spec_src, output_vars, dist_constraints) =
             make_large_sat_spec(node_count, stream_count, constrain_count);
+        let mut spec_src_ref = spec_src.as_str();
+        let spec = dsrv_specification(&mut spec_src_ref).expect("spec should parse");
 
         let mut latest_row = BTreeMap::<VarName, Value>::new();
         for i in 0..constrain_count {
@@ -2072,8 +2062,10 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         let constrain_count = 8usize;
 
         let graph = clique_graph_with_nodes(node_count);
-        let (spec, output_vars, dist_constraints) =
+        let (spec_src, output_vars, dist_constraints) =
             make_large_sat_spec(node_count, stream_count, constrain_count);
+        let mut spec_src_ref = spec_src.as_str();
+        let spec = dsrv_specification(&mut spec_src_ref).expect("spec should parse");
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -2299,6 +2291,79 @@ dist3 = if ((!!c3) == c3) then monitored_at(s3, C) else monitored_at(s3, A)
         (spec, output_vars, dist_constraints)
     }
 
+    fn spec_3_nodes_with_aux_intermediate_constraints() -> (String, Vec<VarName>, Vec<VarName>) {
+        let spec = r#"
+in c1
+in c2
+in c3
+out s1
+out s2
+out s3
+out d1
+out d2
+out d3
+aux h1
+aux h2
+h1 = if c1 then monitored_at(s1, A) else monitored_at(s1, B)
+h2 = if c2 then monitored_at(s2, B) else monitored_at(s2, C)
+d1 = h1
+d2 = h2
+d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
+"#
+        .trim()
+        .to_string();
+
+        let output_vars = vec![
+            VarName::new("s1"),
+            VarName::new("s2"),
+            VarName::new("s3"),
+            VarName::new("d1"),
+            VarName::new("d2"),
+            VarName::new("d3"),
+        ];
+
+        let dist_constraints = vec![VarName::new("d1"), VarName::new("d2"), VarName::new("d3")];
+
+        (spec, output_vars, dist_constraints)
+    }
+
+    fn spec_3_nodes_with_aux_const_and_replay_mixed() -> (String, Vec<VarName>, Vec<VarName>) {
+        let spec = r#"
+in c1
+in c2
+in c3
+in a
+out s1
+out s2
+out s3
+out d1
+out d2
+out d3
+aux h1
+aux h2
+h1 = if ((true && c1) == c1) then monitored_at(s1, A) else monitored_at(s1, B)
+h2 = if ((false || c2) && (1 < 2)) then monitored_at(s2, B) else monitored_at(s2, C)
+d1 = h1
+d2 = h2
+d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
+"#
+        .trim()
+        .to_string();
+
+        let output_vars = vec![
+            VarName::new("s1"),
+            VarName::new("s2"),
+            VarName::new("s3"),
+            VarName::new("d1"),
+            VarName::new("d2"),
+            VarName::new("d3"),
+        ];
+
+        let dist_constraints = vec![VarName::new("d1"), VarName::new("d2"), VarName::new("d3")];
+
+        (spec, output_vars, dist_constraints)
+    }
+
     fn graph_3_nodes_with_weights(w_ab: u64, w_bc: u64, w_ca: u64) -> Rc<DistributionGraph> {
         let mut graph = DiGraph::new();
         let a = graph.add_node("A".into());
@@ -2387,7 +2452,10 @@ dist3 = if ((!!c3) == c3) then monitored_at(s3, C) else monitored_at(s3, A)
         >::new(
             dist_constraints.clone(),
             output_vars.clone(),
-            spec.clone(),
+            {
+                let mut spec_src = spec.as_str();
+                dsrv_specification(&mut spec_src).expect("fixed property-test spec should parse")
+            },
             Some(shared_replay.clone()),
         ));
 
@@ -2614,6 +2682,153 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         );
         assert!(localised.var_expr(&VarName::new("h1")).is_none());
         assert!(localised.var_expr(&VarName::new("h2")).is_none());
+    }
+
+    #[test]
+    fn sat_solver_panics_on_nested_aux_chain_that_leaves_unresolved_vars_after_localisation() {
+        let spec_src = r#"
+in c1
+in c2
+in c3
+in a
+out s1
+out s2
+out s3
+out d1
+out d2
+out d3
+aux h1
+aux h2
+aux h3
+h1 = if ((true && c1) == c1) then monitored_at(s1, A) else monitored_at(s1, B)
+h2 = if ((false || c2) && (1 < 2)) then monitored_at(s2, B) else monitored_at(s2, C)
+h3 = if a then (h1 && !h2) else (h1 || h2)
+d1 = h1
+d2 = h2
+d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
+"#
+        .trim();
+
+        let mut s = spec_src;
+        let spec = dsrv_specification(&mut s).expect("spec should parse");
+
+        let graph = graph_3_nodes_with_weights(1, 1, 1);
+
+        let replay_snapshot = std::collections::BTreeMap::from([(
+            0usize,
+            std::collections::BTreeMap::from([
+                (VarName::new("c1"), Value::Bool(false)),
+                (VarName::new("c2"), Value::Bool(false)),
+                (VarName::new("c3"), Value::Bool(false)),
+                (VarName::new("a"), Value::Bool(false)),
+            ]),
+        )]);
+
+        let replay_history = ReplayHistory::store_all_with_snapshot(replay_snapshot);
+
+        let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
+            DistributedSemantics<LALRParser>,
+            TestDistConfig,
+        >::new(
+            vec!["d1".into(), "d2".into(), "d3".into()],
+            vec![
+                "s1".into(),
+                "s2".into(),
+                "s3".into(),
+                "d1".into(),
+                "d2".into(),
+                "d3".into(),
+            ],
+            spec,
+            Some(replay_history),
+        ));
+
+        let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = solver.possible_labelled_dist_graph_stream(graph);
+        }));
+
+        assert!(
+            res.is_err(),
+            "SAT solver should panic on unresolved nested aux-variable chains"
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn prop_sat_matches_bruteforce_on_3_node_graphs_with_aux_intermediate_constraints(
+            w_ab in 1u64..=4,
+            w_bc in 1u64..=4,
+            w_ca in 1u64..=4,
+            c1 in any::<bool>(),
+            c2 in any::<bool>(),
+            c3 in any::<bool>(),
+        ) {
+            let graph = graph_3_nodes_with_weights(w_ab, w_bc, w_ca);
+            let (spec, output_vars, dist_constraints) = spec_3_nodes_with_aux_intermediate_constraints();
+
+            let replay_snapshot = std::collections::BTreeMap::from([(
+                0usize,
+                std::collections::BTreeMap::from([
+                    (VarName::new("c1"), Value::Bool(c1)),
+                    (VarName::new("c2"), Value::Bool(c2)),
+                    (VarName::new("c3"), Value::Bool(c3)),
+                ]),
+            )]);
+
+            let (sat_labelled, brute_labelled) = solve_sat_and_bruteforce_once(
+                graph,
+                spec,
+                output_vars,
+                dist_constraints,
+                replay_snapshot,
+            );
+
+            let sat_projection = normalized_assignment_projection(&sat_labelled);
+            let brute_projection = normalized_assignment_projection(&brute_labelled);
+
+            prop_assert_eq!(&sat_labelled.var_names, &brute_labelled.var_names);
+            prop_assert_eq!(sat_projection, brute_projection);
+        }
+
+        #[test]
+        #[ignore = "pending localisation aux-chain support"]
+        fn prop_sat_matches_bruteforce_on_3_node_graphs_with_aux_const_and_replay_mixed(
+            w_ab in 1u64..=4,
+            w_bc in 1u64..=4,
+            w_ca in 1u64..=4,
+            c1 in any::<bool>(),
+            c2 in any::<bool>(),
+            c3 in any::<bool>(),
+            a in any::<bool>(),
+        ) {
+            let graph = graph_3_nodes_with_weights(w_ab, w_bc, w_ca);
+            let (spec, output_vars, dist_constraints) = spec_3_nodes_with_aux_const_and_replay_mixed();
+
+            let replay_snapshot = std::collections::BTreeMap::from([(
+                0usize,
+                std::collections::BTreeMap::from([
+                    (VarName::new("c1"), Value::Bool(c1)),
+                    (VarName::new("c2"), Value::Bool(c2)),
+                    (VarName::new("c3"), Value::Bool(c3)),
+                    (VarName::new("a"), Value::Bool(a)),
+                ]),
+            )]);
+
+            let (sat_labelled, brute_labelled) = solve_sat_and_bruteforce_once(
+                graph,
+                spec,
+                output_vars,
+                dist_constraints,
+                replay_snapshot,
+            );
+
+            let sat_projection = normalized_assignment_projection(&sat_labelled);
+            let brute_projection = normalized_assignment_projection(&brute_labelled);
+
+            prop_assert_eq!(&sat_labelled.var_names, &brute_labelled.var_names);
+            prop_assert_eq!(sat_projection, brute_projection);
+        }
     }
 
     proptest! {

@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
-    InputProvider, Monitor, Specification, Value, VarName,
+    DsrvSpecification, InputProvider, Monitor, Specification, Value, VarName,
     core::{AbstractMonitorBuilder, OutputHandler, Runnable},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -143,8 +143,10 @@ pub enum DistGraphMode {
     ),
 }
 
-impl<AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>, S: MonitoringSemantics<AC>>
-    AbstractAsyncMonitorBuilder<AC> for DistAsyncMonitorBuilder<AC, S>
+impl<
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    S: MonitoringSemantics<AC>,
+> AbstractAsyncMonitorBuilder<AC> for DistAsyncMonitorBuilder<AC, S>
 where
     AC::Spec: Localisable,
 {
@@ -359,7 +361,7 @@ pub enum SchedulerCommunication {
 impl<S, AC> DistAsyncMonitorBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     fn extract_replay_history(&self) -> Option<crate::io::replay_history::ReplayHistory> {
@@ -383,7 +385,7 @@ where
         SatMonitoredAtDistConstraintSolver::new(
             dist_constraints,
             output_vars,
-            spec.to_string(),
+            spec.clone(),
             self.extract_replay_history(),
         )
     }
@@ -392,7 +394,7 @@ where
 impl<S, AC> AbstractMonitorBuilder<AC::Spec, AC::Val> for DistAsyncMonitorBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     type Mon = DistributedMonitorRunner<AC, S>;
@@ -1095,7 +1097,7 @@ impl<S, AC> Monitor<AC::Spec, AC::Val> for DistributedMonitorRunner<AC, S>
 where
     AC::Spec: Localisable,
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     S: MonitoringSemantics<AC>,
 {
     fn spec(&self) -> &AC::Spec {
@@ -1108,7 +1110,7 @@ impl<S, AC> Runnable for DistributedMonitorRunner<AC, S>
 where
     AC::Spec: Localisable,
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     S: MonitoringSemantics<AC>,
 {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {

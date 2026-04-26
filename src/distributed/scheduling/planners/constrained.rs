@@ -6,7 +6,7 @@ use smol::Timer;
 use tracing::info;
 
 use crate::{
-    Value,
+    DsrvSpecification, Value,
     distributed::{
         distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
         solvers::brute_solver::BruteForceDistConstraintSolver,
@@ -24,7 +24,7 @@ use super::core::SchedulerPlanner;
 pub struct StaticOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     solver: Rc<BruteForceDistConstraintSolver<S, AC>>,
@@ -34,7 +34,7 @@ where
 impl<S, AC> StaticOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(solver: BruteForceDistConstraintSolver<S, AC>) -> Self {
@@ -49,7 +49,7 @@ where
 impl<S, AC> SchedulerPlanner for StaticOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     async fn plan(
@@ -86,7 +86,7 @@ where
 pub struct DynamicOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     solver: Rc<BruteForceDistConstraintSolver<S, AC>>,
@@ -95,7 +95,7 @@ where
 impl<S, AC> DynamicOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(solver: BruteForceDistConstraintSolver<S, AC>) -> Self {
@@ -109,7 +109,7 @@ where
 impl<S, AC> SchedulerPlanner for DynamicOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     async fn plan(
