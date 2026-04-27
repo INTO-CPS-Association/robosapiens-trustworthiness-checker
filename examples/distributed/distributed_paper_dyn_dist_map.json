@@ -1,0 +1,102 @@
+{
+  "R1Odom": {
+    "topic": "/tb1/odom",
+    "msg_type": "Odom"
+  },
+  "R2Odom": {
+    "topic": "/tb2/odom",
+    "msg_type": "Odom"
+  },
+  "R3Odom": {
+    "topic": "/tb3/odom",
+    "msg_type": "Odom"
+  },
+  "R4Odom": {
+    "topic": "/tb4/odom",
+    "msg_type": "Odom"
+  },
+  "ConveyorSystem": {
+    "topic": "/ConveyorSystem",
+    "msg_type": "Int32"
+  },
+  "StackerCrane": {
+    "topic": "/StackerCrane",
+    "msg_type": "Int32"
+  },
+  "VerticalLift": {
+    "topic": "/VerticalLift",
+    "msg_type": "Int32"
+  },
+  "HorizontalCarousel": {
+    "topic": "/HorizontalCarousel",
+    "msg_type": "Int32"
+  },
+  "c": {
+    "topic": "/c",
+    "msg_type": "Bool"
+  },
+  "aabbR1C": {
+    "topic": "/aabbR1C",
+    "msg_type": "Bool"
+  },
+  "aabbR2C": {
+    "topic": "/aabbR2C",
+    "msg_type": "Bool"
+  },
+  "aabbR3C": {
+    "topic": "/aabbR3C",
+    "msg_type": "Bool"
+  },
+  "aabbR4C": {
+    "topic": "/aabbR4C",
+    "msg_type": "Bool"
+  },
+  "aabbR1S": {
+    "topic": "/aabbR1S",
+    "msg_type": "Bool"
+  },
+  "aabbR2S": {
+    "topic": "/aabbR2S",
+    "msg_type": "Bool"
+  },
+  "aabbR3S": {
+    "topic": "/aabbR3S",
+    "msg_type": "Bool"
+  },
+  "aabbR4S": {
+    "topic": "/aabbR4S",
+    "msg_type": "Bool"
+  },
+  "aabbR1V": {
+    "topic": "/aabbR1V",
+    "msg_type": "Bool"
+  },
+  "aabbR2V": {
+    "topic": "/aabbR2V",
+    "msg_type": "Bool"
+  },
+  "aabbR3V": {
+    "topic": "/aabbR3V",
+    "msg_type": "Bool"
+  },
+  "aabbR4V": {
+    "topic": "/aabbR4V",
+    "msg_type": "Bool"
+  },
+  "aabbR1H": {
+    "topic": "/aabbR1H",
+    "msg_type": "Bool"
+  },
+  "aabbR2H": {
+    "topic": "/aabbR2H",
+    "msg_type": "Bool"
+  },
+  "aabbR3H": {
+    "topic": "/aabbR3H",
+    "msg_type": "Bool"
+  },
+  "aabbR4H": {
+    "topic": "/aabbR4H",
+    "msg_type": "Bool"
+  }
+}

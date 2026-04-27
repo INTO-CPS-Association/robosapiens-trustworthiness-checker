@@ -1,0 +1,161 @@
+// Run with:
+// RUST_LOG=INFO cargo run --features ros -- examples/distributed/not_working.dsrv --runtime distributed --distribution-graph examples/distributed/not_working_graph.json --distribution-constraints distR1 --dist-constraint-solver sat --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/not_working_map.json --output-ros-file examples/distributed/not_working_out_map.json
+// Notice that R1Odom, etc is lost
+
+in c
+
+in R1Odom
+in R2Odom
+in R3Odom
+in R4Odom
+
+in ConveyorSystem
+in StackerCrane
+in VerticalLift
+in HorizontalCarousel
+
+out CS1Alert
+out CS2Alert
+out CS3Alert
+out CS4Alert
+out SC1Alert
+out SC2Alert
+out SC3Alert
+out SC4Alert
+out VL1Alert
+out VL2Alert
+out VL3Alert
+out VL4Alert
+out HC1Alert
+out HC2Alert
+out HC3Alert
+out HC4Alert
+
+// Axis-aligned bounding box (AABB) of RX and Machine Y
+out aabbR1C 
+out aabbR2C 
+out aabbR3C 
+out aabbR4C 
+out aabbR1S 
+out aabbR2S 
+out aabbR3S 
+out aabbR4S 
+out aabbR1V
+out aabbR2V 
+out aabbR3V 
+out aabbR4V 
+out aabbR1H 
+out aabbR2H 
+out aabbR3H 
+out aabbR4H 
+
+// Dist constraints
+out distR1
+
+// Robot positions
+aux R1Pose
+aux R1X
+aux R1Y
+aux R2Pose
+aux R2X
+aux R2Y
+aux R3Pose
+aux R3X
+aux R3Y
+aux R4Pose
+aux R4X
+aux R4Y
+
+// Machine static coords:
+aux CX 
+aux CY 
+aux SX 
+aux SY 
+aux VX 
+aux VY 
+aux HX 
+aux HY 
+
+// AABB constant
+aux D
+
+aux CPred
+aux SPred
+aux VPred
+aux HPred
+
+// Extract the position of Robots from odometry data
+R1Pose = Map.get(Map.get(Map.get(R1Odom, "pose"), "pose"), "position")
+R1X = Map.get(R1Pose, "x")
+R1Y = Map.get(R1Pose, "y")
+R2Pose = Map.get(Map.get(Map.get(R2Odom, "pose"), "pose"), "position")
+R2X = Map.get(R2Pose, "x")
+R2Y = Map.get(R2Pose, "y")
+R3Pose = Map.get(Map.get(Map.get(R3Odom, "pose"), "pose"), "position")
+R3X = Map.get(R3Pose, "x")
+R3Y = Map.get(R3Pose, "y")
+R4Pose = Map.get(Map.get(Map.get(R4Odom, "pose"), "pose"), "position")
+R4X = Map.get(R4Pose, "x")
+R4Y = Map.get(R4Pose, "y")
+
+// Coordinates of machines (static)
+CX = 3.5
+CY = 3.0
+SX = 3.5
+SY = -6.0
+VX = -4.0
+VY = -6.0
+HX = -4.0
+HY = 3.0
+
+// Bounding box = 10 units wide = robot is maximum five units away from center
+D = 5.0 // Or 10.0 / 2.0
+
+// Probabilistic predicates for machine states:
+CPred = ConveyorSystem < 0
+SPred = StackerCrane < 0 && StackerCrane > 30
+VPred = VerticalLift > 100
+HPred = HorizontalCarousel == 0
+
+// AABB for circles. Esentially (with subst. values):
+// -1.5 <= x <= 8.5 && -2.0 <= y <= 8.0 for ConveyorSystem
+aabbR1C = abs(R1X - CX) <= D && abs(R1Y - CY) <= D 
+aabbR2C = abs(R2X - CX) <= D && abs(R2Y - CY) <= D
+aabbR3C = abs(R3X - CX) <= D && abs(R3Y - CY) <= D
+aabbR4C = abs(R4X - CX) <= D && abs(R4Y - CY) <= D
+
+aabbR1S = abs(R1X - SX) <= D && abs(R1Y - SY) <= D 
+aabbR2S = abs(R2X - SX) <= D && abs(R2Y - SY) <= D
+aabbR3S = abs(R3X - SX) <= D && abs(R3Y - SY) <= D
+aabbR4S = abs(R4X - SX) <= D && abs(R4Y - SY) <= D
+
+aabbR1V = abs(R1X - VX) <= D && abs(R1Y - VY) <= D 
+aabbR2V = abs(R2X - VX) <= D && abs(R2Y - VY) <= D
+aabbR3V = abs(R3X - VX) <= D && abs(R3Y - VY) <= D
+aabbR4V = abs(R4X - VX) <= D && abs(R4Y - VY) <= D
+
+aabbR1H = abs(R1X - HX) <= D && abs(R1Y - HY) <= D 
+aabbR2H = abs(R2X - HX) <= D && abs(R2Y - HY) <= D
+aabbR3H = abs(R3X - HX) <= D && abs(R3Y - HY) <= D
+aabbR4H = abs(R4X - HX) <= D && abs(R4Y - HY) <= D
+
+CS1Alert = if aabbR1C then if CPred then 1 else 0 else -1
+CS2Alert = if aabbR2C then if CPred then 1 else 0 else -1
+CS3Alert = if aabbR3C then if CPred then 1 else 0 else -1
+CS4Alert = if aabbR4C then if CPred then 1 else 0 else -1
+SC1Alert = if aabbR1S then if SPred then 1 else 0 else -1
+SC2Alert = if aabbR2S then if SPred then 1 else 0 else -1
+SC3Alert = if aabbR3S then if SPred then 1 else 0 else -1
+SC4Alert = if aabbR4S then if SPred then 1 else 0 else -1
+VL1Alert = if aabbR1V then if VPred then 1 else 0 else -1
+VL2Alert = if aabbR2V then if VPred then 1 else 0 else -1
+VL3Alert = if aabbR3V then if VPred then 1 else 0 else -1
+VL4Alert = if aabbR4V then if VPred then 1 else 0 else -1
+HC1Alert = if aabbR1H then if HPred then 1 else 0 else -1
+HC2Alert = if aabbR2H then if HPred then 1 else 0 else -1
+HC3Alert = if aabbR3H then if HPred then 1 else 0 else -1
+HC4Alert = if aabbR4H then if HPred then 1 else 0 else -1
+
+distR1 =  if !aabbR1V 
+         then monitored_at(VL1Alert, B) && monitored_at(aabbR1V, B)
+         else monitored_at(VL1Alert, A) && monitored_at(aabbR1V, A)
