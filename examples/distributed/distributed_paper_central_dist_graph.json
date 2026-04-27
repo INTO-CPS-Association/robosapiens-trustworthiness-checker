@@ -6,7 +6,8 @@
         "A",
         "B",
         "C",
-        "D"
+        "D",
+        "E"
       ],
       "edge_property": "directed",
       "edges": [
@@ -83,7 +84,8 @@
     "CPred",
     "SPred",
     "VPred",
-    "HPred"
+    "HPred",
+    "globalProp"
   ],
   "node_labels": {
     "0": [
@@ -209,6 +211,9 @@
       "SPred",
       "VPred",
       "HPred"
+    ],
+    "4": [
+      "globalProp"
     ]
   }
 }
