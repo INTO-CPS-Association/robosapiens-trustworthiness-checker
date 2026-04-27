@@ -1,5 +1,5 @@
 use static_assertions::assert_obj_safe;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Debug;
 
 use tracing::debug;
@@ -164,30 +164,99 @@ fn replace_var(var: &VarName, var_expr: &SExpr, repl_expr: &SExpr) -> SExpr {
 }
 
 fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
-    // Inlines auxiliary variables by replacing them with their definitions in the expressions
-    let mut new_spec = spec.clone();
-    let aux_vars = spec.aux_vars();
-    for aux in aux_vars.iter() {
-        // TODO: Does not handle recursion - we should check if aux_expr contains aux
-        let aux_expr = spec.exprs.get(aux).expect(
-            format!(
-                "Aux variable {:?} does not have a definition in the expressions",
+    // Inline auxiliary variables transitively, while rejecting recursive/cyclic definitions.
+    let aux_vars: BTreeSet<VarName> = spec.aux_vars();
+
+    // Build aux definition map and ensure every aux has a definition.
+    let aux_defs: BTreeMap<VarName, SExpr> = aux_vars
+        .iter()
+        .map(|aux| {
+            let aux_expr = spec.exprs.get(aux).unwrap_or_else(|| {
+                panic!(
+                    "Aux variable {:?} does not have a definition in the expressions",
+                    aux
+                )
+            });
+            (aux.clone(), aux_expr.clone())
+        })
+        .collect();
+
+    // Expand any references to aux variables within the expressions for other aux variables
+    // Cycle check: if an aux still references any aux after one full substitution pass,
+    // we treat it as recursive/cyclic and reject localisation (we are guaranteed to remove any
+    // non-cyclic dependencies after aux_vars.len() passes).
+    let expanded_aux_defs: BTreeMap<VarName, SExpr> =
+        (0..aux_vars.len()).fold(aux_defs.clone(), |current_defs, _| {
+            current_defs
+                .iter()
+                .map(|(name, expr)| {
+                    let expanded = aux_vars.iter().fold(expr.clone(), |acc, dep| {
+                        if dep == name {
+                            // This is the current dependency
+                            acc
+                        } else if let Some(dep_expr) = current_defs.get(dep) {
+                            // Replace the current dependency in the current expression
+                            replace_var(dep, dep_expr, &acc)
+                        } else {
+                            // Leave unchanged
+                            acc
+                        }
+                    });
+                    (name.clone(), expanded)
+                })
+                .collect()
+        });
+
+    // Check for remaining cyclic references
+    if let Some((name, _)) = expanded_aux_defs
+        .iter()
+        .find(|(_, expr)| expr.inputs().into_iter().any(|v| aux_vars.contains(&v)))
+    {
+        panic!(
+            "Recursive/cyclic aux definition detected while localising at aux variable {:?}",
+            name
+        );
+    }
+
+    // Replace all aux references in all expressions with their fully-expanded definitions.
+    let replaced_exprs = aux_vars.iter().fold(spec.exprs, |exprs_acc, aux| {
+        let aux_expr = expanded_aux_defs.get(aux).unwrap_or_else(|| {
+            panic!(
+                "Expanded aux expression missing for auxiliary variable {:?}",
                 aux
             )
-            .as_str(),
-        );
-        for (_, repl_expr) in new_spec.exprs.iter_mut() {
-            let new_expr = replace_var(aux, aux_expr, &*repl_expr);
-            *repl_expr = new_expr;
-        }
-    }
-    for aux in aux_vars.iter() {
-        new_spec.exprs.remove(aux);
-        new_spec.output_vars.retain(|v| v != aux);
-        new_spec.type_annotations.remove(aux);
-    }
-    new_spec.aux_info = vec![];
-    new_spec
+        });
+        exprs_acc
+            .into_iter()
+            .map(|(name, repl_expr)| (name, replace_var(aux, aux_expr, &repl_expr)))
+            .collect::<BTreeMap<_, _>>()
+    });
+
+    // Remove aux declarations/definitions from final spec and rebuild via constructor.
+    let filtered_exprs: BTreeMap<VarName, SExpr> = replaced_exprs
+        .into_iter()
+        .filter(|(name, _)| !aux_vars.contains(name))
+        .collect();
+
+    let filtered_output_vars: Vec<VarName> = spec
+        .output_vars
+        .into_iter()
+        .filter(|v| !aux_vars.contains(v))
+        .collect();
+
+    let filtered_type_annotations: BTreeMap<VarName, crate::core::StreamType> = spec
+        .type_annotations
+        .into_iter()
+        .filter(|(name, _)| !aux_vars.contains(name))
+        .collect();
+
+    DsrvSpecification::new(
+        spec.input_vars,
+        filtered_output_vars,
+        filtered_exprs,
+        filtered_type_annotations,
+        vec![],
+    )
 }
 
 impl Localisable for DsrvSpecification {
@@ -514,6 +583,91 @@ mod tests {
             result,
             DsrvSpecification::new(vec![x, y], vec![z], expected_exprs, BTreeMap::new(), vec![])
         );
+    }
+
+    #[test]
+    fn test_inline_aux_transitive_chain() {
+        let i: VarName = "i".into();
+        let h1: VarName = "h1".into();
+        let h2: VarName = "h2".into();
+        let h3: VarName = "h3".into();
+        let out: VarName = "out".into();
+
+        let spec = DsrvSpecification::new(
+            vec![i.clone()],
+            vec![h1.clone(), h2.clone(), h3.clone(), out.clone()],
+            vec![
+                (h1.clone(), SExpr::Var(i.clone())),
+                (
+                    h2.clone(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var(h1.clone())),
+                        Box::new(SExpr::Val(1.into())),
+                        "+".into(),
+                    ),
+                ),
+                (
+                    h3.clone(),
+                    SExpr::BinOp(
+                        Box::new(SExpr::Var(h2.clone())),
+                        Box::new(SExpr::Val(2.into())),
+                        "+".into(),
+                    ),
+                ),
+                (out.clone(), SExpr::Var(h3.clone())),
+            ]
+            .into_iter()
+            .collect(),
+            BTreeMap::new(),
+            vec![h1.clone(), h2.clone(), h3.clone()],
+        );
+
+        let result = inline_aux(spec);
+
+        // Canonicalize expected to match shape generated by replace_var expansion:
+        let expected_exprs = vec![(
+            out.clone(),
+            SExpr::BinOp(
+                Box::new(SExpr::BinOp(
+                    Box::new(SExpr::Var(i.clone())),
+                    Box::new(SExpr::Val(1.into())),
+                    "+".into(),
+                )),
+                Box::new(SExpr::Val(2.into())),
+                "+".into(),
+            ),
+        )]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            result,
+            DsrvSpecification::new(vec![i], vec![out], expected_exprs, BTreeMap::new(), vec![])
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Recursive/cyclic aux definition detected")]
+    fn test_inline_aux_cycle_panics() {
+        let h1: VarName = "h1".into();
+        let h2: VarName = "h2".into();
+        let out: VarName = "out".into();
+
+        let spec = DsrvSpecification::new(
+            vec![],
+            vec![h1.clone(), h2.clone(), out.clone()],
+            vec![
+                (h1.clone(), SExpr::Var(h2.clone())),
+                (h2.clone(), SExpr::Var(h1.clone())),
+                (out.clone(), SExpr::Var(h1.clone())),
+            ]
+            .into_iter()
+            .collect(),
+            BTreeMap::new(),
+            vec![h1, h2],
+        );
+
+        let _ = inline_aux(spec);
     }
 
     proptest! {

@@ -2647,7 +2647,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
     }
 
     #[test]
-    fn localise_can_leave_unresolved_helper_inputs_regression() {
+    fn localise_resolves_helper_inputs_regression() {
         let spec_src = r#"
 in c1
 in c2
@@ -2682,10 +2682,21 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         );
         assert!(localised.var_expr(&VarName::new("h1")).is_none());
         assert!(localised.var_expr(&VarName::new("h2")).is_none());
+
+        let d3_expr = localised
+            .var_expr(&VarName::new("d3"))
+            .expect("d3 expression should be present after localisation");
+        let d3_inputs = d3_expr.inputs();
+        assert!(
+            !d3_inputs.contains(&VarName::new("h1")) && !d3_inputs.contains(&VarName::new("h2")),
+            "localised d3 should not reference aux vars h1/h2 anymore"
+        );
     }
 
-    #[test]
-    fn sat_solver_panics_on_nested_aux_chain_that_leaves_unresolved_vars_after_localisation() {
+    #[apply(crate::async_test)]
+    async fn sat_solver_supports_nested_aux_chain_after_localisation_fix(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
         let spec_src = r#"
 in c1
 in c2
@@ -2743,14 +2754,31 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
             Some(replay_history),
         ));
 
-        let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _ = solver.possible_labelled_dist_graph_stream(graph);
-        }));
+        let mut stream = solver.possible_labelled_dist_graph_stream(graph.clone());
+        let labelled = futures::StreamExt::next(&mut stream)
+            .await
+            .expect("expected SAT assignment for nested aux-chain constraints");
 
+        let b_idx = graph.get_node_index_by_name(&"B".into()).unwrap();
+        let c_idx = graph.get_node_index_by_name(&"C".into()).unwrap();
+
+        let a_idx = graph.get_node_index_by_name(&"A".into()).unwrap();
+        let s1 = VarName::new("s1");
+        let s2 = VarName::new("s2");
+        let s3 = VarName::new("s3");
+
+        let s1_on_a = labelled.node_labels[&a_idx].contains(&s1);
+        let s1_on_b = labelled.node_labels[&b_idx].contains(&s1);
+        let s1_on_c = labelled.node_labels[&c_idx].contains(&s1);
         assert!(
-            res.is_err(),
-            "SAT solver should panic on unresolved nested aux-variable chains"
+            (s1_on_a as u8 + s1_on_b as u8 + s1_on_c as u8) == 1,
+            "s1 should be placed on exactly one node"
         );
+
+        assert!(labelled.node_labels[&c_idx].contains(&s2));
+        assert!(labelled.node_labels[&c_idx].contains(&s3));
+        assert!(!labelled.node_labels[&a_idx].contains(&s2));
+        assert!(!labelled.node_labels[&a_idx].contains(&s3));
     }
 
     proptest! {
@@ -2792,7 +2820,6 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         }
 
         #[test]
-        #[ignore = "pending localisation aux-chain support"]
         fn prop_sat_matches_bruteforce_on_3_node_graphs_with_aux_const_and_replay_mixed(
             w_ab in 1u64..=4,
             w_bc in 1u64..=4,
