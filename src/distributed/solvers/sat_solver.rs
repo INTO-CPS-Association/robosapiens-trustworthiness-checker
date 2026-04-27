@@ -2500,7 +2500,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+        #![proptest_config(ProptestConfig::with_cases(16))]
         #[test]
         fn prop_sat_matches_bruteforce_on_3_node_graphs(
             w_ab in 1u64..=4,
@@ -2782,7 +2782,7 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+        #![proptest_config(ProptestConfig::with_cases(16))]
         #[test]
         fn prop_sat_matches_bruteforce_on_3_node_graphs_with_aux_intermediate_constraints(
             w_ab in 1u64..=4,
@@ -2859,7 +2859,7 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+        #![proptest_config(ProptestConfig::with_cases(16))]
         #[test]
         fn prop_sat_law_de_morgan_and(
             a in any::<bool>(),

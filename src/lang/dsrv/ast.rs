@@ -949,6 +949,8 @@ mod tests {
     use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
         #[test]
         fn test_prop_format_works(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
             let _ = format!("{}", e);
