@@ -18,6 +18,7 @@ use crate::{
 pub struct RosSchedulerCommunicator {
     pub ros_node_name: String,
     work_txs: BTreeMap<NodeName, Sender<String>>,
+    last_payloads: BTreeMap<NodeName, String>,
     _drop_guard: DropGuard,
 }
 
@@ -135,6 +136,7 @@ impl RosSchedulerCommunicator {
         Ok(Self {
             ros_node_name,
             work_txs,
+            last_payloads: BTreeMap::new(),
             _drop_guard: drop_guard,
         })
     }
@@ -148,15 +150,32 @@ impl<M: Specification> SchedulerCommunicator<M> for RosSchedulerCommunicator {
         work: MonitorWork<M>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let work = serde_json::to_string(&work)?;
+
+        // Skip repeated reconfig messages
+        if self
+            .last_payloads
+            .get(&node)
+            .is_some_and(|last| last == &work)
+        {
+            info!(
+                "Skipping duplicate reconfig message for node {} with payload {}",
+                node, work
+            );
+            return Ok(());
+        }
+
         let tx = self
             .work_txs
             .get(&node)
             .ok_or_else(|| anyhow::anyhow!("Node not found: {node}"))?;
         info!(
-            "sending reconfig message for node {} with payload {}",
+            "Sending reconfig message for node {} with payload {}",
             node, work
         );
-        tx.send(work).await?;
+
+        tx.send(work.clone()).await?;
+        self.last_payloads.insert(node, work);
+
         Ok(())
     }
 }
