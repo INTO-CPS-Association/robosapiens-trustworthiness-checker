@@ -1027,6 +1027,8 @@ where
                         .iter()
                         .map(|x| {
                             let stream = ctx.var(x).unwrap();
+                            // TODO: This should be an Option<bool> stream where None means NoVal.
+                            // Currently, NoVal triggers false which means we replan on NoVal.
                             Box::pin(stream.map(|v| match v {
                                 Value::Bool(b) => b,
                                 _ => false,
