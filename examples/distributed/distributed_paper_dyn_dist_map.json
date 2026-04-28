@@ -1,18 +1,18 @@
 {
   "R1Odom": {
-    "topic": "/tb1/odom",
+    "topic": "/tb1/odomThrot",
     "msg_type": "Odom"
   },
   "R2Odom": {
-    "topic": "/tb2/odom",
+    "topic": "/tb2/odomThrot",
     "msg_type": "Odom"
   },
   "R3Odom": {
-    "topic": "/tb3/odom",
+    "topic": "/tb3/odomThrot",
     "msg_type": "Odom"
   },
   "R4Odom": {
-    "topic": "/tb4/odom",
+    "topic": "/tb4/odomThrot",
     "msg_type": "Odom"
   },
   "ConveyorSystem": {

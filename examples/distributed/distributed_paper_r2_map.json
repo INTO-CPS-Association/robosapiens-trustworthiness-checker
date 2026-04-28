@@ -1,6 +1,6 @@
 {
   "R2Odom": {
-    "topic": "/tb2/odom",
+    "topic": "/tb2/odomThrot",
     "msg_type": "Odom"
   },
   "ConveyorSystem": {
