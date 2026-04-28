@@ -29,7 +29,7 @@ services:
     network_mode: host
   dev:
     extends: base
-    depends_on: [emqx]
+    depends_on: [ emqx ]
     network_mode: host
     image: trustworthiness-checker:dev
     build:
@@ -45,15 +45,15 @@ services:
     volumes:
       - ${XAUTHORITY:-$HOME/.Xauthority}:/home/${USERNAME:-devuser}/.Xauthority
       - /dev/shm:/dev/shm
-  devnogpu:
+  devtcnogpu:
     extends: dev
     environment:
       - LIBGL_ALWAYS_SOFTWARE=1
-  devmesa:
+  devtcmesa:
     extends: dev
     volumes:
       - /dev/dri:/dev/dri
-  devnvidia:
+  devtcnvidia:
     extends: dev
     deploy:
       resources:
