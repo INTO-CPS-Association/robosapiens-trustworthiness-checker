@@ -6,6 +6,7 @@ use futures::future::{Either, LocalBoxFuture};
 use futures::{FutureExt, StreamExt};
 use smol::LocalExecutor;
 use tracing::{Level, debug, error, info, instrument, warn};
+use uuid::Uuid;
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping};
 use crate::core::OutputHandler;
@@ -321,8 +322,10 @@ impl ROSOutputHandler {
         // Create a ROS node for publishing
         let ctx = r2r::Context::create()
             .map_err(|e| anyhow::anyhow!("Failed to create ROS context: {:?}", e))?;
-        let mut node = r2r::Node::create(ctx, node_name.as_str(), "")
-            .map_err(|e| anyhow::anyhow!("Failed to create ROS node: {:?}", e))?;
+        let uuid = Uuid::new_v4().simple().to_string();
+        let mut node =
+            r2r::Node::create(ctx, format!("{}_{}", node_name.as_str(), uuid).as_str(), "")
+                .map_err(|e| anyhow::anyhow!("Failed to create ROS node: {:?}", e))?;
         debug!("Created ROS publisher node 'tc_ros_output'");
 
         // Cancellation token to stop spinning the node

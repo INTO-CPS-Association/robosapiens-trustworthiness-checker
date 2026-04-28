@@ -14,6 +14,7 @@ use tracing::info;
 use tracing::info_span;
 use tracing::{Level, instrument};
 use unsync::spsc;
+use uuid::Uuid;
 
 use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
 
@@ -185,8 +186,8 @@ impl ROSInputProvider {
     ) -> Result<Self, r2r::Error> {
         // Create a ROS node to subscribe to all of the input topics
         let ctx = r2r::Context::create()?;
-        // TODO: do we need to specify a unique ROS node name?
-        let mut node = r2r::Node::create(ctx, "input_monitor", "")?;
+        let uuid = Uuid::new_v4().simple().to_string();
+        let mut node = r2r::Node::create(ctx, format!("input_monitor_{}", uuid).as_str(), "")?;
 
         // Cancellation token to stop the subscriber node
         // if all consumers of the output streams have
