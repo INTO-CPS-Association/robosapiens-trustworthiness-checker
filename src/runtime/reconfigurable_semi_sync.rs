@@ -396,6 +396,45 @@ where
                 info!("Parsed as: {:?}", parsed);
                 let parsed = parsed
                     .map_err(|err| anyhow!("Failed to parse reconfiguration command: {:?}", err))?;
+                let old_model = self
+                    .self_builder
+                    .model
+                    .clone()
+                    .expect("Model must exist for reconfiguration");
+                let old_input_vars = old_model.input_vars();
+                let old_out_exprs = old_model
+                    .output_vars()
+                    .into_iter()
+                    .map(|v| {
+                        let expr = old_model.var_expr(&v).ok_or_else(|| {
+                            anyhow!(
+                                "Output variable {:?} must have an expression in the old model",
+                                v
+                            )
+                        })?;
+                        Ok((v, expr))
+                    })
+                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+                let input_vars = parsed.input_vars();
+                let out_exprs = parsed
+                    .output_vars()
+                    .into_iter()
+                    .map(|v| {
+                        let expr = parsed.var_expr(&v).ok_or_else(|| {
+                            anyhow!(
+                                "Output variable {:?} must have an expression in the new model",
+                                v
+                            )
+                        })?;
+                        Ok((v, expr))
+                    })
+                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+                if input_vars == old_input_vars && out_exprs == old_out_exprs {
+                    info!(
+                        "Reconfiguration does not change input vars or output expressions, skipping rebuild"
+                    );
+                    return Ok(());
+                }
 
                 // TODO: Does not work with FileInputProvider as it reads the file from
                 // fresh...
@@ -428,11 +467,18 @@ where
                             vars.into_iter()
                                 .map(|v| {
                                     let name = v.name();
+                                    let topic_hack = match name.as_str() {
+                                        "R1Odom" => "/tb1/odomThrot".to_string(),
+                                        "R2Odom" => "/tb2/odomThrot".to_string(),
+                                        "R3Odom" => "/tb3/odomThrot".to_string(),
+                                        "R4Odom" => "/tb4/odomThrot".to_string(),
+                                        _ => format!("/{}", v),
+                                    };
                                     let msg_type = types.get(&name).unwrap().clone(); // Safe now
                                     (
                                         name,
                                         serde_json::json!({
-                                            "topic": format!("/{}", v),
+                                            "topic": topic_hack,
                                             "msg_type": msg_type,
                                         }),
                                     )
