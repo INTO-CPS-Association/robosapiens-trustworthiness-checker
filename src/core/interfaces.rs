@@ -99,17 +99,6 @@ pub trait OutputHandler {
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>>;
 }
 
-#[async_trait(?Send)]
-impl Runtime for Box<dyn Runtime> {
-    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        Runtime::run_boxed(self).await
-    }
-
-    async fn run(mut self: Self) -> anyhow::Result<()> {
-        Runtime::run_boxed(self).await
-    }
-}
-
 /*
  * A runtime, implementing a runtime monitor for a model/specification.
  */
@@ -124,4 +113,16 @@ pub trait Runtime {
     }
 
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()>;
+}
+
+/* Allow using a boxed runtime as a runtime */
+#[async_trait(?Send)]
+impl Runtime for Box<dyn Runtime> {
+    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
+        Runtime::run_boxed(self).await
+    }
+
+    async fn run(mut self: Self) -> anyhow::Result<()> {
+        Runtime::run_boxed(self).await
+    }
 }

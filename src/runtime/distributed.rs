@@ -1,5 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
+use crate::io::TopicMapping;
+
 use async_trait::async_trait;
 use futures::{StreamExt, future::LocalBoxFuture, join};
 use smol::LocalExecutor;
@@ -160,6 +162,7 @@ where
 pub struct DistAsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub async_monitor_builder: AsyncRuntimeBuilder<AC, S>,
     var_msg_types: Option<BTreeMap<VarName, String>>,
+    topic_mapping: Option<TopicMapping>,
     input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     pub context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
@@ -311,6 +314,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
             dist_graph_mode: self.dist_graph_mode.as_ref().map(|b| b.clone()),
             scheduler_mode: self.scheduler_mode.as_ref().map(|b| b.clone()),
             var_msg_types: self.var_msg_types.as_ref().cloned(),
+            topic_mapping: self.topic_mapping.as_ref().cloned(),
             input: None,
         }
     }
@@ -402,6 +406,18 @@ where
         }
         self
     }
+
+    pub fn topic_mapping(mut self, topic_mapping: TopicMapping) -> Self {
+        self.topic_mapping = Some(topic_mapping);
+        self
+    }
+
+    pub fn maybe_topic_mapping(mut self, topic_mapping: Option<TopicMapping>) -> Self {
+        if self.topic_mapping.is_some() {
+            self.topic_mapping = topic_mapping;
+        }
+        self
+    }
 }
 
 impl<S, AC> RuntimeBuilder<AC::Spec, AC::Val> for DistAsyncRuntimeBuilder<AC, S>
@@ -416,6 +432,7 @@ where
         DistAsyncRuntimeBuilder {
             async_monitor_builder: AsyncRuntimeBuilder::new(),
             var_msg_types: None,
+            topic_mapping: None,
             context_builder: None,
             dist_graph_mode: None,
             input: None,
@@ -461,6 +478,16 @@ where
             .as_ref()
             .cloned()
             .expect("Variable message types not set");
+        let topic_mapping = self.topic_mapping.as_ref().cloned().unwrap_or_else(|| {
+            var_msg_types
+                .keys()
+                .cloned()
+                .map(|var| {
+                    let topic = format!("/{}", var.name());
+                    (var, topic)
+                })
+                .collect()
+        });
         let executor = self
             .async_monitor_builder
             .executor
@@ -1031,6 +1058,7 @@ where
         let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
             spec.clone(),
             var_msg_types,
+            topic_mapping,
             planner,
             scheduler_communicator,
             dist_graph_provider,

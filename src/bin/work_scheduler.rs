@@ -94,9 +94,19 @@ async fn async_main() -> anyhow::Result<()> {
     let dist_graph_provider = Box::new(StaticDistGraphProvider::new(dist_graph.dist_graph.clone()));
 
     // Run the static work scheduler
+    let topic_mapping = spec
+        .var_names()
+        .into_iter()
+        .map(|var| {
+            let topic = format!("/{}", var.name());
+            (var, topic)
+        })
+        .collect::<BTreeMap<_, _>>();
+
     let scheduler: Scheduler<DsrvSpecification> = Scheduler::new(
         spec,
         var_msg_types,
+        topic_mapping,
         planner,
         communicator,
         dist_graph_provider,

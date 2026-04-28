@@ -6,13 +6,14 @@ use smol::LocalExecutor;
 use tracing::{debug, warn};
 
 use crate::InputProvider;
+use crate::io::MsgTypeMapping;
 use crate::{
     DsrvSpecification, Runtime, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{OutputHandler, RuntimeSpec, Semantics, StreamData},
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
+    io::{InputProviderBuilder, TopicMapping, builders::OutputHandlerBuilder},
     lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
@@ -532,6 +533,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub parser: ParserMode,
     pub reconf_topic: String,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
+    pub topic_mapping: Option<TopicMapping>,
 }
 
 impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
@@ -606,6 +608,20 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
         }
     }
 
+    pub fn topic_mapping(self, topic_mapping: TopicMapping) -> Self {
+        Self {
+            topic_mapping: Some(topic_mapping),
+            ..self
+        }
+    }
+
+    pub fn maybe_topic_mapping(self, topic_mapping: Option<TopicMapping>) -> Self {
+        match topic_mapping {
+            Some(topic_mapping) => self.topic_mapping(topic_mapping),
+            None => self,
+        }
+    }
+
     pub fn reconf_topic(self, reconf_topic: String) -> Self {
         Self {
             reconf_topic,
@@ -632,6 +648,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
             runtime: RuntimeSpec::Async,
             semantics: Semantics::Untimed,
             var_msg_types: None,
+            topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
@@ -695,6 +712,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
+                self.topic_mapping.clone(),
                 self.var_msg_types.clone(),
             );
 
@@ -730,7 +748,8 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
         reconf_topic: String,
-        var_msg_types: Option<BTreeMap<VarName, String>>,
+        topic_mapping: Option<TopicMapping>,
+        var_msg_types: Option<MsgTypeMapping>,
     ) -> Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
@@ -935,6 +954,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 };
 
                 let builder = builder.maybe_var_msg_types(var_msg_types.clone());
+                let builder = builder.maybe_topic_mapping(topic_mapping.clone());
 
                 Box::new(builder)
             }
@@ -990,6 +1010,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
+                self.topic_mapping.clone(),
                 self.var_msg_types.clone(),
             );
 

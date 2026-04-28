@@ -18,6 +18,7 @@ pub type WorkTypeInfo = BTreeMap<VarName, String>;
 pub struct MonitorWork<M: Specification> {
     pub spec: M,
     pub type_info: WorkTypeInfo,
+    pub topic_mapping: BTreeMap<VarName, String>,
 }
 
 impl<M: Specification> Serialize for MonitorWork<M> {
@@ -25,10 +26,11 @@ impl<M: Specification> Serialize for MonitorWork<M> {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("MonitorWork", 2)?;
+        let mut state = serializer.serialize_struct("MonitorWork", 3)?;
         let spec_str = format!("{}", self.spec);
         state.serialize_field("spec", &spec_str)?;
         state.serialize_field("type_info", &self.type_info)?;
+        state.serialize_field("topic_mapping", &self.topic_mapping)?;
         state.end()
     }
 }
@@ -108,6 +110,10 @@ mod tests {
         let work = MonitorWork {
             spec: spec,
             type_info,
+            topic_mapping: BTreeMap::from([
+                (VarName::from("x"), String::from("/x")),
+                (VarName::from("y"), String::from("/y")),
+            ]),
         };
         let serialized = serde_json::to_value(&work)?;
 
@@ -116,6 +122,10 @@ mod tests {
             "type_info": {
                 "x": "Int32",
                 "y": "Int32"
+            },
+            "topic_mapping": {
+                "x": "/x",
+                "y": "/y"
             }
         });
 
@@ -134,7 +144,15 @@ mod tests {
             (VarName::from("z"), String::from("String")),
         ]);
 
-        let work = MonitorWork { spec, type_info };
+        let work = MonitorWork {
+            spec,
+            type_info,
+            topic_mapping: BTreeMap::from([
+                (VarName::from("x"), String::from("/x")),
+                (VarName::from("y"), String::from("/y")),
+                (VarName::from("z"), String::from("/z")),
+            ]),
+        };
         let serialized = serde_json::to_value(&work)?;
 
         let expected = serde_json::json!({
@@ -143,6 +161,11 @@ mod tests {
                 "x": "String",
                 "y": "String",
                 "z": "String"
+            },
+            "topic_mapping": {
+                "x": "/x",
+                "y": "/y",
+                "z": "/z"
             }
         });
 
@@ -160,7 +183,14 @@ mod tests {
             (VarName::from("z"), String::from("Int32")),
         ]);
 
-        let work = MonitorWork { spec, type_info };
+        let work = MonitorWork {
+            spec,
+            type_info,
+            topic_mapping: BTreeMap::from([
+                (VarName::from("records"), String::from("/records")),
+                (VarName::from("z"), String::from("/z")),
+            ]),
+        };
         let serialized = serde_json::to_value(&work)?;
 
         let expected = serde_json::json!({
@@ -168,6 +198,10 @@ mod tests {
             "type_info": {
                 "records": "Odom",
                 "z": "Int32"
+            },
+            "topic_mapping": {
+                "records": "/records",
+                "z": "/z"
             }
         });
 

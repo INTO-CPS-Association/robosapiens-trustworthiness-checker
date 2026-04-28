@@ -90,6 +90,19 @@ pub fn ros_variable_map_to_string_variable_map(
         .collect()
 }
 
+pub fn ros_stream_mapping_to_topic_mapping(
+    map: ROSStreamMapping,
+) -> Result<BTreeMap<VarName, String>, anyhow::Error> {
+    map.into_iter()
+        .map(
+            |(var_name_str, VariableMappingData { topic, msg_type: _ })| {
+                let var_name = var_name_str.try_into()?;
+                Ok((var_name, topic))
+            },
+        )
+        .collect()
+}
+
 pub fn json_to_mapping(json: &str) -> Result<ROSStreamMapping, anyhow::Error> {
     // Note: This was rewritten instead of using `serde_json::from_str` because
     // mhk dreams of one day supporting the custom ROS types automatically...
