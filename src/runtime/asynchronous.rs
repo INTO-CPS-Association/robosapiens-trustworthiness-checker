@@ -1023,6 +1023,10 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
         self
     }
 
+    fn topic_mapping(self, _topic_mapping: crate::io::TopicMapping) -> Self {
+        self
+    }
+
     fn build(self) -> Self::Mon {
         debug!("AsyncMonitorBuilder: Starting build process");
         let executor = self.executor.expect("Executor not supplied");

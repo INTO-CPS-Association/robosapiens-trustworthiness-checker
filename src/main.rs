@@ -175,8 +175,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .redis_port(redis_port)
         .aux_info(aux_info);
 
-    // Get variable message types mapping
-    let var_msg_types: Option<BTreeMap<VarName, String>> = match &cli.output_mode {
+    // Get variable message types mapping and ROS topic mapping
+    let (var_msg_types, topic_mapping): (
+        Option<BTreeMap<VarName, String>>,
+        Option<BTreeMap<VarName, String>>,
+    ) = match &cli.output_mode {
         OutputMode {
             output_ros_file: Some(_output_ros_file),
             ..
@@ -190,41 +193,58 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
                 // and the runtime building)
 
                 use trustworthiness_checker::io::ros::json_to_mapping;
-                use trustworthiness_checker::io::ros::ros_topic_stream_mapping::ros_variable_map_to_string_variable_map;
+                use trustworthiness_checker::io::ros::ros_topic_stream_mapping::{
+                    ros_variable_map_to_string_variable_map,
+                    ros_variable_map_to_topic_string_variable_map,
+                };
 
                 let output_json = std::fs::read_to_string(_output_ros_file)
                     .expect("Output mapping file could not be read");
                 let output_mapping =
                     json_to_mapping(&output_json).expect("Output mapping file could not be parsed");
-                let output_mapping = ros_variable_map_to_string_variable_map(output_mapping)
+                let output_types = ros_variable_map_to_string_variable_map(output_mapping.clone())
                     .expect(
                         "ROS output topic mapping could not be converted to string variable map",
                     );
+                let output_topics =
+                    ros_variable_map_to_topic_string_variable_map(output_mapping).expect(
+                        "ROS output topic mapping could not be converted to topic string variable map",
+                    );
 
-                let input_mapping = match &cli.input_mode.input_ros_file {
+                let (input_types, input_topics) = match &cli.input_mode.input_ros_file {
                     Some(input_ros_file) => {
                         let input_json = std::fs::read_to_string(input_ros_file)
                             .expect("Input mapping file could not be read");
                         let input_mapping = json_to_mapping(&input_json)
                             .expect("Input mapping file could not be parsed");
-                        ros_variable_map_to_string_variable_map(input_mapping).expect(
-                            "ROS input topic mapping could not be converted to string variable map",
+                        let input_types = ros_variable_map_to_string_variable_map(
+                            input_mapping.clone(),
                         )
+                        .expect(
+                            "ROS input topic mapping could not be converted to string variable map",
+                        );
+                        let input_topics =
+                            ros_variable_map_to_topic_string_variable_map(input_mapping).expect(
+                                "ROS input topic mapping could not be converted to topic string variable map",
+                            );
+                        (input_types, input_topics)
                     }
-                    None => BTreeMap::new(),
+                    None => (BTreeMap::new(), BTreeMap::new()),
                 };
 
-                let merged_mapping = input_mapping.into_iter().chain(output_mapping).collect();
-                Some(merged_mapping)
+                let merged_types = input_types.into_iter().chain(output_types).collect();
+                let merged_topics = input_topics.into_iter().chain(output_topics).collect();
+                (Some(merged_types), Some(merged_topics))
             }
             #[cfg(not(feature = "ros"))]
             {
                 unimplemented!("Attempted to set a ROS topic mapping when ROS support not enabled")
             }
         }
-        _ => None,
+        _ => (None, None),
     };
     let builder = builder.maybe_var_msg_types(var_msg_types);
+    let builder = builder.maybe_topic_mapping(topic_mapping);
 
     let builder = builder.output_handler_builder(output_handler_builder);
 

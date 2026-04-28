@@ -172,6 +172,10 @@ where
     fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
         self
     }
+
+    fn topic_mapping(self, _topic_mapping: crate::io::TopicMapping) -> Self {
+        self
+    }
 }
 
 impl<AC, MS, P> ReconfSemiSyncMonitorBuilder<AC, MS, P>

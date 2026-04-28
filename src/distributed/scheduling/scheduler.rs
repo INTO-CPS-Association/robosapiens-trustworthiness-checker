@@ -10,7 +10,7 @@ use crate::{
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, graph_to_png,
     },
-    io::mqtt::dist_graph_provider::DistGraphProvider,
+    io::{TopicMapping, mqtt::dist_graph_provider::DistGraphProvider},
     semantics::distributed::localisation::Localisable,
 };
 
@@ -41,6 +41,7 @@ impl<M: Specification + Localisable> Scheduler<M> {
     pub fn new(
         spec: M,
         var_msg_types: BTreeMap<VarName, String>,
+        topic_mapping: TopicMapping,
         planner: Box<dyn SchedulerPlanner>,
         communicator: Box<dyn SchedulerCommunicator<M>>,
         dist_graph_provider: Box<dyn DistGraphProvider>,
@@ -48,7 +49,8 @@ impl<M: Specification + Localisable> Scheduler<M> {
         suppress_output: bool,
     ) -> Self {
         let mut tx = broadcast::channel(10);
-        let scheduler_executor = SchedulerExecutor::new(spec, var_msg_types, communicator);
+        let scheduler_executor =
+            SchedulerExecutor::new(spec, var_msg_types, topic_mapping, communicator);
         let mut rx_output = tx.subscribe();
         let dist_graph_output_stream: Option<LabelledDistGraphStream> = Some(Box::pin(stream! {
             while let Some(x) = rx_output.recv().await {

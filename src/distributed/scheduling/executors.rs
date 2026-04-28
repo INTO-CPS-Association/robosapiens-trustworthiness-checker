@@ -18,6 +18,7 @@ use super::communication::SchedulerCommunicator;
 pub struct SchedulerExecutor<M: Specification + Localisable> {
     spec: M,
     var_msg_types: BTreeMap<VarName, String>,
+    topic_mapping: BTreeMap<VarName, String>,
     communicator: Box<dyn SchedulerCommunicator<M>>,
 }
 
@@ -32,6 +33,7 @@ pub struct SchedulerExecutor<M: Specification + Localisable> {
 fn monitor_work_for_specification<M: Specification + Localisable>(
     spec: M,
     var_msg_types: BTreeMap<VarName, String>,
+    topic_mapping: BTreeMap<VarName, String>,
 ) -> anyhow::Result<super::communication::MonitorWork<M>> {
     let io_vars: Vec<VarName> = spec
         .input_vars()
@@ -44,10 +46,16 @@ fn monitor_work_for_specification<M: Specification + Localisable>(
         .filter(|(var, _)| io_vars.contains(var))
         .collect();
 
+    let topic_mapping: BTreeMap<VarName, String> = topic_mapping
+        .into_iter()
+        .filter(|(var, _)| io_vars.contains(var))
+        .collect();
+
     Ok(super::communication::MonitorWork {
         // Clone here due to use in contract
         spec: spec.clone(),
         type_info,
+        topic_mapping,
     })
 }
 
@@ -58,22 +66,25 @@ fn monitor_work_for_specification<M: Specification + Localisable>(
 fn local_monitor_work<M: Specification + Localisable>(
     spec: M,
     var_msg_types: BTreeMap<VarName, String>,
+    topic_mapping: BTreeMap<VarName, String>,
     local_topics: Vec<VarName>,
 ) -> anyhow::Result<super::communication::MonitorWork<M>> {
     let local_spec = spec.localise(&local_topics);
 
-    monitor_work_for_specification(local_spec, var_msg_types.clone())
+    monitor_work_for_specification(local_spec, var_msg_types.clone(), topic_mapping.clone())
 }
 
 impl<M: Specification + Localisable> SchedulerExecutor<M> {
     pub fn new(
         spec: M,
         var_msg_types: BTreeMap<VarName, String>,
+        topic_mapping: BTreeMap<VarName, String>,
         communicator: Box<dyn SchedulerCommunicator<M>>,
     ) -> Self {
         SchedulerExecutor {
             spec,
             var_msg_types,
+            topic_mapping,
             communicator,
         }
     }
@@ -87,6 +98,7 @@ impl<M: Specification + Localisable> SchedulerExecutor<M> {
             let work = local_monitor_work(
                 self.spec.clone(),
                 self.var_msg_types.clone(),
+                self.topic_mapping.clone(),
                 local_topics.clone(),
             )
             .expect("Failed to get local work assignment from specification");
@@ -125,7 +137,14 @@ mod tests {
             ("unused".into(), "Int32".to_string()),
         ]);
 
-        let work = monitor_work_for_specification(local_spec, var_msg_types)?;
+        let topic_mapping: BTreeMap<VarName, String> = BTreeMap::from([
+            ("x".into(), "/x".to_string()),
+            ("y".into(), "/y".to_string()),
+            ("z".into(), "/z".to_string()),
+            ("unused".into(), "/unused".to_string()),
+        ]);
+
+        let work = monitor_work_for_specification(local_spec, var_msg_types, topic_mapping)?;
 
         assert!(work.type_info.contains_key(&"x".into()));
         assert!(work.type_info.contains_key(&"y".into()));
@@ -161,9 +180,17 @@ mod tests {
         };
 
         let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator { log: vec![] }));
+        let topic_mapping: BTreeMap<VarName, String> = BTreeMap::from([
+            ("x".into(), "/x".to_string()),
+            ("y".into(), "/y".to_string()),
+            ("z".into(), "/z".to_string()),
+            ("unused".into(), "/unused".to_string()),
+        ]);
+
         let mut executor = SchedulerExecutor::new(
             spec,
             var_msg_types,
+            topic_mapping,
             Box::new(communicator.clone()) as Box<dyn SchedulerCommunicator<_>>,
         );
 
@@ -177,6 +204,72 @@ mod tests {
         assert!(work.type_info.contains_key(&"y".into()));
         assert!(!work.type_info.contains_key(&"z".into()));
         assert!(!work.type_info.contains_key(&"unused".into()));
+        Ok(())
+    }
+
+    #[apply(crate::async_test)]
+    async fn scheduler_executor_propagates_ros_topic_mapping_per_node(
+        _executor: Rc<smol::LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let mut spec_src = "in x: Int\nin z: Int\nout y: Int\ny = (x + 1)";
+        let spec = dsrv_specification(&mut spec_src).map_err(|e| anyhow::anyhow!(e))?;
+
+        let var_msg_types: WorkTypeInfo = BTreeMap::from([
+            ("x".into(), "Int32".to_string()),
+            ("y".into(), "Int32".to_string()),
+            ("z".into(), "Int32".to_string()),
+            ("unused".into(), "Int32".to_string()),
+        ]);
+
+        let topic_mapping: BTreeMap<VarName, String> = BTreeMap::from([
+            ("x".into(), "/robot_1/in/x".to_string()),
+            ("y".into(), "/robot_1/out/y".to_string()),
+            ("z".into(), "/robot_1/in/z".to_string()),
+            ("unused".into(), "/robot_1/unused".to_string()),
+        ]);
+
+        let mut graph = petgraph::prelude::DiGraph::new();
+        let node_a = graph.add_node("A".into());
+        let dist_graph = DistributionGraph {
+            central_monitor: node_a,
+            graph,
+        };
+        let labelled = LabelledDistributionGraph {
+            dist_graph: Rc::new(dist_graph),
+            var_names: vec!["x".into(), "y".into(), "z".into()],
+            node_labels: BTreeMap::from([(node_a, vec!["y".into()])]),
+        };
+
+        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator { log: vec![] }));
+        let mut executor = SchedulerExecutor::new(
+            spec,
+            var_msg_types,
+            topic_mapping,
+            Box::new(communicator.clone()) as Box<dyn SchedulerCommunicator<_>>,
+        );
+
+        executor.execute(Rc::new(labelled)).await;
+
+        let lock = communicator.lock().unwrap();
+        assert_eq!(lock.log.len(), 1);
+
+        let (_node, work) = &lock.log[0];
+
+        assert_eq!(
+            work.topic_mapping
+                .get(&VarName::from("x"))
+                .map(String::as_str),
+            Some("/robot_1/in/x")
+        );
+        assert_eq!(
+            work.topic_mapping
+                .get(&VarName::from("y"))
+                .map(String::as_str),
+            Some("/robot_1/out/y")
+        );
+        assert!(!work.topic_mapping.contains_key(&VarName::from("z")));
+        assert!(!work.topic_mapping.contains_key(&VarName::from("unused")));
+
         Ok(())
     }
 }

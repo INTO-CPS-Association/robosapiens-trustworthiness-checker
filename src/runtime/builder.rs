@@ -11,7 +11,7 @@ use crate::{
     core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
+    io::{InputProviderBuilder, TopicMapping, builders::OutputHandlerBuilder},
     lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
@@ -73,6 +73,11 @@ pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
         var_msg_types: Option<BTreeMap<VarName, String>>,
     ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
 
+    fn maybe_topic_mapping(
+        self: Box<Self>,
+        topic_mapping: Option<TopicMapping>,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+
     fn build(self: Box<Self>) -> Box<dyn Runnable>;
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>>;
@@ -129,6 +134,16 @@ impl<
         }
     }
 
+    fn maybe_topic_mapping(
+        self: Box<Self>,
+        topic_mapping: Option<TopicMapping>,
+    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+        match topic_mapping {
+            Some(map) => Box::new(MonBuilder::topic_mapping(*self, map)),
+            None => self,
+        }
+    }
+
     fn build(self: Box<Self>) -> Box<dyn Runnable> {
         Box::new(MonBuilder::build(*self))
     }
@@ -173,6 +188,10 @@ impl<
     }
 
     fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self
+    }
+
+    fn topic_mapping(self, _topic_mapping: TopicMapping) -> Self {
         self
     }
 
@@ -407,6 +426,7 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub parser: ParserMode,
     pub reconf_topic: String,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
+    pub topic_mapping: Option<TopicMapping>,
 }
 
 impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
@@ -481,6 +501,20 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
         }
     }
 
+    pub fn topic_mapping(self, topic_mapping: TopicMapping) -> Self {
+        Self {
+            topic_mapping: Some(topic_mapping),
+            ..self
+        }
+    }
+
+    pub fn maybe_topic_mapping(self, topic_mapping: Option<TopicMapping>) -> Self {
+        match topic_mapping {
+            Some(topic_mapping) => self.topic_mapping(topic_mapping),
+            None => self,
+        }
+    }
+
     pub fn reconf_topic(self, reconf_topic: String) -> Self {
         Self {
             reconf_topic,
@@ -509,6 +543,7 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
             runtime: Runtime::Async,
             semantics: Semantics::Untimed,
             var_msg_types: None,
+            topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
@@ -544,6 +579,10 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
     }
 
     fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self
+    }
+
+    fn topic_mapping(self, _topic_mapping: TopicMapping) -> Self {
         self
     }
 
@@ -887,6 +926,7 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
         };
 
         let builder = builder.maybe_var_msg_types(self.var_msg_types);
+        let builder = builder.maybe_topic_mapping(self.topic_mapping);
         builder.async_build().await
     }
 }

@@ -1,3 +1,9 @@
+use std::collections::BTreeMap;
+
+use crate::VarName;
+
+pub type TopicMapping = BTreeMap<VarName, String>;
+
 pub mod builders;
 pub mod cli;
 pub mod file;

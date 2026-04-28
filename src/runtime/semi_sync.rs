@@ -95,6 +95,10 @@ where
         self
     }
 
+    fn topic_mapping(self, _topic_mapping: crate::io::TopicMapping) -> Self {
+        self
+    }
+
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
         Box::pin(async move { (*self).build() })
     }

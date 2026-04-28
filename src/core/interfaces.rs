@@ -1,4 +1,5 @@
 use crate::core::StreamType;
+use crate::io::TopicMapping;
 use crate::io::replay_history::ReplayHistory;
 use async_trait::async_trait;
 use clap::ValueEnum;
@@ -151,6 +152,19 @@ pub trait AbstractMonitorBuilder<M, V: StreamData> {
     {
         if let Some(var_mapping) = var_mapping {
             self.var_msg_types(var_mapping)
+        } else {
+            self
+        }
+    }
+
+    fn topic_mapping(self, topic_mapping: TopicMapping) -> Self;
+
+    fn maybe_topic_mapping(self, topic_mapping: Option<TopicMapping>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(topic_mapping) = topic_mapping {
+            self.topic_mapping(topic_mapping)
         } else {
             self
         }
