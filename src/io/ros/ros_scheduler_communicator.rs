@@ -151,19 +151,6 @@ impl<M: Specification> SchedulerCommunicator<M> for RosSchedulerCommunicator {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let work = serde_json::to_string(&work)?;
 
-        // Skip repeated reconfig messages
-        if self
-            .last_payloads
-            .get(&node)
-            .is_some_and(|last| last == &work)
-        {
-            info!(
-                "Skipping duplicate reconfig message for node {} with payload {}",
-                node, work
-            );
-            return Ok(());
-        }
-
         let tx = self
             .work_txs
             .get(&node)
