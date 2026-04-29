@@ -26,7 +26,10 @@ use futures::{
 use serde::Deserialize;
 use serde_json::Value as JValue;
 use smol::LocalExecutor;
-use std::{collections::BTreeMap, rc::Rc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 use tracing::{debug, error, info, warn};
 use unsync::spsc::Sender as SpscSender;
 
@@ -401,7 +404,18 @@ where
                     .model
                     .clone()
                     .expect("Model must exist for reconfiguration");
-                let old_input_vars = old_model.input_vars();
+                let reconf_topic: VarName = self
+                    .self_builder
+                    .reconf_topic
+                    .clone()
+                    .expect("Reconf topic must be set")
+                    .into();
+                let old_input_set = old_model
+                    .input_vars()
+                    .into_iter()
+                    .filter(|v| *v != reconf_topic) // Exclude reconf topic from comparison
+                    .map(|v| v.name())
+                    .collect::<BTreeSet<_>>();
                 let old_out_exprs = old_model
                     .output_vars()
                     .into_iter()
@@ -412,10 +426,14 @@ where
                                 v
                             )
                         })?;
-                        Ok((v, expr))
+                        Ok((v.name(), expr))
                     })
                     .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                let input_vars = parsed.input_vars();
+                let new_input_set = parsed
+                    .input_vars()
+                    .into_iter()
+                    .map(|v| v.name())
+                    .collect::<BTreeSet<_>>();
                 let out_exprs = parsed
                     .output_vars()
                     .into_iter()
@@ -426,14 +444,50 @@ where
                                 v
                             )
                         })?;
-                        Ok((v, expr))
+                        Ok((v.name(), expr))
                     })
                     .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                if input_vars == old_input_vars && out_exprs == old_out_exprs {
+                if new_input_set == old_input_set && out_exprs == old_out_exprs {
                     info!(
                         "Reconfiguration does not change input vars or output expressions, skipping rebuild"
                     );
                     return Ok(());
+                }
+
+                let added_inputs: Vec<_> =
+                    new_input_set.difference(&old_input_set).cloned().collect();
+                let removed_inputs: Vec<_> =
+                    old_input_set.difference(&new_input_set).cloned().collect();
+                if !added_inputs.is_empty() || !removed_inputs.is_empty() {
+                    info!(
+                        "Reconfiguration input vars changed. Added: {:?}, removed: {:?}",
+                        added_inputs, removed_inputs
+                    );
+                }
+
+                let old_out_keys: BTreeSet<_> = old_out_exprs.keys().cloned().collect();
+                let new_out_keys: BTreeSet<_> = out_exprs.keys().cloned().collect();
+                let added_outputs: Vec<_> =
+                    new_out_keys.difference(&old_out_keys).cloned().collect();
+                let removed_outputs: Vec<_> =
+                    old_out_keys.difference(&new_out_keys).cloned().collect();
+                let changed_outputs: Vec<_> = out_exprs
+                    .iter()
+                    .filter_map(|(name, expr)| {
+                        old_out_exprs
+                            .get(name)
+                            .filter(|old_expr| *old_expr != expr)
+                            .map(|old_expr| (name.clone(), old_expr, expr))
+                    })
+                    .collect();
+                if !added_outputs.is_empty()
+                    || !removed_outputs.is_empty()
+                    || !changed_outputs.is_empty()
+                {
+                    info!(
+                        "Reconfiguration output expressions changed. Added: {:?}, removed: {:?}, changed: {:?}",
+                        added_outputs, removed_outputs, changed_outputs
+                    );
                 }
 
                 // TODO: Does not work with FileInputProvider as it reads the file from
@@ -604,7 +658,7 @@ where
                         }
                         Some(val) => {
                             self.handle_reconfig_input(val).await?;
-                            return;
+                            values.clear(); // In case we receive duplicate reconf
                         }
                         None => {
                             info!("Input stream for variable {:?} ended", reconf_topic);
