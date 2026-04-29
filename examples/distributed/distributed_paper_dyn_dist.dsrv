@@ -1,6 +1,5 @@
 // Run with:
-// RUST_LOG=INFO cargo run --features ros -- examples/distributed/distributed_paper_dyn_dist.dsrv --runtime distributed --distribution-graph examples/distributed/distributed_paper_dyn_dist_graph.json --distribution-constraints distR1 --dist-constraint-solver sat --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/distributed_paper_dyn_dist_map.json --output-ros-file examples/distributed/distributed_paper_dyn_dist_out_map.json
-// Notice that R1Odom, etc is lost
+// RUST_LOG=INFO cargo run --features ros -- examples/distributed/distributed_paper_dyn_dist.dsrv --runtime distributed --distribution-graph examples/distributed/distributed_paper_dyn_dist_graph.json --distribution-constraints dist1 dist2 dist3 dist4 --dist-constraint-solver sat --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/distributed_paper_dyn_dist_map.json --output-ros-file examples/distributed/distributed_paper_dyn_dist_out_map.json
 
 in R1Odom
 in R2Odom
@@ -48,7 +47,10 @@ out aabbR3H
 out aabbR4H 
 
 // Dist constraints
-out distR1
+out dist1
+out dist2
+out dist3
+out dist4
 
 // Robot positions
 aux R1Pose
@@ -154,7 +156,7 @@ HC2Alert = if aabbR2H then if HPred then 1 else 0 else -1
 HC3Alert = if aabbR3H then if HPred then 1 else 0 else -1
 HC4Alert = if aabbR4H then if HPred then 1 else 0 else -1
 
-distR1 = if aabbR1V 
+dist1 = if aabbR1V 
          then monitored_at(VL1Alert, A) && monitored_at(aabbR1V, A) && monitored_at(VL2Alert, None) && monitored_at(VL3Alert, None) && monitored_at(VL4Alert, None) && monitored_at(aabbR2V, None) && monitored_at(aabbR3V, None) && monitored_at(aabbR4V, None)
          else if aabbR2V
          then monitored_at(VL2Alert, B) && monitored_at(aabbR2V, B) && monitored_at(VL1Alert, None) && monitored_at(VL3Alert, None) && monitored_at(VL4Alert, None) && monitored_at(aabbR1V, None) && monitored_at(aabbR3V, None) && monitored_at(aabbR4V, None)
@@ -164,3 +166,38 @@ distR1 = if aabbR1V
          then monitored_at(VL4Alert, D) && monitored_at(aabbR4V, D) && monitored_at(VL1Alert, None) && monitored_at(VL2Alert, None) && monitored_at(VL3Alert, None) && monitored_at(aabbR1V, None) && monitored_at(aabbR2V, None) && monitored_at(aabbR3V, None)
          else
          monitored_at(aabbR1V, A) && monitored_at(aabbR2V, B) && monitored_at(aabbR3V, C) && monitored_at(aabbR4V, D) && monitored_at(VL1Alert, None) && monitored_at(VL2Alert, None) && monitored_at(VL3Alert, None) && monitored_at(VL4Alert, None)
+
+dist2 = if aabbR1H 
+         then monitored_at(HC1Alert, A) && monitored_at(aabbR1H, A) && monitored_at(HC2Alert, None) && monitored_at(HC3Alert, None) && monitored_at(HC4Alert, None) && monitored_at(aabbR2H, None) && monitored_at(aabbR3H, None) && monitored_at(aabbR4H, None)
+         else if aabbR2H
+         then monitored_at(HC2Alert, B) && monitored_at(aabbR2H, B) && monitored_at(HC1Alert, None) && monitored_at(HC3Alert, None) && monitored_at(HC4Alert, None) && monitored_at(aabbR1H, None) && monitored_at(aabbR3H, None) && monitored_at(aabbR4H, None)
+         else if aabbR3H
+         then monitored_at(HC3Alert, C) && monitored_at(aabbR3H, C) && monitored_at(HC1Alert, None) && monitored_at(HC2Alert, None) && monitored_at(HC4Alert, None) && monitored_at(aabbR1H, None) && monitored_at(aabbR2H, None) && monitored_at(aabbR4H, None)
+         else if aabbR4H
+         then monitored_at(HC4Alert, D) && monitored_at(aabbR4H, D) && monitored_at(HC1Alert, None) && monitored_at(HC2Alert, None) && monitored_at(HC3Alert, None) && monitored_at(aabbR1H, None) && monitored_at(aabbR2H, None) && monitored_at(aabbR3H, None)
+         else
+         monitored_at(aabbR1H, A) && monitored_at(aabbR2H, B) && monitored_at(aabbR3H, C) && monitored_at(aabbR4H, D) && monitored_at(HC1Alert, None) && monitored_at(HC2Alert, None) && monitored_at(HC3Alert, None) && monitored_at(HC4Alert, None)
+
+
+dist3 = if aabbR1C 
+         then monitored_at(CS1Alert, A) && monitored_at(aabbR1C, A) && monitored_at(CS2Alert, None) && monitored_at(CS3Alert, None) && monitored_at(CS4Alert, None) && monitored_at(aabbR2C, None) && monitored_at(aabbR3C, None) && monitored_at(aabbR4C, None)
+         else if aabbR2C
+         then monitored_at(CS2Alert, B) && monitored_at(aabbR2C, B) && monitored_at(CS1Alert, None) && monitored_at(CS3Alert, None) && monitored_at(CS4Alert, None) && monitored_at(aabbR1C, None) && monitored_at(aabbR3C, None) && monitored_at(aabbR4C, None)
+         else if aabbR3C
+         then monitored_at(CS3Alert, C) && monitored_at(aabbR3C, C) && monitored_at(CS1Alert, None) && monitored_at(CS2Alert, None) && monitored_at(CS4Alert, None) && monitored_at(aabbR1C, None) && monitored_at(aabbR2C, None) && monitored_at(aabbR4C, None)
+         else if aabbR4C
+         then monitored_at(CS4Alert, D) && monitored_at(aabbR4C, D) && monitored_at(CS1Alert, None) && monitored_at(CS2Alert, None) && monitored_at(CS3Alert, None) && monitored_at(aabbR1C, None) && monitored_at(aabbR2C, None) && monitored_at(aabbR3C, None)
+         else
+         monitored_at(aabbR1C, A) && monitored_at(aabbR2C, B) && monitored_at(aabbR3C, C) && monitored_at(aabbR4C, D) && monitored_at(CS1Alert, None) && monitored_at(CS2Alert, None) && monitored_at(CS3Alert, None) && monitored_at(CS4Alert, None)
+
+
+dist4 = if aabbR1S 
+         then monitored_at(SC1Alert, A) && monitored_at(aabbR1S, A) && monitored_at(SC2Alert, None) && monitored_at(SC3Alert, None) && monitored_at(SC4Alert, None) && monitored_at(aabbR2S, None) && monitored_at(aabbR3S, None) && monitored_at(aabbR4S, None)
+         else if aabbR2S
+         then monitored_at(SC2Alert, B) && monitored_at(aabbR2S, B) && monitored_at(SC1Alert, None) && monitored_at(SC3Alert, None) && monitored_at(SC4Alert, None) && monitored_at(aabbR1S, None) && monitored_at(aabbR3S, None) && monitored_at(aabbR4S, None)
+         else if aabbR3S
+         then monitored_at(SC3Alert, C) && monitored_at(aabbR3S, C) && monitored_at(SC1Alert, None) && monitored_at(SC2Alert, None) && monitored_at(SC4Alert, None) && monitored_at(aabbR1S, None) && monitored_at(aabbR2S, None) && monitored_at(aabbR4S, None)
+         else if aabbR4S
+         then monitored_at(SC4Alert, D) && monitored_at(aabbR4S, D) && monitored_at(SC1Alert, None) && monitored_at(SC2Alert, None) && monitored_at(SC3Alert, None) && monitored_at(aabbR1S, None) && monitored_at(aabbR2S, None) && monitored_at(aabbR3S, None)
+         else
+         monitored_at(aabbR1S, A) && monitored_at(aabbR2S, B) && monitored_at(aabbR3S, C) && monitored_at(aabbR4S, D) && monitored_at(SC1Alert, None) && monitored_at(SC2Alert, None) && monitored_at(SC3Alert, None) && monitored_at(SC4Alert, None)
