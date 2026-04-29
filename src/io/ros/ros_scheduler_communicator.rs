@@ -76,7 +76,7 @@ fn ros_value_sender(
                 value = futures::FutureExt::fuse(work_rx.recv()) => {
                     match value {
                         Some(value) => {
-                            info!("Received request to send reconf message {} for topic {}", value, normalized_topic_name);
+                            info!("Received request to send reconf message to topic {} with spec {}", normalized_topic_name, value);
                             let msg = r2r::std_msgs::msg::String { data: value.to_string() };
                             publisher.publish(&msg)
                                 .map_err(|e| anyhow::anyhow!("Failed to publish reconf message: {:?}", e))?;
