@@ -2,8 +2,6 @@
 // RUST_LOG=INFO cargo run --features ros -- examples/distributed/distributed_paper_dyn_dist.dsrv --runtime distributed --distribution-graph examples/distributed/distributed_paper_dyn_dist_graph.json --distribution-constraints distR1 --dist-constraint-solver sat --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/distributed_paper_dyn_dist_map.json --output-ros-file examples/distributed/distributed_paper_dyn_dist_out_map.json
 // Notice that R1Odom, etc is lost
 
-in c
-
 in R1Odom
 in R2Odom
 in R3Odom
@@ -51,7 +49,6 @@ out aabbR4H
 
 // Dist constraints
 out distR1
-out distR3
 
 // Robot positions
 aux R1Pose
@@ -158,8 +155,12 @@ HC3Alert = if aabbR3H then if HPred then 1 else 0 else -1
 HC4Alert = if aabbR4H then if HPred then 1 else 0 else -1
 
 distR1 = if aabbR1V 
-         then monitored_at(VL1Alert, A) && monitored_at(aabbR1V, A)
-         else monitored_at(VL1Alert, B) && monitored_at(aabbR1V, B)
-distR3 = if aabbR3C 
-         then monitored_at(CS3Alert, C) && monitored_at(aabbR3C, C)
-         else monitored_at(CS3Alert, B) && monitored_at(aabbR3C, B)
+         then monitored_at(VL1Alert, A) && monitored_at(aabbR1V, A) && monitored_at(VL2Alert, None) && monitored_at(VL3Alert, None) && monitored_at(VL4Alert, None) && monitored_at(aabbR2V, None) && monitored_at(aabbR3V, None) && monitored_at(aabbR4V, None)
+         else if aabbR2V
+         then monitored_at(VL2Alert, B) && monitored_at(aabbR2V, B) && monitored_at(VL1Alert, None) && monitored_at(VL3Alert, None) && monitored_at(VL4Alert, None) && monitored_at(aabbR1V, None) && monitored_at(aabbR3V, None) && monitored_at(aabbR4V, None)
+         else if aabbR3V
+         then monitored_at(VL3Alert, C) && monitored_at(aabbR3V, C) && monitored_at(VL1Alert, None) && monitored_at(VL2Alert, None) && monitored_at(VL4Alert, None) && monitored_at(aabbR1V, None) && monitored_at(aabbR2V, None) && monitored_at(aabbR4V, None)
+         else if aabbR4V
+         then monitored_at(VL4Alert, D) && monitored_at(aabbR4V, D) && monitored_at(VL1Alert, None) && monitored_at(VL2Alert, None) && monitored_at(VL3Alert, None) && monitored_at(aabbR1V, None) && monitored_at(aabbR2V, None) && monitored_at(aabbR3V, None)
+         else
+         monitored_at(aabbR1V, A) && monitored_at(aabbR2V, B) && monitored_at(aabbR3V, C) && monitored_at(aabbR4V, D) && monitored_at(VL1Alert, None) && monitored_at(VL2Alert, None) && monitored_at(VL3Alert, None) && monitored_at(VL4Alert, None)
