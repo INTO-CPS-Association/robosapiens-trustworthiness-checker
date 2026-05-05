@@ -24,7 +24,7 @@ pub struct VarData {
 pub struct ROSOutputHandler {
     executor: Rc<LocalExecutor<'static>>,
     pub node_name: String,
-    pub var_names: Vec<VarName>,
+    var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     pub aux_info: Vec<VarName>,
 }
@@ -402,20 +402,16 @@ impl ROSOutputHandler {
 impl OutputHandler for ROSOutputHandler {
     type Val = Value;
 
-    fn var_names(&self) -> Vec<VarName> {
-        self.var_names.clone()
-    }
-
     fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
         debug!("Providing {} streams to ROS output handler", streams.len());
-        debug!("Expected var_names: {:?}", self.var_names());
+        debug!("Expected var_names: {:?}", self.var_names);
         assert_eq!(
-            self.var_names().len(),
+            self.var_names.len(),
             streams.len(),
             "Number of provided streams must match number of variable names"
         );
 
-        for (var, stream) in self.var_names().iter().zip(streams.into_iter()) {
+        for (var, stream) in self.names().iter().zip(streams.into_iter()) {
             debug!("Assigning stream for output variable: {}", var);
             match self.var_map.get_mut(var) {
                 Some(var_data) => {

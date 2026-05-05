@@ -94,8 +94,6 @@ pub trait OutputHandler {
     // This should only be called once by the runtime to provide the streams
     fn provide_streams(&mut self, streams: Vec<OutputStream<Self::Val>>);
 
-    fn var_names(&self) -> Vec<VarName>;
-
     // Essentially this is of type
     // async fn run(&mut self);
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>>;

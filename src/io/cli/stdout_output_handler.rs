@@ -36,10 +36,6 @@ impl StdoutOutputHandler {
 impl OutputHandler for StdoutOutputHandler {
     type Val = Value;
 
-    fn var_names(&self) -> Vec<VarName> {
-        self.manual_output_handler.var_names()
-    }
-
     fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
         self.manual_output_handler.provide_streams(streams);
     }
@@ -50,6 +46,7 @@ impl OutputHandler for StdoutOutputHandler {
         let enumerated_outputs = output_stream.enumerate();
         let mut task = FutureExt::fuse(executor.spawn(self.manual_output_handler.run()));
         let var_names = self
+            .manual_output_handler
             .var_names()
             .iter()
             .map(|x| x.name())

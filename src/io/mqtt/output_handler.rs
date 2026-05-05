@@ -29,7 +29,7 @@ pub type OutputChannelMap = BTreeMap<VarName, String>;
 
 pub struct MQTTOutputHandler {
     factory: MqttFactory,
-    pub var_names: Vec<VarName>,
+    var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     pub hostname: String,
     pub port: Option<u16>,
@@ -139,18 +139,15 @@ async fn await_stream(mut stream: OutputStream<Value>) {
 impl OutputHandler for MQTTOutputHandler {
     type Val = Value;
 
-    fn var_names(&self) -> Vec<VarName> {
-        self.var_names.clone()
-    }
-
     fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
         debug!("Providing {} streams to output handler", streams.len());
-        debug!("Expected var_names: {:?}", self.var_names());
+        let var_names: Vec<_> = self.var_names.clone();
+        debug!("Expected var_names: {:?}", var_names);
 
         // First collect a list of available variables to avoid borrowing issues
         let available_vars = self.var_map.keys().cloned().collect::<Vec<_>>();
 
-        for (var, stream) in self.var_names().iter().zip(streams.into_iter()) {
+        for (var, stream) in var_names.iter().zip(streams.into_iter()) {
             debug!("Assigning stream for output variable: {}", var);
             let var_data = self.var_map.get_mut(var).unwrap_or_else(|| {
                 panic!(

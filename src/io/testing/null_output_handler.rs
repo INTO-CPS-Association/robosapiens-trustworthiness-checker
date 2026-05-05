@@ -40,10 +40,6 @@ impl<V: StreamData> LimitedNullOutputHandler<V> {
 impl<V: StreamData> OutputHandler for LimitedNullOutputHandler<V> {
     type Val = V;
 
-    fn var_names(&self) -> Vec<VarName> {
-        self.manual_output_handler.var_names()
-    }
-
     fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
         self.manual_output_handler.provide_streams(streams);
     }
@@ -70,10 +66,6 @@ impl<V: StreamData> NullOutputHandler<V> {
 
 impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
     type Val = V;
-
-    fn var_names(&self) -> Vec<VarName> {
-        self.manual_output_handler.var_names()
-    }
 
     fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
         self.manual_output_handler.provide_streams(streams);

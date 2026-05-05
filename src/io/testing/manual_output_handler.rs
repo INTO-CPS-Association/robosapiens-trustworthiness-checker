@@ -73,14 +73,14 @@ impl<V: StreamData> ManualOutputHandler<V> {
         debug!("ManualOutputHandler: Created drop guard for output stream");
         drop_guard_stream(oneshot_to_stream(receiver), drop_guard)
     }
+
+    pub fn var_names(&self) -> Vec<VarName> {
+        self.var_names.clone()
+    }
 }
 
 impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
     type Val = V;
-
-    fn var_names(&self) -> Vec<VarName> {
-        self.var_names.clone()
-    }
 
     #[instrument(skip(self, streams))]
     fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {

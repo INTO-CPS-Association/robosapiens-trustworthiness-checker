@@ -1121,39 +1121,6 @@ mod integration_tests {
     }
 
     #[apply(smol_test)]
-    async fn test_redis_output_handler_var_names(
-        executor: Rc<LocalExecutor<'static>>,
-    ) -> anyhow::Result<()> {
-        let redis = start_redis().await;
-        let host = redis.get_host_port_ipv4(6379).await.unwrap();
-
-        // Create test variables
-        let var1 = VarName::new("var1");
-        let var2 = VarName::new("var2");
-        let var_names = vec![var1.clone(), var2.clone()];
-
-        let mut var_topics = BTreeMap::new();
-        var_topics.insert(var1.clone(), "topic1".to_string());
-        var_topics.insert(var2.clone(), "topic2".to_string());
-
-        // Create RedisOutputHandler
-        let handler = RedisOutputHandler::new(
-            executor.clone(),
-            var_names.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
-            var_topics,
-            vec![],
-        )?;
-
-        // Test var_names method
-        let returned_var_names = handler.var_names();
-        assert_eq!(returned_var_names, var_names);
-
-        Ok(())
-    }
-
-    #[apply(smol_test)]
     async fn test_redis_output_handler_json_serialization(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {

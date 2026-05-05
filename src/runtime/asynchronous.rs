@@ -1037,10 +1037,6 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
         let mut input_provider = self.input.expect("Input streams not supplied");
 
         let output_handler = self.output.expect("Output handler not supplied");
-        debug!(
-            "AsyncMonitorBuilder: Output handler variables: {:?}",
-            output_handler.var_names()
-        );
 
         let context_builder = self
             .context_builder
