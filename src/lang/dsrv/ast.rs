@@ -614,12 +614,21 @@ impl Display for SExpr {
 
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let aux_vars = self.aux_vars();
+        let out_vars = self
+            .output_vars()
+            .into_iter()
+            .filter(|v| !aux_vars.contains(v))
+            .collect::<Vec<VarName>>();
         if self.type_annotations.is_empty() {
             for v in self.input_vars.iter() {
                 writeln!(f, "in {}", v)?;
             }
-            for v in self.output_vars.iter() {
+            for v in out_vars.iter() {
                 writeln!(f, "out {}", v)?;
+            }
+            for v in aux_vars.iter() {
+                writeln!(f, "aux {}", v)?;
             }
             for (v, e) in self.exprs.iter() {
                 writeln!(f, "{} = {}", v, e)?;
@@ -629,11 +638,14 @@ impl Display for DsrvSpecification {
                 let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "in {}: {}", v, typ)?;
             }
-            for v in self.output_vars.iter() {
+            for v in out_vars.iter() {
                 let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "out {}: {}", v, typ)?;
             }
-            // TODO: should we have some support for annotating the types of auxiliary variables?
+            for v in aux_vars.iter() {
+                let typ = self.type_annotations.get(v).ok_or(Error)?;
+                writeln!(f, "aux {}: {}", v, typ)?;
+            }
             for (v, e) in self.exprs.iter() {
                 writeln!(f, "{} = {}", v, e)?;
             }
@@ -933,7 +945,7 @@ pub mod generation {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use proptest::prelude::*;
     use tracing::info;
@@ -943,7 +955,10 @@ mod tests {
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
     use crate::SExpr;
-    use crate::dsrv_fixtures::{spec_simple_add_monitor, spec_simple_add_monitor_typed};
+    use crate::dsrv_fixtures::{
+        spec_simple_add_aux_monitor, spec_simple_add_aux_typed_monitor, spec_simple_add_monitor,
+        spec_simple_add_monitor_typed,
+    };
     use crate::dsrv_specification;
     use crate::lang::dsrv::lalr_parser::parse_sexpr;
     use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
@@ -1013,18 +1028,41 @@ mod tests {
 
     #[test]
     fn test_display_simple_add() {
-        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
-        let res = format!("{}", spec_untyped);
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let res = format!("{}", spec);
         let expected = "in x\nin y\nout z\nz = (x + y)\n";
         assert_eq!(res, expected);
     }
 
     #[test]
     fn test_display_simple_add_typed() {
-        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-        let res = format!("{}", spec_untyped);
+        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let res = format!("{}", spec);
         let expected = "in x: Int\nin y: Int\nout z: Int\nz = (x + y)\n";
         assert_eq!(res, expected);
+    }
+
+    #[test]
+    fn test_display_simple_add_aux() {
+        let spec = dsrv_specification(&mut spec_simple_add_aux_monitor()).unwrap();
+        let res = format!("{}", spec);
+        let expected = "in x\nin y\nout z\naux u\naux w\nu = x\nw = y\nz = (u + w)";
+        assert_eq!(
+            res.lines().collect::<BTreeSet<_>>(),
+            expected.lines().collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn test_display_simple_add_aux_typed() {
+        let spec = dsrv_specification(&mut spec_simple_add_aux_typed_monitor()).unwrap();
+        let res = format!("{}", spec);
+        let expected =
+            "in x: Int\nin y: Int\nout z: Int\naux u: Int\naux w: Int\nu = x\nw = y\nz = (u + w)";
+        assert_eq!(
+            res.lines().collect::<BTreeSet<_>>(),
+            expected.lines().collect::<BTreeSet<_>>()
+        );
     }
 
     #[test]
