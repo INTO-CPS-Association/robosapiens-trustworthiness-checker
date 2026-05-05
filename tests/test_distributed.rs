@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use macro_rules_attribute::apply;
 use petgraph::graph::DiGraph;
@@ -53,7 +56,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     y = x + 1\n
     z = x + 2\n
     w = monitored_at(x, B)";
-    let var_names = vec!["w".into(), "y".into(), "z".into()];
+    let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
@@ -139,7 +142,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     y = x + 1\n
     z = x + 2\n
     w = dist(x, y)";
-    let var_names = vec!["w".into(), "y".into(), "z".into()];
+    let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
@@ -225,7 +228,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     y = x + 1\n
     z = x + 2\n
     w = dist(A, C)";
-    let var_names = vec!["w".into(), "y".into(), "z".into()];
+    let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
@@ -311,7 +314,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     y = x + 1\n
     z = x + 2\n
     w = dist(x, C)";
-    let var_names = vec!["w".into(), "y".into(), "z".into()];
+    let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
@@ -397,7 +400,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     y = x + 1\n
     z = x + 2\n
     w = dist(x, z)";
-    let var_names = vec!["w".into(), "y".into(), "z".into()];
+    let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);

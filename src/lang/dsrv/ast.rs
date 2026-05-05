@@ -310,7 +310,7 @@ impl SExpr {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct DsrvSpecification {
     pub input_vars: Vec<VarName>,
-    pub output_vars: Vec<VarName>,
+    pub output_vars: BTreeSet<VarName>,
     pub exprs: BTreeMap<VarName, SExpr>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
     pub aux_info: Vec<VarName>,
@@ -343,7 +343,7 @@ impl DsrvSpecification {
     // 4. Profit - this hack is no longer needed and we have a more correct solution
     fn fix_dynamic(
         input_vars: &Vec<VarName>,
-        output_vars: &Vec<VarName>,
+        output_vars: &BTreeSet<VarName>,
         exprs: &BTreeMap<VarName, SExpr>,
     ) -> BTreeMap<VarName, SExpr> {
         // Helper function to do the changes...
@@ -471,7 +471,7 @@ impl DsrvSpecification {
 
     pub fn new(
         input_vars: Vec<VarName>,
-        output_vars: Vec<VarName>,
+        output_vars: BTreeSet<VarName>,
         exprs: BTreeMap<VarName, SExpr>,
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_info: Vec<VarName>,
@@ -494,7 +494,7 @@ impl Specification for DsrvSpecification {
         self.input_vars.clone()
     }
 
-    fn output_vars(&self) -> Vec<VarName> {
+    fn output_vars(&self) -> BTreeSet<VarName> {
         self.output_vars.clone()
     }
 
@@ -917,7 +917,7 @@ pub mod generation {
             .prop_flat_map(|(input_set, output_set)| {
                 // Convert the sets into Vec<VarName>
                 let input_vars: Vec<VarName> = input_set.into_iter().map(|s| s.into()).collect();
-                let output_vars: Vec<VarName> = output_set.into_iter().map(|s| s.into()).collect();
+                let output_vars: BTreeSet<_> = output_set.into_iter().map(|s| s.into()).collect();
 
                 // Combine input and output variables.
                 let mut all_vars = input_vars.clone();

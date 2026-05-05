@@ -24,7 +24,6 @@ pub struct VarData {
 pub struct ROSOutputHandler {
     executor: Rc<LocalExecutor<'static>>,
     pub node_name: String,
-    var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     pub aux_info: Vec<VarName>,
 }
@@ -262,16 +261,9 @@ impl ROSOutputHandler {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,
-        var_names: Vec<VarName>,
         var_topics: ROSStreamMapping,
         aux_info: Vec<VarName>,
     ) -> anyhow::Result<Self> {
-        debug!(
-            "Creating new ROS output handler for {} variables: {:?}",
-            var_names.len(),
-            var_names
-        );
-
         let var_map = var_topics
             .into_iter()
             .map(|(var_name, mapping_data)| {
@@ -292,15 +284,9 @@ impl ROSOutputHandler {
             })
             .collect();
 
-        debug!(
-            "Created ROS output handler with {} variables",
-            var_names.len()
-        );
-
         Ok(ROSOutputHandler {
             executor,
             node_name,
-            var_names,
             var_map,
             aux_info,
         })
@@ -404,12 +390,6 @@ impl OutputHandler for ROSOutputHandler {
 
     fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
         debug!("Providing {} streams to ROS output handler", streams.len());
-        debug!("Expected var_names: {:?}", self.var_names);
-        assert_eq!(
-            self.var_names.len(),
-            streams.len(),
-            "Number of provided streams must match number of variable names"
-        );
 
         for (var, stream) in streams {
             debug!("Assigning stream for output variable: {}", var);

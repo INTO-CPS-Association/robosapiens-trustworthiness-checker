@@ -132,13 +132,10 @@ mod integration_tests {
 
         let aux_info = vec!["w".into()];
 
-        let var_names = vec!["w".into(), "z".into()];
-
         // Create the ROS output handler
         let mut output_handler = ROSOutputHandler::new(
             ex.clone(),
             qualified_ros_name(test_add_monitor_ros_output_with_aux, "pub"),
-            var_names,
             var_topics,
             aux_info,
         )
@@ -204,13 +201,10 @@ mod integration_tests {
 
         let aux_info = vec![];
 
-        let var_names = vec!["z".into()];
-
         // Create the ROS output handler
         let mut output_handler = ROSOutputHandler::new(
             ex.clone(),
             qualified_ros_name(test_add_monitor_ros_output_no_aux, "pub"),
-            var_names,
             var_topics,
             aux_info,
         )

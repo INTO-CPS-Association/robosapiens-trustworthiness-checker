@@ -805,7 +805,6 @@ mod integration_tests {
         // Create test variables and topics
         let var1 = VarName::new("test_var1");
         let var2 = VarName::new("test_var2");
-        let var_names = vec![var1.clone(), var2.clone()];
 
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var1.clone(), "topic1".to_string());
@@ -814,7 +813,6 @@ mod integration_tests {
         // Create RedisOutputHandler
         let mut handler = RedisOutputHandler::new(
             executor.clone(),
-            var_names,
             REDIS_HOSTNAME,
             Some(host),
             var_topics,
@@ -891,7 +889,6 @@ mod integration_tests {
 
         // Create single test variable
         let var = VarName::new("single_var");
-        let var_names = vec![var.clone()];
 
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var.clone(), "single_topic".to_string());
@@ -899,7 +896,6 @@ mod integration_tests {
         // Create RedisOutputHandler
         let mut handler = RedisOutputHandler::new(
             executor.clone(),
-            var_names,
             REDIS_HOSTNAME,
             Some(host),
             var_topics,
@@ -966,7 +962,6 @@ mod integration_tests {
 
         // Create test variable
         let var = VarName::new("empty_var");
-        let var_names = vec![var.clone()];
 
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var.clone(), "empty_topic".to_string());
@@ -974,7 +969,6 @@ mod integration_tests {
         // Create RedisOutputHandler
         let mut handler = RedisOutputHandler::new(
             executor.clone(),
-            var_names,
             REDIS_HOSTNAME,
             Some(host),
             var_topics,
@@ -1033,7 +1027,6 @@ mod integration_tests {
         let var1 = VarName::new("multi_var1");
         let var2 = VarName::new("multi_var2");
         let var3 = VarName::new("multi_var3");
-        let var_names = vec![var1.clone(), var2.clone(), var3.clone()];
 
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var1.clone(), "multi_topic1".to_string());
@@ -1043,7 +1036,6 @@ mod integration_tests {
         // Create RedisOutputHandler
         let mut handler = RedisOutputHandler::new(
             executor.clone(),
-            var_names,
             REDIS_HOSTNAME,
             Some(host),
             var_topics,
@@ -1138,7 +1130,6 @@ mod integration_tests {
 
         // Create test variable
         let var = VarName::new("json_var");
-        let var_names = vec![var.clone()];
 
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var.clone(), "json_topic".to_string());
@@ -1146,7 +1137,6 @@ mod integration_tests {
         // Create RedisOutputHandler
         let mut handler = RedisOutputHandler::new(
             executor.clone(),
-            var_names,
             REDIS_HOSTNAME,
             Some(host),
             var_topics,
@@ -1222,7 +1212,6 @@ mod integration_tests {
         // Create test variables
         let var1 = VarName::new("concurrent_var1");
         let var2 = VarName::new("concurrent_var2");
-        let var_names = vec![var1.clone(), var2.clone()];
 
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var1.clone(), "concurrent_topic1".to_string());
@@ -1231,7 +1220,6 @@ mod integration_tests {
         // Create RedisOutputHandler
         let mut handler = RedisOutputHandler::new(
             executor.clone(),
-            var_names,
             REDIS_HOSTNAME,
             Some(host),
             var_topics,
@@ -1311,7 +1299,6 @@ mod integration_tests {
     ) -> anyhow::Result<()> {
         // Test with invalid Redis host
         let var = VarName::new("error_var");
-        let var_names = vec![var.clone()];
 
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var.clone(), "error_topic".to_string());
@@ -1319,7 +1306,6 @@ mod integration_tests {
         // Creating the handler should succeed even with invalid host
         let result = RedisOutputHandler::new(
             executor.clone(),
-            var_names,
             "invalid-host",
             Some(9999),
             var_topics,

@@ -1,4 +1,4 @@
-// TODO: Figure out how to deduplicate this grammar compared to the basic one
+// TODO: TW - Figure out how to deduplicate this grammar compared to the basic one
 
 use crate::core::Value;
 use crate::core::VarName;
@@ -231,7 +231,7 @@ pub struct DistConstraint(pub DistConstraintType, pub DistConstraintBody);
 
 #[cfg(test)]
 pub mod generation {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use proptest::prelude::*;
 
@@ -276,7 +276,7 @@ pub mod generation {
             .prop_flat_map(|(input_set, output_set)| {
                 // Convert the sets into Vec<VarName>
                 let input_vars: Vec<VarName> = input_set.into_iter().map(|s| s.into()).collect();
-                let output_vars: Vec<VarName> = output_set.into_iter().map(|s| s.into()).collect();
+                let output_vars: BTreeSet<_> = output_set.into_iter().map(|s| s.into()).collect();
 
                 // Combine input and output variables.
                 let mut all_vars = input_vars.clone();

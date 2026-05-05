@@ -95,7 +95,6 @@ impl OutputHandler for RedisOutputHandler {
 impl RedisOutputHandler {
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
-        _: Vec<VarName>,
         hostname: &str,
         port: Option<u16>,
         var_topics: OutputChannelMap,

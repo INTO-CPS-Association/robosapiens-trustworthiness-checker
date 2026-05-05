@@ -356,6 +356,7 @@ mod reconf_tests {
     use macro_rules_attribute::apply;
     use serde_json::json;
     use smol::LocalExecutor;
+    use std::collections::BTreeSet;
     use std::rc::Rc;
     use tc_testutils::mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt};
     use tc_testutils::streams::{TickSender, tick_stream, with_timeout, with_timeout_res};
@@ -470,7 +471,7 @@ mod reconf_tests {
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
             .executor(executor.clone())
-            .output_var_names(vec!["z".into()])
+            .output_var_names(BTreeSet::from(["z".into()]))
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
@@ -613,7 +614,7 @@ mod reconf_tests {
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
             .executor(executor.clone())
-            .output_var_names(vec!["z".into()])
+            .output_var_names(BTreeSet::from(["z".into()]))
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
@@ -847,7 +848,7 @@ mod reconf_tests {
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
             .executor(executor.clone())
-            .output_var_names(vec!["z".into()])
+            .output_var_names(BTreeSet::from(["z".into()]))
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
@@ -1054,7 +1055,7 @@ mod reconf_tests {
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
             .executor(executor.clone())
-            .output_var_names(vec!["z".into()])
+            .output_var_names(BTreeSet::from(["z".into()]))
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
@@ -1250,7 +1251,7 @@ mod reconf_tests {
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
             .executor(executor.clone())
-            .output_var_names(vec!["v".into(), "w".into()])
+            .output_var_names(BTreeSet::from(["v".into(), "w".into()]))
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
@@ -1427,7 +1428,7 @@ mod reconf_tests {
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
             .executor(executor.clone())
-            .output_var_names(vec!["v".into()])
+            .output_var_names(BTreeSet::from(["v".into()]))
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
@@ -1601,7 +1602,7 @@ mod reconf_tests {
 
         let output_builder = OutputHandlerBuilder::new(output_mode)
             .executor(executor.clone())
-            .output_var_names(vec!["z".into()])
+            .output_var_names(BTreeSet::from(["z".into()]))
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(

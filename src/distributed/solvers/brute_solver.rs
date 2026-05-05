@@ -63,8 +63,10 @@ where
             .unwrap_or_default();
 
         let input_provider: Box<dyn InputProvider<Val = Value>> = Box::new(replay_input_data);
-        let mut output_handler =
-            ManualOutputHandler::new(self.executor.clone(), self.dist_constraints.clone());
+        let mut output_handler = ManualOutputHandler::new(
+            self.executor.clone(),
+            self.dist_constraints.iter().cloned().collect(),
+        );
         let output_stream: OutputStream<BTreeMap<VarName, Value>> =
             Box::pin(output_handler.get_output());
 

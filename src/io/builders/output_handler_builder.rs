@@ -34,7 +34,7 @@ pub enum OutputHandlerSpec {
 #[derive(Debug, Clone)]
 pub struct OutputHandlerBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
-    output_var_names: Option<Vec<VarName>>,
+    output_var_names: Option<BTreeSet<VarName>>,
     pub spec: OutputHandlerSpec,
     aux_info: Option<Vec<VarName>>,
     mqtt_port: Option<u16>,
@@ -60,7 +60,7 @@ impl OutputHandlerBuilder {
         self
     }
 
-    pub fn output_var_names(mut self, output_var_names: Vec<VarName>) -> Self {
+    pub fn output_var_names(mut self, output_var_names: BTreeSet<VarName>) -> Self {
         self.output_var_names = Some(output_var_names);
         self
     }
@@ -176,13 +176,10 @@ impl OutputHandlerBuilder {
                         aux_info.clone().into_iter().collect(),
                     )
                     .expect("ROS mapping file does not contain all variables from the spec");
-                    // TODO: OutputHandler should not need both output_vars and
-                    // output_mapping, since the mapping already contains the exact variable names.
                     Box::new(
                         ROSOutputHandler::new(
                             executor,
                             "tc_ros_output".into(),
-                            output_vars.into_iter().collect(),
                             output_mapping,
                             aux_info,
                         )
@@ -258,11 +255,8 @@ impl OutputHandlerBuilder {
                 )
                 .expect("Provided Redis topics do not match output variables");
 
-                // TODO: OutputHandler should not need both output_vars and
-                // output_mapping, since the mapping already contains the exact variable names.
                 let mut handler = RedisOutputHandler::new(
                     executor.clone(),
-                    output_vars.into_iter().collect(),
                     REDIS_HOSTNAME,
                     self.redis_port,
                     topics,

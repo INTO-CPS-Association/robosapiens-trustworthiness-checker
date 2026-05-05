@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use futures::{StreamExt, future::LocalBoxFuture};
 use smol::LocalExecutor;
@@ -24,7 +27,7 @@ pub struct LimitedNullOutputHandler<V: StreamData> {
 impl<V: StreamData> LimitedNullOutputHandler<V> {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
-        var_names: Vec<VarName>,
+        var_names: BTreeSet<VarName>,
         limit: usize,
     ) -> Self {
         let combined_output_handler = ManualOutputHandler::new(executor.clone(), var_names);
@@ -54,7 +57,7 @@ impl<V: StreamData> OutputHandler for LimitedNullOutputHandler<V> {
 }
 
 impl<V: StreamData> NullOutputHandler<V> {
-    pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: Vec<VarName>) -> Self {
+    pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: BTreeSet<VarName>) -> Self {
         let combined_output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
         Self {
@@ -86,6 +89,7 @@ mod tests {
     use crate::core::{OutputStream, Value};
     use futures::stream;
     use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
 
     use super::*;
     use macro_rules_attribute::apply;
@@ -96,7 +100,7 @@ mod tests {
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
         let mut handler: NullOutputHandler<Value> =
-            NullOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()]);
+            NullOutputHandler::new(executor.clone(), BTreeSet::from(["x".into(), "y".into()]));
 
         let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
         handler.provide_streams(streams);
@@ -111,8 +115,11 @@ mod tests {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..).map(|x| (x * 2 + 1).into())));
-        let mut handler: LimitedNullOutputHandler<Value> =
-            LimitedNullOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()], 10);
+        let mut handler: LimitedNullOutputHandler<Value> = LimitedNullOutputHandler::new(
+            executor.clone(),
+            BTreeSet::from(["x".into(), "y".into()]),
+            10,
+        );
 
         let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
         handler.provide_streams(streams);

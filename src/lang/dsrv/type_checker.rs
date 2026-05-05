@@ -582,7 +582,7 @@ pub enum SExprTE {
 #[derive(Clone, PartialEq, Debug)]
 pub struct TypedDsrvSpecification {
     pub input_vars: Vec<VarName>,
-    pub output_vars: Vec<VarName>,
+    pub output_vars: BTreeSet<VarName>,
     pub aux_info: BTreeSet<VarName>,
     pub exprs: BTreeMap<VarName, SExprTE>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
@@ -612,7 +612,7 @@ impl Specification for TypedDsrvSpecification {
         self.input_vars.clone()
     }
 
-    fn output_vars(&self) -> Vec<VarName> {
+    fn output_vars(&self) -> BTreeSet<VarName> {
         self.output_vars.clone()
     }
 
@@ -2100,7 +2100,7 @@ mod tests {
     #[test]
     fn test_typed_spec_display_output() {
         let input_vars = vec!["x".into(), "y".into()];
-        let output_vars = vec!["z".into(), "d".into()];
+        let output_vars = BTreeSet::from(["z".into(), "d".into()]);
 
         let mut dynamic_ctx = BTreeMap::new();
         dynamic_ctx.insert("s".into(), StreamType::Str);
@@ -2192,7 +2192,7 @@ mod tests {
 
                     Some(TypedDsrvSpecification {
                         input_vars: fixed_inputs.clone(),
-                        output_vars: vec!["x".into(), "y".into(), "d".into()],
+                        output_vars: BTreeSet::from(["x".into(), "y".into(), "d".into()]),
                         aux_info: BTreeSet::new(),
                         exprs: BTreeMap::from([
                             ("x".into(), typed_x),

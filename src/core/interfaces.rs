@@ -63,7 +63,7 @@ pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
 
     fn input_vars(&self) -> Vec<VarName>;
 
-    fn output_vars(&self) -> Vec<VarName>;
+    fn output_vars(&self) -> BTreeSet<VarName>;
 
     fn aux_vars(&self) -> BTreeSet<VarName>;
 

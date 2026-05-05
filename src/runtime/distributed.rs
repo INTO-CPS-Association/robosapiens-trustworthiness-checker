@@ -459,19 +459,26 @@ where
             .as_ref()
             .expect("Executor")
             .clone();
+        // TODO: TW - potential bug here. It only considers output vars from the model
+        // TODO: Use set here to avoid collecting into vec
         let var_names = self
             .async_monitor_builder
             .model
             .as_ref()
             .expect("Var names not set")
-            .output_vars();
+            .output_vars()
+            .into_iter()
+            .collect();
 
-        let output_vars = self
+        // TODO: Use set here to avoid collecting into vec
+        let output_vars: Vec<_> = self
             .async_monitor_builder
             .model
             .as_ref()
             .unwrap()
-            .output_vars();
+            .output_vars()
+            .into_iter()
+            .collect();
         let (planner, locations, dist_graph_provider, dist_constraints, replanning_condition): (
             Box<dyn SchedulerPlanner>,
             Vec<NodeName>,
@@ -1053,7 +1060,7 @@ where
         if !dist_constraints.is_empty() {
             let null_output = Box::new(NullOutputHandler::new(
                 executor.clone(),
-                dist_constraints.clone(),
+                dist_constraints.clone().into_iter().collect(),
             ));
             async_builder = async_builder.output(null_output);
         }

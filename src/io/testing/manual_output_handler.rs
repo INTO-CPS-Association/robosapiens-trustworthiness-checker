@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::{collections::BTreeMap, mem, rc::Rc};
 
 use crate::utils::cancellation_token::{CancellationToken, DropGuard};
@@ -22,7 +23,7 @@ use crate::{
  * cannot be used again; this allows us to manage the lifetimes of our data
  * without mutexes or arcs. */
 pub struct ManualOutputHandler<V: StreamData> {
-    var_names: Vec<VarName>,
+    pub var_names: BTreeSet<VarName>,
     #[allow(dead_code)]
     pub executor: Rc<LocalExecutor<'static>>,
     stream_senders: Option<BTreeMap<VarName, oneshot::Sender<OutputStream<V>>>>,
@@ -33,7 +34,7 @@ pub struct ManualOutputHandler<V: StreamData> {
 }
 
 impl<V: StreamData> ManualOutputHandler<V> {
-    pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: Vec<VarName>) -> Self {
+    pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: BTreeSet<VarName>) -> Self {
         let mut stream_senders: BTreeMap<VarName, oneshot::Sender<OutputStream<V>>> =
             BTreeMap::new();
         let mut stream_receivers: BTreeMap<VarName, oneshot::Receiver<OutputStream<V>>> =
@@ -78,10 +79,6 @@ impl<V: StreamData> ManualOutputHandler<V> {
         debug!("ManualOutputHandler: Created drop guard for output stream");
         drop_guard_stream(oneshot_to_stream(receiver), drop_guard)
     }
-
-    pub fn var_names(&self) -> &[VarName] {
-        &self.var_names
-    }
 }
 
 impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
@@ -94,6 +91,10 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
             .stream_senders
             .take()
             .expect("Stream senders not found");
+        assert!(
+            self.var_names == streams.keys().cloned().collect(),
+            "Variable names provided do not match variable names provided in constructor."
+        );
         for (var_name, stream) in streams {
             let sender = senders
                 .remove(&var_name)
@@ -224,6 +225,7 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
 mod tests {
     use crate::async_test;
     use std::cmp::Ordering;
+    use std::collections::BTreeSet;
 
     use super::*;
     use crate::{OutputStream, Value};
@@ -299,7 +301,7 @@ mod tests {
             })
             .collect();
         let mut handler: ManualOutputHandler<Value> =
-            ManualOutputHandler::new(ex.clone(), vec!["x".into(), "y".into()]);
+            ManualOutputHandler::new(ex.clone(), BTreeSet::from(["x".into(), "y".into()]));
 
         let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
         handler.provide_streams(streams);
@@ -323,7 +325,8 @@ mod tests {
         use futures::stream;
 
         info!("Creating ManualOutputHandler with infinite input stream");
-        let mut handler = ManualOutputHandler::new(executor.clone(), vec!["test".into()]);
+        let mut handler =
+            ManualOutputHandler::new(executor.clone(), BTreeSet::from(["test".into()]));
 
         // Create an infinite stream
         let infinite_stream: OutputStream<Value> =
@@ -359,7 +362,8 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         info!("Creating ManualOutputHandler...");
-        let mut handler = ManualOutputHandler::new(executor.clone(), vec!["test".into()]);
+        let mut handler =
+            ManualOutputHandler::new(executor.clone(), BTreeSet::from(["test".into()]));
 
         // Create a test stream that never ends
         let test_stream: OutputStream<Value> = Box::pin(stream::iter((0..).map(|x| Value::Int(x))));

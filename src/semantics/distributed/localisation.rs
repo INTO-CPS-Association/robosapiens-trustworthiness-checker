@@ -238,7 +238,7 @@ fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
 
-    let filtered_output_vars: Vec<VarName> = spec
+    let filtered_output_vars: BTreeSet<VarName> = spec
         .output_vars
         .into_iter()
         .filter(|v| !aux_vars.contains(v))
@@ -320,7 +320,7 @@ mod tests {
     fn test_localise_specification_1() {
         let spec = DsrvSpecification::new(
             vec!["a".into(), "b".into()],
-            vec!["c".into(), "d".into(), "e".into()],
+            BTreeSet::from(["c".into(), "d".into(), "e".into()]),
             vec![
                 ("c".into(), SExpr::Var("a".into())),
                 ("d".into(), SExpr::Not(Box::new(SExpr::Var("a".into())))),
@@ -337,7 +337,7 @@ mod tests {
             localised_spec,
             DsrvSpecification::new(
                 vec!["a".into(), "d".into()],
-                vec!["c".into(), "e".into()],
+                BTreeSet::from(["c".into(), "e".into()]),
                 vec![
                     ("c".into(), SExpr::Var("a".into())),
                     ("e".into(), SExpr::Not(Box::new(SExpr::Var("d".into())))),
@@ -354,7 +354,7 @@ mod tests {
     fn test_localise_specification_2() {
         let spec = DsrvSpecification::new(
             vec!["a".into()],
-            vec!["i".into()],
+            BTreeSet::from(["i".into()]),
             vec![].into_iter().collect(),
             BTreeMap::new(),
             vec![],
@@ -365,7 +365,7 @@ mod tests {
             localised_spec,
             DsrvSpecification::new(
                 vec![],
-                vec![],
+                BTreeSet::new(),
                 vec![].into_iter().collect(),
                 BTreeMap::new(),
                 vec![],
@@ -386,7 +386,7 @@ mod tests {
             local_spec1,
             DsrvSpecification::new(
                 vec!["x".into(), "y".into()],
-                vec!["w".into()],
+                BTreeSet::from(["w".into()]),
                 vec![(
                     "w".into(),
                     SExpr::BinOp(
@@ -406,7 +406,7 @@ mod tests {
             local_spec2,
             DsrvSpecification::new(
                 vec!["z".into(), "w".into()],
-                vec!["v".into()],
+                BTreeSet::from(["v".into()]),
                 vec![(
                     "v".into(),
                     SExpr::BinOp(
@@ -448,7 +448,7 @@ mod tests {
             local_spec1,
             DsrvSpecification::new(
                 vec!["x".into(), "y".into()],
-                vec!["w".into()],
+                BTreeSet::from(["w".into()]),
                 vec![(
                     "w".into(),
                     SExpr::BinOp(
@@ -468,7 +468,7 @@ mod tests {
             local_spec2,
             DsrvSpecification::new(
                 vec!["z".into(), "w".into()],
-                vec!["v".into()],
+                BTreeSet::from(["v".into()]),
                 vec![(
                     "v".into(),
                     SExpr::BinOp(
@@ -537,7 +537,7 @@ mod tests {
 
         let spec = DsrvSpecification::new(
             vec![x.clone(), y.clone()],
-            vec![tmp.clone(), z.clone()],
+            BTreeSet::from([tmp.clone(), z.clone()]),
             vec![
                 (
                     tmp.clone(),
@@ -581,7 +581,13 @@ mod tests {
 
         assert_eq!(
             result,
-            DsrvSpecification::new(vec![x, y], vec![z], expected_exprs, BTreeMap::new(), vec![])
+            DsrvSpecification::new(
+                vec![x, y],
+                BTreeSet::from([z]),
+                expected_exprs,
+                BTreeMap::new(),
+                vec![]
+            )
         );
     }
 
@@ -595,7 +601,7 @@ mod tests {
 
         let spec = DsrvSpecification::new(
             vec![i.clone()],
-            vec![h1.clone(), h2.clone(), h3.clone(), out.clone()],
+            BTreeSet::from([h1.clone(), h2.clone(), h3.clone(), out.clone()]),
             vec![
                 (h1.clone(), SExpr::Var(i.clone())),
                 (
@@ -642,7 +648,13 @@ mod tests {
 
         assert_eq!(
             result,
-            DsrvSpecification::new(vec![i], vec![out], expected_exprs, BTreeMap::new(), vec![])
+            DsrvSpecification::new(
+                vec![i],
+                BTreeSet::from([out]),
+                expected_exprs,
+                BTreeMap::new(),
+                vec![]
+            )
         );
     }
 
@@ -655,7 +667,7 @@ mod tests {
 
         let spec = DsrvSpecification::new(
             vec![],
-            vec![h1.clone(), h2.clone(), out.clone()],
+            BTreeSet::from([h1.clone(), h2.clone(), out.clone()]),
             vec![
                 (h1.clone(), SExpr::Var(h2.clone())),
                 (h2.clone(), SExpr::Var(h1.clone())),

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use futures::future::LocalBoxFuture;
@@ -22,7 +22,7 @@ pub struct StdoutOutputHandler {
 impl StdoutOutputHandler {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
-        var_names: Vec<VarName>,
+        var_names: BTreeSet<VarName>,
         aux_info: Vec<VarName>,
     ) -> Self {
         let combined_output_handler = ManualOutputHandler::new(executor, var_names);
@@ -86,6 +86,7 @@ mod tests {
     use crate::core::{OutputStream, Value};
     use futures::stream;
     use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
     use tracing::info;
 
     use super::*;
@@ -97,8 +98,11 @@ mod tests {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
-        let mut handler =
-            StdoutOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()], vec![]);
+        let mut handler = StdoutOutputHandler::new(
+            executor.clone(),
+            BTreeSet::from(["x".into(), "y".into()]),
+            vec![],
+        );
 
         let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
         handler.provide_streams(streams);
