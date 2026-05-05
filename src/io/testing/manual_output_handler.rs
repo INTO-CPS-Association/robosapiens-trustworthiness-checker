@@ -1,12 +1,14 @@
 use std::{collections::BTreeMap, mem, rc::Rc};
 
 use crate::utils::cancellation_token::{CancellationToken, DropGuard};
+use anyhow::anyhow;
 use async_stream::stream;
 use async_unsync::oneshot;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::{LocalBoxFuture, join_all};
 use smol::LocalExecutor;
+use tracing::error;
 use tracing::warn;
 use tracing::{Level, debug, enabled, instrument};
 
@@ -25,8 +27,8 @@ pub struct ManualOutputHandler<V: StreamData> {
     pub executor: Rc<LocalExecutor<'static>>,
     stream_senders: Option<BTreeMap<VarName, oneshot::Sender<OutputStream<V>>>>,
     stream_receivers: Option<BTreeMap<VarName, oneshot::Receiver<OutputStream<V>>>>,
-    output_receiver: Option<oneshot::Receiver<OutputStream<Vec<V>>>>,
-    output_sender: Option<oneshot::Sender<OutputStream<Vec<V>>>>,
+    output_receiver: Option<oneshot::Receiver<OutputStream<BTreeMap<VarName, V>>>>,
+    output_sender: Option<oneshot::Sender<OutputStream<BTreeMap<VarName, V>>>>,
     output_cancellation: CancellationToken,
 }
 
@@ -67,7 +69,7 @@ impl<V: StreamData> ManualOutputHandler<V> {
         }
     }
 
-    pub fn get_output(&mut self) -> OutputStream<Vec<V>> {
+    pub fn get_output(&mut self) -> OutputStream<BTreeMap<VarName, V>> {
         let receiver = self
             .output_receiver
             .take()
@@ -107,17 +109,30 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
 
         debug!(num_streams = receivers.len(), "Running ManualOutputHandler");
 
-        // Maintain order based on var_names
-        let streams: anyhow::Result<Vec<_>> = self
-            .var_names
-            .iter()
-            .map(|name| {
-                let receiver = receivers
-                    .get_mut(name)
-                    .ok_or_else(|| anyhow::anyhow!("No receiver found for variable: {}", name))?;
-                receiver.try_recv().map_err(anyhow::Error::from)
-            })
-            .collect();
+        let mut streams: anyhow::Result<BTreeMap<VarName, OutputStream<V>>> = Ok(BTreeMap::new());
+        for name in self.var_names.iter() {
+            match receivers.remove(name) {
+                Some(mut rx) => match rx.try_recv() {
+                    Ok(stream) => {
+                        debug!("Received stream for variable: {}", name);
+                        streams.as_mut().unwrap().insert(name.clone(), stream);
+                    }
+                    Err(_) => {
+                        error!(
+                            "Stream sender was dropped before providing stream for variable: {}",
+                            name
+                        );
+                        streams = Err(anyhow!("Stream sender dropped for variable: {}", name));
+                        break;
+                    }
+                },
+                None => {
+                    error!("No receiver found for variable: {}", name);
+                    streams = Err(anyhow!("No receiver found for variable: {}", name));
+                    break;
+                }
+            }
+        }
 
         let (result_tx, result_rx) = oneshot::channel().into_split();
         let output_cancellation = self.output_cancellation.clone();
@@ -145,12 +160,16 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
                 loop {
                     let num_streams = streams.len();
                     debug!("ManualOutputHandler: Stream generator loop iteration, {} streams", num_streams);
-                    let nexts = join_all(streams.iter_mut().map(|s| s.next()));
+
+                    let nexts = join_all(streams.iter_mut().map(|(n, s)| s.next().map(|v| match v {
+                        Some(val) => Some((n.clone(), val)),
+                        None => None,
+                    })));
                     debug!("ManualOutputHandler: Waiting for values from streams");
 
                     if let Some(vals) = nexts.await
                         .into_iter()
-                        .collect::<Option<Vec<V>>>()
+                        .collect::<Option<BTreeMap<VarName, V>>>()
                     {
                         // Collect the values into a Vec<V>
                         let output = vals;
@@ -271,8 +290,13 @@ mod tests {
         let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..10).map(|x| (x * 2).into())));
         let y_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..10).map(|x| (x * 2 + 1).into())));
-        let xy_expected: Vec<Vec<Value>> = (0..10)
-            .map(|x| vec![(x * 2).into(), (x * 2 + 1).into()])
+        let xy_expected: Vec<BTreeMap<VarName, Value>> = (0..10)
+            .map(|x| {
+                BTreeMap::from([
+                    ("x".into(), (x * 2).into()),
+                    ("y".into(), (x * 2 + 1).into()),
+                ])
+            })
             .collect();
         let mut handler: ManualOutputHandler<Value> =
             ManualOutputHandler::new(ex.clone(), vec!["x".into(), "y".into()]);
@@ -285,7 +309,7 @@ mod tests {
 
         let task = ex.spawn(run_fut);
 
-        let output: Vec<Vec<Value>> = output_stream.collect().await;
+        let output: Vec<BTreeMap<VarName, Value>> = output_stream.collect().await;
 
         assert_eq!(output, xy_expected);
 

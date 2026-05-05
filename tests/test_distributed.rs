@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, rc::Rc};
 use macro_rules_attribute::apply;
 use petgraph::graph::DiGraph;
 use smol::{LocalExecutor, stream::StreamExt};
+use trustworthiness_checker::VarName;
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::{
     OutputStream, Value,
@@ -57,7 +58,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
-    let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
+    let output_stream: OutputStream<BTreeMap<VarName, Value>> = output_handler.get_output();
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -80,9 +81,30 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     let output: Vec<_> = output_stream.collect().await;
 
     assert_eq!(output.len(), 3);
-    assert_eq!(output[0], vec![true.into(), 2.into(), 3.into()]);
-    assert_eq!(output[1], vec![true.into(), 3.into(), 4.into()]);
-    assert_eq!(output[2], vec![true.into(), 4.into(), 5.into()]);
+    assert_eq!(
+        output[0],
+        BTreeMap::from([
+            ("w".into(), true.into()),
+            ("y".into(), 2.into()),
+            ("z".into(), 3.into())
+        ])
+    );
+    assert_eq!(
+        output[1],
+        BTreeMap::from([
+            ("w".into(), true.into()),
+            ("y".into(), 3.into()),
+            ("z".into(), 4.into())
+        ])
+    );
+    assert_eq!(
+        output[2],
+        BTreeMap::from([
+            ("w".into(), true.into()),
+            ("y".into(), 4.into()),
+            ("z".into(), 5.into())
+        ])
+    );
 }
 
 #[apply(async_test)]
@@ -122,7 +144,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
-    let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
+    let output_stream: OutputStream<BTreeMap<VarName, Value>> = output_handler.get_output();
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -145,9 +167,30 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     let output: Vec<_> = output_stream.collect().await;
 
     assert_eq!(output.len(), 3);
-    assert_eq!(output[0], vec![0.into(), 2.into(), 3.into()]);
-    assert_eq!(output[1], vec![0.into(), 3.into(), 4.into()]);
-    assert_eq!(output[2], vec![0.into(), 4.into(), 5.into()]);
+    assert_eq!(
+        output[0],
+        BTreeMap::from([
+            ("w".into(), 0.into()),
+            ("y".into(), 2.into()),
+            ("z".into(), 3.into())
+        ])
+    );
+    assert_eq!(
+        output[1],
+        BTreeMap::from([
+            ("w".into(), 0.into()),
+            ("y".into(), 3.into()),
+            ("z".into(), 4.into())
+        ])
+    );
+    assert_eq!(
+        output[2],
+        BTreeMap::from([
+            ("w".into(), 0.into()),
+            ("y".into(), 4.into()),
+            ("z".into(), 5.into())
+        ])
+    );
 }
 
 #[apply(async_test)]
@@ -187,7 +230,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
-    let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
+    let output_stream: OutputStream<BTreeMap<VarName, Value>> = output_handler.get_output();
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -210,9 +253,30 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     let output: Vec<_> = output_stream.collect().await;
 
     assert_eq!(output.len(), 3);
-    assert_eq!(output[0], vec![2.into(), 2.into(), 3.into()]);
-    assert_eq!(output[1], vec![2.into(), 3.into(), 4.into()]);
-    assert_eq!(output[2], vec![2.into(), 4.into(), 5.into()]);
+    assert_eq!(
+        output[0],
+        BTreeMap::from([
+            ("w".into(), 2.into()),
+            ("y".into(), 2.into()),
+            ("z".into(), 3.into())
+        ])
+    );
+    assert_eq!(
+        output[1],
+        BTreeMap::from([
+            ("w".into(), 2.into()),
+            ("y".into(), 3.into()),
+            ("z".into(), 4.into())
+        ])
+    );
+    assert_eq!(
+        output[2],
+        BTreeMap::from([
+            ("w".into(), 2.into()),
+            ("y".into(), 4.into()),
+            ("z".into(), 5.into())
+        ])
+    );
 }
 
 #[apply(async_test)]
@@ -252,7 +316,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
-    let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
+    let output_stream: OutputStream<BTreeMap<VarName, Value>> = output_handler.get_output();
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -275,9 +339,30 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     let output: Vec<_> = output_stream.collect().await;
 
     assert_eq!(output.len(), 3);
-    assert_eq!(output[0], vec![1.into(), 2.into(), 3.into()]);
-    assert_eq!(output[1], vec![1.into(), 3.into(), 4.into()]);
-    assert_eq!(output[2], vec![1.into(), 4.into(), 5.into()]);
+    assert_eq!(
+        output[0],
+        BTreeMap::from([
+            ("w".into(), 1.into()),
+            ("y".into(), 2.into()),
+            ("z".into(), 3.into())
+        ])
+    );
+    assert_eq!(
+        output[1],
+        BTreeMap::from([
+            ("w".into(), 1.into()),
+            ("y".into(), 3.into()),
+            ("z".into(), 4.into())
+        ])
+    );
+    assert_eq!(
+        output[2],
+        BTreeMap::from([
+            ("w".into(), 1.into()),
+            ("y".into(), 4.into()),
+            ("z".into(), 5.into())
+        ])
+    );
 }
 
 #[apply(async_test)]
@@ -317,7 +402,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
-    let output_stream: OutputStream<Vec<Value>> = output_handler.get_output();
+    let output_stream: OutputStream<BTreeMap<VarName, Value>> = output_handler.get_output();
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -340,7 +425,28 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     let output: Vec<_> = output_stream.collect().await;
 
     assert_eq!(output.len(), 3);
-    assert_eq!(output[0], vec![1.into(), 2.into(), 3.into()]);
-    assert_eq!(output[1], vec![1.into(), 3.into(), 4.into()]);
-    assert_eq!(output[2], vec![1.into(), 4.into(), 5.into()]);
+    assert_eq!(
+        output[0],
+        BTreeMap::from([
+            ("w".into(), 1.into()),
+            ("y".into(), 2.into()),
+            ("z".into(), 3.into())
+        ])
+    );
+    assert_eq!(
+        output[1],
+        BTreeMap::from([
+            ("w".into(), 1.into()),
+            ("y".into(), 3.into()),
+            ("z".into(), 4.into())
+        ])
+    );
+    assert_eq!(
+        output[2],
+        BTreeMap::from([
+            ("w".into(), 1.into()),
+            ("y".into(), 4.into()),
+            ("z".into(), 5.into())
+        ])
+    );
 }

@@ -1,5 +1,6 @@
-use std::rc::Rc;
+use std::{collections::BTreeMap, rc::Rc};
 
+use async_stream::stream;
 use smol::{
     LocalExecutor,
     stream::{StreamExt, repeat},
@@ -64,7 +65,8 @@ where
         let input_provider: Box<dyn InputProvider<Val = Value>> = Box::new(replay_input_data);
         let mut output_handler =
             ManualOutputHandler::new(self.executor.clone(), self.dist_constraints.clone());
-        let output_stream: OutputStream<Vec<Value>> = Box::pin(output_handler.get_output());
+        let output_stream: OutputStream<BTreeMap<VarName, Value>> =
+            Box::pin(output_handler.get_output());
 
         let potential_dist_graph_stream = Box::pin(repeat(labelled_graph.clone()));
         let context_builder = self
@@ -101,17 +103,35 @@ where
         let runtime = async_builder.build();
         self.executor.spawn(runtime.run()).detach();
 
+        // Fix to OutputHandlers previously relying on an implicit ordering based on a
+        // Vec<VarName>.
+        let order: BTreeMap<VarName, usize> = self
+            .dist_constraints
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect();
+
         // Tolerant Value -> bool conversion:
         // - Bool(true/false) => true/false
         // - NoVal/Deferred/other => false
-        Box::pin(output_stream.map(|row| {
-            row.into_iter()
-                .map(|v| match v {
-                    Value::Bool(b) => b,
-                    _ => false,
-                })
-                .collect::<Vec<bool>>()
-        }))
+        Box::pin(stream! {
+            let mut output_stream = output_stream;
+            let order = order;
+            while let Some(map) = output_stream.next().await {
+                let mut v = vec![false; order.len()];
+                for (n, val) in map {
+                    let idx = order
+                        .get(&n)
+                        .expect("Output variable not in dist_constraints");
+                    match val {
+                        Value::Bool(b) => v[*idx] = b,
+                        _ => v[*idx] = false,
+                    }
+                }
+                yield v;
+            }
+        })
     }
 
     /// Finds all possible labelled distribution graphs given a set of distribution constraints

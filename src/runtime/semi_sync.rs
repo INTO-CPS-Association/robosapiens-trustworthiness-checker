@@ -1096,7 +1096,6 @@ where
 mod tests {
 
     use crate::core::Runnable;
-    use crate::dsrv_fixtures::*;
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dsrv::lalr_parser::LALRParser;
@@ -1105,6 +1104,7 @@ mod tests {
     use crate::semantics::{StreamContext, UntimedDsrvSemantics};
     use crate::{OutputStream, async_test};
     use crate::{Value, dsrv_specification};
+    use crate::{VarName, dsrv_fixtures::*};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -1140,7 +1140,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1149,9 +1149,9 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![3.into()]),
-                (1, vec![5.into()]),
-                (2, vec![7.into()]),
+                (0, BTreeMap::from([("z".into(), 3.into())])),
+                (1, BTreeMap::from([("z".into(), 5.into())])),
+                (2, BTreeMap::from([("z".into(), 7.into())])),
             ],
         );
     }
@@ -1209,7 +1209,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1218,9 +1218,18 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![0.into(), 1.into()]),
-                (1, vec![1.into(), 2.into()]),
-                (2, vec![2.into(), 3.into()]),
+                (
+                    0,
+                    BTreeMap::from([("a".into(), 0.into()), ("b".into(), 1.into())])
+                ),
+                (
+                    1,
+                    BTreeMap::from([("a".into(), 1.into()), ("b".into(), 2.into())])
+                ),
+                (
+                    2,
+                    BTreeMap::from([("a".into(), 2.into()), ("b".into(), 3.into())])
+                ),
             ],
         );
     }
@@ -1249,7 +1258,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1258,9 +1267,9 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![3.into()]),
-                (2, vec![5.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 3.into())])),
+                (2, BTreeMap::from([("z".into(), 5.into())])),
             ],
         );
     }
@@ -1289,7 +1298,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1298,9 +1307,9 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![2.into()]),
-                (2, vec![3.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 2.into())])),
+                (2, BTreeMap::from([("z".into(), 3.into())])),
             ],
         );
     }
@@ -1329,7 +1338,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1338,9 +1347,9 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![2.into()]),
-                (2, vec![3.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 2.into())])),
+                (2, BTreeMap::from([("z".into(), 3.into())])),
             ],
         );
     }
@@ -1369,7 +1378,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1378,9 +1387,9 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![Value::Deferred]),
-                (2, vec![5.into()]),
+                (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (1, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (2, BTreeMap::from([("z".into(), 5.into())])),
             ],
         );
     }
@@ -1415,7 +1424,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1424,11 +1433,11 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![Value::Deferred]),
-                (2, vec![0.into()]),
-                (3, vec![1.into()]),
-                (4, vec![2.into()]),
+                (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (1, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (2, BTreeMap::from([("z".into(), 0.into())])),
+                (3, BTreeMap::from([("z".into(), 1.into())])),
+                (4, BTreeMap::from([("z".into(), 2.into())])),
             ],
         );
     }
@@ -1462,7 +1471,7 @@ mod tests {
 
         executor.spawn(monitor.run()).detach();
 
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 1, "outputs")
                 .await
                 .unwrap();
@@ -1471,9 +1480,18 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![0.into(), 0.into()]),
-                (1, vec![1.into(), 1.into()]),
-                (2, vec![2.into(), 2.into()]),
+                (
+                    0,
+                    BTreeMap::from([("a".into(), 0.into()), ("b".into(), 0.into())])
+                ),
+                (
+                    1,
+                    BTreeMap::from([("a".into(), 1.into()), ("b".into(), 1.into())])
+                ),
+                (
+                    2,
+                    BTreeMap::from([("a".into(), 2.into()), ("b".into(), 2.into())])
+                ),
             ],
         );
         Ok(())

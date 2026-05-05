@@ -46,13 +46,7 @@ impl OutputHandler for StdoutOutputHandler {
         let output_stream = self.manual_output_handler.get_output();
         let enumerated_outputs = output_stream.enumerate();
         let mut task = FutureExt::fuse(executor.spawn(self.manual_output_handler.run()));
-        let var_names = self
-            .manual_output_handler
-            .var_names()
-            .iter()
-            .map(|x| x.name())
-            .collect::<Vec<_>>();
-        let aux_names = self.aux_info.iter().map(|x| x.name()).collect::<Vec<_>>();
+        let aux_names = self.aux_info.clone();
         let mut outputs = StreamExt::fuse(enumerated_outputs);
 
         Box::pin(async move {
@@ -64,12 +58,13 @@ impl OutputHandler for StdoutOutputHandler {
                 select_biased! {
                     res = outputs.next() => {
                         match res {
-                            Some((i, output)) => for (var, data) in var_names.iter().zip(output) {
-                                info!(?var, ?i, ?data, "Handling output");
-                                if !aux_names.contains(var) && data != Value::NoVal {
-                                    println!("{}[{}] = {:?}", var, i, data);
-                                }
-                            }
+                            Some((i, output)) => {
+                                for (var, data) in output {
+                                    info!(?var, ?i, ?data, "Handling output");
+                                    if !aux_names.contains(&var) && data != Value::NoVal {
+                                        println!("{}[{}] = {:?}", var, i, data);
+                                    }
+                            }},
                             None => {
                                 return Ok(())
                             }

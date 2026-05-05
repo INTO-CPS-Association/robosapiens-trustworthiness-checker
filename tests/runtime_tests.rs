@@ -5,13 +5,13 @@ use smol::LocalExecutor;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Runtime, Semantics};
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
 use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{Value, dsrv_specification, runtime::RuntimeBuilder};
+use trustworthiness_checker::{VarName, async_test};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TestConfiguration {
@@ -93,7 +93,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -104,9 +104,9 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![2.into()]),
-                (2, vec![3.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 2.into())])),
+                (2, BTreeMap::from([("z".into(), 3.into())])),
             ],
             "Defer output mismatch for config {:?}",
             config,
@@ -146,7 +146,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -157,9 +157,9 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![4.into()]),
-                (2, vec![9.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 4.into())])),
+                (2, BTreeMap::from([("z".into(), 9.into())])),
             ],
             "Defer x squared output mismatch for config {:?}",
             config,
@@ -199,7 +199,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -210,9 +210,9 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         assert_eq!(
             outputs,
             vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![3.into()]),
-                (2, vec![4.into()]),
+                (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (1, BTreeMap::from([("z".into(), 3.into())])),
+                (2, BTreeMap::from([("z".into(), 4.into())])),
             ],
             "Defer deferred output mismatch for config {:?}",
             config,
@@ -252,7 +252,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -263,9 +263,9 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         assert_eq!(
             outputs,
             vec![
-                (0, vec![Value::Deferred]),
-                (1, vec![2.into()]),
-                (2, vec![3.into()]),
+                (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (1, BTreeMap::from([("z".into(), 2.into())])),
+                (2, BTreeMap::from([("z".into(), 3.into())])),
             ],
             "Defer deferred2 output mismatch for config {:?}",
             config,
@@ -314,7 +314,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -325,10 +325,22 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         assert_eq!(
             outputs,
             vec![
-                (0, vec![Value::Deferred, 11.into()]),
-                (1, vec![22.into(), 22.into()]),
-                (2, vec![33.into(), 33.into()]),
-                (3, vec![44.into(), 44.into()]),
+                (
+                    0,
+                    BTreeMap::from([("z1".into(), Value::Deferred), ("z2".into(), 11.into())])
+                ),
+                (
+                    1,
+                    BTreeMap::from([("z1".into(), 22.into()), ("z2".into(), 22.into())])
+                ),
+                (
+                    2,
+                    BTreeMap::from([("z1".into(), 33.into()), ("z2".into(), 33.into())])
+                ),
+                (
+                    3,
+                    BTreeMap::from([("z1".into(), 44.into()), ("z2".into(), 44.into())])
+                ),
             ],
             "Defer dependency output mismatch for config {:?}",
             config,
@@ -364,7 +376,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -375,9 +387,9 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         assert_eq!(
             outputs,
             vec![
-                (0, vec!["y0".into()]),
-                (1, vec!["y1".into()]),
-                (2, vec!["y2".into()]),
+                (0, BTreeMap::from([("z".into(), "y0".into())])),
+                (1, BTreeMap::from([("z".into(), "y1".into())])),
+                (2, BTreeMap::from([("z".into(), "y2".into())])),
             ],
             "Update both init output mismatch for config {:?}",
             config,
@@ -413,7 +425,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -424,10 +436,10 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
         assert_eq!(
             outputs,
             vec![
-                (0, vec!["x0".into()]),
-                (1, vec!["y1".into()]),
-                (2, vec![Value::Deferred]),
-                (3, vec!["y3".into()]),
+                (0, BTreeMap::from([("z".into(), "x0".into())])),
+                (1, BTreeMap::from([("z".into(), "y1".into())])),
+                (2, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (3, BTreeMap::from([("z".into(), "y3".into())])),
             ],
             "Update first x then y output mismatch for config {:?}",
             config,
@@ -468,7 +480,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -479,10 +491,10 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         assert_eq!(
             outputs,
             vec![
-                (0, vec!["def".into()]),
-                (1, vec!["x1".into()]),
-                (2, vec!["x2".into()]),
-                (3, vec!["x3".into()]),
+                (0, BTreeMap::from([("z".into(), "def".into())])),
+                (1, BTreeMap::from([("z".into(), "x1".into())])),
+                (2, BTreeMap::from([("z".into(), "x2".into())])),
+                (3, BTreeMap::from([("z".into(), "x3".into())])),
             ],
             "Update defer output mismatch for config {:?}",
             config,
@@ -528,7 +540,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -539,10 +551,10 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         assert_eq!(
             outputs,
             vec![
-                (0, vec![Value::Deferred]),
-                (1, vec!["y".into()]),
-                (2, vec!["y_won!".into()]),
-                (3, vec!["y_happy".into()]),
+                (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (1, BTreeMap::from([("z".into(), "y".into())])),
+                (2, BTreeMap::from([("z".into(), "y_won!".into())])),
+                (3, BTreeMap::from([("z".into(), "y_happy".into())])),
             ],
             "Defer update output mismatch for config {:?}",
             config,
@@ -685,7 +697,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -721,7 +733,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -732,9 +744,9 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![3.into()]),
-                (2, vec![5.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 3.into())])),
+                (2, BTreeMap::from([("z".into(), 5.into())])),
             ],
             "Variable test output mismatch for config {:?}",
             config,
@@ -767,7 +779,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = with_timeout(
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
             outputs.take(3).enumerate().collect(),
             5,
             "outputs.collect()",
@@ -782,9 +794,9 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         assert_eq!(
             outputs,
             vec![
-                (0, vec![42.into()]),
-                (1, vec![42.into()]),
-                (2, vec![42.into()]),
+                (0, BTreeMap::from([("z".into(), 42.into())])),
+                (1, BTreeMap::from([("z".into(), 42.into())])),
+                (2, BTreeMap::from([("z".into(), 42.into())])),
             ],
             "Literal expression output mismatch for config {:?}",
             config,
@@ -817,7 +829,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -828,9 +840,9 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
         assert_eq!(
             outputs,
             vec![
-                (0, vec![2.into()]),
-                (1, vec![4.into()]),
-                (2, vec![6.into()]),
+                (0, BTreeMap::from([("z".into(), 2.into())])),
+                (1, BTreeMap::from([("z".into(), 4.into())])),
+                (2, BTreeMap::from([("z".into(), 6.into())])),
             ],
             "Addition output mismatch for config {:?}",
             config,
@@ -863,7 +875,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -874,9 +886,9 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
         assert_eq!(
             outputs,
             vec![
-                (0, vec![Value::Int(-9)]),
-                (1, vec![Value::Int(-7)]),
-                (2, vec![Value::Int(-5)]),
+                (0, BTreeMap::from([("z".into(), Value::Int(-9))])),
+                (1, BTreeMap::from([("z".into(), Value::Int(-7))])),
+                (2, BTreeMap::from([("z".into(), Value::Int(-5))])),
             ],
             "Subtraction output mismatch for config {:?}",
             config
@@ -911,7 +923,7 @@ async fn test_index_past_mult_dependencies(
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         // TODO: async runtime produces more data than the constraint based runtime
         let num_expected_outputs = match config {
@@ -928,9 +940,21 @@ async fn test_index_past_mult_dependencies(
         assert_eq!(
             &outputs[0..3],
             vec![
-                (0, vec![Value::Deferred, Value::Deferred]),
-                (1, vec![1.into(), Value::Deferred]),
-                (2, vec![3.into(), 1.into()]),
+                (
+                    0,
+                    BTreeMap::from([
+                        ("z1".into(), Value::Deferred),
+                        ("z2".into(), Value::Deferred)
+                    ])
+                ),
+                (
+                    1,
+                    BTreeMap::from([("z1".into(), 1.into()), ("z2".into(), Value::Deferred)])
+                ),
+                (
+                    2,
+                    BTreeMap::from([("z1".into(), 3.into()), ("z2".into(), 1.into())])
+                ),
             ],
             "Index past mult dependencies output mismatch for config {:?}",
             config
@@ -963,7 +987,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -974,9 +998,9 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         assert_eq!(
             outputs,
             vec![
-                (0, vec![true.into()]),
-                (1, vec![false.into()]),
-                (2, vec![false.into()]),
+                (0, BTreeMap::from([("z".into(), true.into())])),
+                (1, BTreeMap::from([("z".into(), false.into())])),
+                (2, BTreeMap::from([("z".into(), false.into())])),
             ],
             "If-else expression output mismatch for config {:?}",
             config
@@ -1009,7 +1033,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -1019,7 +1043,10 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         );
         assert_eq!(
             outputs,
-            vec![(0, vec!["ab".into()]), (1, vec!["cd".into()]),],
+            vec![
+                (0, BTreeMap::from([("z".into(), "ab".into())])),
+                (1, BTreeMap::from([("z".into(), "cd".into())])),
+            ],
             "String append output mismatch for config {:?}",
             config
         );
@@ -1051,7 +1078,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -1062,9 +1089,9 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![3.into()]),
-                (2, vec![5.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 3.into())])),
+                (2, BTreeMap::from([("z".into(), 5.into())])),
             ],
             "Default no deferred output mismatch for config {:?}",
             config
@@ -1100,7 +1127,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -1111,9 +1138,9 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         assert_eq!(
             outputs,
             vec![
-                (0, vec![42.into()]),
-                (1, vec![42.into()]),
-                (2, vec![42.into()]),
+                (0, BTreeMap::from([("z".into(), 42.into())])),
+                (1, BTreeMap::from([("z".into(), 42.into())])),
+                (2, BTreeMap::from([("z".into(), 42.into())])),
             ],
             "Default all deferred output mismatch for config {:?}",
             config
@@ -1149,7 +1176,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> =
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
         assert_eq!(
             outputs.len(),
@@ -1160,9 +1187,9 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![42.into()]),
-                (2, vec![5.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 42.into())])),
+                (2, BTreeMap::from([("z".into(), 5.into())])),
             ],
             "Default one deferred output mismatch for config {:?}",
             config
@@ -1195,7 +1222,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let outputs: Vec<(usize, Vec<Value>)> = with_timeout(
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
             outputs.take(4).enumerate().collect(),
             5,
             "outputs.collect()",
@@ -1210,10 +1237,10 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
         assert_eq!(
             outputs,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![2.into()]),
-                (2, vec![3.into()]),
-                (3, vec![4.into()]),
+                (0, BTreeMap::from([("x".into(), 1.into())])),
+                (1, BTreeMap::from([("x".into(), 2.into())])),
+                (2, BTreeMap::from([("x".into(), 3.into())])),
+                (3, BTreeMap::from([("x".into(), 4.into())])),
             ],
             "Counter output mismatch for config {:?}",
             config
@@ -1260,13 +1287,16 @@ async fn test_simple_add_monitor_does_not_go_away(
         };
 
         // Collect results after output handler has been dropped
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - monitor should persist and produce correct outputs
         assert_eq!(
             result,
-            vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])],
+            vec![
+                (0, BTreeMap::from([("z".into(), Value::Int(3))])),
+                (1, BTreeMap::from([("z".into(), Value::Int(7))])),
+            ],
             "Monitor persistence failed for config {:?}",
             config
         );
@@ -1306,7 +1336,7 @@ async fn test_simple_add_monitor_large_input(
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert that large input produces expected number of outputs
@@ -1322,11 +1352,11 @@ async fn test_simple_add_monitor_large_input(
         for (i, (time, values)) in result.iter().enumerate() {
             assert_eq!(*time, i, "Output time should match index");
             assert_eq!(values.len(), 1, "Should have exactly one output value");
-            let expected = Value::Int(4 * (i as i64) + 1);
+            let expected = BTreeMap::from([("z".into(), Value::Int(4 * (i as i64) + 1))]);
             assert_eq!(
-                values[0], expected,
-                "Output at time {} should be {}, got {:?} for config {:?}",
-                i, expected, values[0], config
+                *values, expected,
+                "Output at time {} should be {:?}, got {:?} for config {:?}",
+                i, expected, values, config
             );
         }
     }
@@ -1371,12 +1401,15 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let monitor = builder.async_build().await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
-            vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])]
+            vec![
+                (0, BTreeMap::from([("z".into(), Value::Int(3))])),
+                (1, BTreeMap::from([("z".into(), Value::Int(7))])),
+            ]
         );
     }
     Ok(())
@@ -1411,12 +1444,15 @@ async fn test_simple_add_monitor_untyped_spec(
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
-            vec![(0, vec![Value::Int(3)]), (1, vec![Value::Int(7)])],
+            vec![
+                (0, BTreeMap::from([("z".into(), Value::Int(3))])),
+                (1, BTreeMap::from([("z".into(), Value::Int(7))])),
+            ],
             "Untyped spec failed for config {:?}",
             config,
         );
@@ -1457,15 +1493,15 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
             vec![
-                (0, vec![1.into()]),
-                (1, vec![2.into()]),
-                (2, vec![3.into()]),
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), 2.into())])),
+                (2, BTreeMap::from([("z".into(), 3.into())])),
             ],
             "Untyped defer spec failed for config {:?}",
             config,
@@ -1499,14 +1535,20 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
             vec![
-                (0, vec![Value::Int(3), Value::Int(3)]),
-                (1, vec![Value::Int(7), Value::Int(7)]),
+                (
+                    0,
+                    BTreeMap::from([("z".into(), Value::Int(3)), ("w".into(), Value::Int(3))])
+                ),
+                (
+                    1,
+                    BTreeMap::from([("z".into(), Value::Int(7)), ("w".into(), Value::Int(7))])
+                ),
             ],
             "Untyped dynamic spec failed for config {:?}",
             config,
@@ -1539,7 +1581,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
         let monitor = builder.async_build().await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert based on configuration expectations
@@ -1549,7 +1591,10 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
             | TestConfiguration::SemiSyncUntimed => {
                 assert_eq!(
                     result,
-                    vec![(0, vec![Value::Int(0)]), (1, vec![Value::Int(1)])]
+                    vec![
+                        (0, BTreeMap::from([("z".into(), Value::Int(0))])),
+                        (1, BTreeMap::from([("z".into(), Value::Int(1))])),
+                    ]
                 );
             }
         }
@@ -1581,15 +1626,15 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
         let monitor = builder.async_build().await;
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(result.len(), 2);
-        match result[0].1[0] {
+        match *result[0].1.get(&VarName::new("z")).unwrap() {
             Value::Float(f) => assert_abs_diff_eq!(f, 3.7, epsilon = 1e-4),
             _ => panic!("Expected float"),
         }
-        match result[1].1[0] {
+        match *result[1].1.get(&VarName::new("z")).unwrap() {
             Value::Float(f) => assert_abs_diff_eq!(f, 7.7, epsilon = 1e-4),
             _ => panic!("Expected float"),
         }
@@ -1625,16 +1670,16 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .await;
 
             executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> =
+            let result: Vec<(usize, BTreeMap<VarName, Value>)> =
                 with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
             assert_eq!(
                 result,
                 vec![
-                    (0, vec![Value::Int(1)]),
-                    (1, vec![Value::Int(2)]),
-                    (2, vec![Value::Int(3)]),
-                    (3, vec![Value::Int(4)]),
+                    (0, BTreeMap::from([("x".into(), Value::Int(1))])),
+                    (1, BTreeMap::from([("x".into(), Value::Int(2))])),
+                    (2, BTreeMap::from([("x".into(), Value::Int(3))])),
+                    (3, BTreeMap::from([("x".into(), Value::Int(4))])),
                 ],
                 "First run failed for semantics {:?}",
                 semantics,
@@ -1663,16 +1708,16 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .await;
 
             executor.spawn(monitor.run()).detach();
-            let result: Vec<(usize, Vec<Value>)> =
+            let result: Vec<(usize, BTreeMap<VarName, Value>)> =
                 with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
             assert_eq!(
                 result,
                 vec![
-                    (0, vec![Value::Int(1)]),
-                    (1, vec![Value::Int(2)]),
-                    (2, vec![Value::Int(3)]),
-                    (3, vec![Value::Int(4)]),
+                    (0, BTreeMap::from([("x".into(), Value::Int(1))])),
+                    (1, BTreeMap::from([("x".into(), Value::Int(2))])),
+                    (2, BTreeMap::from([("x".into(), Value::Int(3))])),
+                    (3, BTreeMap::from([("x".into(), Value::Int(4))])),
                 ],
                 "Second run failed for semantics {:?}",
                 semantics,
@@ -1781,12 +1826,15 @@ async fn test_drop_guard_cancellation_behavior(
         executor.spawn(monitor.run()).detach();
 
         // Take only 2 values - this should trigger drop guard when output stream is dropped
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.take(2).enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
-            vec![(0, vec![Value::Int(1)]), (1, vec![Value::Int(2)]),],
+            vec![
+                (0, BTreeMap::from([("x".into(), Value::Int(1))])),
+                (1, BTreeMap::from([("x".into(), Value::Int(2))])),
+            ],
             "Drop guard cancellation failed for semantics {:?}",
             semantics,
         );
@@ -1828,17 +1876,17 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - count functionality should work across configurations
         assert_eq!(
             result,
             vec![
-                (0, vec![Value::Int(1)]),
-                (1, vec![Value::Int(2)]),
-                (2, vec![Value::Int(3)]),
-                (3, vec![Value::Int(4)]),
+                (0, BTreeMap::from([("x".into(), Value::Int(1))])),
+                (1, BTreeMap::from([("x".into(), Value::Int(2))])),
+                (2, BTreeMap::from([("x".into(), Value::Int(3))])),
+                (3, BTreeMap::from([("x".into(), Value::Int(4))])),
             ],
             "Count monitor failed for config {:?}",
             config
@@ -1872,15 +1920,21 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(result.len(), 2);
         assert_eq!(
             result,
             vec![
-                (0, vec![Value::Int(3), Value::Int(2)]),
-                (1, vec![Value::Int(7), Value::Int(12)]),
+                (
+                    0,
+                    BTreeMap::from([("r1".into(), Value::Int(3)), ("r2".into(), Value::Int(2))])
+                ),
+                (
+                    1,
+                    BTreeMap::from([("r1".into(), Value::Int(7)), ("r2".into(), Value::Int(12))])
+                ),
             ]
         );
     }
@@ -1910,13 +1964,19 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
         assert_eq!(
             result,
             vec![
-                (0, vec![Value::Int(3), Value::Int(3)]),
-                (1, vec![Value::Int(7), Value::Int(7)]),
+                (
+                    0,
+                    BTreeMap::from([("z".into(), Value::Int(3)), ("w".into(), Value::Int(3))])
+                ),
+                (
+                    1,
+                    BTreeMap::from([("z".into(), Value::Int(7)), ("w".into(), Value::Int(7))])
+                ),
             ],
             "Dynamic monitor untimed failed for config {:?}",
             config,
@@ -1949,14 +2009,14 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         assert_eq!(
             result,
             vec![
-                (0, vec![Value::Str("ab".into())]),
-                (1, vec![Value::Str("cd".into())]),
+                (0, BTreeMap::from([("z".into(), Value::Str("ab".into()))])),
+                (1, BTreeMap::from([("z".into(), Value::Str("cd".into()))])),
             ]
         );
     }
@@ -1988,14 +2048,14 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         let expected_results = vec![
-            (0, vec![Value::Deferred]), // Default value for x[1] at time 0
-            (1, vec![Value::Int(1)]),   // x[0] = 1 at time 1
-            (2, vec![Value::Int(3)]),   // x[1] = 3 at time 2
-            (3, vec![Value::Int(5)]),   // x[2] = 3 at time 3
+            (0, BTreeMap::from([("z".into(), Value::Deferred)])), // Default value for x[1] at time 0
+            (1, BTreeMap::from([("z".into(), Value::Int(1))])),   // x[0] = 1 at time 1
+            (2, BTreeMap::from([("z".into(), Value::Int(3))])),   // x[1] = 3 at time 2
+            (3, BTreeMap::from([("z".into(), Value::Int(5))])),   // x[2] = 3 at time 3
         ];
         assert_eq!(
             result, expected_results,
@@ -2030,7 +2090,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let monitor = builder.build();
 
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // TODO: Different runtimes may handle temporal dependencies differently for complex patterns
@@ -2047,7 +2107,10 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Verify that we get boolean outputs (the specification outputs are all Bool type)
         for (time, values) in &result {
             assert!(
-                values.iter().all(|v| matches!(v, Value::Bool(_))),
+                values
+                    .iter()
+                    .map(|(_, v)| v)
+                    .all(|v| matches!(v, Value::Bool(_))),
                 "Expected all boolean outputs at time {}, got {:?} for config {:?}",
                 time,
                 values,
@@ -2094,7 +2157,7 @@ async fn test_restricted_dynamic_monitor(
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - dynamic monitor should work across configurations
@@ -2154,7 +2217,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
@@ -2166,21 +2229,21 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         );
 
         let expected_outputs = vec![
-            (0, vec![Value::Deferred]),
-            (1, vec![Value::Int(2)]),
-            (2, vec![Value::Int(3)]),
-            (3, vec![Value::Int(4)]),
-            (4, vec![Value::Int(5)]),
-            (5, vec![Value::Int(6)]),
-            (6, vec![Value::Int(7)]),
-            (7, vec![Value::Int(8)]),
-            (8, vec![Value::Int(9)]),
-            (9, vec![Value::Int(10)]),
-            (10, vec![Value::Int(11)]),
-            (11, vec![Value::Int(12)]),
-            (12, vec![Value::Int(13)]),
-            (13, vec![Value::Int(14)]),
-            (14, vec![Value::Int(15)]),
+            (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (1, BTreeMap::from([("z".into(), Value::Int(2))])),
+            (2, BTreeMap::from([("z".into(), Value::Int(3))])),
+            (3, BTreeMap::from([("z".into(), Value::Int(4))])),
+            (4, BTreeMap::from([("z".into(), Value::Int(5))])),
+            (5, BTreeMap::from([("z".into(), Value::Int(6))])),
+            (6, BTreeMap::from([("z".into(), Value::Int(7))])),
+            (7, BTreeMap::from([("z".into(), Value::Int(8))])),
+            (8, BTreeMap::from([("z".into(), Value::Int(9))])),
+            (9, BTreeMap::from([("z".into(), Value::Int(10))])),
+            (10, BTreeMap::from([("z".into(), Value::Int(11))])),
+            (11, BTreeMap::from([("z".into(), Value::Int(12))])),
+            (12, BTreeMap::from([("z".into(), Value::Int(13))])),
+            (13, BTreeMap::from([("z".into(), Value::Int(14))])),
+            (14, BTreeMap::from([("z".into(), Value::Int(15))])),
         ];
         assert_eq!(
             result, expected_outputs,
@@ -2225,7 +2288,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
@@ -2237,21 +2300,21 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         );
 
         let expected_outputs = vec![
-            (0, vec![Value::Deferred]),
-            (1, vec![Value::Deferred]),
-            (2, vec![Value::Deferred]),
-            (3, vec![Value::Int(4)]),
-            (4, vec![Value::Int(5)]),
-            (5, vec![Value::Int(6)]),
-            (6, vec![Value::Int(7)]),
-            (7, vec![Value::Int(8)]),
-            (8, vec![Value::Int(9)]),
-            (9, vec![Value::Int(10)]),
-            (10, vec![Value::Int(11)]),
-            (11, vec![Value::Int(12)]),
-            (12, vec![Value::Int(13)]),
-            (13, vec![Value::Int(14)]),
-            (14, vec![Value::Int(15)]),
+            (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (1, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (2, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (3, BTreeMap::from([("z".into(), Value::Int(4))])),
+            (4, BTreeMap::from([("z".into(), Value::Int(5))])),
+            (5, BTreeMap::from([("z".into(), Value::Int(6))])),
+            (6, BTreeMap::from([("z".into(), Value::Int(7))])),
+            (7, BTreeMap::from([("z".into(), Value::Int(8))])),
+            (8, BTreeMap::from([("z".into(), Value::Int(9))])),
+            (9, BTreeMap::from([("z".into(), Value::Int(10))])),
+            (10, BTreeMap::from([("z".into(), Value::Int(11))])),
+            (11, BTreeMap::from([("z".into(), Value::Int(12))])),
+            (12, BTreeMap::from([("z".into(), Value::Int(13))])),
+            (13, BTreeMap::from([("z".into(), Value::Int(14))])),
+            (14, BTreeMap::from([("z".into(), Value::Int(15))])),
         ];
         assert_eq!(
             result, expected_outputs,
@@ -2296,7 +2359,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
@@ -2308,21 +2371,21 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         );
 
         let expected_outputs = vec![
-            (0, vec![Value::Deferred]),
-            (1, vec![Value::Deferred]),
-            (2, vec![Value::Deferred]),
-            (3, vec![Value::Deferred]),
-            (4, vec![Value::Deferred]),
-            (5, vec![Value::Deferred]),
-            (6, vec![Value::Deferred]),
-            (7, vec![Value::Deferred]),
-            (8, vec![Value::Deferred]),
-            (9, vec![Value::Deferred]),
-            (10, vec![Value::Deferred]),
-            (11, vec![Value::Deferred]),
-            (12, vec![Value::Int(13)]),
-            (13, vec![Value::Int(14)]),
-            (14, vec![Value::Int(15)]),
+            (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (1, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (2, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (3, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (4, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (5, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (6, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (7, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (8, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (9, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (10, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (11, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (12, BTreeMap::from([("z".into(), Value::Int(13))])),
+            (13, BTreeMap::from([("z".into(), Value::Int(14))])),
+            (14, BTreeMap::from([("z".into(), Value::Int(15))])),
         ];
         assert_eq!(
             result, expected_outputs,
@@ -2367,7 +2430,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> =
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect").await?;
 
         // Assert expected results - defer functionality should work across configurations
@@ -2389,11 +2452,11 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // See also: Comment on sindex combinator.
 
         let expected_outputs = vec![
-            (0, vec![Value::Deferred]),
-            (1, vec![Value::Deferred]),
-            (2, vec![Value::Deferred]),
-            (3, vec![Value::Int(2)]),
-            (4, vec![Value::Int(3)]),
+            (0, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (1, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (2, BTreeMap::from([("z".into(), Value::Deferred)])),
+            (3, BTreeMap::from([("z".into(), Value::Int(2))])),
+            (4, BTreeMap::from([("z".into(), Value::Int(3))])),
         ];
         assert_eq!(
             result, expected_outputs,
@@ -2439,7 +2502,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = with_timeout(
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
             outputs.enumerate().collect(),
             1,
             format!("outputs.collect with config: {:?}", config).as_str(),
@@ -2456,7 +2519,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
                 config
             );
 
-            let (v_defer, v_dynamic) = (&values[0], &values[1]);
+            let (v_defer, v_dynamic) = (&values.get(&"z1".into()), &values.get(&"z2".into()));
             assert_eq!(
                 v_defer, v_dynamic,
                 "Expected defer and dynamic outputs to match at time {}, got {:?} and {:?} for config {:?}.\nFull values:\n{:?}",
@@ -2510,7 +2573,7 @@ async fn test_benchmark_regression_long_add_defer(
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
-        let result: Vec<(usize, Vec<Value>)> = with_timeout(
+        let result: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
             outputs.take(SIZE).enumerate().collect(),
             10,
             format!("outputs.collect with config: {:?}", config).as_str(),
