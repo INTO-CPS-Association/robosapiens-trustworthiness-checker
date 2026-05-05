@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use futures::future::LocalBoxFuture;
@@ -36,7 +37,7 @@ impl StdoutOutputHandler {
 impl OutputHandler for StdoutOutputHandler {
     type Val = Value;
 
-    fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
         self.manual_output_handler.provide_streams(streams);
     }
 
@@ -89,6 +90,7 @@ impl OutputHandler for StdoutOutputHandler {
 mod tests {
     use crate::core::{OutputStream, Value};
     use futures::stream;
+    use std::collections::BTreeMap;
     use tracing::info;
 
     use super::*;
@@ -103,7 +105,8 @@ mod tests {
         let mut handler =
             StdoutOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()], vec![]);
 
-        handler.provide_streams(vec![x_stream, y_stream].into_iter().collect());
+        let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
+        handler.provide_streams(streams);
 
         handler.run().await.expect("Failed to run output handler");
         info!("Finished running output handler");

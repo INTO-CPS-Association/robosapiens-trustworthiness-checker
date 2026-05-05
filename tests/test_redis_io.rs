@@ -827,7 +827,8 @@ mod integration_tests {
         let stream2 = create_test_output_stream(vec![Value::Float(3.14), Value::Bool(true)]);
 
         // Provide streams to handler
-        handler.provide_streams(vec![stream1, stream2]);
+        let streams = BTreeMap::from([(var1.clone(), stream1), (var2.clone(), stream2)]);
+        handler.provide_streams(streams);
 
         // Create oneshot channels for coordination
         let ready_channel1 = oneshot::channel();
@@ -916,7 +917,8 @@ mod integration_tests {
         ]);
 
         // Provide stream to handler
-        handler.provide_streams(vec![stream]);
+        let streams = BTreeMap::from([(var.clone(), stream)]);
+        handler.provide_streams(streams);
 
         // Create oneshot channel for coordination
         let ready_channel = oneshot::channel();
@@ -984,7 +986,8 @@ mod integration_tests {
         let stream = create_test_output_stream(vec![]);
 
         // Provide stream to handler
-        handler.provide_streams(vec![stream]);
+        let streams = BTreeMap::from([(var.clone(), stream)]);
+        handler.provide_streams(streams);
 
         // Create oneshot channel for coordination
         let ready_channel = oneshot::channel();
@@ -1055,7 +1058,12 @@ mod integration_tests {
         let stream3 = create_test_output_stream(vec![Value::Bool(true), Value::Bool(false)]);
 
         // Provide streams to handler
-        handler.provide_streams(vec![stream1, stream2, stream3]);
+        let streams = BTreeMap::from([
+            (var1.clone(), stream1),
+            (var2.clone(), stream2),
+            (var3.clone(), stream3),
+        ]);
+        handler.provide_streams(streams);
 
         // Create oneshot channels for coordination
         let ready_channel1 = oneshot::channel();
@@ -1153,7 +1161,8 @@ mod integration_tests {
         ]);
 
         // Provide stream to handler
-        handler.provide_streams(vec![stream]);
+        let streams = BTreeMap::from([(var.clone(), stream)]);
+        handler.provide_streams(streams);
 
         // Create oneshot channel for coordination
         let ready_channel = oneshot::channel();
@@ -1240,7 +1249,8 @@ mod integration_tests {
         ]);
 
         // Provide streams to handler
-        handler.provide_streams(vec![stream1, stream2]);
+        let streams = BTreeMap::from([(var1.clone(), stream1), (var2.clone(), stream2)]);
+        handler.provide_streams(streams);
 
         // Create oneshot channels for coordination
         let ready_channel1 = oneshot::channel();

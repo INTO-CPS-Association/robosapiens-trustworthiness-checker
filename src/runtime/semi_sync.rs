@@ -708,10 +708,14 @@ where
 
         let input_streams = Self::setup_input_streams(&model, &mut *input_provider);
         let (expr_eval_components, mut var_managers) = Self::setup_output_var_managers(&model)?;
-        let subscriptions = var_managers
+        let subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = var_managers
             .iter_mut()
-            .map(|vm| vm.subscribe(0))
-            .collect::<Vec<OutputStream<AC::Val>>>();
+            .map(|vm| {
+                let var_name = vm.var_name.clone();
+                let stream = vm.subscribe(0);
+                (var_name, stream)
+            })
+            .collect();
         output_handler.provide_streams(subscriptions);
         let context = Self::build_context(var_managers, input_streams, model.clone());
         let expr_evals = expr_eval_components

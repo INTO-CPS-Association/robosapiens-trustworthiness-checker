@@ -1,4 +1,4 @@
-use std::{mem, rc::Rc};
+use std::{collections::BTreeMap, mem, rc::Rc};
 
 use crate::utils::cancellation_token::{CancellationToken, DropGuard};
 use async_stream::stream;
@@ -23,8 +23,8 @@ pub struct ManualOutputHandler<V: StreamData> {
     var_names: Vec<VarName>,
     #[allow(dead_code)]
     pub executor: Rc<LocalExecutor<'static>>,
-    stream_senders: Option<Vec<oneshot::Sender<OutputStream<V>>>>,
-    stream_receivers: Option<Vec<oneshot::Receiver<OutputStream<V>>>>,
+    stream_senders: Option<BTreeMap<VarName, oneshot::Sender<OutputStream<V>>>>,
+    stream_receivers: Option<BTreeMap<VarName, oneshot::Receiver<OutputStream<V>>>>,
     output_receiver: Option<oneshot::Receiver<OutputStream<Vec<V>>>>,
     output_sender: Option<oneshot::Sender<OutputStream<Vec<V>>>>,
     output_cancellation: CancellationToken,
@@ -32,13 +32,16 @@ pub struct ManualOutputHandler<V: StreamData> {
 
 impl<V: StreamData> ManualOutputHandler<V> {
     pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: Vec<VarName>) -> Self {
-        let (stream_senders, stream_receivers): (
-            Vec<oneshot::Sender<OutputStream<V>>>,
-            Vec<oneshot::Receiver<OutputStream<V>>>,
-        ) = var_names
-            .iter()
-            .map(|_| oneshot::channel().into_split())
-            .unzip();
+        let mut stream_senders: BTreeMap<VarName, oneshot::Sender<OutputStream<V>>> =
+            BTreeMap::new();
+        let mut stream_receivers: BTreeMap<VarName, oneshot::Receiver<OutputStream<V>>> =
+            BTreeMap::new();
+
+        for (_, var_name) in var_names.iter().enumerate() {
+            let (tx, rx) = oneshot::channel().into_split();
+            stream_senders.insert(var_name.clone(), tx);
+            stream_receivers.insert(var_name.clone(), rx);
+        }
         let (output_sender, output_receiver) = oneshot::channel().into_split();
         let cancellation = CancellationToken::new();
 
@@ -74,8 +77,8 @@ impl<V: StreamData> ManualOutputHandler<V> {
         drop_guard_stream(oneshot_to_stream(receiver), drop_guard)
     }
 
-    pub fn var_names(&self) -> Vec<VarName> {
-        self.var_names.clone()
+    pub fn var_names(&self) -> &[VarName] {
+        &self.var_names
     }
 }
 
@@ -83,29 +86,37 @@ impl<V: StreamData> OutputHandler for ManualOutputHandler<V> {
     type Val = V;
 
     #[instrument(skip(self, streams))]
-    fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
-        debug!(num_streams = self.var_names.len(), "Providing streams",);
-        for (stream, sender) in streams.into_iter().zip(
-            self.stream_senders
-                .take()
-                .expect("Stream senders not found"),
-        ) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
+        debug!(num_streams = streams.len(), "Providing streams",);
+        let mut senders = self
+            .stream_senders
+            .take()
+            .expect("Stream senders not found");
+        for (var_name, stream) in streams {
+            let sender = senders
+                .remove(&var_name)
+                .unwrap_or_else(|| panic!("No sender found for variable: {}", var_name));
             assert!(sender.send(stream).is_ok());
         }
     }
 
     #[instrument(name="Running ManualOutputHandler", level=Level::INFO, skip(self))]
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let receivers: Vec<oneshot::Receiver<OutputStream<V>>> =
+        let mut receivers: BTreeMap<VarName, oneshot::Receiver<OutputStream<V>>> =
             mem::take(&mut self.stream_receivers).expect("Stream receivers already taken");
 
         debug!(num_streams = receivers.len(), "Running ManualOutputHandler");
-        // Create a list of streams for each of the receivers or an error (short-circuits if any
-        // of the receivers fails)
-        // (Should always be possible if `provide_streams` was called)
-        let streams: anyhow::Result<Vec<_>> = receivers
-            .into_iter()
-            .map(|mut r| r.try_recv().map_err(anyhow::Error::from))
+
+        // Maintain order based on var_names
+        let streams: anyhow::Result<Vec<_>> = self
+            .var_names
+            .iter()
+            .map(|name| {
+                let receiver = receivers
+                    .get_mut(name)
+                    .ok_or_else(|| anyhow::anyhow!("No receiver found for variable: {}", name))?;
+                receiver.try_recv().map_err(anyhow::Error::from)
+            })
             .collect();
 
         let (result_tx, result_rx) = oneshot::channel().into_split();
@@ -266,7 +277,8 @@ mod tests {
         let mut handler: ManualOutputHandler<Value> =
             ManualOutputHandler::new(ex.clone(), vec!["x".into(), "y".into()]);
 
-        handler.provide_streams(vec![x_stream, y_stream]);
+        let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
+        handler.provide_streams(streams);
 
         let run_fut = handler.run();
         let output_stream = handler.get_output();
@@ -292,7 +304,8 @@ mod tests {
         // Create an infinite stream
         let infinite_stream: OutputStream<Value> =
             Box::pin(stream::iter((0..).map(|x| Value::Int(x))));
-        handler.provide_streams(vec![infinite_stream]);
+        let streams = BTreeMap::from([("test".into(), infinite_stream)]);
+        handler.provide_streams(streams);
 
         let output_stream = handler.get_output();
         let handler_task = executor.spawn(handler.run());
@@ -328,7 +341,8 @@ mod tests {
         let test_stream: OutputStream<Value> = Box::pin(stream::iter((0..).map(|x| Value::Int(x))));
 
         info!("Providing infinite stream to handler...");
-        handler.provide_streams(vec![test_stream]);
+        let streams = BTreeMap::from([("test".into(), test_stream)]);
+        handler.provide_streams(streams);
 
         info!("Getting output stream...");
         let output_stream = handler.get_output();

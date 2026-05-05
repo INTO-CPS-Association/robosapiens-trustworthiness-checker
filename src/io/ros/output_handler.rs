@@ -402,7 +402,7 @@ impl ROSOutputHandler {
 impl OutputHandler for ROSOutputHandler {
     type Val = Value;
 
-    fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
         debug!("Providing {} streams to ROS output handler", streams.len());
         debug!("Expected var_names: {:?}", self.var_names);
         assert_eq!(
@@ -411,9 +411,9 @@ impl OutputHandler for ROSOutputHandler {
             "Number of provided streams must match number of variable names"
         );
 
-        for (var, stream) in self.names().iter().zip(streams.into_iter()) {
+        for (var, stream) in streams {
             debug!("Assigning stream for output variable: {}", var);
-            match self.var_map.get_mut(var) {
+            match self.var_map.get_mut(&var) {
                 Some(var_data) => {
                     var_data.stream = Some(stream);
                 }

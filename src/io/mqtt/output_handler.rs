@@ -139,17 +139,14 @@ async fn await_stream(mut stream: OutputStream<Value>) {
 impl OutputHandler for MQTTOutputHandler {
     type Val = Value;
 
-    fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
         debug!("Providing {} streams to output handler", streams.len());
-        let var_names: Vec<_> = self.var_names.clone();
-        debug!("Expected var_names: {:?}", var_names);
+        debug!("Expected var_names: {:?}", self.var_names);
 
-        // First collect a list of available variables to avoid borrowing issues
-        let available_vars = self.var_map.keys().cloned().collect::<Vec<_>>();
-
-        for (var, stream) in var_names.iter().zip(streams.into_iter()) {
+        let available_vars: Vec<_> = self.var_map.keys().cloned().collect();
+        for (var, stream) in streams {
             debug!("Assigning stream for output variable: {}", var);
-            let var_data = self.var_map.get_mut(var).unwrap_or_else(|| {
+            let var_data = self.var_map.get_mut(&var).unwrap_or_else(|| {
                 panic!(
                     "Variable {} not found in output handler. Available vars: {:?}",
                     var, available_vars

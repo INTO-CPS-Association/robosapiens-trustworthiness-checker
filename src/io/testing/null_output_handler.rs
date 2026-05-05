@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{collections::BTreeMap, rc::Rc};
 
 use futures::{StreamExt, future::LocalBoxFuture};
 use smol::LocalExecutor;
@@ -40,7 +40,7 @@ impl<V: StreamData> LimitedNullOutputHandler<V> {
 impl<V: StreamData> OutputHandler for LimitedNullOutputHandler<V> {
     type Val = V;
 
-    fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
         self.manual_output_handler.provide_streams(streams);
     }
 
@@ -67,7 +67,7 @@ impl<V: StreamData> NullOutputHandler<V> {
 impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
     type Val = V;
 
-    fn provide_streams(&mut self, streams: Vec<OutputStream<V>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
         self.manual_output_handler.provide_streams(streams);
     }
 
@@ -85,6 +85,7 @@ mod tests {
     use crate::async_test;
     use crate::core::{OutputStream, Value};
     use futures::stream;
+    use std::collections::BTreeMap;
 
     use super::*;
     use macro_rules_attribute::apply;
@@ -97,7 +98,8 @@ mod tests {
         let mut handler: NullOutputHandler<Value> =
             NullOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()]);
 
-        handler.provide_streams(vec![x_stream, y_stream]);
+        let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
+        handler.provide_streams(streams);
 
         let task = executor.spawn(handler.run());
 
@@ -112,7 +114,8 @@ mod tests {
         let mut handler: LimitedNullOutputHandler<Value> =
             LimitedNullOutputHandler::new(executor.clone(), vec!["x".into(), "y".into()], 10);
 
-        handler.provide_streams(vec![x_stream, y_stream]);
+        let streams = BTreeMap::from([("x".into(), x_stream), ("y".into(), y_stream)]);
+        handler.provide_streams(streams);
 
         let task = executor.spawn(handler.run());
 

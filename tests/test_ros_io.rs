@@ -1,6 +1,8 @@
 #[cfg(test)]
 #[cfg(feature = "ros")]
 mod integration_tests {
+    use std::collections::BTreeMap;
+
     use futures::StreamExt;
     use futures::stream;
     use macro_rules_attribute::apply;
@@ -142,7 +144,11 @@ mod integration_tests {
         )
         .unwrap();
 
-        output_handler.provide_streams(vec![ws, zs]);
+        let streams = BTreeMap::from([
+            (trustworthiness_checker::VarName::new("w"), ws),
+            (trustworthiness_checker::VarName::new("z"), zs),
+        ]);
+        output_handler.provide_streams(streams);
 
         let z_output_stream = recv_ros_int_stream(
             ex.clone(),
@@ -210,7 +216,8 @@ mod integration_tests {
         )
         .unwrap();
 
-        output_handler.provide_streams(vec![zs]);
+        let streams = BTreeMap::from([(trustworthiness_checker::VarName::new("z"), zs)]);
+        output_handler.provide_streams(streams);
 
         let z_output_stream = recv_ros_int_stream(
             ex.clone(),

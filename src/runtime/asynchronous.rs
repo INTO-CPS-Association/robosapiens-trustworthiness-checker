@@ -927,7 +927,7 @@ where
     model: AC::Spec,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
-    output_streams: Vec<OutputStream<AC::Val>>,
+    output_streams: BTreeMap<VarName, OutputStream<AC::Val>>,
     cancellation_token: CancellationToken,
     #[allow(dead_code)]
     semantics_t: PhantomData<S>,
@@ -1083,7 +1083,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
 
         // Create a map of the output variables to their streams
         // based on using the context
-        let output_streams = model
+        let output_streams: BTreeMap<VarName, OutputStream<AC::Val>> = model
             .output_vars()
             .iter()
             .map(|var| {
@@ -1097,7 +1097,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
                     "AsyncMonitorBuilder: Wrapped output stream for var {} with drop guard",
                     var
                 );
-                guarded_stream
+                (var.clone(), guarded_stream)
             })
             .collect();
 

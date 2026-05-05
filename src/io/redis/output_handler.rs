@@ -42,7 +42,6 @@ pub struct VarData {
 pub type OutputChannelMap = BTreeMap<VarName, String>;
 
 pub struct RedisOutputHandler {
-    var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
     pub hostname: String,
     pub port: Option<u16>,
@@ -56,10 +55,9 @@ pub struct RedisOutputHandler {
 impl OutputHandler for RedisOutputHandler {
     type Val = Value;
 
-    fn provide_streams(&mut self, streams: Vec<OutputStream<Value>>) {
-        let var_names: Vec<_> = self.var_names.clone();
-        for (var, stream) in var_names.iter().zip(streams.into_iter()) {
-            let var_data = self.var_map.get_mut(var).expect("Variable not found");
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
+        for (var, stream) in streams {
+            let var_data = self.var_map.get_mut(&var).expect("Variable not found");
             var_data.stream = Some(stream);
         }
     }
@@ -97,7 +95,7 @@ impl OutputHandler for RedisOutputHandler {
 impl RedisOutputHandler {
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
-        var_names: Vec<VarName>,
+        _: Vec<VarName>,
         hostname: &str,
         port: Option<u16>,
         var_topics: OutputChannelMap,
@@ -125,7 +123,6 @@ impl RedisOutputHandler {
             .collect();
 
         Ok(RedisOutputHandler {
-            var_names,
             var_map,
             hostname,
             port,
