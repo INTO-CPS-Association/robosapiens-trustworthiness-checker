@@ -41,7 +41,7 @@ pub enum InputProviderSpec {
 pub struct InputProviderBuilder {
     pub spec: InputProviderSpec,
     lang: Option<Language>,
-    input_vars: Option<Vec<VarName>>,
+    input_vars: Option<BTreeSet<VarName>>,
     executor: Option<Rc<LocalExecutor<'static>>>,
     redis_port: Option<u16>,
     mqtt_port: Option<u16>,

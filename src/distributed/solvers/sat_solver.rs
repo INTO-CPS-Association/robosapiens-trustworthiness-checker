@@ -2678,7 +2678,7 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
 
         assert_eq!(
             localised.input_vars,
-            vec!["c1".into(), "c2".into(), "c3".into()]
+            BTreeSet::from(["c1".into(), "c2".into(), "c3".into()])
         );
         assert!(localised.var_expr(&VarName::new("h1")).is_none());
         assert!(localised.var_expr(&VarName::new("h2")).is_none());

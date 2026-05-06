@@ -589,7 +589,9 @@ where
                         .model
                         .as_ref()
                         .unwrap()
-                        .input_vars(),
+                        .input_vars()
+                        .into_iter()
+                        .collect(),
                     output_vars: output_vars.clone(),
                     replay_history,
                 };
@@ -653,7 +655,9 @@ where
                         .model
                         .as_ref()
                         .unwrap()
-                        .input_vars(),
+                        .input_vars()
+                        .into_iter()
+                        .collect(),
                     output_vars: output_vars.clone(),
                     replay_history,
                 };
@@ -787,7 +791,9 @@ where
                             .model
                             .as_ref()
                             .unwrap()
-                            .input_vars(),
+                            .input_vars()
+                            .into_iter()
+                            .collect(),
                         output_vars: output_vars.clone(),
                         replay_history,
                     };
@@ -877,7 +883,9 @@ where
                             .model
                             .as_ref()
                             .unwrap()
-                            .input_vars(),
+                            .input_vars()
+                            .into_iter()
+                            .collect(),
                         output_vars: output_vars.clone(),
                         replay_history,
                     };
@@ -963,7 +971,9 @@ where
                         .model
                         .as_ref()
                         .unwrap()
-                        .input_vars(),
+                        .input_vars()
+                        .into_iter()
+                        .collect(),
                     output_vars: output_vars.clone(),
                     replay_history,
                 };
