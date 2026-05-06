@@ -581,7 +581,7 @@ pub enum SExprTE {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct TypedDsrvSpecification {
-    pub input_vars: Vec<VarName>,
+    pub input_vars: BTreeSet<VarName>,
     pub output_vars: BTreeSet<VarName>,
     pub aux_info: BTreeSet<VarName>,
     pub exprs: BTreeMap<VarName, SExprTE>,
@@ -608,7 +608,7 @@ impl std::fmt::Display for TypedDsrvSpecification {
 impl Specification for TypedDsrvSpecification {
     type Expr = SExprTE;
 
-    fn input_vars(&self) -> Vec<VarName> {
+    fn input_vars(&self) -> BTreeSet<VarName> {
         self.input_vars.clone()
     }
 
@@ -2099,7 +2099,7 @@ mod tests {
 
     #[test]
     fn test_typed_spec_display_output() {
-        let input_vars = vec!["x".into(), "y".into()];
+        let input_vars = BTreeSet::from(["x".into(), "y".into()]);
         let output_vars = BTreeSet::from(["z".into(), "d".into()]);
 
         let mut dynamic_ctx = BTreeMap::new();
@@ -2151,7 +2151,7 @@ mod tests {
     }
 
     fn arb_typed_roundtrip_spec() -> impl Strategy<Value = TypedDsrvSpecification> {
-        let fixed_inputs: Vec<VarName> = vec!["a".into(), "b".into(), "s".into()];
+        let fixed_inputs: BTreeSet<VarName> = BTreeSet::from(["a".into(), "b".into(), "s".into()]);
 
         let all_vars: Vec<VarName> =
             vec!["a".into(), "b".into(), "s".into(), "x".into(), "y".into()];

@@ -61,13 +61,13 @@ pub trait InputProvider {
 pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     type Expr;
 
-    fn input_vars(&self) -> Vec<VarName>;
+    fn input_vars(&self) -> BTreeSet<VarName>;
 
     fn output_vars(&self) -> BTreeSet<VarName>;
 
     fn aux_vars(&self) -> BTreeSet<VarName>;
 
-    fn var_names(&self) -> Vec<VarName> {
+    fn var_names(&self) -> BTreeSet<VarName> {
         self.input_vars()
             .into_iter()
             .chain(self.output_vars().into_iter())

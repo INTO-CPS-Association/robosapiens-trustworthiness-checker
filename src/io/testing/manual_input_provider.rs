@@ -32,7 +32,7 @@ impl<AC: AsyncConfig> ManualInputProvider<AC> {
     //
     // On top of the regular InputProvider interface, it needs to have a sender channel for pushing
     // values.
-    pub fn new(input_vars: Vec<VarName>) -> Self {
+    pub fn new(input_vars: BTreeSet<VarName>) -> Self {
         let mut map = BTreeMap::new();
         let mut senders = BTreeMap::new();
         for name in input_vars.into_iter() {
@@ -135,12 +135,12 @@ mod tests {
     use futures::{FutureExt, StreamExt};
     use macro_rules_attribute::apply;
     use smol::{LocalExecutor, Timer};
-    use std::{rc::Rc, time::Duration};
+    use std::{collections::BTreeSet, rc::Rc, time::Duration};
     use tc_testutils::streams::with_timeout;
 
     #[apply(async_test)]
     async fn var_stream_availability(_ex: Rc<LocalExecutor<'static>>) {
-        let data = vec!["x".into()];
+        let data = BTreeSet::from(["x".into()]);
         let mut provider = ManualInputProvider::<TestConfig>::new(data);
 
         // Available on first call
@@ -155,7 +155,8 @@ mod tests {
         let ys = vec![Value::Int(3), Value::Int(4)];
         let mut x_iter = xs.into_iter();
         let mut y_iter = ys.into_iter();
-        let mut provider = ManualInputProvider::<TestConfig>::new(vec!["x".into(), "y".into()]);
+        let mut provider =
+            ManualInputProvider::<TestConfig>::new(BTreeSet::from(["x".into(), "y".into()]));
 
         let mut x_stream = provider
             .var_stream(&"x".into())
@@ -199,7 +200,8 @@ mod tests {
         let ys = vec![Value::Int(3), Value::Int(4)];
         let mut x_iter = xs.into_iter();
         let mut y_iter = ys.into_iter();
-        let mut provider = ManualInputProvider::<TestConfig>::new(vec!["x".into(), "y".into()]);
+        let mut provider =
+            ManualInputProvider::<TestConfig>::new(BTreeSet::from(["x".into(), "y".into()]));
 
         let mut x_stream = provider
             .var_stream(&"x".into())
@@ -299,7 +301,8 @@ mod tests {
         let xs = vec![Value::Int(1), Value::Int(2)];
         let mut x_iter = xs.into_iter();
         let _ys: Vec<Value> = vec![]; // ys are empty..
-        let mut provider = ManualInputProvider::<TestConfig>::new(vec!["x".into(), "y".into()]);
+        let mut provider =
+            ManualInputProvider::<TestConfig>::new(BTreeSet::from(["x".into(), "y".into()]));
 
         let mut x_stream = provider
             .var_stream(&"x".into())
@@ -393,8 +396,11 @@ mod tests {
         let mut x_iter = xs.into_iter();
         let mut y_iter = ys.into_iter();
         let mut e_iter = es.into_iter();
-        let mut provider =
-            ManualInputProvider::<TestConfig>::new(vec!["x".into(), "y".into(), "e".into()]);
+        let mut provider = ManualInputProvider::<TestConfig>::new(BTreeSet::from([
+            "x".into(),
+            "y".into(),
+            "e".into(),
+        ]));
 
         let mut x_sender = provider
             .sender_channel(&"x".into())

@@ -309,7 +309,7 @@ impl SExpr {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct DsrvSpecification {
-    pub input_vars: Vec<VarName>,
+    pub input_vars: BTreeSet<VarName>,
     pub output_vars: BTreeSet<VarName>,
     pub exprs: BTreeMap<VarName, SExpr>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
@@ -342,7 +342,7 @@ impl DsrvSpecification {
     //   a lot of thought.
     // 4. Profit - this hack is no longer needed and we have a more correct solution
     fn fix_dynamic(
-        input_vars: &Vec<VarName>,
+        input_vars: &BTreeSet<VarName>,
         output_vars: &BTreeSet<VarName>,
         exprs: &BTreeMap<VarName, SExpr>,
     ) -> BTreeMap<VarName, SExpr> {
@@ -470,7 +470,7 @@ impl DsrvSpecification {
     }
 
     pub fn new(
-        input_vars: Vec<VarName>,
+        input_vars: BTreeSet<VarName>,
         output_vars: BTreeSet<VarName>,
         exprs: BTreeMap<VarName, SExpr>,
         type_annotations: BTreeMap<VarName, StreamType>,
@@ -490,7 +490,7 @@ impl DsrvSpecification {
 impl Specification for DsrvSpecification {
     type Expr = SExpr;
 
-    fn input_vars(&self) -> Vec<VarName> {
+    fn input_vars(&self) -> BTreeSet<VarName> {
         self.input_vars.clone()
     }
 
@@ -916,14 +916,16 @@ pub mod generation {
         )
             .prop_flat_map(|(input_set, output_set)| {
                 // Convert the sets into Vec<VarName>
-                let input_vars: Vec<VarName> = input_set.into_iter().map(|s| s.into()).collect();
+                let input_vars: BTreeSet<VarName> =
+                    input_set.into_iter().map(|s| s.into()).collect();
                 let output_vars: BTreeSet<_> = output_set.into_iter().map(|s| s.into()).collect();
 
                 // Combine input and output variables.
-                let mut all_vars = input_vars.clone();
-                all_vars.extend(output_vars.clone());
-                all_vars.sort();
-                all_vars.dedup();
+                let all_vars = input_vars
+                    .clone()
+                    .into_iter()
+                    .chain(output_vars.clone().into_iter())
+                    .collect::<Vec<VarName>>();
 
                 // Create a strategy for generating the expression map.
                 // For each key (chosen from the union of variables) generate an expression.
