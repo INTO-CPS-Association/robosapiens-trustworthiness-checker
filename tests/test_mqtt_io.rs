@@ -718,7 +718,8 @@ mod reconf_tests {
         let reconf_stream = futures::stream::once(async {
             json!({
                 "spec": spec_simple_add_monitor_plus_one(),
-                "type_info": {}
+                "type_info": {},
+                "topic_mapping": {}
             })
             .to_string()
         })
@@ -951,7 +952,8 @@ mod reconf_tests {
         let reconf_stream = futures::stream::once(async {
             json!({
                 "spec": spec_acc_monitor(),
-                "type_info": {}
+                "type_info": {},
+                "topic_mapping": {}
             })
             .to_string()
         })
@@ -1128,7 +1130,8 @@ mod reconf_tests {
         let reconf_stream = futures::stream::once(async {
             json!({
                 "spec": spec_simple_add_monitor(),
-                "type_info": {}
+                "type_info": {},
+                "topic_mapping": {}
             })
             .to_string()
         })
@@ -1329,7 +1332,8 @@ mod reconf_tests {
         let reconf_stream = futures::stream::once(async {
             json!({
                 "spec": spec_assignment_monitor(),
-                "type_info": {}
+                "type_info": {},
+                "topic_mapping": {}
             })
             .to_string()
         })
@@ -1500,7 +1504,8 @@ mod reconf_tests {
         let reconf_stream = futures::stream::once(async {
             json!({
                 "spec": spec_assignment2_monitor(),
-                "type_info": {}
+                "type_info": {},
+                "topic_mapping": {}
             })
             .to_string()
         })
@@ -1666,7 +1671,8 @@ mod reconf_tests {
         let reconf_stream = futures::stream::once(async {
             json!({
                 "spec": spec_sindex(),
-                "type_info": {}
+                "type_info": {},
+                "topic_mapping": {}
             })
             .to_string()
         })
@@ -1714,4 +1720,5 @@ mod reconf_tests {
             .await
             .expect("x publisher task should finish");
     }
+    // TODO: MHK - Implement test with topic mapping (currently unsupported for MQTT)
 }

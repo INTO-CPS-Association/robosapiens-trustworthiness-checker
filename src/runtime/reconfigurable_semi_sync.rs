@@ -41,8 +41,8 @@ struct ReconfInput {
     // TODO: Certain InputProviders are type-strong (e.g. Ros). These must know the types of Inputs
     // and Outputs. When type checking becomes more stable for the language, we
     // should use that instead of a variable here, and simply enforce that the spec is typed.
-    #[allow(dead_code)]
     type_info: BTreeMap<String, String>,
+    topic_mapping: BTreeMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -388,6 +388,8 @@ where
     async fn handle_reconfig_input(&mut self, val: Value) -> anyhow::Result<()> {
         match val {
             Value::Str(config) => {
+                // NOTE: Known limitation: Reconf commands where only topic mapping changes counts
+                // as duplicates
                 info!("Received reconfiguration command: {:?}", config);
                 // TODO: This error message prints horribly... But I did not want to add another
                 // crate like schemar just for this
@@ -490,13 +492,13 @@ where
                     );
                 }
 
-                // TODO: Does not work with FileInputProvider as it reads the file from
-                // fresh...
                 self.self_builder = self.self_builder.clone().model(parsed.clone());
 
+                // TODO: does not respect topic mapping for MQTT and Redis (because Input/Output
+                // builder does not either...)
+                //
                 // Update InputProvider spec
                 let input_spec = match self.self_builder.input_builder.clone().unwrap().spec {
-                    // TODO: does not respect _topics for any kind of InputProvider...
                     InputProviderSpec::MQTT(_topics) => InputProviderSpec::MQTT(Some(
                         parsed
                             .input_vars()
@@ -505,15 +507,16 @@ where
                             .collect(),
                     )),
                     InputProviderSpec::Ros(_json) => {
-                        let types = deserialized.type_info.clone();
+                        let type_info = deserialized.type_info.clone();
+                        let topic_mapping = deserialized.topic_mapping.clone();
                         let vars = parsed.input_vars();
                         let missing: Vec<_> = vars
                             .iter()
-                            .filter_map(|v| types.get(&v.name()).is_none().then_some(v.name()))
+                            .filter_map(|v| type_info.get(&v.name()).is_none().then_some(v.name()))
                             .collect();
                         if !missing.is_empty() {
                             return Err(anyhow!(
-                                "Missing msg_types for vars: {:?}. Required for ROS2 InputProvider",
+                                "Missing type_info for vars: {:?}. Required for ROS2 InputProvider",
                                 missing
                             ));
                         }
@@ -521,19 +524,16 @@ where
                             vars.into_iter()
                                 .map(|v| {
                                     let name = v.name();
-                                    let topic_hack = match name.as_str() {
-                                        "R1Odom" => "/tb1/odomThrot".to_string(),
-                                        "R2Odom" => "/tb2/odomThrot".to_string(),
-                                        "R3Odom" => "/tb3/odomThrot".to_string(),
-                                        "R4Odom" => "/tb4/odomThrot".to_string(),
-                                        _ => format!("/{}", v),
+                                    let topic = match topic_mapping.get(&name) {
+                                        Some(t) => t.clone(),
+                                        None => format!("/{}", v),
                                     };
-                                    let msg_type = types.get(&name).unwrap().clone(); // Safe now
+                                    let var_type = type_info.get(&name).unwrap().clone(); // Safe now
                                     (
                                         name,
                                         serde_json::json!({
-                                            "topic": topic_hack,
-                                            "msg_type": msg_type,
+                                            "topic": topic,
+                                            "msg_type": var_type,
                                         }),
                                     )
                                 })
@@ -541,7 +541,17 @@ where
                         );
                         InputProviderSpec::Ros(combined.to_string())
                     }
-                    _ => self.self_builder.input_builder.clone().unwrap().spec,
+                    InputProviderSpec::File(_path) => {
+                        // TODO: Maybe this could be implemented if FileInputProvider had a way of telling us which line it
+                        // currently read on
+                        unimplemented!(
+                            "Reconfiguration of file inputs is not supported as it requires re-reading the input file, which causes the inputs to start over."
+                        )
+                    }
+                    InputProviderSpec::Redis(_topics) => {
+                        unimplemented!("Unimplemented. Could be done similarly to MQTT.")
+                    }
+                    InputProviderSpec::Manual => unimplemented!("Not needed yet"),
                 };
                 if let Some(ref mut input_builder) = self.self_builder.input_builder {
                     input_builder.spec = input_spec;
@@ -554,15 +564,16 @@ where
                     OutputHandlerSpec::Stdout => OutputHandlerSpec::Stdout,
                     // Requires type_info:
                     OutputHandlerSpec::Ros(_) => {
-                        let types = deserialized.type_info.clone();
+                        let type_info = deserialized.type_info.clone();
+                        let topic_mapping = deserialized.topic_mapping.clone();
                         let vars = parsed.output_vars();
                         let missing: Vec<_> = vars
                             .iter()
-                            .filter_map(|v| types.get(&v.name()).is_none().then_some(v.name()))
+                            .filter_map(|v| type_info.get(&v.name()).is_none().then_some(v.name()))
                             .collect();
                         if !missing.is_empty() {
                             return Err(anyhow!(
-                                "Missing msg_types for vars: {:?}. Required for ROS2 OutputHandler",
+                                "Missing type_info for vars: {:?}. Required for ROS2 OutputHandler",
                                 missing
                             ));
                         }
@@ -570,12 +581,16 @@ where
                             vars.into_iter()
                                 .map(|v| {
                                     let name = v.name();
-                                    let msg_type = types.get(&name).unwrap().clone(); // Safe now
+                                    let topic = match topic_mapping.get(&name) {
+                                        Some(t) => t.clone(),
+                                        None => format!("/{}", v),
+                                    };
+                                    let var_type = type_info.get(&name).unwrap().clone(); // Safe now
                                     (
                                         name,
                                         serde_json::json!({
-                                            "topic": format!("/{}", v),
-                                            "msg_type": msg_type,
+                                            "topic": topic,
+                                            "msg_type": var_type,
                                         }),
                                     )
                                 })
@@ -584,10 +599,16 @@ where
 
                         OutputHandlerSpec::Ros(combined.to_string())
                     }
-                    // Auto assign topics on rebuild instead - a problem if manual topics were configured
-                    OutputHandlerSpec::MQTT(_) => OutputHandlerSpec::MQTT(None),
-                    // Auto assign topics on rebuild instead - a problem if manual topics were configured
-                    OutputHandlerSpec::Redis(_) => OutputHandlerSpec::Redis(None),
+                    OutputHandlerSpec::MQTT(_topics) => OutputHandlerSpec::MQTT(Some(
+                        parsed
+                            .output_vars()
+                            .into_iter()
+                            .map(|v| v.to_string())
+                            .collect(),
+                    )),
+                    OutputHandlerSpec::Redis(_topics) => {
+                        unimplemented!("Unimplemented. Could be done similarly to MQTT.")
+                    }
                     OutputHandlerSpec::Manual => unimplemented!("Not needed yet"),
                 };
                 if let Some(ref mut output_builder) = self.self_builder.output_builder {
