@@ -58,6 +58,7 @@ where
     input_builder: Option<InputProviderBuilder>,
     output_builder: Option<OutputHandlerBuilder>,
     reconf_topic: Option<String>,
+    starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
     _marker: (
         std::marker::PhantomData<MS>,
         std::marker::PhantomData<AC>,
@@ -82,6 +83,7 @@ where
             input_builder: None,
             output_builder: None,
             reconf_topic: None,
+            starting_history: None,
             _marker: (
                 std::marker::PhantomData,
                 std::marker::PhantomData,
@@ -127,6 +129,7 @@ where
             let executor = self.executor.clone().unwrap();
             let output_builder = self.output_builder.clone().unwrap();
             let model = self.model.clone().unwrap();
+            let starting_history = self.starting_history.clone().unwrap_or_default();
             let mut inner_input = Box::new(ManualInputProvider::<AC>::new(model.input_vars()));
             let sender_channels = model
                 .input_vars()
@@ -156,6 +159,7 @@ where
                 .model(model)
                 .input(inner_input)
                 .output(output)
+                .starting_history(starting_history)
                 .build();
 
             ReconfSemiSyncMonitor {
@@ -385,7 +389,11 @@ where
         ret
     }
 
-    async fn handle_reconfig_input(&mut self, val: Value) -> anyhow::Result<()> {
+    async fn handle_reconfig_input<'a>(
+        &mut self,
+        val: Value,
+        context: &'a mut SemiSyncContext<AC>,
+    ) -> anyhow::Result<()> {
         match val {
             Value::Str(config) => {
                 // NOTE: Known limitation: Reconf commands where only topic mapping changes counts
@@ -616,7 +624,41 @@ where
                     self.self_builder.output_builder = Some(output_builder.clone());
                 }
 
-                warn!(?self.self_builder.model, ?self.self_builder.input_builder, "Reconfiguring ReconfSemiSyncMonitor");
+                // Make history for new runtime of equal length, containing all variables, and padded with NoVal if needed.
+                // NOTE: Using NoVal here, because this indicates the start of a new trace where no
+                // values have previously been received on the stream.
+                // Also, Deferred messes up signal semantics outputs. E.g., z = x + y and
+                let mut retained_history = context.get_retained_history();
+                let vars = self
+                    .self_builder
+                    .model
+                    .clone()
+                    .expect("Model must exist")
+                    .var_names();
+                // Retain only variables that are still present in the new model
+                retained_history.retain(|var_name, _| vars.contains(var_name));
+                // Add empty history for new variables (should not be needed but better safe than sorry)
+                vars.iter().for_each(|var| {
+                    retained_history.entry(var.clone()).or_default();
+                });
+                let longest_history = retained_history
+                    .values()
+                    .map(|h| h.len())
+                    .max()
+                    .unwrap_or(0);
+                // Pad histories to be of equal length
+                let starting_history = retained_history
+                    .into_iter()
+                    .map(|(var_name, hist)| {
+                        let padding_needed = longest_history.saturating_sub(hist.len());
+                        let mut padded_hist = vec![AC::Val::no_val_value(); padding_needed];
+                        padded_hist.extend(hist);
+                        (var_name, padded_hist)
+                    })
+                    .collect();
+
+                self.self_builder.starting_history = Some(starting_history);
+                warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
                 let new_self = Box::new(self.self_builder.clone()).async_build().await;
                 new_self.run().await
             }
@@ -678,7 +720,7 @@ where
                             info!("Ignoring NoVal for reconfiguration command");
                         }
                         Some(val) => {
-                            self.handle_reconfig_input(val).await?;
+                            self.handle_reconfig_input(val, context).await?;
                             values.clear(); // In case we receive duplicate reconf
                         }
                         None => {

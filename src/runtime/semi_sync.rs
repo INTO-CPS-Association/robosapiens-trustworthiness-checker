@@ -26,6 +26,8 @@ use std::{
 use tracing::{debug, error, info};
 use unsync::spsc;
 
+const CHANNEL_SIZE: usize = 8;
+
 pub struct SemiSyncMonitorBuilder<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr>,
@@ -35,7 +37,20 @@ where
     model: Option<AC::Spec>,
     input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
+    starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
     _marker: std::marker::PhantomData<MS>,
+}
+
+impl<AC, MS> SemiSyncMonitorBuilder<AC, MS>
+where
+    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC::Val: DeferrableStreamData,
+    MS: MonitoringSemantics<AC>,
+{
+    pub fn starting_history(mut self, history: BTreeMap<VarName, Vec<AC::Val>>) -> Self {
+        self.starting_history = Some(history);
+        self
+    }
 }
 
 impl<AC, MS> AbstractMonitorBuilder<AC::Spec, AC::Val> for SemiSyncMonitorBuilder<AC, MS>
@@ -52,6 +67,7 @@ where
             model: None,
             input: None,
             output: None,
+            starting_history: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -81,12 +97,14 @@ where
         let model = self.model.unwrap();
         let input = self.input.unwrap();
         let output = self.output.unwrap();
+        let starting_history = self.starting_history.unwrap_or_default();
 
         SemiSyncMonitor {
             _executor: executor,
             model,
             input_provider: input,
             output_handler: output,
+            starting_history: starting_history,
             _marker: std::marker::PhantomData,
         }
     }
@@ -209,6 +227,12 @@ impl<T: DeferrableStreamData> RetainedHistory<T> {
     }
 
     /// Gets the last N values from history, padding with deferred values if needed
+    /// NOTE: I was arguing whether this should be NoVal or Deferred but ended with Deferred.
+    /// Reason: They are requesting N values but we don't have enough context. This is exactly
+    /// what Deferred means.
+    /// Also, the context where this becomes relevant is when we have a new subscriber that
+    /// requests more history than what we currently store, which is only the case for DUPs that
+    /// introduce time indices.
     fn get_last_n_with_pad(&self, n: usize) -> Vec<T> {
         let available = self.history.len();
         let to_send = match n {
@@ -233,19 +257,10 @@ impl<T: DeferrableStreamData> RetainedHistory<T> {
         result
     }
 
-    /// Increases the capacity, padding with deferred values if needed
+    /// Increases the capacity
     fn increase_capacity(&mut self, new_capacity: usize) {
         if new_capacity <= self.capacity {
             return;
-        }
-
-        let padding_needed = std::cmp::min(
-            new_capacity.saturating_sub(self.capacity),
-            self.samples_seen.saturating_sub(self.history.len()),
-        );
-
-        for _ in 0..padding_needed {
-            self.history.push_front(T::deferred_value());
         }
 
         self.capacity = new_capacity;
@@ -254,15 +269,8 @@ impl<T: DeferrableStreamData> RetainedHistory<T> {
     fn get_all(&self) -> Vec<T> {
         self.history.iter().cloned().collect()
     }
-
-    fn set_all(&mut self, values: impl IntoIterator<Item = T>) {
-        self.history = values.into_iter().collect();
-        self.prune_old();
-    }
 }
 
-// TODO: Fix that we have the boolean parameter input to define an ordering. Should not be defined
-// inside the VarManager but somewhere with logic in the context.
 struct VarManager<AC>
 where
     AC: AsyncConfig<Expr = SExpr>,
@@ -304,7 +312,7 @@ where
     }
 
     fn subscribe(&mut self, history_length: usize) -> OutputStream<AC::Val> {
-        let (tx, rx) = spsc::channel::<AC::Val>(history_length + 8);
+        let (tx, rx) = spsc::channel::<AC::Val>(history_length + CHANNEL_SIZE);
 
         // Increase capacity if the new subscriber needs more history
         self.retained_history.increase_capacity(history_length);
@@ -423,10 +431,6 @@ where
         self.retained_history.get_all()
     }
 
-    fn set_retained_history(&mut self, history: impl IntoIterator<Item = AC::Val>) {
-        self.retained_history.set_all(history);
-    }
-
     fn set_history_to_retain(&mut self, history_to_retain: usize) {
         self.retained_history.capacity = history_to_retain;
     }
@@ -441,6 +445,7 @@ where
     model: AC::Spec,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
+    starting_history: BTreeMap<VarName, Vec<AC::Val>>,
     _marker: std::marker::PhantomData<MS>,
 }
 
@@ -495,7 +500,7 @@ where
             .iter()
             .map(|var_name| {
                 let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
-                    spsc::channel(128);
+                    spsc::channel(CHANNEL_SIZE);
                 let var_manager = VarManager::<AC>::new_from_receiver(var_name.clone(), receiver);
                 let expr = model.var_expr(var_name).ok_or_else(|| {
                     anyhow!(
@@ -703,12 +708,46 @@ where
             model,
             mut input_provider,
             mut output_handler,
+            starting_history,
             _marker: _,
         } = self;
+        // Assert: All history lengths are the same:
+        let hist_len = starting_history
+            .first_key_value()
+            .map(|(_, hist)| hist.len())
+            .unwrap_or(0);
+        assert!(
+            starting_history
+                .iter()
+                .all(|(_, hist)| hist.len() == hist_len),
+            "All history lengths must be the same"
+        );
 
-        let input_streams = Self::setup_input_streams(&model, &mut *input_provider);
+        info!(
+            "Setting up runtime with starting history: {:?}",
+            starting_history
+        );
+
+        let mut input_streams = Self::setup_input_streams(&model, &mut *input_provider);
+        let input_vars = model.input_vars().iter().cloned().collect::<BTreeSet<_>>();
+        for var in input_vars.iter() {
+            // NOTE: Using NoVal here, because this indicates the start of a new trace where no
+            // values have previously been received on the stream.
+            // Also, Deferred messes up signal semantics outputs. E.g., z = x + y and
+            let hist = starting_history
+                .get(var)
+                .cloned()
+                .unwrap_or_else(|| vec![AC::Val::no_val_value(); hist_len]);
+            let stream = input_streams
+                .remove(var)
+                .expect(&format!("Input stream for variable {} not found", var));
+            let prefixed: OutputStream<AC::Val> =
+                Box::pin(futures::stream::iter(hist.clone()).chain(stream));
+            input_streams.insert(var.clone(), prefixed);
+        }
+
         let (expr_eval_components, mut var_managers) = Self::setup_output_var_managers(&model)?;
-        let subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = var_managers
+        let mut subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = var_managers
             .iter_mut()
             .map(|vm| {
                 let var_name = vm.var_name.clone();
@@ -716,13 +755,22 @@ where
                 (var_name, stream)
             })
             .collect();
-        output_handler.provide_streams(subscriptions);
-        let context = Self::build_context(var_managers, input_streams, model.clone());
-        let expr_evals = expr_eval_components
+        let mut context = Self::build_context(var_managers, input_streams, model.clone());
+        let mut expr_evals = expr_eval_components
             .into_iter()
             .map(|(var_name, expr, sender)| ExprEvalutor::new(var_name, expr, sender, &context))
             .collect();
-
+        for _ in 0..hist_len {
+            Self::step(&mut context, &mut expr_evals)
+                .await
+                .expect("Step failed when syncing starting history");
+            for (_, sub) in subscriptions.iter_mut() {
+                // Drain the subscription to sync it up with the context
+                let _ = sub.next().await;
+            }
+        }
+        info!("Finished syncing starting history of length {}", hist_len,);
+        output_handler.provide_streams(subscriptions);
         Ok((input_provider, output_handler, context, expr_evals))
     }
 }
@@ -976,45 +1024,12 @@ where
     }
 
     // Gets the retained history for all the variables inside the context.
-    fn get_retained_history(&self) -> BTreeMap<VarName, Vec<AC::Val>> {
+    pub fn get_retained_history(&self) -> BTreeMap<VarName, Vec<AC::Val>> {
         let managers = self.var_managers.borrow();
-
-        let history: BTreeMap<_, Vec<AC::Val>> = managers
+        managers
             .iter()
             .map(|(var_name, manager)| (var_name.clone(), manager.get_retained_history()))
-            .collect();
-        history
-    }
-
-    // Sets the retained history for the variables in the context based on the provided history.
-    fn set_retained_history(&mut self, history: BTreeMap<VarName, Vec<AC::Val>>) {
-        let mut managers = self.var_managers.borrow_mut();
-        for (var_name, history) in history.into_iter() {
-            if let Some(manager) = managers.get_mut(&var_name) {
-                manager.set_retained_history(history);
-            } else {
-                info!(
-                    "SemiSyncContext ID {:?}: Tried to set retained history for variable {} but it is not in the context. Most likely due to different specs.",
-                    self.id, var_name
-                );
-            }
-        }
-    }
-
-    // Transfers the retained history from this context to the VarManagers of the `other` context.
-    // New subscribers will receive that history if relevant.
-    pub fn context_transfer(&self, other: &mut Self) {
-        let history = self.get_retained_history();
-        info!(
-            "SemiSyncContext ID {:?}: Transferring context to SemiSyncContext ID {:?} with history: {:?}",
-            self.id,
-            other.id,
-            history
-                .keys()
-                .map(|k| (k, history[k].len()))
-                .collect::<BTreeMap<_, _>>()
-        );
-        other.set_retained_history(history);
+            .collect()
     }
 }
 
@@ -1095,20 +1110,19 @@ where
 #[cfg(test)]
 mod tests {
 
+    use crate::async_test;
     use crate::core::Runnable;
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::runtime::builder::SemiSyncValueConfig;
-    use crate::runtime::semi_sync::{SemiSyncContext, SemiSyncMonitor, VarManager};
-    use crate::semantics::{StreamContext, UntimedDsrvSemantics};
-    use crate::{OutputStream, async_test};
+    use crate::runtime::semi_sync::SemiSyncMonitor;
+    use crate::semantics::UntimedDsrvSemantics;
     use crate::{Value, dsrv_specification};
     use crate::{VarName, dsrv_fixtures::*};
     use futures::stream::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
-    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
@@ -1135,6 +1149,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1175,6 +1190,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1204,6 +1220,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1253,6 +1270,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1293,6 +1311,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1333,6 +1352,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1373,6 +1393,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1419,6 +1440,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1466,6 +1488,7 @@ mod tests {
             model: spec.clone(),
             input_provider: Box::new(input_streams),
             output_handler,
+            starting_history: BTreeMap::new(),
             _marker: std::marker::PhantomData,
         };
 
@@ -1497,88 +1520,148 @@ mod tests {
         Ok(())
     }
 
-    #[apply(async_test)]
-    async fn test_context_transfer(_executor: Rc<LocalExecutor<'static>>) {
-        // Tests that context transfers work purely from a Context perspective (without actually
-        // involving the monitor or outputs)
-
-        // Note: The values used in these tests don't actually matter.
-
-        // Note: z has time index of 1 which means we should maintain history for it
-        let spec = dsrv_specification(&mut spec_acc_monitor()).unwrap();
-        let x_stream: OutputStream<Value> =
-            Box::pin(futures::stream::iter((0..3).map(|x| x.into())));
-        let z_stream: OutputStream<Value> =
-            Box::pin(futures::stream::iter((0..3).map(|z| z.into())));
-        let stream_map = BTreeMap::from([
-            (
-                "x".into(),
-                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream),
-            ),
-            (
-                "z".into(),
-                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream),
-            ),
-        ]);
-        let mut context1 = SemiSyncContext::<SemiSyncValueConfig>::new(
-            Rc::new(RefCell::new(stream_map)),
-            spec.clone(),
-        );
-        let x_out = context1.var(&"x".into()).unwrap();
-        let z_out = context1.var(&"z".into()).unwrap();
-
-        context1.forward_values().await.unwrap();
-        context1.forward_values().await.unwrap();
-        context1.forward_values().await.unwrap();
-        let x_vals: Vec<_> = with_timeout(x_out.take(3).collect(), 1, "x stream")
-            .await
-            .unwrap();
-        let z_vals: Vec<_> = with_timeout(z_out.take(3).collect(), 1, "z stream")
-            .await
-            .unwrap();
-        assert_eq!(x_vals, vec![0.into(), 1.into(), 2.into()]);
-        assert_eq!(z_vals, vec![0.into(), 1.into(), 2.into()]);
-        let x_stream: OutputStream<Value> =
-            Box::pin(futures::stream::iter((0..3).map(|x| x.into())));
-        let z_stream: OutputStream<Value> =
-            Box::pin(futures::stream::iter((0..3).map(|z| z.into())));
-        let stream_map = BTreeMap::from([
-            (
-                "x".into(),
-                VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream),
-            ),
-            (
-                "z".into(),
-                VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream),
-            ),
-        ]);
-        let mut context2 =
-            SemiSyncContext::<SemiSyncValueConfig>::new(Rc::new(RefCell::new(stream_map)), spec);
-        context1.context_transfer(&mut context2);
-        let history = context2.get_retained_history();
-        // New context has one in hist for z and 0 for x:
-        assert_eq!(
-            history,
-            BTreeMap::from([("x".into(), vec![]), ("z".into(), vec![2.into()])])
-        );
-        let x_out = context2.var(&"x".into()).unwrap();
-        let z_out = context2.var(&"z".into()).unwrap();
-        // Need to forward a new values in order to also make VarManagers send history
-        // (This could be changed if var was async)
-        context2.forward_values().await.unwrap();
-        context2.forward_values().await.unwrap();
-        context2.forward_values().await.unwrap();
-
-        let x_vals: Vec<_> = with_timeout(x_out.take(3).collect(), 1, "context transfer stream")
-            .await
-            .unwrap();
-        let z_vals: Vec<_> = with_timeout(z_out.take(4).collect(), 1, "z stream")
-            .await
-            .unwrap();
-
-        // z carries the history value, x does not
-        assert_eq!(x_vals, vec![0.into(), 1.into(), 2.into()]);
-        // Note: The streams are now "out of sync". A runtime would still need to forward the necessary amount
-        assert_eq!(z_vals, vec![2.into(), 0.into(), 1.into(), 2.into()]);
-    }
+    // TODO: - MHK implement a similar test but for reconfig runtime when it is more testable.
+    //
+    // #[apply(async_test)]
+    // async fn test_context_transfer(_executor: Rc<LocalExecutor<'static>>) {
+    //     // Tests that context transfers work purely from a Context perspective (without actually
+    //     // involving the monitor or outputs) with various time indices for the history.
+    //
+    //     // NOTE: The values used in these tests don't actually matter, as long as history for z
+    //     // behaves as intended
+    //
+    //     // If we go > CHANNEL_SIZE we deadlock because context buffer is full. Not an issue when
+    //     // using the full runtime because it progresses the subscribers one step after each runtime
+    //     // step
+    //     for time_index in 1..CHANNEL_SIZE {
+    //         // Note: z has time index of `time_index` which means we should maintain history for it
+    //         let spec_str = format!("in x\nout z\nz = default(z[{}], 0) + x", time_index);
+    //         let spec = dsrv_specification(&mut spec_str.as_str()).unwrap();
+    //         let x_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //             (0..CHANNEL_SIZE).map(|x| (x as i64).into()),
+    //         ));
+    //         let z_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //             (0..CHANNEL_SIZE).map(|z| (z as i64).into()),
+    //         ));
+    //         let stream_map = BTreeMap::from([
+    //             (
+    //                 "x".into(),
+    //                 VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream),
+    //             ),
+    //             (
+    //                 "z".into(),
+    //                 VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream),
+    //             ),
+    //         ]);
+    //         let mut context1 = SemiSyncContext::<SemiSyncValueConfig>::new(
+    //             Rc::new(RefCell::new(stream_map)),
+    //             spec.clone(),
+    //         );
+    //         let x_out = context1.var(&"x".into()).unwrap();
+    //         let z_out = context1.var(&"z".into()).unwrap();
+    //
+    //         for _ in 0..CHANNEL_SIZE {
+    //             with_timeout_res(context1.forward_values(), 1, "forward_values")
+    //                 .await
+    //                 .unwrap();
+    //         }
+    //         let x_vals: Vec<_> = with_timeout(x_out.take(CHANNEL_SIZE).collect(), 1, "x stream")
+    //             .await
+    //             .unwrap();
+    //         let z_vals: Vec<_> = with_timeout(z_out.take(CHANNEL_SIZE).collect(), 1, "z stream")
+    //             .await
+    //             .unwrap();
+    //         assert_eq!(
+    //             x_vals,
+    //             (0..CHANNEL_SIZE)
+    //                 .map(|v| (v as i64).into())
+    //                 .collect::<Vec<Value>>(),
+    //             "Failed at time_index: {}",
+    //             time_index
+    //         );
+    //         assert_eq!(
+    //             z_vals,
+    //             (0..CHANNEL_SIZE)
+    //                 .map(|v| (v as i64).into())
+    //                 .collect::<Vec<Value>>(),
+    //             "Failed at time_index: {}",
+    //             time_index
+    //         );
+    //         let x_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //             (0..CHANNEL_SIZE).map(|x| (x as i64).into()),
+    //         ));
+    //         let z_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //             (0..CHANNEL_SIZE).map(|z| (z as i64).into()),
+    //         ));
+    //         let stream_map = BTreeMap::from([
+    //             (
+    //                 "x".into(),
+    //                 VarManager::<SemiSyncValueConfig>::new("x".into(), x_stream),
+    //             ),
+    //             (
+    //                 "z".into(),
+    //                 VarManager::<SemiSyncValueConfig>::new("z".into(), z_stream),
+    //             ),
+    //         ]);
+    //         let mut context2 = SemiSyncContext::<SemiSyncValueConfig>::new(
+    //             Rc::new(RefCell::new(stream_map)),
+    //             spec,
+    //         );
+    //         context1.context_transfer(&mut context2);
+    //         let history = context2.get_retained_history();
+    //         // New context has `time_index` in hist for z and Deferred for x:
+    //         let expected_z_hist: Vec<Value> = (CHANNEL_SIZE - time_index..CHANNEL_SIZE)
+    //             .map(|v| (v as i64).into())
+    //             .collect();
+    //         // x history is deferred because we don't need those
+    //         let expected_x_hist: Vec<Value> = (CHANNEL_SIZE - time_index..CHANNEL_SIZE)
+    //             .map(|_| Value::NoVal)
+    //             .collect();
+    //         assert_eq!(
+    //             history,
+    //             BTreeMap::from([
+    //                 ("x".into(), expected_x_hist.clone()),
+    //                 ("z".into(), expected_z_hist.clone())
+    //             ]),
+    //             "Failed at time_index: {}",
+    //             time_index
+    //         );
+    //         let x_out = context2.var(&"x".into()).unwrap();
+    //         let z_out = context2.var(&"z".into()).unwrap();
+    //         // Need to forward new values in order to also make VarManagers send history
+    //         // (This could be changed if `var` was async)
+    //         for _ in 0..CHANNEL_SIZE {
+    //             context2.forward_values().await.unwrap();
+    //         }
+    //
+    //         let x_vals: Vec<_> = with_timeout(
+    //             x_out.take(CHANNEL_SIZE).collect(),
+    //             1,
+    //             "context transfer stream",
+    //         )
+    //         .await
+    //         .unwrap();
+    //         let z_vals: Vec<_> = with_timeout(z_out.take(CHANNEL_SIZE).collect(), 1, "z stream")
+    //             .await
+    //             .unwrap();
+    //
+    //         // z carries the history value, x does not
+    //         assert_eq!(
+    //             x_vals,
+    //             (0..CHANNEL_SIZE)
+    //                 .map(|v| (v as i64).into())
+    //                 .collect::<Vec<Value>>(),
+    //             "Failed at time_index: {}",
+    //             time_index
+    //         );
+    //         // Note: The streams are now "out of sync". A runtime would need to forward the necessary amount
+    //         // in order for the stream to not be yielding history but instead yield new values
+    //         let expected_z = expected_z_hist
+    //             .into_iter()
+    //             .chain((0..CHANNEL_SIZE).map(|v| (v as i64).into()))
+    //             .take(CHANNEL_SIZE)
+    //             .collect::<Vec<Value>>();
+    //         assert_eq!(z_vals, expected_z, "Failed at time_index: {}", time_index);
+    //     }
+    // }
 }

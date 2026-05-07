@@ -37,6 +37,9 @@ impl DeferrableStreamData for Value {
     fn deferred_value() -> Self {
         Value::Deferred
     }
+    fn no_val_value() -> Self {
+        Value::NoVal
+    }
 }
 
 impl ToRedisArgs for Value {
@@ -277,6 +280,7 @@ pub trait TypedStreamData: StreamData {
 pub trait DeferrableStreamData: StreamData {
     fn is_deferred(&self) -> bool;
     fn deferred_value() -> Self;
+    fn no_val_value() -> Self;
 }
 
 // Trait defining the allowed types for expression values

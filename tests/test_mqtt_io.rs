@@ -1560,7 +1560,6 @@ mod reconf_tests {
             .expect("x publisher task should finish");
     }
 
-    #[ignore] // TODO: MHK fix test when context transfer is implemented
     #[apply(async_test)]
     async fn test_reconf_sindex_context_transfer(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncMonitor correctly transfers the context from the old spec to the
