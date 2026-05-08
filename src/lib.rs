@@ -2,7 +2,7 @@
 
 pub mod benches_common;
 pub mod core;
-pub use core::{InputProvider, Monitor, OutputStream, Specification, Value, VarName};
+pub use core::{InputProvider, OutputStream, Runtime, Specification, Value, VarName};
 pub mod cli;
 pub mod io;
 pub use io::file::parse_file;

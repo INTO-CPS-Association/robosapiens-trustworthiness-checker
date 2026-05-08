@@ -5,10 +5,10 @@ use smol::LocalExecutor;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable, Runtime, Semantics};
+use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics};
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
-use trustworthiness_checker::runtime::builder::GenericMonitorBuilder;
+use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{Value, dsrv_specification, runtime::RuntimeBuilder};
 use trustworthiness_checker::{VarName, async_test};
@@ -46,19 +46,19 @@ impl TestConfiguration {
 }
 
 fn create_builder_from_config(
-    builder: GenericMonitorBuilder<DsrvSpecification, Value>,
+    builder: GeneralRuntimeBuilder<DsrvSpecification, Value>,
     config: TestConfiguration,
-) -> GenericMonitorBuilder<DsrvSpecification, Value> {
+) -> GeneralRuntimeBuilder<DsrvSpecification, Value> {
     match config {
         TestConfiguration::AsyncUntimed => {
-            let builder = builder.runtime(Runtime::Async);
+            let builder = builder.runtime(RuntimeSpec::Async);
             builder.semantics(Semantics::Untimed)
         }
         TestConfiguration::AsyncTypedUntimed => {
-            let builder = builder.runtime(Runtime::Async);
+            let builder = builder.runtime(RuntimeSpec::Async);
             builder.semantics(Semantics::TypedUntimed)
         }
-        TestConfiguration::SemiSyncUntimed => builder.runtime(Runtime::SemiSync),
+        TestConfiguration::SemiSyncUntimed => builder.runtime(RuntimeSpec::SemiSync),
     }
 }
 
@@ -82,7 +82,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -135,7 +135,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -188,7 +188,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -241,7 +241,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -303,7 +303,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -365,7 +365,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -414,7 +414,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -469,7 +469,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -529,7 +529,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -686,7 +686,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -722,7 +722,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -768,7 +768,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -818,7 +818,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -864,7 +864,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -912,7 +912,7 @@ async fn test_index_past_mult_dependencies(
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -976,7 +976,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1022,7 +1022,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1067,7 +1067,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1116,7 +1116,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1165,7 +1165,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1211,7 +1211,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1270,7 +1270,7 @@ async fn test_simple_add_monitor_does_not_go_away(
             let outputs = output_handler.get_output();
 
             // Build base monitor with common settings
-            let builder = RuntimeBuilder::new()
+            let builder = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec_untyped.clone())
                 .input(Box::new(input_streams))
@@ -1323,7 +1323,7 @@ async fn test_simple_add_monitor_large_input(
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1390,7 +1390,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1433,7 +1433,7 @@ async fn test_simple_add_monitor_untyped_spec(
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(Box::new(input_streams))
@@ -1482,7 +1482,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(Box::new(input_streams))
@@ -1524,7 +1524,7 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(Box::new(input_streams))
@@ -1570,7 +1570,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1615,7 +1615,7 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1660,7 +1660,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
             ));
             let outputs = output_handler.get_output();
 
-            let monitor = RuntimeBuilder::new()
+            let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec_untyped.clone())
                 .input(Box::new(input_streams))
@@ -1698,7 +1698,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
             ));
             let outputs = output_handler.get_output();
 
-            let monitor = RuntimeBuilder::new()
+            let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec_untyped.clone())
                 .input(Box::new(input_streams))
@@ -1814,7 +1814,7 @@ async fn test_drop_guard_cancellation_behavior(
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = RuntimeBuilder::new()
+        let monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1863,7 +1863,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1909,7 +1909,7 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -1953,7 +1953,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(Box::new(input_streams))
@@ -1998,7 +1998,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2037,7 +2037,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         ));
         let outputs = output_handler.get_output();
 
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2080,7 +2080,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2144,7 +2144,7 @@ async fn test_restricted_dynamic_monitor(
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2204,7 +2204,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2275,7 +2275,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2346,7 +2346,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2417,7 +2417,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2489,7 +2489,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
@@ -2560,7 +2560,7 @@ async fn test_benchmark_regression_long_add_defer(
         let outputs = output_handler.get_output();
 
         // Build base monitor with common settings
-        let builder = RuntimeBuilder::new()
+        let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(Box::new(input_streams))

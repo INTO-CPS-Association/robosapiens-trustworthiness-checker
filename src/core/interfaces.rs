@@ -3,14 +3,13 @@ use crate::io::replay_history::ReplayHistory;
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
-use smol::LocalExecutor;
 use std::collections::BTreeSet;
-use std::rc::Rc;
 use std::{collections::BTreeMap, fmt::Debug};
 use strum_macros::Display;
 
 use super::{StreamData, Value, VarName};
 
+/* Enum specifying which semantics is to be used */
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
 pub enum Semantics {
@@ -18,9 +17,10 @@ pub enum Semantics {
     TypedUntimed,
 }
 
+/* Enum specifying which runtime is to be used */
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
-pub enum Runtime {
+pub enum RuntimeSpec {
     Async,
     Distributed,
     SemiSync,
@@ -99,112 +99,22 @@ pub trait OutputHandler {
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>>;
 }
 
-pub trait AbstractMonitorBuilder<M, V: StreamData> {
-    type Mon: Runnable;
-
-    fn new() -> Self;
-
-    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self;
-
-    fn maybe_executor(self, ex: Option<Rc<LocalExecutor<'static>>>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(ex) = ex {
-            self.executor(ex)
-        } else {
-            self
-        }
-    }
-
-    fn model(self, model: M) -> Self;
-
-    fn maybe_model(self, model: Option<M>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(model) = model {
-            self.model(model)
-        } else {
-            self
-        }
-    }
-
-    fn input(self, input: Box<dyn InputProvider<Val = V>>) -> Self;
-
-    fn maybe_input(self, input: Option<Box<dyn InputProvider<Val = V>>>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(input) = input {
-            self.input(input)
-        } else {
-            self
-        }
-    }
-
-    fn var_msg_types(self, var_mapping: BTreeMap<VarName, String>) -> Self;
-
-    fn maybe_var_msg_types(self, var_mapping: Option<BTreeMap<VarName, String>>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(var_mapping) = var_mapping {
-            self.var_msg_types(var_mapping)
-        } else {
-            self
-        }
-    }
-
-    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
-
-    fn maybe_output(self, output: Option<Box<dyn OutputHandler<Val = V>>>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(output) = output {
-            self.output(output)
-        } else {
-            self
-        }
-    }
-
-    fn build(self) -> Self::Mon;
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon>;
-}
-
 #[async_trait(?Send)]
-impl Runnable for Box<dyn Runnable> {
+impl Runtime for Box<dyn Runtime> {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        Runnable::run_boxed(self).await
+        Runtime::run_boxed(self).await
     }
 
     async fn run(mut self: Self) -> anyhow::Result<()> {
-        Runnable::run_boxed(self).await
+        Runtime::run_boxed(self).await
     }
 }
 
+/*
+ * A runtime, implementing a runtime monitor for a model/specification.
+ */
 #[async_trait(?Send)]
-impl<M, V: StreamData> Runnable for Box<dyn Monitor<M, V>> {
-    async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        Runnable::run_boxed(self).await
-    }
-
-    async fn run(mut self: Self) -> anyhow::Result<()> {
-        Runnable::run_boxed(self).await
-    }
-}
-
-#[async_trait(?Send)]
-impl<M, V: StreamData> Monitor<M, V> for Box<dyn Monitor<M, V>> {
-    fn spec(&self) -> &M {
-        self.as_ref().spec()
-    }
-}
-
-#[async_trait(?Send)]
-pub trait Runnable {
+pub trait Runtime {
     // Should usually wait on the output provider
     async fn run(mut self) -> anyhow::Result<()>
     where
@@ -214,13 +124,4 @@ pub trait Runnable {
     }
 
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()>;
-}
-
-/*
- * A runtime monitor for a model/specification of type M over streams with
- * values of type V.
- */
-#[async_trait(?Send)]
-pub trait Monitor<M, V: StreamData>: Runnable {
-    fn spec(&self) -> &M;
 }

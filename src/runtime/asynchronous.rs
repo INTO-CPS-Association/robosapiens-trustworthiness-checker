@@ -29,13 +29,12 @@ use tracing::instrument;
 use tracing::warn;
 use tracing::{Level, error};
 
-use crate::core::AbstractMonitorBuilder;
 use crate::core::InputProvider;
-use crate::core::Monitor;
 use crate::core::OutputHandler;
-use crate::core::Runnable;
+use crate::core::Runtime;
 use crate::core::Specification;
 use crate::core::{OutputStream, StreamData, VarName};
+use crate::runtime::builder::RuntimeBuilder;
 use crate::semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext};
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
@@ -917,14 +916,12 @@ where
 ///  - The S type parameter is the monitoring semantics used to evaluate the
 ///    expressions as streams.
 ///  - The M type parameter is the model/specification being monitored.
-pub struct AsyncMonitorRunner<AC, S>
+pub struct AsyncRuntime<AC, S>
 where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
 {
-    #[allow(dead_code)]
     pub executor: Rc<LocalExecutor<'static>>,
-    model: AC::Spec,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
     output_streams: BTreeMap<VarName, OutputStream<AC::Val>>,
@@ -933,7 +930,7 @@ where
     semantics_t: PhantomData<S>,
 }
 
-pub struct AsyncMonitorBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
+pub struct AsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<AC::Spec>,
     pub(super) input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
@@ -942,7 +939,7 @@ pub struct AsyncMonitorBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     semantics_t: PhantomData<S>,
 }
 
-impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> AsyncMonitorBuilder<AC, S> {
+impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> AsyncRuntimeBuilder<AC, S> {
     pub fn partial_clone(&self) -> Self {
         Self {
             executor: self.executor.clone(),
@@ -958,14 +955,12 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> AsyncMonitorBuilder<AC, S> {
     }
 }
 
-pub trait AbstractAsyncMonitorBuilder<AC: AsyncConfig>:
-    AbstractMonitorBuilder<AC::Spec, AC::Val>
-{
+pub trait AbstractAsyncRuntimeBuilder<AC: AsyncConfig>: RuntimeBuilder<AC::Spec, AC::Val> {
     fn context_builder(self, context_builder: <AC::Ctx as StreamContext>::Builder) -> Self;
 }
 
-impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractAsyncMonitorBuilder<AC>
-    for AsyncMonitorBuilder<AC, S>
+impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractAsyncRuntimeBuilder<AC>
+    for AsyncRuntimeBuilder<AC, S>
 {
     fn context_builder(self, context_builder: <AC::Ctx as StreamContext>::Builder) -> Self {
         Self {
@@ -975,13 +970,13 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractAsyncMonitorBuilder<AC
     }
 }
 
-impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spec, AC::Val>
-    for AsyncMonitorBuilder<AC, S>
+impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::Val>
+    for AsyncRuntimeBuilder<AC, S>
 {
-    type Mon = AsyncMonitorRunner<AC, S>;
+    type Runtime = AsyncRuntime<AC, S>;
 
     fn new() -> Self {
-        AsyncMonitorBuilder {
+        AsyncRuntimeBuilder {
             executor: None,
             model: None,
             input: None,
@@ -1019,17 +1014,13 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
         }
     }
 
-    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
-        self
-    }
-
-    fn build(self) -> Self::Mon {
-        debug!("AsyncMonitorBuilder: Starting build process");
+    fn build(self) -> Self::Runtime {
+        debug!("AsyncRuntimeBuilder: Starting build process");
         let executor = self.executor.expect("Executor not supplied");
         let model = self.model.expect("Model not supplied");
 
         debug!(
-            "AsyncMonitorBuilder: Model variables: input={:?}, output={:?}",
+            "AsyncRuntimeBuilder: Model variables: input={:?}, output={:?}",
             model.input_vars(),
             model.output_vars()
         );
@@ -1041,7 +1032,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
         let context_builder = self
             .context_builder
             .unwrap_or_else(<AC::Ctx as StreamContext>::Builder::new);
-        debug!("AsyncMonitorBuilder: Context builder initialized");
+        debug!("AsyncRuntimeBuilder: Context builder initialized");
 
         let input_vars = model.input_vars().clone();
         let output_vars = model.output_vars().clone();
@@ -1079,7 +1070,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
         // Get cancellation token from context and create drop guard
         let cancellation_token = context.cancellation_token();
         let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
-        debug!("AsyncMonitorBuilder: Created drop guard for cancellation token");
+        debug!("AsyncRuntimeBuilder: Created drop guard for cancellation token");
 
         // Create a map of the output variables to their streams
         // based on using the context
@@ -1094,7 +1085,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
                 // is dropped
                 let guarded_stream = drop_guard_stream(stream, drop_guard.clone());
                 debug!(
-                    "AsyncMonitorBuilder: Wrapped output stream for var {} with drop guard",
+                    "AsyncRuntimeBuilder: Wrapped output stream for var {} with drop guard",
                     var
                 );
                 (var.clone(), guarded_stream)
@@ -1119,26 +1110,25 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractMonitorBuilder<AC::Spe
             })
             .detach();
 
-        debug!("AsyncMonitorBuilder: Returning runner with cancellation token");
-        let runner = AsyncMonitorRunner {
+        debug!("AsyncRuntimeBuilder: Returning runner with cancellation token");
+        let runner = AsyncRuntime {
             executor,
-            model,
             input_provider,
             output_handler,
             output_streams,
             cancellation_token,
             semantics_t: PhantomData,
         };
-        debug!("AsyncMonitorBuilder: Build process complete, runner created");
+        debug!("AsyncRuntimeBuilder: Build process complete, runner created");
         runner
     }
 
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move { self.build() })
     }
 }
 
-impl<AC, S> AsyncMonitorRunner<AC, S>
+impl<AC, S> AsyncRuntime<AC, S>
 where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
@@ -1149,7 +1139,7 @@ where
         input: Box<dyn InputProvider<Val = AC::Val>>,
         output: Box<dyn OutputHandler<Val = AC::Val>>,
     ) -> Self {
-        AsyncMonitorBuilder::new()
+        AsyncRuntimeBuilder::new()
             .executor(executor)
             .model(model)
             .input(input)
@@ -1159,28 +1149,17 @@ where
 }
 
 #[async_trait(?Send)]
-impl<AC, S> Monitor<AC::Spec, AC::Val> for AsyncMonitorRunner<AC, S>
-where
-    AC: AsyncConfig,
-    S: MonitoringSemantics<AC>,
-{
-    fn spec(&self) -> &AC::Spec {
-        &self.model
-    }
-}
-
-#[async_trait(?Send)]
-impl<AC, S> Runnable for AsyncMonitorRunner<AC, S>
+impl<AC, S> Runtime for AsyncRuntime<AC, S>
 where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
 {
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        debug!("AsyncMonitorRunner: Starting monitor execution");
+        debug!("AsyncRuntime: Starting monitor execution");
         self.output_handler.provide_streams(self.output_streams);
 
-        debug!("AsyncMonitorRunner: Creating futures for input and output handlers");
+        debug!("AsyncRuntime: Creating futures for input and output handlers");
         let output_fut = self.output_handler.run().fuse();
 
         // Wrap input provider's run with cancellation support
@@ -1190,15 +1169,15 @@ where
             while let Some(res) = input_provider_stream.next().await {
                 if res.is_err() {
                     error!(
-                        "AsyncMonitorRunner: Input provider stream returned error: {:?}",
+                        "AsyncRuntime: Input provider stream returned error: {:?}",
                         res
                     );
                     return res;
                 } else {
-                    debug!("AsyncMonitorRunner: Received Ok message from input provider");
+                    debug!("AsyncRuntime: Received Ok message from input provider");
                 }
             }
-            debug!("AsyncMonitorRunner: Input provider control_stream ended");
+            debug!("AsyncRuntime: Input provider control_stream ended");
             Ok(())
         });
 
@@ -1206,7 +1185,7 @@ where
             futures::select! {
                 result = input_provider_future.fuse() => result,
                 _ = cancellation_token.cancelled().fuse() => {
-                    debug!("AsyncMonitorRunner: Input provider cancelled");
+                    debug!("AsyncRuntime: Input provider cancelled");
                     Ok(())
                 }
             }
@@ -1226,7 +1205,7 @@ where
         };
 
         self.cancellation_token.cancel();
-        debug!(?result, "AsyncMonitorRunner: Monitor execution completed");
+        debug!(?result, "AsyncRuntime: Monitor execution completed");
         result
     }
 }

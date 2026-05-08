@@ -1,7 +1,7 @@
 use clap::{Args, Parser, ValueEnum, builder::OsStr};
 use strum_macros::Display;
 
-use crate::core::{Runtime, Semantics};
+use crate::core::{RuntimeSpec, Semantics};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -234,8 +234,8 @@ pub struct Cli {
     pub language: Language,
     #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::Untimed)]
     pub semantics: Semantics,
-    #[arg(long, help = "Runtime system to use for execution", default_value_t = Runtime::Async)]
-    pub runtime: Runtime,
+    #[arg(long, help = "Runtime system to use for execution", default_value_t = RuntimeSpec::Async)]
+    pub runtime: RuntimeSpec,
 
     #[command(flatten)]
     pub distribution_mode: DistributionMode,

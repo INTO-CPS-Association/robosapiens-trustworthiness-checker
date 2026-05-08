@@ -13,12 +13,12 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::VarName;
 use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
-use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
+use trustworthiness_checker::core::Runtime;
 use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::builders::OutputHandlerBuilder;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
-use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::builder::DistributionMode;
+use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
 use trustworthiness_checker::{self as tc, io::file::parse_file};
 
@@ -40,7 +40,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let _log_guard = init_tracing(cli.log_file.as_deref())?;
     debug!("CLI arguments: {:?}", cli);
 
-    let builder = RuntimeBuilder::new();
+    let builder = GeneralRuntimeBuilder::new();
 
     let mqtt_port = cli.mqtt_port;
     let redis_port = cli.redis_port;
@@ -57,7 +57,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let effective_parser = if matches!(
         cli.runtime,
-        trustworthiness_checker::core::Runtime::Distributed
+        trustworthiness_checker::core::RuntimeSpec::Distributed
     ) {
         if parser_was_explicit && !matches!(cli.parser, ParserMode::Combinator) {
             cmd.error(
@@ -138,7 +138,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // dependencies).
     let localized_model = if matches!(
         cli.runtime,
-        trustworthiness_checker::core::Runtime::Distributed
+        trustworthiness_checker::core::RuntimeSpec::Distributed
     ) {
         match &dist_constraints {
             Some(constraints) if !constraints.is_empty() => {

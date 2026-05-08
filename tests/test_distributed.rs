@@ -10,19 +10,20 @@ use trustworthiness_checker::VarName;
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::{
     OutputStream, Value,
-    core::{AbstractMonitorBuilder, Runnable},
+    core::Runtime,
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
     dsrv_specification,
     io::testing::ManualOutputHandler,
-    runtime::distributed::DistAsyncMonitorBuilder,
+    runtime::RuntimeBuilder,
+    runtime::distributed::DistAsyncRuntimeBuilder,
     semantics::distributed::semantics::DistributedSemantics,
 };
 use trustworthiness_checker::{async_test, lang::dsrv::lalr_parser::LALRParser};
 use winnow::Parser;
 
 type TestDistSemantics = DistributedSemantics<LALRParser>;
-type TestDistMonitorBuilder = DistAsyncMonitorBuilder<TestDistConfig, TestDistSemantics>;
+type TestDistRuntimeBuilder = DistAsyncRuntimeBuilder<TestDistConfig, TestDistSemantics>;
 
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
@@ -70,7 +71,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
         ("w".into(), "Int32".to_string()),
     ]);
 
-    let monitor = TestDistMonitorBuilder::new()
+    let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -156,7 +157,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
         ("w".into(), "Int32".to_string()),
     ]);
 
-    let monitor = TestDistMonitorBuilder::new()
+    let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -242,7 +243,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
         ("w".into(), "Int32".to_string()),
     ]);
 
-    let monitor = TestDistMonitorBuilder::new()
+    let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -328,7 +329,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
         ("w".into(), "Int32".to_string()),
     ]);
 
-    let monitor = TestDistMonitorBuilder::new()
+    let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)
@@ -414,7 +415,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
         ("w".into(), "Int32".to_string()),
     ]);
 
-    let monitor = TestDistMonitorBuilder::new()
+    let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
         .input(Box::new(input_handler))
         .model(spec)

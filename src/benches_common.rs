@@ -5,23 +5,22 @@ use std::rc::Rc;
 
 use crate::DsrvSpecification;
 use crate::Value;
-use crate::core::AbstractMonitorBuilder;
 use crate::core::OutputHandler;
-use crate::core::Runnable;
 use crate::core::Runtime;
+use crate::core::RuntimeSpec;
 use crate::core::Semantics;
 use crate::io::map::MapInputProvider;
 use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::lang::dsrv::lalr_parser::LALRParser;
 use crate::lang::dsrv::type_checker::TypedDsrvSpecification;
-use crate::runtime::RuntimeBuilder;
-use crate::runtime::asynchronous::AsyncMonitorBuilder;
+use crate::runtime::asynchronous::AsyncRuntimeBuilder;
+use crate::runtime::builder::RuntimeBuilder;
 use crate::runtime::builder::TypedValueConfig;
 
 use smol::LocalExecutor;
 
 pub async fn monitor_runtime_outputs(
-    runtime: Runtime,
+    runtime: RuntimeSpec,
     semantics: Semantics,
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
@@ -40,7 +39,7 @@ pub async fn monitor_runtime_outputs(
         )),
     };
 
-    let monitor = RuntimeBuilder::new()
+    let monitor = crate::runtime::GeneralRuntimeBuilder::new()
         .runtime(runtime)
         .semantics(semantics)
         .executor(executor)
@@ -58,7 +57,7 @@ pub async fn monitor_outputs_untyped_async_limited(
     limit: usize,
 ) {
     monitor_runtime_outputs(
-        Runtime::Async,
+        RuntimeSpec::Async,
         Semantics::Untimed,
         executor,
         spec,
@@ -74,7 +73,7 @@ pub async fn monitor_outputs_untyped_async(
     input_values: MapInputProvider,
 ) {
     monitor_runtime_outputs(
-        Runtime::Async,
+        RuntimeSpec::Async,
         Semantics::Untimed,
         executor,
         spec,
@@ -90,7 +89,7 @@ pub async fn monitor_outputs_untyped_little(
     input_provider: MapInputProvider,
 ) {
     monitor_runtime_outputs(
-        Runtime::SemiSync,
+        RuntimeSpec::SemiSync,
         Semantics::Untimed,
         executor,
         spec,
@@ -111,7 +110,7 @@ pub async fn monitor_outputs_typed_async(
         executor.clone(),
         spec.output_vars.clone(),
     ));
-    let async_monitor = AsyncMonitorBuilder::<
+    let async_monitor = AsyncRuntimeBuilder::<
         TypedValueConfig,
         crate::semantics::TypedUntimedDsrvSemantics<LALRParser>,
     >::new()

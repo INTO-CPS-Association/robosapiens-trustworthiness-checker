@@ -1,10 +1,8 @@
 use crate::{
     OutputStream, SExpr, VarName,
-    core::{
-        AbstractMonitorBuilder, DeferrableStreamData, InputProvider, Monitor, OutputHandler,
-        Runnable, Specification,
-    },
+    core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
     lang::core::{DepGraph, DependencyResolver},
+    runtime::RuntimeBuilder,
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
     stream_utils::{self},
     utils::cancellation_token::CancellationToken,
@@ -28,7 +26,7 @@ use unsync::spsc;
 
 const CHANNEL_SIZE: usize = 8;
 
-pub struct SemiSyncMonitorBuilder<AC, MS>
+pub struct SemiSyncRuntimeBuilder<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr>,
     MS: MonitoringSemantics<AC>,
@@ -41,7 +39,7 @@ where
     _marker: std::marker::PhantomData<MS>,
 }
 
-impl<AC, MS> SemiSyncMonitorBuilder<AC, MS>
+impl<AC, MS> SemiSyncRuntimeBuilder<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -53,13 +51,13 @@ where
     }
 }
 
-impl<AC, MS> AbstractMonitorBuilder<AC::Spec, AC::Val> for SemiSyncMonitorBuilder<AC, MS>
+impl<AC, MS> RuntimeBuilder<AC::Spec, AC::Val> for SemiSyncRuntimeBuilder<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
-    type Mon = SemiSyncMonitor<AC, MS>;
+    type Runtime = SemiSyncRuntime<AC, MS>;
 
     fn new() -> Self {
         Self {
@@ -92,14 +90,14 @@ where
         self
     }
 
-    fn build(self) -> SemiSyncMonitor<AC, MS> {
+    fn build(self) -> SemiSyncRuntime<AC, MS> {
         let executor = self.executor.unwrap();
         let model = self.model.unwrap();
         let input = self.input.unwrap();
         let output = self.output.unwrap();
         let starting_history = self.starting_history.unwrap_or_default();
 
-        SemiSyncMonitor {
+        SemiSyncRuntime {
             _executor: executor,
             model,
             input_provider: input,
@@ -109,11 +107,7 @@ where
         }
     }
 
-    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
-        self
-    }
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move { (*self).build() })
     }
 }
@@ -436,7 +430,7 @@ where
     }
 }
 
-pub struct SemiSyncMonitor<AC, MS>
+pub struct SemiSyncRuntime<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr>,
     MS: MonitoringSemantics<AC>,
@@ -449,7 +443,7 @@ where
     _marker: std::marker::PhantomData<MS>,
 }
 
-impl<AC, MS> SemiSyncMonitor<AC, MS>
+impl<AC, MS> SemiSyncRuntime<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -461,7 +455,7 @@ where
         input: Box<dyn InputProvider<Val = AC::Val>>,
         output: Box<dyn OutputHandler<Val = AC::Val>>,
     ) -> Self {
-        SemiSyncMonitorBuilder::new()
+        SemiSyncRuntimeBuilder::new()
             .executor(executor)
             .model(model)
             .input(input)
@@ -553,7 +547,7 @@ where
         while let Some(res) = input_provider_stream.next().await {
             if res.is_err() {
                 error!(
-                    "SemiSyncMonitor: Input provider stream returned error: {:?}",
+                    "SemiSyncRuntime: Input provider stream returned error: {:?}",
                     res
                 );
                 return res;
@@ -628,7 +622,7 @@ where
         ctx: &mut SemiSyncContext<AC>,
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<StreamState> {
-        info!("SemiSyncMonitor work_task: Waiting for next tick...");
+        info!("SemiSyncRuntime work_task: Waiting for next tick...");
         let aux_vars = ctx.aux_vars.clone();
         let result = futures::join!(
             ctx.forward_values(),
@@ -639,19 +633,19 @@ where
         match result {
             (Ok(StreamState::Pending), Ok(StreamState::Pending)) => {
                 debug!(
-                    "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals pending, continuing..."
+                    "SemiSyncRuntime work_task: Both forward_values and eval_expr_evals pending, continuing..."
                 );
                 Ok(StreamState::Pending)
             }
             (Ok(StreamState::Finished), Ok(StreamState::Finished)) => {
                 debug!(
-                    "SemiSyncMonitor work_task: Both forward_values and eval_expr_evals finished, ending work_task."
+                    "SemiSyncRuntime work_task: Both forward_values and eval_expr_evals finished, ending work_task."
                 );
                 Ok(StreamState::Finished)
             }
             (Ok(StreamState::Pending), Ok(StreamState::Finished)) => {
                 error!(
-                    "SemiSyncMonitor work_task: eval_expr_evals finished but forward_values pending"
+                    "SemiSyncRuntime work_task: eval_expr_evals finished but forward_values pending"
                 );
                 Err(anyhow!(
                     "eval_expr_evals finished but forward_values pending"
@@ -659,25 +653,25 @@ where
             }
             (Ok(StreamState::Finished), Ok(StreamState::Pending)) => {
                 error!(
-                    "SemiSyncMonitor work_task: forward_values finished but eval_expr_evals pending"
+                    "SemiSyncRuntime work_task: forward_values finished but eval_expr_evals pending"
                 );
                 Err(anyhow!(
                     "forward_values finished but eval_expr_evals pending"
                 ))
             }
             (Ok(_), Err(e)) => {
-                error!(?e, "SemiSyncMonitor work_task: Error in eval_expr_evals");
+                error!(?e, "SemiSyncRuntime work_task: Error in eval_expr_evals");
                 Err(e)
             }
             (Err(e), Ok(_)) => {
-                error!(?e, "SemiSyncMonitor work_task: Error in ctx.forward_values");
+                error!(?e, "SemiSyncRuntime work_task: Error in ctx.forward_values");
                 Err(e)
             }
             (Err(e1), Err(e2)) => {
                 error!(
                     ?e1,
                     ?e2,
-                    "SemiSyncMonitor work_task: Errors in both ctx.forward_values and eval_expr_evals"
+                    "SemiSyncRuntime work_task: Errors in both ctx.forward_values and eval_expr_evals"
                 );
                 Err(anyhow!("Errors in work_task: {}, {}", e1, e2))
             }
@@ -703,7 +697,7 @@ where
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
-        let SemiSyncMonitor {
+        let SemiSyncRuntime {
             _executor: _,
             model,
             mut input_provider,
@@ -775,19 +769,8 @@ where
     }
 }
 
-impl<AC, MS> Monitor<AC::Spec, AC::Val> for SemiSyncMonitor<AC, MS>
-where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
-    AC::Val: DeferrableStreamData,
-    MS: MonitoringSemantics<AC>,
-{
-    fn spec(&self) -> &AC::Spec {
-        &self.model
-    }
-}
-
 #[async_trait(?Send)]
-impl<AC, MS> Runnable for SemiSyncMonitor<AC, MS>
+impl<AC, MS> Runtime for SemiSyncRuntime<AC, MS>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -1111,12 +1094,12 @@ where
 mod tests {
 
     use crate::async_test;
-    use crate::core::Runnable;
+    use crate::core::Runtime;
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::runtime::builder::SemiSyncValueConfig;
-    use crate::runtime::semi_sync::SemiSyncMonitor;
+    use crate::runtime::semi_sync::SemiSyncRuntime;
     use crate::semantics::UntimedDsrvSemantics;
     use crate::{Value, dsrv_specification};
     use crate::{VarName, dsrv_fixtures::*};
@@ -1128,7 +1111,7 @@ mod tests {
 
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
-    type TestMonitor = SemiSyncMonitor<SemiSyncValueConfig, UntimedDsrvSemantics<LALRParser>>;
+    type TestRuntime = SemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics<LALRParser>>;
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
@@ -1144,7 +1127,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1185,7 +1168,7 @@ mod tests {
             executor.clone(),
             spec.output_vars.clone(),
         ));
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1215,7 +1198,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1265,7 +1248,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1306,7 +1289,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1347,7 +1330,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1388,7 +1371,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1435,7 +1418,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),
@@ -1483,7 +1466,7 @@ mod tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = TestMonitor {
+        let monitor = TestRuntime {
             _executor: executor.clone(),
             model: spec.clone(),
             input_provider: Box::new(input_streams),

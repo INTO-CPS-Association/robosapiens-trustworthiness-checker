@@ -1,9 +1,6 @@
 use crate::{
     OutputStream, SExpr, Value, VarName,
-    core::{
-        AbstractMonitorBuilder, DeferrableStreamData, InputProvider, OutputHandler, Runnable,
-        Specification,
-    },
+    core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
     io::{
         InputProviderBuilder,
         builders::{
@@ -12,7 +9,10 @@ use crate::{
         testing::ManualInputProvider,
     },
     lang::core::parser::SpecParser,
-    runtime::semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncMonitor, SemiSyncMonitorBuilder},
+    runtime::{
+        RuntimeBuilder,
+        semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncRuntime, SemiSyncRuntimeBuilder},
+    },
     semantics::{AsyncConfig, MonitoringSemantics},
 };
 use anyhow::anyhow;
@@ -46,7 +46,7 @@ struct ReconfInput {
 }
 
 #[derive(Clone)]
-pub struct ReconfSemiSyncMonitorBuilder<AC, MS, P>
+pub struct ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -66,15 +66,14 @@ where
     ),
 }
 
-impl<AC, MS, P> AbstractMonitorBuilder<AC::Spec, AC::Val>
-    for ReconfSemiSyncMonitorBuilder<AC, MS, P>
+impl<AC, MS, P> RuntimeBuilder<AC::Spec, AC::Val> for ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
 {
-    type Mon = ReconfSemiSyncMonitor<AC, MS, P>;
+    type Runtime = ReconfSemiSyncRuntime<AC, MS, P>;
 
     fn new() -> Self {
         Self {
@@ -110,21 +109,29 @@ where
 
     fn input(self, _input: Box<dyn InputProvider<Val = AC::Val>>) -> Self {
         panic!(
-            "Direct InputProvider is not supported in ReconfSemiSyncMonitorBuilder. Use InputProviderBuilder instead."
+            "Direct InputProvider is not supported in ReconfSemiSyncRuntimeBuilder. Use InputProviderBuilder instead."
         );
+    }
+
+    fn input_builder(mut self, input_builder: InputProviderBuilder) -> Self {
+        self.input_builder = Some(match self.model.clone() {
+            Some(model) => input_builder.model(model),
+            None => input_builder,
+        });
+        self
     }
 
     fn output(self, _output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
         panic!(
-            "Direct OutputHandler is not supported in ReconfSemiSyncMonitorBuilder. Use OutputHandlerBuilder instead."
+            "Direct OutputHandler is not supported in ReconfSemiSyncRuntimeBuilder. Use OutputHandlerBuilder instead."
         );
     }
 
-    fn build(self) -> ReconfSemiSyncMonitor<AC, MS, P> {
+    fn build(self) -> ReconfSemiSyncRuntime<AC, MS, P> {
         panic!("One does not simply build a ReconfSemiSync - use async_build instead!");
     }
 
-    fn async_build(mut self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+    fn async_build(mut self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move {
             let executor = self.executor.clone().unwrap();
             let output_builder = self.output_builder.clone().unwrap();
@@ -146,15 +153,15 @@ where
             self.inject_reconf_stream();
             info!(
                 ?self.input_builder,
-                "Building ReconfSemiSyncMonitor input provider"
+                "Building ReconfSemiSyncRuntime input provider"
             );
             let input_provider = self.input_builder.clone().unwrap().async_build().await;
             info!(
                 ?self.output_builder,
-                "Building ReconfSemiSyncMonitor output handler"
+                "Building ReconfSemiSyncRuntime output handler"
             );
             let output = output_builder.async_build().await;
-            let semi_sync_monitor = SemiSyncMonitorBuilder::new()
+            let semi_sync_monitor = SemiSyncRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(model)
                 .input(inner_input)
@@ -162,7 +169,7 @@ where
                 .starting_history(starting_history)
                 .build();
 
-            ReconfSemiSyncMonitor {
+            ReconfSemiSyncRuntime {
                 executor,
                 semi_sync_monitor: Some(semi_sync_monitor),
                 input_provider,
@@ -172,13 +179,9 @@ where
             }
         })
     }
-
-    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
-        self
-    }
 }
 
-impl<AC, MS, P> ReconfSemiSyncMonitorBuilder<AC, MS, P>
+impl<AC, MS, P> ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -298,7 +301,7 @@ where
     }
 }
 
-pub struct ReconfSemiSyncMonitor<AC, MS, P>
+pub struct ReconfSemiSyncRuntime<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -306,14 +309,14 @@ where
     P: SpecParser<AC::Spec>,
 {
     executor: Rc<LocalExecutor<'static>>,
-    semi_sync_monitor: Option<SemiSyncMonitor<AC, MS>>,
+    semi_sync_monitor: Option<SemiSyncRuntime<AC, MS>>,
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
-    self_builder: ReconfSemiSyncMonitorBuilder<AC, MS, P>,
+    self_builder: ReconfSemiSyncRuntimeBuilder<AC, MS, P>,
     sender_channels: BTreeMap<VarName, SpscSender<AC::Val>>,
     _marker: (std::marker::PhantomData<MS>, std::marker::PhantomData<P>),
 }
 
-impl<AC, MS, P> ReconfSemiSyncMonitor<AC, MS, P>
+impl<AC, MS, P> ReconfSemiSyncRuntime<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -344,7 +347,7 @@ where
     }
 
     async fn inner_monitor_tasks(
-        monitor: SemiSyncMonitor<AC, MS>,
+        monitor: SemiSyncRuntime<AC, MS>,
     ) -> anyhow::Result<(
         LocalBoxFuture<'static, anyhow::Result<()>>,
         LocalBoxFuture<'static, anyhow::Result<()>>,
@@ -355,7 +358,7 @@ where
             monitor.setup_runtime().await?;
         let output_fut = async move { output_handler.run().await }.boxed_local();
         let input_fut =
-            async move { SemiSyncMonitor::<AC, MS>::input_task(&mut *input_provider).await }
+            async move { SemiSyncRuntime::<AC, MS>::input_task(&mut *input_provider).await }
                 .boxed_local();
 
         Ok((output_fut, input_fut, context, expr_evals))
@@ -382,7 +385,7 @@ where
                 ret.insert(name, Some(val));
             } else {
                 // Not an error, most likely because the channel is done
-                debug!("ReconfSemiSyncMonitor: Input stream for {} has ended", name);
+                debug!("ReconfSemiSyncRuntime: Input stream for {} has ended", name);
                 ret.insert(name, None);
             }
         }
@@ -709,7 +712,7 @@ where
     ) -> LocalBoxStream<'a, anyhow::Result<()>> {
         Box::pin(try_stream! {
             loop {
-                info!("ReconfSemiSyncMonitor: Waiting for inputs",);
+                info!("ReconfSemiSyncRuntime: Waiting for inputs",);
                 let mut values = Self::await_inputs(input_streams).await;
 
                 // If we have reconf then do only that, as reconfiguration is orthogonal to receiving
@@ -740,7 +743,7 @@ where
                 }
 
                 if forwarded_regular_input {
-                    SemiSyncMonitor::<AC, MS>::step(context, expr_evals).await?;
+                    SemiSyncRuntime::<AC, MS>::step(context, expr_evals).await?;
                 }
                 yield ();
             }
@@ -749,7 +752,7 @@ where
 }
 
 #[async_trait(?Send)]
-impl<AC, MS, P> Runnable for ReconfSemiSyncMonitor<AC, MS, P>
+impl<AC, MS, P> Runtime for ReconfSemiSyncRuntime<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Val: DeferrableStreamData,
@@ -771,7 +774,7 @@ where
         let monitor = self
             .semi_sync_monitor
             .take()
-            .expect("SemiSyncMonitor must exist");
+            .expect("SemiSyncRuntime must exist");
         let (inner_input_task, output_task, mut context, mut expr_evals) =
             Self::inner_monitor_tasks(monitor).await?;
         // TODO: Don't spawn these
@@ -788,24 +791,24 @@ where
         while let Some(ip_res) = input_provider_stream.next().await {
             ip_res.map_err(|err| {
                 error!(
-                    "ReconfSemiSyncMonitor: Input provider stream returned error: {:?}",
+                    "ReconfSemiSyncRuntime: Input provider stream returned error: {:?}",
                     err
                 );
                 err
             })?;
 
             let Some(process_res) = process_stream.next().await else {
-                info!("Process stream ended, shutting down ReconfSemiSyncMonitor");
+                info!("Process stream ended, shutting down ReconfSemiSyncRuntime");
                 return Ok(());
             };
 
             process_res.map_err(|err| {
-                error!("Error in ReconfSemiSyncMonitor main loop: {:?}", err);
+                error!("Error in ReconfSemiSyncRuntime main loop: {:?}", err);
                 err
             })?;
         }
 
-        info!("Input provider control stream ended, shutting down ReconfSemiSyncMonitor");
+        info!("Input provider control stream ended, shutting down ReconfSemiSyncRuntime");
         Ok(())
     }
 }

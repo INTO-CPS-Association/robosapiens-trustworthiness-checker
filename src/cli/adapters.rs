@@ -11,7 +11,7 @@ use crate::{
 
 use super::args::DistributionMode as CliDistributionMode;
 use super::args::{DistributionMode, DistributionSolver, InputMode, SchedulingType};
-use crate::core::interfaces::Runtime;
+use crate::core::interfaces::RuntimeSpec;
 use crate::runtime::builder::DistributionMode as BuilderDistributionMode;
 
 impl From<InputMode> for InputProviderSpec {
@@ -102,7 +102,7 @@ pub struct DistributionModeBuilder {
     dist_constraints: Option<Vec<VarName>>,
     mqtt_port: Option<u16>,
     ros_dist_graph_topic: String,
-    runtime: Option<Runtime>,
+    runtime: Option<RuntimeSpec>,
     dist_constraint_solver: DistributionSolver,
 }
 
@@ -154,7 +154,7 @@ impl DistributionModeBuilder {
         self
     }
 
-    pub fn runtime(mut self, runtime: Runtime) -> Self {
+    pub fn runtime(mut self, runtime: RuntimeSpec) -> Self {
         self.runtime = Some(runtime);
         self
     }
@@ -210,7 +210,7 @@ impl DistributionModeBuilder {
                 let distribution_graph: LabelledDistributionGraph =
                     serde_json::from_str(&f).context("Distribution graph could not be parsed")?;
 
-                if matches!(runtime, Some(Runtime::Distributed)) {
+                if matches!(runtime, Some(RuntimeSpec::Distributed)) {
                     if let Some(dist_constraints) = self.dist_constraints {
                         match self.dist_constraint_solver {
                             DistributionSolver::BruteForce => {

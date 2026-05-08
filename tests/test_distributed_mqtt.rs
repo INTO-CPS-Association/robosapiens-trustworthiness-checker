@@ -10,7 +10,7 @@ mod integration_tests {
     use tc_testutils::mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt};
     use tc_testutils::streams::{TickSender, tick_stream, with_timeout, with_timeout_res};
     use tracing::{info, warn};
-    use trustworthiness_checker::core::Runnable;
+    use trustworthiness_checker::core::Runtime;
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
     use trustworthiness_checker::io::mqtt::MqttFactory;
     use trustworthiness_checker::{OutputStream, dsrv_fixtures::*};
@@ -221,7 +221,7 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 2");
 
-        let runner_1 = TestMonitorRunner::new(
+        let runner_1 = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             Box::new(input_provider_1),
@@ -229,7 +229,7 @@ mod integration_tests {
         );
         executor.spawn(runner_1.run()).detach();
 
-        let runner_2 = TestMonitorRunner::new(
+        let runner_2 = TestRuntime::new(
             executor.clone(),
             model2.clone(),
             Box::new(input_provider_2),
@@ -376,14 +376,14 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 2");
 
-        let runner_1 = TestMonitorRunner::new(
+        let runner_1 = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
         );
 
-        let runner_2 = TestMonitorRunner::new(
+        let runner_2 = TestRuntime::new(
             executor.clone(),
             model2.clone(),
             Box::new(input_provider_2),
@@ -528,14 +528,14 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 2");
 
-        let runner_1 = TestMonitorRunner::new(
+        let runner_1 = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
         );
 
-        let runner_2 = TestMonitorRunner::new(
+        let runner_2 = TestRuntime::new(
             executor.clone(),
             model2.clone(),
             Box::new(input_provider_2),

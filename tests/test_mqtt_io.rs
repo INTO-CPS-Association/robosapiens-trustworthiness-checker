@@ -23,10 +23,10 @@ mod integration_tests {
     use std::{collections::BTreeMap, rc::Rc};
     use tc_testutils::mqtt::{get_mqtt_outputs, start_mqtt};
 
-    use trustworthiness_checker::dsrv_fixtures::{TestMonitorRunner, input_streams1};
+    use trustworthiness_checker::dsrv_fixtures::{TestRuntime, input_streams1};
     use trustworthiness_checker::{
         Value,
-        core::Runnable,
+        core::Runtime,
         dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         dsrv_specification,
         io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
@@ -128,7 +128,7 @@ mod integration_tests {
         .unwrap();
         output_handler.connect().await.unwrap();
         let output_handler = Box::new(output_handler);
-        let async_monitor = TestMonitorRunner::new(
+        let async_monitor = TestRuntime::new(
             executor.clone(),
             spec.clone(),
             Box::new(input_streams),
@@ -181,7 +181,7 @@ mod integration_tests {
         .unwrap();
         output_handler.connect().await.unwrap();
         let output_handler = Box::new(output_handler);
-        let async_monitor = TestMonitorRunner::new(
+        let async_monitor = TestRuntime::new(
             executor.clone(),
             spec.clone(),
             Box::new(input_streams),
@@ -363,19 +363,20 @@ mod reconf_tests {
     use tracing::info;
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::cli::args::OutputMode;
+    use trustworthiness_checker::core::Runtime;
     use trustworthiness_checker::core::values::Value;
-    use trustworthiness_checker::core::{AbstractMonitorBuilder, Runnable};
     use trustworthiness_checker::dsrv_fixtures::*;
     use trustworthiness_checker::dsrv_specification;
     use trustworthiness_checker::io::builders::{
         InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
     };
     use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
+    use trustworthiness_checker::runtime::RuntimeBuilder;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
-    use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder;
+    use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
     use trustworthiness_checker::semantics::UntimedDsrvSemantics;
 
-    type TestMonitorBuilder = ReconfSemiSyncMonitorBuilder<
+    type TestRuntimeBuilder = ReconfSemiSyncRuntimeBuilder<
         SemiSyncValueConfig,
         UntimedDsrvSemantics<LALRParser>,
         LALRParser,
@@ -433,7 +434,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_reconf_simple_add_no_reconf(executor: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncMonitor with the simple add monitor, without actually sending a
+        // Tests the ReconfSemiSyncRuntime with the simple add monitor, without actually sending a
         // reconfiguration, to check that the basic MQTT input/output works as expected.
 
         let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
@@ -475,7 +476,7 @@ mod reconf_tests {
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
-            TestMonitorBuilder::new()
+            TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_builder(input_builder)
@@ -567,7 +568,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_reconf_no_change_of_streams(executor: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure but do
+        // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure but do
         // not introduce/remove any streams
 
         let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
@@ -618,7 +619,7 @@ mod reconf_tests {
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
-            TestMonitorBuilder::new()
+            TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_builder(input_builder)
@@ -803,7 +804,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_reconf_delete_input_stream(executor: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncMonitor with the simple add monitor, where we reconfigure to a
+        // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure to a
         // spec that does not require a y stream
 
         let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
@@ -853,7 +854,7 @@ mod reconf_tests {
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
-            TestMonitorBuilder::new()
+            TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_builder(input_builder)
@@ -1010,7 +1011,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_reconf_add_input_stream(executor: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncMonitor with the acc spec, where we reconfigure to
+        // Tests the ReconfSemiSyncRuntime with the acc spec, where we reconfigure to
         // run the simple_add spec, which includes an extra input stream
 
         let spec = dsrv_specification(&mut spec_acc_monitor()).unwrap();
@@ -1061,7 +1062,7 @@ mod reconf_tests {
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
-            TestMonitorBuilder::new()
+            TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_builder(input_builder)
@@ -1215,7 +1216,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_reconf_delete_output_stream(executor: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncMonitor with the where we initally have two output streams,
+        // Tests the ReconfSemiSyncRuntime with the where we initally have two output streams,
         // and reconfigure into having one
 
         let spec = dsrv_specification(&mut spec_assignment2_monitor()).unwrap();
@@ -1258,7 +1259,7 @@ mod reconf_tests {
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
-            TestMonitorBuilder::new()
+            TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_builder(input_builder)
@@ -1392,7 +1393,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_reconf_add_output_stream(executor: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncMonitor with the where we initally have one output streams,
+        // Tests the ReconfSemiSyncRuntime with the where we initally have one output streams,
         // and reconfigure into having two
 
         let spec = dsrv_specification(&mut spec_assignment_monitor()).unwrap();
@@ -1436,7 +1437,7 @@ mod reconf_tests {
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
-            TestMonitorBuilder::new()
+            TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_builder(input_builder)
@@ -1562,7 +1563,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_reconf_sindex_context_transfer(executor: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncMonitor correctly transfers the context from the old spec to the
+        // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
         // new one
 
         let spec = dsrv_specification(&mut spec_sindex()).unwrap();
@@ -1610,7 +1611,7 @@ mod reconf_tests {
             .mqtt_port(Some(mqtt_port))
             .aux_info(vec![]);
         let monitor_builder = Box::new(
-            TestMonitorBuilder::new()
+            TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_builder(input_builder)

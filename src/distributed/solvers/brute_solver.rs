@@ -9,13 +9,14 @@ use tracing::{debug, info};
 
 use crate::{
     DsrvSpecification, InputProvider, OutputStream, Value, VarName,
-    core::{AbstractMonitorBuilder, Runnable},
+    core::Runtime,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
         possible_labelled_dist_graphs,
     },
     io::{replay_history::ReplayHistory, testing::ManualOutputHandler},
-    runtime::{asynchronous::AbstractAsyncMonitorBuilder, distributed::DistAsyncMonitorBuilder},
+    runtime::RuntimeBuilder,
+    runtime::{asynchronous::AbstractAsyncRuntimeBuilder, distributed::DistAsyncRuntimeBuilder},
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics,
         distributed::{
@@ -32,7 +33,7 @@ where
     AC::Spec: Localisable,
 {
     pub executor: Rc<LocalExecutor<'static>>,
-    pub monitor_builder: DistAsyncMonitorBuilder<AC, S>,
+    pub monitor_builder: DistAsyncRuntimeBuilder<AC, S>,
     pub context_builder: Option<DistributedContextBuilder<AC>>,
     pub dist_constraints: Vec<VarName>,
     pub input_vars: Vec<VarName>,
@@ -48,7 +49,7 @@ where
 {
     fn output_stream_for_graph(
         &self,
-        monitor_builder: DistAsyncMonitorBuilder<AC, S>,
+        monitor_builder: DistAsyncRuntimeBuilder<AC, S>,
         labelled_graph: Rc<LabelledDistributionGraph>,
     ) -> OutputStream<Vec<bool>> {
         debug!(

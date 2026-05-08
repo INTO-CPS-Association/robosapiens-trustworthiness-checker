@@ -1061,12 +1061,12 @@ fn build_labelled_graph_from_solution(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::interfaces::AbstractMonitorBuilder;
     use crate::dsrv_fixtures::TestDistConfig;
     use crate::io::replay_history::ReplayHistory;
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lang::dsrv::parser::dsrv_specification;
-    use crate::runtime::distributed::DistAsyncMonitorBuilder;
+    use crate::runtime::RuntimeBuilder;
+    use crate::runtime::distributed::DistAsyncRuntimeBuilder;
     use crate::semantics::distributed::semantics::DistributedSemantics;
     use macro_rules_attribute::apply;
     use petgraph::graph::DiGraph;
@@ -2472,7 +2472,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
 
         let executor = Rc::new(LocalExecutor::new());
         let monitor_builder =
-            DistAsyncMonitorBuilder::<TestDistConfig, DistributedSemantics<LALRParser>>::new()
+            DistAsyncRuntimeBuilder::<TestDistConfig, DistributedSemantics<LALRParser>>::new()
                 .executor(executor.clone())
                 .model(parsed_spec);
 

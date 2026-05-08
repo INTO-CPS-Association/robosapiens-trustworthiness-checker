@@ -4,7 +4,7 @@ use std::rc::Rc;
 use smol::LocalExecutor;
 use tracing::debug_span;
 
-use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME, Runtime};
+use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME, RuntimeSpec};
 use crate::io::file::FileInputProvider;
 use crate::io::mqtt::MqttFactory;
 use crate::io::replay_history::ReplayHistory;
@@ -112,8 +112,8 @@ impl InputProviderBuilder {
         self
     }
 
-    pub fn runtime(mut self, runtime: Runtime) -> Self {
-        self.replay_history = if matches!(runtime, Runtime::Distributed) {
+    pub fn runtime(mut self, runtime: RuntimeSpec) -> Self {
+        self.replay_history = if matches!(runtime, RuntimeSpec::Distributed) {
             ReplayHistory::store_all()
         } else {
             ReplayHistory::disabled()

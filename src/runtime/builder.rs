@@ -5,10 +5,11 @@ use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use tracing::{debug, warn};
 
+use crate::InputProvider;
 use crate::{
-    DsrvSpecification, Monitor, SExpr, Value, VarName,
+    DsrvSpecification, Runtime, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
-    core::{AbstractMonitorBuilder, OutputHandler, Runnable, Runtime, Semantics, StreamData},
+    core::{OutputHandler, RuntimeSpec, Semantics, StreamData},
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
@@ -18,8 +19,8 @@ use crate::{
         type_checker::{SExprTE, TypedDsrvSpecification, type_check},
     },
     runtime::{
-        reconfigurable_semi_sync::ReconfSemiSyncMonitorBuilder,
-        semi_sync::{SemiSyncContext, SemiSyncMonitorBuilder},
+        reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder,
+        semi_sync::{SemiSyncContext, SemiSyncRuntimeBuilder},
     },
     semantics::{
         AsyncConfig, DistributedSemantics, TypedUntimedDsrvSemantics, UntimedDsrvSemantics,
@@ -28,8 +29,8 @@ use crate::{
 };
 
 use super::{
-    asynchronous::{AsyncMonitorBuilder, Context},
-    distributed::{DistAsyncMonitorBuilder, SchedulerCommunication},
+    asynchronous::{AsyncRuntimeBuilder, Context},
+    distributed::{DistAsyncRuntimeBuilder, SchedulerCommunication},
 };
 
 use static_assertions::assert_obj_safe;
@@ -44,99 +45,227 @@ define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedCont
 #[rustfmt::skip]
 define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext, Spec = DsrvSpecification);
 
-pub trait AnonymousMonitorBuilder<M, V: StreamData>: 'static {
+/* A trait for builders, which construct a particular runtime
+ *
+ */
+pub trait RuntimeBuilder<M, V: StreamData> {
+    type Runtime: Runtime;
+
+    fn new() -> Self;
+
+    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self;
+
+    fn maybe_executor(self, ex: Option<Rc<LocalExecutor<'static>>>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(ex) = ex {
+            self.executor(ex)
+        } else {
+            self
+        }
+    }
+
+    fn model(self, model: M) -> Self;
+
+    fn maybe_model(self, model: Option<M>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(model) = model {
+            self.model(model)
+        } else {
+            self
+        }
+    }
+
+    fn input(self, input: Box<dyn InputProvider<Val = V>>) -> Self;
+
+    fn maybe_input(self, input: Option<Box<dyn InputProvider<Val = V>>>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(input) = input {
+            self.input(input)
+        } else {
+            self
+        }
+    }
+
+    fn input_builder(self, input_builder: InputProviderBuilder) -> Self
+    where
+        Self: Sized,
+    {
+        let _ = input_builder;
+        panic!("This builder type does not support input_builder method")
+    }
+
+    fn maybe_input_builder(self, input_builder: Option<InputProviderBuilder>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(input_builder) = input_builder {
+            self.input_builder(input_builder)
+        } else {
+            self
+        }
+    }
+
+    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
+
+    fn maybe_output(self, output: Option<Box<dyn OutputHandler<Val = V>>>) -> Self
+    where
+        Self: Sized,
+    {
+        if let Some(output) = output {
+            self.output(output)
+        } else {
+            self
+        }
+    }
+
+    fn build(self) -> Self::Runtime;
+
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime>;
+}
+
+/* Builders which construct a given runtime in an object-safe manner.
+ *
+ * Due to object safety, the return types do not reveal what type of runtime is being built.
+ * Builders should not implement this directly, but should instead implement the non-object--safe
+ * trait RuntimeBuilder.
+ */
+pub trait RuntimeBuilderDyn<M, V: StreamData>: 'static {
     fn executor(
         self: Box<Self>,
         ex: Rc<LocalExecutor<'static>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    fn model(self: Box<Self>, model: M) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+    fn maybe_executor(
+        self: Box<Self>,
+        ex: Option<Rc<LocalExecutor<'static>>>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    // fn input(self, input: Box<dyn InputProvider<Val = V>>) -> Self;
+    fn model(self: Box<Self>, model: M) -> Box<dyn RuntimeBuilderDyn<M, V>>;
+
+    fn maybe_model(self: Box<Self>, model: Option<M>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
+
     fn input(
         self: Box<Self>,
         input: Box<dyn crate::InputProvider<Val = V>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
+
+    fn maybe_input(
+        self: Box<Self>,
+        input: Option<Box<dyn crate::InputProvider<Val = V>>>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
     fn input_builder(
         self: Box<Self>,
         input_builder: InputProviderBuilder,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
+
+    fn maybe_input_builder(
+        self: Box<Self>,
+        input_builder: Option<InputProviderBuilder>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
     fn output(
         self: Box<Self>,
         output: Box<dyn OutputHandler<Val = V>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    fn maybe_var_msg_types(
+    fn maybe_output(
         self: Box<Self>,
-        var_msg_types: Option<BTreeMap<VarName, String>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>>;
+        output: Option<Box<dyn OutputHandler<Val = V>>>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    fn build(self: Box<Self>) -> Box<dyn Runnable>;
+    fn build(self: Box<Self>) -> Box<dyn Runtime>;
 
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>>;
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>>;
 }
 
-assert_obj_safe!(AnonymousMonitorBuilder<(), ()>);
+assert_obj_safe!(RuntimeBuilderDyn<(), ()>);
 
 impl<
     M,
     V: StreamData,
-    Mon: Runnable + 'static,
-    MonBuilder: AbstractMonitorBuilder<M, V, Mon = Mon> + 'static,
-> AnonymousMonitorBuilder<M, V> for MonBuilder
+    Mon: Runtime + 'static,
+    MonBuilder: RuntimeBuilder<M, V, Runtime = Mon> + 'static,
+> RuntimeBuilderDyn<M, V> for MonBuilder
 {
     fn executor(
         self: Box<Self>,
         ex: Rc<LocalExecutor<'static>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
         Box::new(MonBuilder::executor(*self, ex))
     }
 
-    fn model(self: Box<Self>, model: M) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+    fn maybe_executor(
+        self: Box<Self>,
+        ex: Option<Rc<LocalExecutor<'static>>>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+        Box::new(MonBuilder::maybe_executor(*self, ex))
+    }
+
+    fn model(self: Box<Self>, model: M) -> Box<dyn RuntimeBuilderDyn<M, V>> {
         Box::new(MonBuilder::model(*self, model))
+    }
+
+    fn maybe_model(self: Box<Self>, model: Option<M>) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+        Box::new(MonBuilder::maybe_model(*self, model))
     }
 
     fn input(
         self: Box<Self>,
         input: Box<dyn crate::InputProvider<Val = V>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
         Box::new(MonBuilder::input(*self, input))
+    }
+
+    fn maybe_input(
+        self: Box<Self>,
+        input: Option<Box<dyn crate::InputProvider<Val = V>>>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+        Box::new(MonBuilder::maybe_input(*self, input))
     }
 
     fn input_builder(
         self: Box<Self>,
-        _input_builder: InputProviderBuilder,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
-        panic!("This builder type does not support input_builder method")
+        input_builder: InputProviderBuilder,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+        Box::new(MonBuilder::input_builder(*self, input_builder))
+    }
+
+    fn maybe_input_builder(
+        self: Box<Self>,
+        input_builder: Option<InputProviderBuilder>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+        Box::new(MonBuilder::maybe_input_builder(*self, input_builder))
     }
 
     fn output(
         self: Box<Self>,
         output: Box<dyn OutputHandler<Val = V>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
         Box::new(MonBuilder::output(*self, output))
     }
 
-    fn maybe_var_msg_types(
+    fn maybe_output(
         self: Box<Self>,
-        var_msg_types: Option<BTreeMap<VarName, String>>,
-    ) -> Box<dyn AnonymousMonitorBuilder<M, V>> {
-        match var_msg_types {
-            Some(map) => Box::new(MonBuilder::var_msg_types(*self, map)),
-            None => self,
-        }
+        output: Option<Box<dyn OutputHandler<Val = V>>>,
+    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+        Box::new(MonBuilder::maybe_output(*self, output))
     }
 
-    fn build(self: Box<Self>) -> Box<dyn Runnable> {
+    fn build(self: Box<Self>) -> Box<dyn Runtime> {
         Box::new(MonBuilder::build(*self))
     }
 
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runnable>> {
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>> {
         Box::pin(async move {
-            let mon = <MonBuilder as AbstractMonitorBuilder<M, V>>::async_build(self).await;
-            Box::new(mon) as Box<dyn Runnable>
+            let mon = <MonBuilder as RuntimeBuilder<M, V>>::async_build(self).await;
+            Box::new(mon) as Box<dyn Runtime>
         })
     }
 }
@@ -145,11 +274,11 @@ struct TypeCheckingBuilder<Builder>(Builder);
 
 impl<
     V: StreamData,
-    Mon: Monitor<TypedDsrvSpecification, V> + 'static,
-    MonBuilder: AbstractMonitorBuilder<TypedDsrvSpecification, V, Mon = Mon> + 'static,
-> AbstractMonitorBuilder<DsrvSpecification, V> for TypeCheckingBuilder<MonBuilder>
+    Mon: Runtime + 'static,
+    MonBuilder: RuntimeBuilder<TypedDsrvSpecification, V, Runtime = Mon> + 'static,
+> RuntimeBuilder<DsrvSpecification, V> for TypeCheckingBuilder<MonBuilder>
 {
-    type Mon = Mon;
+    type Runtime = Mon;
 
     fn new() -> Self {
         Self(MonBuilder::new())
@@ -172,15 +301,11 @@ impl<
         Self(self.0.output(output))
     }
 
-    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
-        self
-    }
-
-    fn build(self) -> Self::Mon {
+    fn build(self) -> Self::Runtime {
         self.0.build()
     }
 
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move { (*self).build() })
     }
 }
@@ -392,14 +517,14 @@ impl Debug for DistributionMode {
     }
 }
 
-pub struct GenericMonitorBuilder<M, V: StreamData> {
+pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
     pub input: Option<Box<dyn crate::InputProvider<Val = V>>>,
     pub input_provider_builder: Option<InputProviderBuilder>,
     pub output: Option<Box<dyn OutputHandler<Val = V>>>,
     pub output_handler_builder: Option<OutputHandlerBuilder>,
-    pub runtime: Runtime,
+    pub runtime: RuntimeSpec,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
@@ -409,8 +534,8 @@ pub struct GenericMonitorBuilder<M, V: StreamData> {
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
 }
 
-impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
-    pub fn runtime(self, runtime: Runtime) -> Self {
+impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
+    pub fn runtime(self, runtime: RuntimeSpec) -> Self {
         Self { runtime, ..self }
     }
 
@@ -489,10 +614,8 @@ impl<M, V: StreamData> GenericMonitorBuilder<M, V> {
     }
 }
 
-impl AbstractMonitorBuilder<DsrvSpecification, Value>
-    for GenericMonitorBuilder<DsrvSpecification, Value>
-{
-    type Mon = Box<dyn Runnable>;
+impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpecification, Value> {
+    type Runtime = Box<dyn Runtime>;
 
     // TODO: Refactor. This needs to either reuse defaults used within the CLI parser, or not allow
     // constructing without args.
@@ -506,7 +629,7 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
             distribution_mode_builder: None,
-            runtime: Runtime::Async,
+            runtime: RuntimeSpec::Async,
             semantics: Semantics::Untimed,
             var_msg_types: None,
             scheduler_mode: SchedulerCommunication::Null,
@@ -536,6 +659,13 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
         }
     }
 
+    fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
+        Self {
+            input_provider_builder: Some(input_builder),
+            ..self
+        }
+    }
+
     fn output(self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
         Self {
             output: Some(output),
@@ -543,11 +673,9 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
         }
     }
 
-    fn var_msg_types(self, _var_msg_types: BTreeMap<VarName, String>) -> Self {
-        self
-    }
+    fn build(self) -> Self::Runtime {
+        // WARNING: when updating this, also update async_build
 
-    fn build(self) -> Self::Mon {
         if self.distribution_mode_builder.is_some()
             || self.input_provider_builder.is_some()
             || self.output_handler_builder.is_some()
@@ -555,7 +683,7 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
             panic!("Call async_build instead");
         }
 
-        let builder: Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> =
+        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,
@@ -567,6 +695,7 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
+                self.var_msg_types.clone(),
             );
 
         let builder = if let Some(output) = self.output {
@@ -583,15 +712,15 @@ impl AbstractMonitorBuilder<DsrvSpecification, Value>
         builder.build()
     }
 
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move { (*self).async_build().await })
     }
 }
 
-impl GenericMonitorBuilder<DsrvSpecification, Value> {
+impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
     // Creates the common parts of the builder
     fn create_common_builder(
-        runtime: Runtime,
+        runtime: RuntimeSpec,
         semantics: Semantics,
         parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
@@ -601,34 +730,35 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
         reconf_topic: String,
-    ) -> Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> {
+        var_msg_types: Option<BTreeMap<VarName, String>>,
+    ) -> Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
         );
-        let builder: Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> = match (
+        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> = match (
             runtime, semantics, parser,
         ) {
-            (Runtime::Async, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(AsyncMonitorBuilder::<
+            (RuntimeSpec::Async, Semantics::Untimed, ParserMode::Lalr) => {
+                Box::new(AsyncRuntimeBuilder::<
                     ValueConfig,
                     UntimedDsrvSemantics<LALRParser>,
                 >::new())
             }
-            (Runtime::Async, Semantics::Untimed, ParserMode::Combinator) => {
-                Box::new(AsyncMonitorBuilder::<
+            (RuntimeSpec::Async, Semantics::Untimed, ParserMode::Combinator) => {
+                Box::new(AsyncRuntimeBuilder::<
                     ValueConfig,
                     UntimedDsrvSemantics<CombExprParser>,
                 >::new())
             }
-            (Runtime::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(SemiSyncMonitorBuilder::<
+            (RuntimeSpec::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
+                Box::new(SemiSyncRuntimeBuilder::<
                     SemiSyncValueConfig,
                     UntimedDsrvSemantics<LALRParser>,
                 >::new())
             }
-            (Runtime::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-                let mut builder = ReconfSemiSyncMonitorBuilder::<
+            (RuntimeSpec::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
+                let mut builder = ReconfSemiSyncRuntimeBuilder::<
                     SemiSyncValueConfig,
                     UntimedDsrvSemantics<LALRParser>,
                     LALRParser,
@@ -644,19 +774,19 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                     ));
                 Box::new(builder)
             }
-            (Runtime::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
-                Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
+            (RuntimeSpec::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
+                Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
                     TypedValueConfig,
                     TypedUntimedDsrvSemantics<LALRParser>,
                 >::new()))
             }
-            (Runtime::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
-                Box::new(TypeCheckingBuilder(AsyncMonitorBuilder::<
+            (RuntimeSpec::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
+                Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
                     TypedValueConfig,
                     TypedUntimedDsrvSemantics<CombExprParser>,
                 >::new()))
             }
-            (Runtime::Distributed, Semantics::Untimed, _) => {
+            (RuntimeSpec::Distributed, Semantics::Untimed, _) => {
                 debug!(
                     "Setting up distributed runtime with distribution_mode = {:?}",
                     distribution_mode
@@ -667,7 +797,7 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                     );
                 }
 
-                let builder = DistAsyncMonitorBuilder::<
+                let builder = DistAsyncRuntimeBuilder::<
                     DistValueConfig,
                     DistributedSemantics<CombExprParser>,
                 >::new();
@@ -804,6 +934,8 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                     ) => builder.predefined_optimized_dist_graph_sat(graph, dist_constraints),
                 };
 
+                let builder = builder.maybe_var_msg_types(var_msg_types.clone());
+
                 Box::new(builder)
             }
             (runtime, semantics, parser) => {
@@ -825,7 +957,9 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
         builder
     }
 
-    pub async fn async_build(self) -> Box<dyn Runnable> {
+    pub async fn async_build(self) -> Box<dyn Runtime> {
+        // WARNING: when updating this, also update build
+
         let distribution_mode = match self.distribution_mode_builder {
             // TODO: add error handling to this method
             Some(distribution_mode_builder) => {
@@ -844,7 +978,7 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
             }
         };
 
-        let builder: Box<dyn AnonymousMonitorBuilder<DsrvSpecification, Value>> =
+        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,
@@ -856,11 +990,12 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
+                self.var_msg_types.clone(),
             );
 
         // Construct inputs and outputs:
         // Skip this for ReconfigurableSemiSync runtime since we handle builders directly in the match above
-        let builder = if self.runtime == Runtime::ReconfSemiSync {
+        let builder = if self.runtime == RuntimeSpec::ReconfSemiSync {
             builder
         } else {
             // Normal handling for non-reconfigurable runtimes
@@ -886,7 +1021,6 @@ impl GenericMonitorBuilder<DsrvSpecification, Value> {
             }
         };
 
-        let builder = builder.maybe_var_msg_types(self.var_msg_types);
         builder.async_build().await
     }
 }

@@ -6,8 +6,8 @@ use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
-    DsrvSpecification, InputProvider, Monitor, Specification, Value, VarName,
-    core::{AbstractMonitorBuilder, OutputHandler, Runnable},
+    DsrvSpecification, InputProvider, Specification, Value, VarName,
+    core::{OutputHandler, Runtime},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         scheduling::{
@@ -33,6 +33,7 @@ use crate::{
         mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
         testing::NullOutputHandler,
     },
+    runtime::RuntimeBuilder,
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
         distributed::{
@@ -45,7 +46,7 @@ use crate::{
 #[cfg(feature = "ros")]
 use crate::io::ros::dist_graph_provider as ros_dist_graph_provider;
 
-use super::asynchronous::{AbstractAsyncMonitorBuilder, AsyncMonitorBuilder, AsyncMonitorRunner};
+use super::asynchronous::{AbstractAsyncRuntimeBuilder, AsyncRuntime, AsyncRuntimeBuilder};
 
 #[cfg(feature = "ros")]
 use crate::io::ros::ros_scheduler_communicator::RosSchedulerCommunicator;
@@ -146,7 +147,7 @@ pub enum DistGraphMode {
 impl<
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     S: MonitoringSemantics<AC>,
-> AbstractAsyncMonitorBuilder<AC> for DistAsyncMonitorBuilder<AC, S>
+> AbstractAsyncRuntimeBuilder<AC> for DistAsyncRuntimeBuilder<AC, S>
 where
     AC::Spec: Localisable,
 {
@@ -156,8 +157,8 @@ where
     }
 }
 
-pub struct DistAsyncMonitorBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
-    pub async_monitor_builder: AsyncMonitorBuilder<AC, S>,
+pub struct DistAsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
+    pub async_monitor_builder: AsyncRuntimeBuilder<AC, S>,
     var_msg_types: Option<BTreeMap<VarName, String>>,
     input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
     pub context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
@@ -165,7 +166,7 @@ pub struct DistAsyncMonitorBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> 
     scheduler_mode: Option<SchedulerCommunication>,
 }
 
-impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncMonitorBuilder<AC, S> {
+impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S> {
     pub fn static_dist_graph(mut self, graph: LabelledDistributionGraph) -> Self {
         self.dist_graph_mode = Some(DistGraphMode::Static(graph));
         self
@@ -339,7 +340,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncMonitorBuilder<AC, S>
     }
 }
 impl<AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>, S: MonitoringSemantics<AC>>
-    DistAsyncMonitorBuilder<AC, S>
+    DistAsyncRuntimeBuilder<AC, S>
 where
     AC::Spec: Localisable,
 {
@@ -358,7 +359,7 @@ pub enum SchedulerCommunication {
     },
 }
 
-impl<S, AC> DistAsyncMonitorBuilder<AC, S>
+impl<S, AC> DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
@@ -389,19 +390,31 @@ where
             self.extract_replay_history(),
         )
     }
+
+    pub fn var_msg_types(mut self, var_msg_types: BTreeMap<VarName, String>) -> Self {
+        self.var_msg_types = Some(var_msg_types);
+        self
+    }
+
+    pub fn maybe_var_msg_types(mut self, var_msg_types: Option<BTreeMap<VarName, String>>) -> Self {
+        if var_msg_types.is_some() {
+            self.var_msg_types = var_msg_types;
+        }
+        self
+    }
 }
 
-impl<S, AC> AbstractMonitorBuilder<AC::Spec, AC::Val> for DistAsyncMonitorBuilder<AC, S>
+impl<S, AC> RuntimeBuilder<AC::Spec, AC::Val> for DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
-    type Mon = DistributedMonitorRunner<AC, S>;
+    type Runtime = DistributedRuntime<AC, S>;
 
     fn new() -> Self {
-        DistAsyncMonitorBuilder {
-            async_monitor_builder: AsyncMonitorBuilder::new(),
+        DistAsyncRuntimeBuilder {
+            async_monitor_builder: AsyncRuntimeBuilder::new(),
             var_msg_types: None,
             context_builder: None,
             dist_graph_mode: None,
@@ -425,18 +438,13 @@ where
         self
     }
 
-    fn var_msg_types(mut self, var_msg_types: BTreeMap<VarName, String>) -> Self {
-        self.var_msg_types = Some(var_msg_types);
-        self
-    }
-
     fn output(mut self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
         debug!("Setting output handler");
         self.async_monitor_builder = self.async_monitor_builder.output(output);
         self
     }
 
-    fn build(self) -> Self::Mon {
+    fn build(self) -> Self::Runtime {
         let dist_graph_mode = self
             .dist_graph_mode
             .as_ref()
@@ -1077,13 +1085,13 @@ where
 
         let async_monitor = async_builder.build();
 
-        DistributedMonitorRunner {
+        DistributedRuntime {
             async_monitor,
             scheduler: scheduler.take().unwrap(),
         }
     }
 
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Mon> {
+    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move { self.build() })
     }
 }
@@ -1100,32 +1108,20 @@ where
 ///  - The S type parameter is the monitoring semantics used to evaluate the
 ///    expressions as streams.
 ///  - The AC::Spec type parameter is the model/specification being monitored.
-pub struct DistributedMonitorRunner<AC, S>
+pub struct DistributedRuntime<AC, S>
 where
     AC: AsyncConfig<Ctx = DistributedContext<AC>>,
     AC::Spec: Localisable,
     S: MonitoringSemantics<AC>,
 {
-    pub(crate) async_monitor: AsyncMonitorRunner<AC, S>,
+    pub(crate) async_monitor: AsyncRuntime<AC, S>,
     // TODO: should we be responsible for building the stream of graphs
     pub(crate) scheduler: Scheduler<AC::Spec>,
 }
 
 #[async_trait(?Send)]
-impl<S, AC> Monitor<AC::Spec, AC::Val> for DistributedMonitorRunner<AC, S>
-where
-    AC::Spec: Localisable,
-    S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
-    S: MonitoringSemantics<AC>,
-{
-    fn spec(&self) -> &AC::Spec {
-        self.async_monitor.spec()
-    }
-}
-
 #[async_trait(?Send)]
-impl<S, AC> Runnable for DistributedMonitorRunner<AC, S>
+impl<S, AC> Runtime for DistributedRuntime<AC, S>
 where
     AC::Spec: Localisable,
     S: MonitoringSemantics<AC>,
