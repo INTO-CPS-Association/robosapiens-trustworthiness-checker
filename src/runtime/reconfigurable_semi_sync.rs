@@ -718,7 +718,7 @@ where
                     topics.as_ref(),
                 )))
             }
-            OutputHandlerSpec::Manual => unimplemented!("Not needed yet"),
+            OutputHandlerSpec::Manual(_) => unimplemented!("Not needed yet"),
         };
         if let Some(ref mut output_builder) = self.self_builder.output_builder {
             output_builder.spec = output_spec;

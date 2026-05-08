@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use async_unsync::bounded::Sender as MpscSender;
+use futures::StreamExt;
 use smol::LocalExecutor;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
@@ -8,6 +10,7 @@ use crate::io::cli::StdoutOutputHandler;
 use crate::io::config::{MsgTypeMapping, TopicMapping};
 use crate::io::mqtt::{MqttFactory, MqttOutputHandler};
 use crate::io::redis::RedisOutputHandler;
+use crate::io::testing::ManualOutputHandler;
 use crate::{Value, VarName, core::OutputHandler};
 
 #[derive(Debug, Clone)]
@@ -31,7 +34,9 @@ pub enum OutputHandlerSpec {
         /// Topic mapping
         Option<TopicMapping>,
     ),
-    Manual,
+    /// Manually sends the results through the provided channel. Useful for testing.
+    /// NOTE: Building this spawns a detached background task!
+    Manual(MpscSender<BTreeMap<VarName, Value>>),
 }
 
 #[derive(Debug, Clone)]
@@ -274,7 +279,228 @@ impl OutputHandlerBuilder {
                     .expect("Redis output handler failed to connect");
                 Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
             }
-            OutputHandlerSpec::Manual => unimplemented!("Has not been needed yet"),
+            OutputHandlerSpec::Manual(tx) => {
+                let mut handler = ManualOutputHandler::new(executor.clone(), output_vars.clone());
+                let stream = handler.get_output();
+                executor
+                    .spawn(async move {
+                        let mut stream = stream;
+                        while let Some(output) = stream.next().await {
+                            if let Err(e) = tx.send(output).await {
+                                tracing::error!(
+                                    "Failed to send output through manual channel. Most likely due to receiver dropped: {:?}",
+                                    e
+                                );
+                                break;
+                            }
+                        }
+                    })
+                    .detach();
+                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{async_test, core::OutputStream};
+    use futures::stream;
+    use macro_rules_attribute::apply;
+    use tc_testutils::streams::{tick_stream, with_timeout, with_timeout_res};
+
+    #[apply(async_test)]
+    async fn test_manual_handler_builder_regular(ex: Rc<LocalExecutor<'static>>) {
+        // Tests that the ManualOutputHandler built by the builder correctly sends outputs through
+        // the provided channel.
+        // (Notice that we are receiving from the built ManualOutputHandler even though we do not
+        // call `get_output` directly.)
+        let output_var_names = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
+        let (sender, mut receiver) = async_unsync::bounded::channel(10).into_split();
+        let builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(sender))
+            .executor(ex.clone())
+            .output_var_names(output_var_names.clone());
+        let mut handler = builder.async_build().await;
+
+        let xs: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let ys: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
+        let streams = BTreeMap::from([(VarName::new("x"), xs), (VarName::new("y"), ys)]);
+
+        handler.provide_streams(streams);
+        let task = ex.spawn(handler.run());
+
+        let mut results = vec![];
+        while let Some(res) = with_timeout(receiver.recv(), 1, "recv").await.unwrap() {
+            results.push(res);
+        }
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].get(&VarName::new("x")).unwrap(), &Value::Int(1));
+        assert_eq!(results[0].get(&VarName::new("y")).unwrap(), &Value::Int(3));
+        assert_eq!(results[1].get(&VarName::new("x")).unwrap(), &Value::Int(2));
+        assert_eq!(results[1].get(&VarName::new("y")).unwrap(), &Value::Int(4));
+
+        with_timeout_res(task, 1, "task_finish").await.unwrap();
+    }
+
+    #[apply(async_test)]
+    async fn test_manual_handler_builder_multi(ex: Rc<LocalExecutor<'static>>) {
+        // Tests that the ManualOutputHandlers built by a cloned builder can be used after each
+        // other, and that they correctly send outputs through the provided channel.
+        let output_var_names = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
+        let (sender, mut receiver) = async_unsync::bounded::channel(10).into_split();
+        let builder1 = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(sender))
+            .executor(ex.clone())
+            .output_var_names(output_var_names.clone());
+        let builder2 = builder1.clone();
+        let mut handler1 = builder1.async_build().await;
+
+        let xs: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let ys: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
+        let streams = BTreeMap::from([(VarName::new("x"), xs), (VarName::new("y"), ys)]);
+
+        handler1.provide_streams(streams);
+        let task = ex.spawn(handler1.run());
+
+        let mut results = vec![];
+        for i in 0..2 {
+            let res = with_timeout(receiver.recv(), 1, format!("recv_{}", i).as_str())
+                .await
+                .expect("Expected finish")
+                .expect("Expected Some");
+            results.push(res);
+        }
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].get(&VarName::new("x")).unwrap(), &Value::Int(1));
+        assert_eq!(results[0].get(&VarName::new("y")).unwrap(), &Value::Int(3));
+        assert_eq!(results[1].get(&VarName::new("x")).unwrap(), &Value::Int(2));
+        assert_eq!(results[1].get(&VarName::new("y")).unwrap(), &Value::Int(4));
+
+        let mut handler2 = builder2.async_build().await;
+
+        let xs: OutputStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
+        let ys: OutputStream<Value> = Box::pin(stream::iter(vec![7.into(), 8.into()]));
+        let streams = BTreeMap::from([(VarName::new("x"), xs), (VarName::new("y"), ys)]);
+
+        handler2.provide_streams(streams);
+        let task2 = ex.spawn(handler2.run());
+
+        let mut results = vec![];
+        for i in 2..4 {
+            let res = with_timeout(receiver.recv(), 1, format!("recv_{}", i).as_str())
+                .await
+                .expect("Expected finish")
+                .expect("Expected Some");
+            results.push(res);
+        }
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].get(&VarName::new("x")).unwrap(), &Value::Int(5));
+        assert_eq!(results[0].get(&VarName::new("y")).unwrap(), &Value::Int(7));
+        assert_eq!(results[1].get(&VarName::new("x")).unwrap(), &Value::Int(6));
+        assert_eq!(results[1].get(&VarName::new("y")).unwrap(), &Value::Int(8));
+
+        with_timeout_res(task, 1, "task1_finish").await.unwrap();
+        with_timeout_res(task2, 1, "task2_finish").await.unwrap();
+    }
+
+    #[apply(async_test)]
+    async fn test_manual_handler_builder_multi_conc(ex: Rc<LocalExecutor<'static>>) {
+        // Tests that the ManualOutputHandlers built by a cloned builder can be used concurrently,
+        // and that they correctly send outputs through the provided channel.
+        let output_var_names = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
+        let (sender, mut receiver) = async_unsync::bounded::channel(10).into_split();
+        let builder1 = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(sender))
+            .executor(ex.clone())
+            .output_var_names(output_var_names.clone());
+        let builder2 = builder1.clone();
+        let mut handler1 = builder1.async_build().await;
+        let mut handler2 = builder2.async_build().await;
+
+        let xs1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let ys1: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
+        let (mut x_tick1, xs1) = tick_stream(xs1);
+        let (mut y_tick1, ys1) = tick_stream(ys1);
+        let streams1 = BTreeMap::from([(VarName::new("x"), xs1), (VarName::new("y"), ys1)]);
+        handler1.provide_streams(streams1);
+        let task1 = ex.spawn(handler1.run());
+
+        let xs2: OutputStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
+        let ys2: OutputStream<Value> = Box::pin(stream::iter(vec![7.into(), 8.into()]));
+        let (mut x_tick2, xs2) = tick_stream(xs2);
+        let (mut y_tick2, ys2) = tick_stream(ys2);
+        let streams2 = BTreeMap::from([(VarName::new("x"), xs2), (VarName::new("y"), ys2)]);
+        handler2.provide_streams(streams2);
+        let task2 = ex.spawn(handler2.run());
+
+        // Allow one from each through:
+        with_timeout_res(x_tick1.send(()), 1, "tick_x1_1")
+            .await
+            .unwrap();
+        with_timeout_res(y_tick1.send(()), 1, "tick_y1_1")
+            .await
+            .unwrap();
+        with_timeout_res(x_tick2.send(()), 1, "tick_x2_1")
+            .await
+            .unwrap();
+        with_timeout_res(y_tick2.send(()), 1, "tick_y2_1")
+            .await
+            .unwrap();
+
+        let mut results = vec![];
+        for i in 0..2 {
+            let res = with_timeout(receiver.recv(), 1, format!("recv_{}", i).as_str())
+                .await
+                .expect("Expected finish")
+                .expect("Expected Some");
+            results.push(res);
+        }
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].get(&VarName::new("x")).unwrap(), &Value::Int(1));
+        assert_eq!(results[0].get(&VarName::new("y")).unwrap(), &Value::Int(3));
+        assert_eq!(results[1].get(&VarName::new("x")).unwrap(), &Value::Int(5));
+        assert_eq!(results[1].get(&VarName::new("y")).unwrap(), &Value::Int(7));
+
+        // Let handler2 finish:
+        with_timeout_res(x_tick2.send(()), 1, "tick_x2_2")
+            .await
+            .unwrap();
+        with_timeout_res(y_tick2.send(()), 1, "tick_y2_2")
+            .await
+            .unwrap();
+        let res = with_timeout(receiver.recv(), 1, "recv_2")
+            .await
+            .expect("Expected finish")
+            .expect("Expected Some");
+        results.push(res);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[2].get(&VarName::new("x")).unwrap(), &Value::Int(6));
+        assert_eq!(results[2].get(&VarName::new("y")).unwrap(), &Value::Int(8));
+        with_timeout_res(x_tick1.send(()), 1, "tick_x1_1")
+            .await
+            .unwrap();
+        with_timeout_res(y_tick1.send(()), 1, "tick_y1_1")
+            .await
+            .unwrap();
+        let res = with_timeout(receiver.recv(), 1, "recv_3")
+            .await
+            .expect("Expected finish")
+            .expect("Expected Some");
+        results.push(res);
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[3].get(&VarName::new("x")).unwrap(), &Value::Int(2));
+        assert_eq!(results[3].get(&VarName::new("y")).unwrap(), &Value::Int(4));
+
+        // Final ticks:
+        x_tick1.send(()).await.unwrap();
+        x_tick2.send(()).await.unwrap();
+        y_tick1.send(()).await.unwrap();
+        y_tick2.send(()).await.unwrap();
+
+        with_timeout_res(task1, 1, "task1_finish").await.unwrap();
+        with_timeout_res(task2, 1, "task2_finish").await.unwrap();
     }
 }
