@@ -34,7 +34,8 @@ pub enum OutputHandlerSpec {
         /// Topic mapping
         Option<TopicMapping>,
     ),
-    /// Manually sends the results through the provided channel. Useful for testing.
+    /// Manually sends the results through the provided channel, and forwards them to any
+    /// built OutputHandlers. Useful for testing.
     /// NOTE: Building this spawns a detached background task!
     Manual(MpscSender<BTreeMap<VarName, Value>>),
 }

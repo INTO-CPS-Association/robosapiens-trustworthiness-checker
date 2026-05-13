@@ -250,7 +250,7 @@ where
 
         // Compute new spec with reconf_topic injected when applicable
         let new_spec = match &input_builder.spec {
-            InputProviderSpec::Manual | InputProviderSpec::File(_) => {
+            InputProviderSpec::Manual(_) | InputProviderSpec::File(_) => {
                 warn!(
                     "Limited support for reconfiguration of file inputs, ros inputs and manual. \
                  Treating var '{:?}' as reconfiguration variable",
@@ -682,7 +682,7 @@ where
                     topics.as_ref(),
                 )))
             }
-            InputProviderSpec::Manual => unimplemented!("Not needed yet"),
+            InputProviderSpec::Manual(_) => unimplemented!("Not needed yet"),
         };
         if let Some(ref mut input_builder) = self.self_builder.input_builder {
             input_builder.spec = input_spec;
