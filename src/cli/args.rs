@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, ValueEnum, builder::OsStr};
 use strum_macros::Display;
 
@@ -53,14 +55,14 @@ pub struct InputMode {
     #[clap(long, help = "Path to input file containing trace data")]
     pub input_file: Option<String>,
 
-    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "List of MQTT topics to subscribe to for input")]
-    pub input_mqtt_topics: Option<Vec<String>>,
+    #[clap(long, help = "MQTT topics configuration file for input")]
+    pub input_mqtt_file: Option<PathBuf>,
 
     #[clap(long, help = "Enable generic MQTT input mode")]
     pub mqtt_input: bool,
 
-    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "List of Redis channels to subscribe to for input")]
-    pub input_redis_topics: Option<Vec<String>>,
+    #[clap(long, help = "Redis topics configuration file for input")]
+    pub input_redis_file: Option<PathBuf>,
 
     #[clap(long, help = "Enable generic Redis input mode")]
     pub redis_input: bool,
@@ -68,33 +70,38 @@ pub struct InputMode {
     // #[cfg(feature = "ros")]
     #[clap(
         long,
-        help = "ROS topics configuration file for input (requires running with `--features ros` or similar)"
+        help = "ROS topics configuration file for input (requires running with `--features ros`)"
     )]
     pub input_ros_file: Option<String>,
 }
 
 /// Output handler configuration for monitoring results
+///
+/// Specifies either to use a given mode of output (Files, ROS, MQTT, Redis) or to select the
+/// output mode an provide an additional configuration file at the same time. This configuration
+/// file is mandatory for ROS since the message types need to be specified, or optional for all
+/// other protocols (with the default behaviour being to directly use the stream variable
+/// names as topic names).
 #[derive(Args, Clone, Debug)]
 #[group(required = false, multiple = false)]
 pub struct OutputMode {
     #[clap(long, help = "Output monitoring results to stdout")]
     pub output_stdout: bool,
 
-    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "List of MQTT topics to publish monitoring results to")]
-    pub output_mqtt_topics: Option<Vec<String>>,
-
     #[clap(long, help = "Enable generic MQTT output mode")]
     pub mqtt_output: bool,
 
-    #[clap(long, value_delimiter = ' ', num_args = 1.., help = "List of Redis channels to publish monitoring results to")]
-    pub output_redis_topics: Option<Vec<String>>,
+    #[clap(long, help = "MQTT topics configuration file for output")]
+    pub output_mqtt_file: Option<PathBuf>,
 
     #[clap(long, help = "Enable generic Redis output mode")]
     pub redis_output: bool,
 
-    // #[cfg(feature = "ros")]
     #[clap(long, help = "ROS topics configuration file for output")]
-    pub output_ros_file: Option<String>,
+    pub output_redis_file: Option<PathBuf>,
+
+    #[clap(long, help = "ROS topics configuration file for output")]
+    pub output_ros_file: Option<PathBuf>,
 }
 
 /// Distribution and deployment configuration for monitoring

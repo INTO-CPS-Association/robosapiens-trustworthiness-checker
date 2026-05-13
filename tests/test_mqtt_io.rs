@@ -356,7 +356,7 @@ mod reconf_tests {
     use macro_rules_attribute::apply;
     use serde_json::json;
     use smol::LocalExecutor;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::rc::Rc;
     use tc_testutils::mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt};
     use tc_testutils::streams::{TickSender, tick_stream, with_timeout, with_timeout_res};
@@ -452,7 +452,7 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into(), Y_TOPIC.into()]));
+        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into()), (Y_TOPIC.into(), Y_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -463,9 +463,9 @@ mod reconf_tests {
 
         let output_mode = OutputMode {
             output_stdout: false,
-            output_mqtt_topics: Some(vec![Z_TOPIC.into()]),
+            output_mqtt_file: None,
             mqtt_output: true,
-            output_redis_topics: None,
+            output_redis_file: None,
             redis_output: false,
             output_ros_file: None,
         };
@@ -595,7 +595,7 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into(), Y_TOPIC.into()]));
+        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into()), (Y_TOPIC.into(), Y_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -606,9 +606,9 @@ mod reconf_tests {
 
         let output_mode = OutputMode {
             output_stdout: false,
-            output_mqtt_topics: Some(vec![Z_TOPIC.into()]),
+            output_mqtt_file: None,
             mqtt_output: true,
-            output_redis_topics: None,
+            output_redis_file: None,
             redis_output: false,
             output_ros_file: None,
         };
@@ -830,7 +830,7 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into(), Y_TOPIC.into()]));
+        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into()), (Y_TOPIC.into(), Y_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -841,9 +841,9 @@ mod reconf_tests {
 
         let output_mode = OutputMode {
             output_stdout: false,
-            output_mqtt_topics: Some(vec![Z_TOPIC.into()]),
+            output_mqtt_file: None,
             mqtt_output: true,
-            output_redis_topics: None,
+            output_redis_file: None,
             redis_output: false,
             output_ros_file: None,
         };
@@ -1038,7 +1038,7 @@ mod reconf_tests {
 
         // InputProvider is MQTT server:
         // NOTE: No way of giving new Y_TOPIC after reconf - defaults to /y
-        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into()]));
+        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1049,9 +1049,9 @@ mod reconf_tests {
 
         let output_mode = OutputMode {
             output_stdout: false,
-            output_mqtt_topics: Some(vec![Z_TOPIC.into()]),
+            output_mqtt_file: None,
             mqtt_output: true,
-            output_redis_topics: None,
+            output_redis_file: None,
             redis_output: false,
             output_ros_file: None,
         };
@@ -1235,7 +1235,7 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into()]));
+        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1246,9 +1246,9 @@ mod reconf_tests {
 
         let output_mode = OutputMode {
             output_stdout: false,
-            output_mqtt_topics: Some(vec![V_TOPIC.into(), W_TOPIC.into()]),
+            output_mqtt_file: None,
             mqtt_output: true,
-            output_redis_topics: None,
+            output_redis_file: None,
             redis_output: false,
             output_ros_file: None,
         };
@@ -1412,7 +1412,7 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into()]));
+        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1424,9 +1424,9 @@ mod reconf_tests {
         // NOTE: No way of giving new W_TOPIC after reconf - defaults to /w
         let output_mode = OutputMode {
             output_stdout: false,
-            output_mqtt_topics: Some(vec![V_TOPIC.into()]),
+            output_mqtt_file: None,
             mqtt_output: true,
-            output_redis_topics: None,
+            output_redis_file: None,
             redis_output: false,
             output_ros_file: None,
         };
@@ -1587,7 +1587,7 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(vec![X_TOPIC.into()]));
+        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1598,9 +1598,9 @@ mod reconf_tests {
 
         let output_mode = OutputMode {
             output_stdout: false,
-            output_mqtt_topics: Some(vec![Z_TOPIC.into()]),
+            output_mqtt_file: None,
             mqtt_output: true,
-            output_redis_topics: None,
+            output_redis_file: None,
             redis_output: false,
             output_ros_file: None,
         };

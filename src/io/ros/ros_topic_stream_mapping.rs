@@ -1,11 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::anyhow;
+use contracts::requires;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JValue;
-use tracing::debug;
 
-use crate::VarName;
+use crate::{
+    VarName,
+    io::config::{MsgTypeMapping, TopicMapping},
+};
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone)]
 pub enum ROSMsgType {
@@ -103,81 +105,88 @@ pub fn ros_stream_mapping_to_topic_mapping(
         .collect()
 }
 
-pub fn json_to_mapping(json: &str) -> Result<ROSStreamMapping, anyhow::Error> {
-    // Note: This was rewritten instead of using `serde_json::from_str` because
-    // mhk dreams of one day supporting the custom ROS types automatically...
-    let jval = match serde_json5::from_str::<JValue>(&json) {
-        Ok(value) => value,
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
-    if let Some(jval) = jval.as_object() {
-        debug!("JSON Mapping raw: {:?}", jval);
-        let mut map = BTreeMap::new();
-        for (var_name, data) in jval.iter() {
-            let topic_opt = data.get("topic");
-            let typ_opt = data.get("msg_type");
+#[requires(topic_map.keys().cloned().collect::<BTreeSet<_>>() == msg_type_map.keys().cloned().collect::<BTreeSet<_>>())]
+#[ensures({
+    let expected_keys = topic_map
+        .keys()
+        .map(|k| k.clone().into())
+        .collect::<BTreeSet<String>>();
+    ret.as_ref().is_ok_and(|x| x.keys().cloned().collect::<BTreeSet<_>>() == expected_keys)
+})]
+pub fn ros_stream_mapping_from_topic_and_msg_type_mapping(
+    topic_map: TopicMapping,
+    msg_type_map: MsgTypeMapping,
+) -> Result<ROSStreamMapping, anyhow::Error> {
+    let mut ros_stream_mapping: ROSStreamMapping = BTreeMap::new();
 
-            match (topic_opt, typ_opt) {
-                (Some(topic_v), Some(typ_v)) => match (topic_v.as_str(), typ_v.as_str()) {
-                    (Some(topic), Some(typ)) => {
-                        let ros_typ = string_to_ros_msg_type(typ)?;
-                        map.insert(
-                            var_name.clone(),
-                            VariableMappingData {
-                                topic: topic.to_string(),
-                                msg_type: ros_typ,
-                            },
-                        );
-                    }
-                    _ => {
-                        return Err(anyhow!(
-                            "topic and msg_type must be strings for variable '{}'",
-                            var_name
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(anyhow!(
-                        "Missing topic or msg_type for variable '{}'",
-                        var_name
-                    ));
-                }
-            }
-        }
-        Ok(map)
-    } else {
-        return Err(anyhow!("Must be specified as a JSON object"));
+    for (var_name, topic) in topic_map.iter() {
+        let topic = topic.clone();
+        let msg_type = msg_type_map[&var_name].clone();
+        let msg_type = string_to_ros_msg_type(msg_type.as_str())?;
+        let var_name: String = var_name.clone().into();
+
+        ros_stream_mapping.insert(var_name, VariableMappingData { topic, msg_type });
     }
+
+    Ok(ros_stream_mapping)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::io::ros::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, json_to_mapping};
+    use std::collections::BTreeMap;
+
+    use crate::{
+        VarName,
+        io::{
+            config::{MsgTypeMapping, TopicMapping},
+            ros::ros_topic_stream_mapping::{
+                ROSMsgType, ros_stream_mapping_from_topic_and_msg_type_mapping,
+            },
+        },
+    };
     use test_log::test;
 
     #[test]
-    fn test_json_to_mapping() -> Result<(), anyhow::Error> {
-        let json = r#"
-        {
-            "x": {
-                "topic": "/x",
-                "msg_type": "Int32"
-            },
-            "y": {
-                "topic": "/y",
-                "msg_type": "String"
-            }
-        }
-        "#;
+    fn test_ros_stream_mapping_from_topic_and_msg_type_mapping() -> Result<(), anyhow::Error> {
+        let topic_map: TopicMapping = BTreeMap::from([
+            (VarName::new("x"), "/r1/x".to_string()),
+            (VarName::new("y"), "/r2/y".to_string()),
+        ]);
+        let msg_type_map: MsgTypeMapping = BTreeMap::from([
+            (VarName::new("x"), "Int32".to_string()),
+            (VarName::new("y"), "String".to_string()),
+        ]);
 
-        let mapping: ROSStreamMapping = json_to_mapping(json)?;
+        let mapping = ros_stream_mapping_from_topic_and_msg_type_mapping(topic_map, msg_type_map)?;
+
         assert_eq!(mapping.len(), 2);
-        assert_eq!(mapping["x"].topic, "/x");
+        assert_eq!(mapping["x"].topic, "/r1/x");
         assert_eq!(mapping["x"].msg_type, ROSMsgType::Int32);
-        assert_eq!(mapping["y"].topic, "/y");
+        assert_eq!(mapping["y"].topic, "/r2/y");
         assert_eq!(mapping["y"].msg_type, ROSMsgType::String);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ros_stream_mapping_from_topic_and_msg_type_mapping_rejects_unknown_type() {
+        let topic_map: TopicMapping = BTreeMap::from([(VarName::new("x"), "/topic/x".to_string())]);
+        let msg_type_map: MsgTypeMapping =
+            BTreeMap::from([(VarName::new("x"), "NotARosType".to_string())]);
+
+        let result = ros_stream_mapping_from_topic_and_msg_type_mapping(topic_map, msg_type_map);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ros_stream_mapping_from_topic_and_msg_type_mapping_empty_maps()
+    -> Result<(), anyhow::Error> {
+        let topic_map: TopicMapping = BTreeMap::new();
+        let msg_type_map: MsgTypeMapping = BTreeMap::new();
+
+        let mapping = ros_stream_mapping_from_topic_and_msg_type_mapping(topic_map, msg_type_map)?;
+
+        assert!(mapping.is_empty());
         Ok(())
     }
 }

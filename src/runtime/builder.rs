@@ -6,14 +6,14 @@ use smol::LocalExecutor;
 use tracing::{debug, warn};
 
 use crate::InputProvider;
-use crate::io::MsgTypeMapping;
+use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
     DsrvSpecification, Runtime, SExpr, Value, VarName,
     cli::{adapters::DistributionModeBuilder, args::ParserMode},
     core::{OutputHandler, RuntimeSpec, Semantics, StreamData},
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputProviderBuilder, TopicMapping, builders::OutputHandlerBuilder},
+    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
     lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,

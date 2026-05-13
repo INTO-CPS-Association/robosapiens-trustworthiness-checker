@@ -22,7 +22,9 @@ mod integration_tests {
     use trustworthiness_checker::core::OutputHandler;
     use trustworthiness_checker::io::ros::ROSInputProvider;
     use trustworthiness_checker::io::ros::ROSOutputHandler;
-    use trustworthiness_checker::io::ros::json_to_mapping;
+    use trustworthiness_checker::io::ros::ros_topic_stream_mapping::{
+        ROSMsgType, VariableMappingData,
+    };
 
     #[apply(async_test)]
     async fn test_add_monitor_ros_input(ex: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
@@ -34,22 +36,22 @@ mod integration_tests {
         let x_topic = qualified_ros_name(test_add_monitor_ros_input, "x");
         let y_topic = qualified_ros_name(test_add_monitor_ros_input, "y");
 
-        let var_topics = json_to_mapping(&format!(
-            r#"
-        {{
-            "x": {{
-                "topic": "{}",
-                "msg_type": "Int32"
-            }},
-            "y": {{
-                "topic": "{}",
-                "msg_type": "Int32"
-            }}
-        }}
-        "#,
-            x_topic, y_topic
-        ))
-        .unwrap();
+        let var_topics = BTreeMap::from([
+            (
+                "x".to_string(),
+                VariableMappingData {
+                    topic: x_topic.clone(),
+                    msg_type: ROSMsgType::Int32,
+                },
+            ),
+            (
+                "y".to_string(),
+                VariableMappingData {
+                    topic: y_topic.clone(),
+                    msg_type: ROSMsgType::Int32,
+                },
+            ),
+        ]);
 
         // Create the ROS input provider
         let mut input_provider = ROSInputProvider::new(ex.clone(), var_topics).unwrap();
@@ -117,18 +119,13 @@ mod integration_tests {
 
         let z_topic = qualified_ros_name(test_add_monitor_ros_output_with_aux, "z");
 
-        let var_topics = json_to_mapping(&format!(
-            r#"
-        {{
-            "z": {{
-                "topic": "{}",
-                "msg_type": "Int32"
-            }}
-        }}
-        "#,
-            z_topic
-        ))
-        .unwrap();
+        let var_topics = BTreeMap::from([(
+            "z".to_string(),
+            VariableMappingData {
+                topic: z_topic.clone(),
+                msg_type: ROSMsgType::Int32,
+            },
+        )]);
 
         let aux_info = vec!["w".into()];
 
@@ -186,18 +183,13 @@ mod integration_tests {
 
         let z_topic = qualified_ros_name(test_add_monitor_ros_output_no_aux, "z");
 
-        let var_topics = json_to_mapping(&format!(
-            r#"
-            {{
-                "z": {{
-                    "topic": "{}",
-                    "msg_type": "Int32"
-                }}
-            }}
-            "#,
-            z_topic
-        ))
-        .unwrap();
+        let var_topics = BTreeMap::from([(
+            "z".to_string(),
+            VariableMappingData {
+                topic: z_topic.clone(),
+                msg_type: ROSMsgType::Int32,
+            },
+        )]);
 
         let aux_info = vec![];
 

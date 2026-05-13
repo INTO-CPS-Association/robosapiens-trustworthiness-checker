@@ -1474,12 +1474,8 @@ mod integration_tests {
         use std::collections::BTreeMap;
         use std::os::unix::process::ExitStatusExt;
         use tc_testutils::{
-            mqtt::{
-                dummy_mqtt_publisher, dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt,
-            },
-            redis::{
-                dummy_redis_receiver, dummy_redis_sender, dummy_redis_stream_sender, start_redis,
-            },
+            mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt},
+            redis::{dummy_redis_receiver, dummy_redis_stream_sender, start_redis},
             streams::{TickSender, with_timeout, with_timeout_res},
         };
         use trustworthiness_checker::Value;
@@ -1891,152 +1887,6 @@ mod integration_tests {
             }
         }
 
-        #[cfg(feature = "testcontainers")]
-        #[apply(async_test)]
-        async fn test_redis_input_output_specific_topics(executor: Rc<LocalExecutor>) {
-            let xs = vec![Value::Int(1), Value::Int(2)];
-            let ys = vec![Value::Int(3), Value::Int(4)];
-
-            let redis_server = start_redis().await;
-            let redis_port = TokioCompat::new(redis_server.get_host_port_ipv4(6379))
-                .await
-                .expect("Failed to get host port for Redis server");
-            let cli_timeout = Duration::from_secs(3);
-
-            // Start CLI process with Redis input and output
-            let args = vec![
-                fixture_path("simple_add_typed.dsrv"),
-                "--input-redis-topics".to_string(),
-                "x".to_string(),
-                "y".to_string(),
-                "--output-redis-topics".to_string(),
-                "z".to_string(),
-                "--redis-port".to_string(),
-                format!("{}", redis_port),
-            ];
-
-            let cli_task = executor.spawn(async move {
-                let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-                run_cli_streaming(&args_refs, cli_timeout).await
-            });
-
-            // Now start publishers to send data to the waiting CLI
-            let ready_rx1 = Box::pin(futures::FutureExt::map(
-                Timer::after(Duration::from_millis(200)),
-                |_| (),
-            ));
-            let ready_rx2 = Box::pin(futures::FutureExt::map(
-                Timer::after(Duration::from_millis(200)),
-                |_| (),
-            ));
-
-            let x_publisher_task = executor.spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "x".to_string(),
-                xs,
-                ready_rx1,
-            ));
-
-            let y_publisher_task = executor.spawn(dummy_redis_sender(
-                REDIS_HOSTNAME,
-                Some(redis_port),
-                "y".to_string(),
-                ys,
-                ready_rx2,
-            ));
-
-            // Wait for publishers to complete
-            x_publisher_task.await.unwrap();
-            y_publisher_task.await.unwrap();
-
-            // Give CLI additional time to process the messages
-            Timer::after(Duration::from_millis(150)).await;
-
-            // Wait for CLI to capture output or timeout
-            let (_stdout, stderr, exit_status) =
-                cli_task.await.expect("Failed to run CLI streaming");
-
-            // Check that CLI completed successfully
-            if let Some(status) = exit_status {
-                if !(status.success() || status.signal().is_some()) {
-                    panic!(
-                        "CLI failed with exit status: {:?}, stderr: '{}'",
-                        status, stderr
-                    );
-                }
-            }
-        }
-
-        #[cfg(feature = "testcontainers")]
-        #[apply(async_test)]
-        async fn test_mqtt_input_output_specific_topics(executor: Rc<LocalExecutor>) {
-            let xs = vec![Value::Int(1), Value::Int(2)];
-            let ys = vec![Value::Int(3), Value::Int(4)];
-
-            let mqtt_server = start_mqtt().await;
-            let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
-                .await
-                .expect("Failed to get host port for MQTT server");
-            let cli_timeout = Duration::from_secs(3);
-
-            // Start CLI process with MQTT input and output
-            let args = vec![
-                fixture_path("simple_add_typed.dsrv"),
-                "--input-mqtt-topics".to_string(),
-                "x".to_string(),
-                "y".to_string(),
-                "--output-mqtt-topics".to_string(),
-                "z".to_string(),
-                "--mqtt-port".to_string(),
-                format!("{}", mqtt_port),
-            ];
-
-            let cli_task = executor.spawn(async move {
-                let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-                run_cli_streaming(&args_refs, cli_timeout).await
-            });
-
-            // Wait for CLI to start and subscribe to MQTT topics
-            Timer::after(Duration::from_millis(150)).await;
-
-            // Now start publishers to send data to the waiting CLI
-            let x_publisher_task = executor.spawn(dummy_mqtt_publisher(
-                "x_publisher".to_string(),
-                "x".to_string(),
-                xs,
-                mqtt_port,
-            ));
-
-            let y_publisher_task = executor.spawn(dummy_mqtt_publisher(
-                "y_publisher".to_string(),
-                "y".to_string(),
-                ys,
-                mqtt_port,
-            ));
-
-            // Wait for publishers to complete
-            x_publisher_task.await.expect("Failed to run x_publisher");
-            y_publisher_task.await.expect("Failed to run y_publisher");
-
-            // Give CLI additional time to process the messages
-            Timer::after(Duration::from_millis(150)).await;
-
-            // Wait for CLI to capture output or timeout
-            let (_stdout, stderr, exit_status) =
-                cli_task.await.expect("Failed to run CLI streaming");
-
-            // Check that CLI completed successfully
-            if let Some(status) = exit_status {
-                if !(status.success() || status.signal().is_some()) {
-                    panic!(
-                        "CLI failed with exit status: {:?}, stderr: '{}'",
-                        status, stderr
-                    );
-                }
-            }
-        }
-
         /// Test file input with MQTT output
         #[cfg(feature = "testcontainers")]
         #[apply(async_test)]
@@ -2212,6 +2062,147 @@ mod integration_tests {
                 wrap(Value::Int(11)),
                 "Third result should be 11"
             );
+        }
+
+        /// Test file input with MQTT output using output topic file mapping
+        #[cfg(feature = "testcontainers")]
+        #[apply(async_test)]
+        async fn test_file_input_mqtt_output_with_topic_file(executor: Rc<LocalExecutor>) {
+            let mqtt_server = start_mqtt().await;
+            let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
+                .await
+                .expect("Failed to get host port for MQTT server");
+            let cli_timeout = Duration::from_secs(5);
+
+            let mut z_sub = with_timeout(
+                get_mqtt_outputs(
+                    "z_mqtt_file".to_string(),
+                    "z_mqtt_file_subscriber".to_string(),
+                    mqtt_port,
+                ),
+                5,
+                "z_mqtt_file_subscriber",
+            )
+            .await
+            .expect("Failed to subscribe to z_mqtt_file topic");
+
+            let args = vec![
+                fixture_path("simple_add_typed.dsrv"),
+                "--input-file".to_string(),
+                fixture_path("simple_add_typed.input"),
+                "--output-mqtt-file".to_string(),
+                fixture_path("mqtt_output_topics.json"),
+                "--mqtt-port".to_string(),
+                format!("{}", mqtt_port),
+            ];
+
+            let cli_task = executor.spawn(async move {
+                let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                run_cli_streaming(&args_refs, cli_timeout).await
+            });
+
+            let (_stdout, stderr, exit_status) =
+                cli_task.await.expect("Failed to run CLI streaming");
+
+            if let Some(status) = exit_status {
+                if !(status.success() || status.signal().is_some()) {
+                    panic!(
+                        "CLI failed with exit status: {:?}, stderr: '{}'",
+                        status, stderr
+                    );
+                }
+            }
+
+            let mut results = Vec::new();
+            for _ in 0..3 {
+                let val = with_timeout(z_sub.next(), 5, "z_mqtt_file_subscriber.next()")
+                    .await
+                    .expect("Failed to get mqtt output value")
+                    .expect("MQTT subscriber ended unexpectedly");
+                results.push(val);
+            }
+
+            assert_eq!(results.len(), 3);
+            assert_eq!(results[0], Value::Int(3));
+            assert_eq!(results[1], Value::Int(7));
+            assert_eq!(results[2], Value::Int(11));
+        }
+
+        /// Test file input with Redis output using output topic file mapping
+        #[cfg(feature = "testcontainers")]
+        #[apply(async_test)]
+        async fn test_file_input_redis_output_with_topic_file(executor: Rc<LocalExecutor>) {
+            let redis_server = start_redis().await;
+            let redis_port = TokioCompat::new(redis_server.get_host_port_ipv4(6379))
+                .await
+                .expect("Failed to get host port for Redis server");
+            let cli_timeout = Duration::from_secs(5);
+
+            let ready_channel = oneshot::channel();
+            let (ready_tx, ready_rx) = ready_channel.into_split();
+
+            let mut receiver_outputs = dummy_redis_receiver(
+                executor.clone(),
+                REDIS_HOSTNAME,
+                Some(redis_port),
+                vec!["z_redis_file".to_string()],
+                ready_tx,
+            )
+            .await
+            .expect("Failed to create Redis receiver");
+
+            ready_rx.await.unwrap();
+
+            let args = vec![
+                fixture_path("simple_add_typed.dsrv"),
+                "--input-file".to_string(),
+                fixture_path("simple_add_typed.input"),
+                "--output-redis-file".to_string(),
+                fixture_path("redis_output_topics.json"),
+                "--redis-port".to_string(),
+                format!("{}", redis_port),
+            ];
+
+            let cli_task = executor.spawn(async move {
+                let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                run_cli_streaming(&args_refs, cli_timeout).await
+            });
+
+            let (_stdout, stderr, exit_status) =
+                cli_task.await.expect("Failed to run CLI streaming");
+
+            if let Some(status) = exit_status {
+                if !(status.success() || status.signal().is_some()) {
+                    panic!(
+                        "CLI failed with exit status: {:?}, stderr: '{}'",
+                        status, stderr
+                    );
+                }
+            }
+
+            if let Some(mut stream) = receiver_outputs.pop() {
+                let mut results = Vec::new();
+                for _ in 0..3 {
+                    let timeout = Timer::after(Duration::from_millis(1000));
+                    futures::select! {
+                        value = stream.next().fuse() => {
+                            if let Some(val) = value {
+                                results.push(val);
+                            }
+                        }
+                        _ = futures::FutureExt::fuse(timeout) => {
+                            break;
+                        }
+                    }
+                }
+
+                assert_eq!(results.len(), 3);
+                assert_eq!(results[0], Value::Int(3));
+                assert_eq!(results[1], Value::Int(7));
+                assert_eq!(results[2], Value::Int(11));
+            } else {
+                panic!("No Redis output stream found");
+            }
         }
 
         /// Test distributed work mode with MQTT input and local node

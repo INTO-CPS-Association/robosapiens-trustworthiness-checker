@@ -60,6 +60,12 @@ impl From<String> for VarName {
     }
 }
 
+impl From<VarName> for String {
+    fn from(var_name: VarName) -> String {
+        var_name.name()
+    }
+}
+
 impl Display for VarName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.name())

@@ -10,7 +10,7 @@ use crate::{
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, graph_to_png,
     },
-    io::{TopicMapping, mqtt::dist_graph_provider::DistGraphProvider},
+    io::{config::TopicMapping, mqtt::dist_graph_provider::DistGraphProvider},
     semantics::distributed::localisation::Localisable,
 };
 

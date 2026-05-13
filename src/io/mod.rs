@@ -1,10 +1,3 @@
-use std::collections::BTreeMap;
-
-use crate::VarName;
-
-pub type TopicMapping = BTreeMap<VarName, String>;
-pub type MsgTypeMapping = BTreeMap<VarName, String>;
-
 pub mod builders;
 pub mod cli;
 pub mod file;
@@ -15,4 +8,6 @@ pub mod replay_history;
 pub mod ros;
 pub mod testing;
 pub use self::builders::InputProviderBuilder;
+pub mod config;
+pub use config::{MsgTypeMapping, TopicMapping};
 pub mod redis;

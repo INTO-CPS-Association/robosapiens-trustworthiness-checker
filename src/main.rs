@@ -192,39 +192,20 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
                 // currently as this would couple the output handler building
                 // and the runtime building)
 
-                use trustworthiness_checker::io::ros::json_to_mapping;
-                use trustworthiness_checker::io::ros::ros_topic_stream_mapping::{
-                    ros_stream_mapping_to_topic_mapping, ros_variable_map_to_string_variable_map,
-                };
+                use trustworthiness_checker::io::config::deserialisation::json_to_topic_msg_type_mapping;
 
                 let output_json = std::fs::read_to_string(_output_ros_file)
                     .expect("Output mapping file could not be read");
-                let output_mapping =
-                    json_to_mapping(&output_json).expect("Output mapping file could not be parsed");
-                let output_types = ros_variable_map_to_string_variable_map(output_mapping.clone())
-                    .expect(
-                        "ROS output topic mapping could not be converted to string variable map",
-                    );
-                let output_topics = ros_stream_mapping_to_topic_mapping(output_mapping).expect(
-                    "ROS output topic mapping could not be converted to topic string variable map",
-                );
+                let (output_topics, output_types) = json_to_topic_msg_type_mapping(&output_json)
+                    .expect("Output mapping file could not be parsed");
 
                 let (input_types, input_topics) = match &cli.input_mode.input_ros_file {
                     Some(input_ros_file) => {
                         let input_json = std::fs::read_to_string(input_ros_file)
                             .expect("Input mapping file could not be read");
-                        let input_mapping = json_to_mapping(&input_json)
-                            .expect("Input mapping file could not be parsed");
-                        let input_types = ros_variable_map_to_string_variable_map(
-                            input_mapping.clone(),
-                        )
-                        .expect(
-                            "ROS input topic mapping could not be converted to string variable map",
-                        );
-                        let input_topics =
-                            ros_stream_mapping_to_topic_mapping(input_mapping).expect(
-                                "ROS input topic mapping could not be converted to topic string variable map",
-                            );
+                        let (input_topics, input_types) =
+                            json_to_topic_msg_type_mapping(&input_json)
+                                .expect("Input mapping file could not be parsed");
                         (input_types, input_topics)
                     }
                     None => (BTreeMap::new(), BTreeMap::new()),

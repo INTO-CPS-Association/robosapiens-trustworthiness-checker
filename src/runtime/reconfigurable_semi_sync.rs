@@ -2,7 +2,7 @@ use crate::{
     OutputStream, SExpr, Value, VarName,
     core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
     io::{
-        InputProviderBuilder,
+        InputProviderBuilder, MsgTypeMapping, TopicMapping,
         builders::{
             InputProviderSpec, OutputHandlerBuilder, output_handler_builder::OutputHandlerSpec,
         },
@@ -24,7 +24,6 @@ use futures::{
     stream::{FuturesUnordered, LocalBoxStream},
 };
 use serde::Deserialize;
-use serde_json::Value as JValue;
 use smol::LocalExecutor;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -41,8 +40,8 @@ struct ReconfInput {
     // TODO: Certain InputProviders are type-strong (e.g. Ros). These must know the types of Inputs
     // and Outputs. When type checking becomes more stable for the language, we
     // should use that instead of a variable here, and simply enforce that the spec is typed.
-    type_info: BTreeMap<String, String>,
-    topic_mapping: BTreeMap<String, String>,
+    type_info: MsgTypeMapping,
+    topic_mapping: TopicMapping,
 }
 
 #[derive(Clone)]
@@ -59,6 +58,8 @@ where
     output_builder: Option<OutputHandlerBuilder>,
     reconf_topic: Option<String>,
     starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
+    known_topic_mapping: TopicMapping,
+    known_type_info: MsgTypeMapping,
     _marker: (
         std::marker::PhantomData<MS>,
         std::marker::PhantomData<AC>,
@@ -83,6 +84,8 @@ where
             output_builder: None,
             reconf_topic: None,
             starting_history: None,
+            known_topic_mapping: BTreeMap::new(),
+            known_type_info: BTreeMap::new(),
             _marker: (
                 std::marker::PhantomData,
                 std::marker::PhantomData,
@@ -151,6 +154,23 @@ where
                 })
                 .collect();
             self.inject_reconf_stream();
+
+            if let Some(input_builder) = &self.input_builder {
+                if let InputProviderSpec::Ros(topic_mapping, msg_type_mapping) = &input_builder.spec
+                {
+                    self.known_topic_mapping.extend(topic_mapping.clone());
+                    self.known_type_info.extend(msg_type_mapping.clone());
+                }
+            }
+            if let Some(output_builder) = &self.output_builder {
+                if let OutputHandlerSpec::Ros(topic_mapping, msg_type_mapping) =
+                    &output_builder.spec
+                {
+                    self.known_topic_mapping.extend(topic_mapping.clone());
+                    self.known_type_info.extend(msg_type_mapping.clone());
+                }
+            }
+
             info!(
                 ?self.input_builder,
                 "Building ReconfSemiSyncRuntime input provider"
@@ -244,14 +264,17 @@ where
                     "Injecting reconf variable into InputProvider"
                 );
 
-                let mut var_topics: Vec<String> = topics.clone().unwrap_or_else(|| {
+                let mut var_topics: TopicMapping = topics.clone().unwrap_or_else(|| {
                     model
                         .input_vars()
                         .into_iter()
-                        .map(|v| v.to_string())
+                        .map(|v| {
+                            let topic: String = (&v).into();
+                            (v, topic)
+                        })
                         .collect()
                 });
-                var_topics.push(reconf_topic.name());
+                var_topics.insert(reconf_topic.clone(), reconf_topic.name());
 
                 match input_builder.spec {
                     InputProviderSpec::MQTT(_) => InputProviderSpec::MQTT(Some(var_topics)),
@@ -259,24 +282,17 @@ where
                     _ => unreachable!(),
                 }
             }
-            InputProviderSpec::Ros(json_info) => {
+            InputProviderSpec::Ros(topic_mapping, msg_type_mapping) => {
+                let mut topic_mapping = topic_mapping.clone();
+                let mut msg_type_mapping = msg_type_mapping.clone();
                 info!(
                     ?reconf_topic,
                     "Injecting reconf variable into InputProvider"
                 );
-                // Read as JSON:
-                let mut json = serde_json5::from_str::<JValue>(&json_info)
-                    .expect("ROS input topics must be valid JSON");
-                if let JValue::Object(obj) = &mut json {
-                    obj.extend([(
-                        reconf_topic.name(),
-                        serde_json::json!({
-                            "topic": format!("/{}", reconf_topic.name()),
-                            "msg_type": "String",
-                        }),
-                    )]);
-                }
-                InputProviderSpec::Ros(json.to_string())
+                let reconf_topic_name = format!("/{}", reconf_topic.name());
+                topic_mapping.insert(reconf_topic.clone(), reconf_topic_name.into());
+                msg_type_mapping.insert(reconf_topic.clone(), "String".into());
+                InputProviderSpec::Ros(topic_mapping, msg_type_mapping)
             }
         };
 
@@ -392,284 +408,360 @@ where
         ret
     }
 
+    // Merge the existing mappings/type data with the existing one so that the types for
+    // new variables are either given by the previous mapping (so, initially, from the
+    // mapping file passed on the commandline) or the new one if new values are provided.
+    // This means that new mapping data replaces old data, but old topic names and msg types
+    // can still be used if new ones are not sent.
+    fn merge_topic_msg_type_mappings(
+        vars: &BTreeSet<VarName>,
+        incoming_topic_mapping: &TopicMapping,
+        existing_topic_mapping: &TopicMapping,
+        incoming_msg_type_mapping: &MsgTypeMapping,
+        existing_msg_type_mapping: &MsgTypeMapping,
+    ) -> anyhow::Result<(TopicMapping, MsgTypeMapping)> {
+        let merged_msg_type_mapping: MsgTypeMapping = vars
+            .iter()
+            .filter_map(|v| {
+                incoming_msg_type_mapping
+                    .get(v)
+                    .cloned()
+                    .or_else(|| existing_msg_type_mapping.get(v).cloned())
+                    .map(|typ| (v.clone(), typ))
+            })
+            .collect();
+
+        let missing: Vec<_> = vars
+            .iter()
+            .filter_map(|v| merged_msg_type_mapping.get(v).is_none().then_some(v.name()))
+            .collect();
+        if !missing.is_empty() {
+            return Err(anyhow!("Missing type_info for vars: {:?}.", missing));
+        }
+
+        let merged_topics: TopicMapping = vars
+            .iter()
+            .map(|v| {
+                let topic = incoming_topic_mapping
+                    .get(v)
+                    .cloned()
+                    .or_else(|| existing_topic_mapping.get(v).cloned())
+                    .unwrap_or_else(|| format!("/{}", v.name()));
+                (v.clone(), topic)
+            })
+            .collect();
+
+        Ok((merged_topics, merged_msg_type_mapping))
+    }
+
+    fn merge_topic_mappings(
+        vars: BTreeSet<VarName>,
+        incoming_topic_mapping: &TopicMapping,
+        existing_topics: Option<&TopicMapping>,
+    ) -> TopicMapping {
+        let mut merged = existing_topics.cloned().unwrap_or_default();
+        merged.extend(incoming_topic_mapping.clone());
+
+        for v in vars {
+            merged.entry(v.clone()).or_insert_with(|| v.to_string());
+        }
+
+        merged
+    }
+
+    fn reconf_input_from_map(
+        map: &BTreeMap<ecow::EcoString, Value>,
+    ) -> anyhow::Result<ReconfInput> {
+        let spec = match map.get("spec") {
+            Some(Value::Str(s)) => s.to_string(),
+            Some(v) => {
+                return Err(anyhow!(
+                    "Invalid reconfiguration map: 'spec' must be a string, got {:?}",
+                    v
+                ));
+            }
+            None => {
+                return Err(anyhow!(
+                    "Invalid reconfiguration map: missing required field 'spec'"
+                ));
+            }
+        };
+
+        let to_string_mapping = |field_name: &str| -> anyhow::Result<BTreeMap<VarName, String>> {
+            let Value::Map(inner) = map.get(field_name).ok_or_else(|| {
+                anyhow!(
+                    "Invalid reconfiguration map: missing required field '{}'",
+                    field_name
+                )
+            })?
+            else {
+                return Err(anyhow!(
+                    "Invalid reconfiguration map: '{}' must be an object",
+                    field_name
+                ));
+            };
+
+            inner
+                .iter()
+                .map(|(k, v)| match v {
+                    Value::Str(s) => Ok((VarName::new(k.as_str()), s.to_string())),
+                    other => Err(anyhow!(
+                        "Invalid reconfiguration map: '{}' value for key '{}' must be a string, got {:?}",
+                        field_name,
+                        k,
+                        other
+                    )),
+                })
+                .collect()
+        };
+
+        let type_info = to_string_mapping("type_info")?;
+        let topic_mapping = to_string_mapping("topic_mapping")?;
+
+        Ok(ReconfInput {
+            spec,
+            type_info,
+            topic_mapping,
+        })
+    }
+
     async fn handle_reconfig_input<'a>(
         &mut self,
         val: Value,
         context: &'a mut SemiSyncContext<AC>,
     ) -> anyhow::Result<()> {
-        match val {
+        let deserialized = match val {
             Value::Str(config) => {
-                // NOTE: Known limitation: Reconf commands where only topic mapping changes counts
-                // as duplicates
                 info!("Received reconfiguration command: {:?}", config);
                 // TODO: This error message prints horribly... But I did not want to add another
                 // crate like schemar just for this
-                let deserialized =
-                    serde_json5::from_str::<ReconfInput>(&config).map_err(|err| {
-                        anyhow!("Failed to deserialize reconfiguration command: {:?}", err)
-                    })?;
-                let parsed = P::parse(&mut deserialized.spec.as_str());
-                info!("Parsed as: {:?}", parsed);
-                let parsed = parsed
-                    .map_err(|err| anyhow!("Failed to parse reconfiguration command: {:?}", err))?;
-                let old_model = self
-                    .self_builder
-                    .model
-                    .clone()
-                    .expect("Model must exist for reconfiguration");
-                let reconf_topic: VarName = self
-                    .self_builder
-                    .reconf_topic
-                    .clone()
-                    .expect("Reconf topic must be set")
-                    .into();
-                let old_input_set = old_model
-                    .input_vars()
-                    .into_iter()
-                    .filter(|v| *v != reconf_topic) // Exclude reconf topic from comparison
-                    .map(|v| v.name())
-                    .collect::<BTreeSet<_>>();
-                let old_out_exprs = old_model
-                    .output_vars()
-                    .into_iter()
-                    .map(|v| {
-                        let expr = old_model.var_expr(&v).ok_or_else(|| {
-                            anyhow!(
-                                "Output variable {:?} must have an expression in the old model",
-                                v
-                            )
-                        })?;
-                        Ok((v.name(), expr))
-                    })
-                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                let new_input_set = parsed
-                    .input_vars()
-                    .into_iter()
-                    .map(|v| v.name())
-                    .collect::<BTreeSet<_>>();
-                let out_exprs = parsed
-                    .output_vars()
-                    .into_iter()
-                    .map(|v| {
-                        let expr = parsed.var_expr(&v).ok_or_else(|| {
-                            anyhow!(
-                                "Output variable {:?} must have an expression in the new model",
-                                v
-                            )
-                        })?;
-                        Ok((v.name(), expr))
-                    })
-                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                if new_input_set == old_input_set && out_exprs == old_out_exprs {
-                    info!(
-                        "Reconfiguration does not change input vars or output expressions, skipping rebuild"
-                    );
-                    return Ok(());
-                }
-
-                let added_inputs: Vec<_> =
-                    new_input_set.difference(&old_input_set).cloned().collect();
-                let removed_inputs: Vec<_> =
-                    old_input_set.difference(&new_input_set).cloned().collect();
-                if !added_inputs.is_empty() || !removed_inputs.is_empty() {
-                    info!(
-                        "Reconfiguration input vars changed. Added: {:?}, removed: {:?}",
-                        added_inputs, removed_inputs
-                    );
-                }
-
-                let old_out_keys: BTreeSet<_> = old_out_exprs.keys().cloned().collect();
-                let new_out_keys: BTreeSet<_> = out_exprs.keys().cloned().collect();
-                let added_outputs: Vec<_> =
-                    new_out_keys.difference(&old_out_keys).cloned().collect();
-                let removed_outputs: Vec<_> =
-                    old_out_keys.difference(&new_out_keys).cloned().collect();
-                let changed_outputs: Vec<_> = out_exprs
-                    .iter()
-                    .filter_map(|(name, expr)| {
-                        old_out_exprs
-                            .get(name)
-                            .filter(|old_expr| *old_expr != expr)
-                            .map(|old_expr| (name.clone(), old_expr, expr))
-                    })
-                    .collect();
-                if !added_outputs.is_empty()
-                    || !removed_outputs.is_empty()
-                    || !changed_outputs.is_empty()
-                {
-                    info!(
-                        "Reconfiguration output expressions changed. Added: {:?}, removed: {:?}, changed: {:?}",
-                        added_outputs, removed_outputs, changed_outputs
-                    );
-                }
-
-                self.self_builder = self.self_builder.clone().model(parsed.clone());
-
-                // TODO: does not respect topic mapping for MQTT and Redis (because Input/Output
-                // builder does not either...)
-                //
-                // Update InputProvider spec
-                let input_spec = match self.self_builder.input_builder.clone().unwrap().spec {
-                    InputProviderSpec::MQTT(_topics) => InputProviderSpec::MQTT(Some(
-                        parsed
-                            .input_vars()
-                            .into_iter()
-                            .map(|v| v.to_string())
-                            .collect(),
-                    )),
-                    InputProviderSpec::Ros(_json) => {
-                        let type_info = deserialized.type_info.clone();
-                        let topic_mapping = deserialized.topic_mapping.clone();
-                        let vars = parsed.input_vars();
-                        let missing: Vec<_> = vars
-                            .iter()
-                            .filter_map(|v| type_info.get(&v.name()).is_none().then_some(v.name()))
-                            .collect();
-                        if !missing.is_empty() {
-                            return Err(anyhow!(
-                                "Missing type_info for vars: {:?}. Required for ROS2 InputProvider",
-                                missing
-                            ));
-                        }
-                        let combined = JValue::Object(
-                            vars.into_iter()
-                                .map(|v| {
-                                    let name = v.name();
-                                    let topic = match topic_mapping.get(&name) {
-                                        Some(t) => t.clone(),
-                                        None => format!("/{}", v),
-                                    };
-                                    let var_type = type_info.get(&name).unwrap().clone(); // Safe now
-                                    (
-                                        name,
-                                        serde_json::json!({
-                                            "topic": topic,
-                                            "msg_type": var_type,
-                                        }),
-                                    )
-                                })
-                                .collect(),
-                        );
-                        InputProviderSpec::Ros(combined.to_string())
-                    }
-                    InputProviderSpec::File(_path) => {
-                        // TODO: Maybe this could be implemented if FileInputProvider had a way of telling us which line it
-                        // currently read on
-                        unimplemented!(
-                            "Reconfiguration of file inputs is not supported as it requires re-reading the input file, which causes the inputs to start over."
-                        )
-                    }
-                    InputProviderSpec::Redis(_topics) => {
-                        unimplemented!("Unimplemented. Could be done similarly to MQTT.")
-                    }
-                    InputProviderSpec::Manual => unimplemented!("Not needed yet"),
-                };
-                if let Some(ref mut input_builder) = self.self_builder.input_builder {
-                    input_builder.spec = input_spec;
-                    self.self_builder.input_builder = Some(input_builder.clone());
-                }
-
-                // Update OutputSpec
-                // TODO: Most matches do not respect _topics...
-                let output_spec = match self.self_builder.output_builder.clone().unwrap().spec {
-                    OutputHandlerSpec::Stdout => OutputHandlerSpec::Stdout,
-                    // Requires type_info:
-                    OutputHandlerSpec::Ros(_) => {
-                        let type_info = deserialized.type_info.clone();
-                        let topic_mapping = deserialized.topic_mapping.clone();
-                        let vars = parsed.output_vars();
-                        let missing: Vec<_> = vars
-                            .iter()
-                            .filter_map(|v| type_info.get(&v.name()).is_none().then_some(v.name()))
-                            .collect();
-                        if !missing.is_empty() {
-                            return Err(anyhow!(
-                                "Missing type_info for vars: {:?}. Required for ROS2 OutputHandler",
-                                missing
-                            ));
-                        }
-                        let combined = JValue::Object(
-                            vars.into_iter()
-                                .map(|v| {
-                                    let name = v.name();
-                                    let topic = match topic_mapping.get(&name) {
-                                        Some(t) => t.clone(),
-                                        None => format!("/{}", v),
-                                    };
-                                    let var_type = type_info.get(&name).unwrap().clone(); // Safe now
-                                    (
-                                        name,
-                                        serde_json::json!({
-                                            "topic": topic,
-                                            "msg_type": var_type,
-                                        }),
-                                    )
-                                })
-                                .collect(),
-                        );
-
-                        OutputHandlerSpec::Ros(combined.to_string())
-                    }
-                    OutputHandlerSpec::MQTT(_topics) => OutputHandlerSpec::MQTT(Some(
-                        parsed
-                            .output_vars()
-                            .into_iter()
-                            .map(|v| v.to_string())
-                            .collect(),
-                    )),
-                    OutputHandlerSpec::Redis(_topics) => {
-                        unimplemented!("Unimplemented. Could be done similarly to MQTT.")
-                    }
-                    OutputHandlerSpec::Manual => unimplemented!("Not needed yet"),
-                };
-                if let Some(ref mut output_builder) = self.self_builder.output_builder {
-                    output_builder.spec = output_spec;
-                    self.self_builder.output_builder = Some(output_builder.clone());
-                }
-
-                // Make history for new runtime of equal length, containing all variables, and padded with NoVal if needed.
-                // NOTE: Using NoVal here, because this indicates the start of a new trace where no
-                // values have previously been received on the stream.
-                // Also, Deferred messes up signal semantics outputs. E.g., z = x + y and
-                let mut retained_history = context.get_retained_history();
-                let vars = self
-                    .self_builder
-                    .model
-                    .clone()
-                    .expect("Model must exist")
-                    .var_names();
-                // Retain only variables that are still present in the new model
-                retained_history.retain(|var_name, _| vars.contains(var_name));
-                // Add empty history for new variables (should not be needed but better safe than sorry)
-                vars.iter().for_each(|var| {
-                    retained_history.entry(var.clone()).or_default();
-                });
-                let longest_history = retained_history
-                    .values()
-                    .map(|h| h.len())
-                    .max()
-                    .unwrap_or(0);
-                // Pad histories to be of equal length
-                let starting_history = retained_history
-                    .into_iter()
-                    .map(|(var_name, hist)| {
-                        let padding_needed = longest_history.saturating_sub(hist.len());
-                        let mut padded_hist = vec![AC::Val::no_val_value(); padding_needed];
-                        padded_hist.extend(hist);
-                        (var_name, padded_hist)
-                    })
-                    .collect();
-
-                self.self_builder.starting_history = Some(starting_history);
-                warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
-                let new_self = Box::new(self.self_builder.clone()).async_build().await;
-                new_self.run().await
+                serde_json5::from_str::<ReconfInput>(&config).map_err(|err| {
+                    anyhow!("Failed to deserialize reconfiguration command: {:?}", err)
+                })?
             }
-            v => Err(anyhow!(
-                "Received invalid reconfiguration value type: {:?}",
-                v
-            )),
+            Value::Map(map) => {
+                info!("Received reconfiguration command as map payload");
+                Self::reconf_input_from_map(&map)?
+            }
+            v => {
+                return Err(anyhow!(
+                    "Received invalid reconfiguration value type: {:?}",
+                    v
+                ));
+            }
+        };
+
+        self.self_builder
+            .known_topic_mapping
+            .extend(deserialized.topic_mapping.clone());
+        self.self_builder
+            .known_type_info
+            .extend(deserialized.type_info.clone());
+
+        let parsed = P::parse(&mut deserialized.spec.as_str());
+        info!("Parsed as: {:?}", parsed);
+        let parsed =
+            parsed.map_err(|err| anyhow!("Failed to parse reconfiguration command: {:?}", err))?;
+        let old_model = self
+            .self_builder
+            .model
+            .clone()
+            .expect("Model must exist for reconfiguration");
+        let reconf_topic: VarName = self
+            .self_builder
+            .reconf_topic
+            .clone()
+            .expect("Reconf topic must be set")
+            .into();
+        let old_input_set = old_model
+            .input_vars()
+            .into_iter()
+            .filter(|v| *v != reconf_topic) // Exclude reconf topic from comparison
+            .map(|v| v.name())
+            .collect::<BTreeSet<_>>();
+        let old_out_exprs = old_model
+            .output_vars()
+            .into_iter()
+            .map(|v| {
+                let expr = old_model.var_expr(&v).ok_or_else(|| {
+                    anyhow!(
+                        "Output variable {:?} must have an expression in the old model",
+                        v
+                    )
+                })?;
+                Ok((v.name(), expr))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+        let new_input_set = parsed
+            .input_vars()
+            .into_iter()
+            .map(|v| v.name())
+            .collect::<BTreeSet<_>>();
+        let out_exprs = parsed
+            .output_vars()
+            .into_iter()
+            .map(|v| {
+                let expr = parsed.var_expr(&v).ok_or_else(|| {
+                    anyhow!(
+                        "Output variable {:?} must have an expression in the new model",
+                        v
+                    )
+                })?;
+                Ok((v.name(), expr))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+        if new_input_set == old_input_set && out_exprs == old_out_exprs {
+            info!(
+                "Reconfiguration does not change input vars or output expressions, skipping rebuild"
+            );
+            return Ok(());
         }
+
+        let added_inputs: Vec<_> = new_input_set.difference(&old_input_set).cloned().collect();
+        let removed_inputs: Vec<_> = old_input_set.difference(&new_input_set).cloned().collect();
+        if !added_inputs.is_empty() || !removed_inputs.is_empty() {
+            info!(
+                "Reconfiguration input vars changed. Added: {:?}, removed: {:?}",
+                added_inputs, removed_inputs
+            );
+        }
+
+        let old_out_keys: BTreeSet<_> = old_out_exprs.keys().cloned().collect();
+        let new_out_keys: BTreeSet<_> = out_exprs.keys().cloned().collect();
+        let added_outputs: Vec<_> = new_out_keys.difference(&old_out_keys).cloned().collect();
+        let removed_outputs: Vec<_> = old_out_keys.difference(&new_out_keys).cloned().collect();
+        let changed_outputs: Vec<_> = out_exprs
+            .iter()
+            .filter_map(|(name, expr)| {
+                old_out_exprs
+                    .get(name)
+                    .filter(|old_expr| *old_expr != expr)
+                    .map(|old_expr| (name.clone(), old_expr, expr))
+            })
+            .collect();
+        if !added_outputs.is_empty() || !removed_outputs.is_empty() || !changed_outputs.is_empty() {
+            info!(
+                "Reconfiguration output expressions changed. Added: {:?}, removed: {:?}, changed: {:?}",
+                added_outputs, removed_outputs, changed_outputs
+            );
+        }
+
+        self.self_builder = self.self_builder.clone().model(parsed.clone());
+
+        // Update InputProvider spec
+        let input_spec = match self.self_builder.input_builder.clone().unwrap().spec {
+            InputProviderSpec::MQTT(topics) => {
+                InputProviderSpec::MQTT(Some(Self::merge_topic_mappings(
+                    parsed.input_vars(),
+                    &self.self_builder.known_topic_mapping,
+                    topics.as_ref(),
+                )))
+            }
+            InputProviderSpec::Ros(topic_mapping, msg_type_mapping) => {
+                let vars = parsed.input_vars();
+                let (new_topic_mapping, new_type_mapping) = Self::merge_topic_msg_type_mappings(
+                    &vars,
+                    &self.self_builder.known_topic_mapping,
+                    &topic_mapping,
+                    &self.self_builder.known_type_info,
+                    &msg_type_mapping,
+                )?;
+                InputProviderSpec::Ros(new_topic_mapping, new_type_mapping)
+            }
+            InputProviderSpec::File(_path) => {
+                // TODO: Maybe this could be implemented if FileInputProvider had a way of telling us which line it
+                // currently read on
+                unimplemented!(
+                    "Reconfiguration of file inputs is not supported as it requires re-reading the input file, which causes the inputs to start over."
+                )
+            }
+            InputProviderSpec::Redis(topics) => {
+                InputProviderSpec::Redis(Some(Self::merge_topic_mappings(
+                    parsed.input_vars(),
+                    &self.self_builder.known_topic_mapping,
+                    topics.as_ref(),
+                )))
+            }
+            InputProviderSpec::Manual => unimplemented!("Not needed yet"),
+        };
+        if let Some(ref mut input_builder) = self.self_builder.input_builder {
+            input_builder.spec = input_spec;
+            self.self_builder.input_builder = Some(input_builder.clone());
+        }
+
+        // Update OutputSpec
+        let output_spec = match self.self_builder.output_builder.clone().unwrap().spec {
+            OutputHandlerSpec::Stdout => OutputHandlerSpec::Stdout,
+            // Requires type_info:
+            OutputHandlerSpec::Ros(topic_mapping, msg_type_mapping) => {
+                let vars = parsed.output_vars();
+                let (new_topics, merged_type_info) = Self::merge_topic_msg_type_mappings(
+                    &vars,
+                    &self.self_builder.known_topic_mapping,
+                    &topic_mapping,
+                    &self.self_builder.known_type_info,
+                    &msg_type_mapping,
+                )?;
+                OutputHandlerSpec::Ros(new_topics, merged_type_info)
+            }
+            OutputHandlerSpec::Mqtt(topics) => {
+                OutputHandlerSpec::Mqtt(Some(Self::merge_topic_mappings(
+                    parsed.output_vars(),
+                    &self.self_builder.known_topic_mapping,
+                    topics.as_ref(),
+                )))
+            }
+            OutputHandlerSpec::Redis(topics) => {
+                OutputHandlerSpec::Redis(Some(Self::merge_topic_mappings(
+                    parsed.output_vars(),
+                    &self.self_builder.known_topic_mapping,
+                    topics.as_ref(),
+                )))
+            }
+            OutputHandlerSpec::Manual => unimplemented!("Not needed yet"),
+        };
+        if let Some(ref mut output_builder) = self.self_builder.output_builder {
+            output_builder.spec = output_spec;
+            self.self_builder.output_builder = Some(output_builder.clone());
+        }
+
+        // Make history for new runtime of equal length, containing all variables, and padded with NoVal if needed.
+        // NOTE: Using NoVal here, because this indicates the start of a new trace where no
+        // values have previously been received on the stream.
+        // Also, Deferred messes up signal semantics outputs. E.g., z = x + y and
+        let mut retained_history = context.get_retained_history();
+        let vars = self
+            .self_builder
+            .model
+            .clone()
+            .expect("Model must exist")
+            .var_names();
+        // Retain only variables that are still present in the new model
+        retained_history.retain(|var_name, _| vars.contains(var_name));
+        // Add empty history for new variables (should not be needed but better safe than sorry)
+        vars.iter().for_each(|var| {
+            retained_history.entry(var.clone()).or_default();
+        });
+        let longest_history = retained_history
+            .values()
+            .map(|h| h.len())
+            .max()
+            .unwrap_or(0);
+        // Pad histories to be of equal length
+        let starting_history = retained_history
+            .into_iter()
+            .map(|(var_name, hist)| {
+                let padding_needed = longest_history.saturating_sub(hist.len());
+                let mut padded_hist = vec![AC::Val::no_val_value(); padding_needed];
+                padded_hist.extend(hist);
+                (var_name, padded_hist)
+            })
+            .collect();
+
+        self.self_builder.starting_history = Some(starting_history);
+        warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
+        let new_self = Box::new(self.self_builder.clone()).async_build().await;
+        new_self.run().await
     }
 
     async fn handle_regular_input_update(

@@ -5,6 +5,7 @@ use smol::LocalExecutor;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::cli::StdoutOutputHandler;
+use crate::io::config::{MsgTypeMapping, TopicMapping};
 use crate::io::mqtt::{MQTTOutputHandler, MqttFactory};
 use crate::io::redis::RedisOutputHandler;
 use crate::{Value, VarName, core::OutputHandler};
@@ -15,18 +16,20 @@ pub enum OutputHandlerSpec {
     Stdout,
     /// ROS topics input provider
     Ros(
-        /// JSON string with topics and types
-        String,
+        /// Topic mapping
+        TopicMapping,
+        /// Var Msg Type mapping
+        MsgTypeMapping,
     ),
     /// MQTT topics output provider
-    MQTT(
-        /// Topics
-        Option<Vec<String>>,
+    Mqtt(
+        /// Topics mapping
+        Option<TopicMapping>,
     ),
     /// Redis topics output provider
     Redis(
-        /// Topics
-        Option<Vec<String>>,
+        /// Topic mapping
+        Option<TopicMapping>,
     ),
     Manual,
 }
@@ -117,12 +120,12 @@ impl OutputHandlerBuilder {
                 output_vars.into_iter().collect(),
                 aux_info,
             )) as Box<dyn OutputHandler<Val = Value>>,
-            OutputHandlerSpec::Ros(_json_string) => {
+            OutputHandlerSpec::Ros(_topic_mapping, _msg_type_mapping) => {
                 #[cfg(feature = "ros")]
                 {
                     use crate::io::ros::output_handler::ROSOutputHandler;
                     use crate::io::ros::ros_topic_stream_mapping::{
-                        VariableMappingData, json_to_mapping,
+                        VariableMappingData, ros_stream_mapping_from_topic_and_msg_type_mapping,
                     };
                     use std::collections::BTreeMap;
                     use tracing::warn;
@@ -168,8 +171,12 @@ impl OutputHandlerBuilder {
                         Ok(used_mapping)
                     }
 
-                    let output_mapping_raw = json_to_mapping(&_json_string)
-                        .expect("Output mapping file could not be parsed");
+                    // json_to_mapping(&_json_string)
+                    let output_mapping_raw = ros_stream_mapping_from_topic_and_msg_type_mapping(
+                        _topic_mapping,
+                        _msg_type_mapping,
+                    )
+                    .expect("Output mapping file could not be parsed");
                     let output_mapping: BTreeMap<_, _> = filter_ros_mapping(
                         output_mapping_raw,
                         &output_vars,
@@ -191,15 +198,14 @@ impl OutputHandlerBuilder {
                     unimplemented!("ROS support not enabled")
                 }
             }
-            OutputHandlerSpec::MQTT(topics) => {
-                let topics: BTreeMap<_, _> = if let Some(topics) = topics {
+            OutputHandlerSpec::Mqtt(topics) => {
+                let topics: BTreeMap<VarName, String> = if let Some(topics) = topics {
                     // Topics provided by user
                     topics
                         .into_iter()
                         // Only include topics that are in the output_vars
                         // this is necessary for localisation support
-                        .filter(|topic| output_vars.contains(&VarName::new(topic.as_str())))
-                        .map(|topic| (topic.clone().into(), topic))
+                        .filter(|(var, _)| output_vars.contains(var))
                         .collect()
                 } else {
                     // Auto generated topics from spec
@@ -233,14 +239,13 @@ impl OutputHandlerBuilder {
                 Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
             }
             OutputHandlerSpec::Redis(topics) => {
-                let topics: BTreeMap<_, _> = if let Some(topics) = topics {
+                let topics: BTreeMap<VarName, String> = if let Some(topics) = topics {
                     // Topics provided by user
                     topics
                         .into_iter()
                         // Only include topics that are in the output_vars
                         // this is necessary for localisation support
-                        .filter(|topic| output_vars.contains(&VarName::new(topic.as_str())))
-                        .map(|topic| (topic.clone().into(), topic))
+                        .filter(|(var, _)| output_vars.contains(var))
                         .collect()
                 } else {
                     // Auto generated topics from spec
