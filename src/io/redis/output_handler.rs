@@ -2,33 +2,66 @@ use std::{collections::BTreeMap, mem, rc::Rc};
 
 use anyhow::Context;
 use futures::{
-    StreamExt,
+    FutureExt, StreamExt,
     future::{LocalBoxFuture, join_all},
 };
 use redis::{AsyncTypedCommands, aio::MultiplexedConnection};
 use smol::LocalExecutor;
-use tracing::info;
+use tracing::{debug, info};
 use unsync::oneshot::{Receiver as OSReceiver, Sender as OSSender};
 
-use crate::{OutputStream, Value, VarName, core::OutputHandler};
+use crate::{
+    OutputStream, Value, VarName,
+    core::OutputHandler,
+    utils::cancellation_token::{CancellationToken, DropGuard},
+};
 
 async fn publish_stream(
     topic_name: String,
     mut stream: OutputStream<Value>,
     mut con: MultiplexedConnection,
+    cancellation_token: CancellationToken,
 ) -> anyhow::Result<()> {
-    while let Some(data) = stream.next().await {
-        if data == Value::NoVal {
-            continue;
+    let mut cancelled = cancellation_token.cancelled().fuse();
+    loop {
+        futures::select_biased! {
+            _ = cancelled => {
+                return Ok(());
+            },
+            data = stream.next().fuse() => {
+                let Some(data) = data else {
+                    return Ok(());
+                };
+                if data == Value::NoVal {
+                    continue;
+                }
+
+                let data = serde_json::to_string(&data).unwrap();
+                con.publish(topic_name.clone(), data.clone())
+                    .await
+                    .context("Failed to publish output message")?;
+            }
         }
-
-        let data = serde_json::to_string(&data).unwrap();
-        con.publish(topic_name.clone(), data.clone())
-            .await
-            .context("Failed to publish output message")?;
     }
+}
 
-    Ok(())
+async fn drain_stream(
+    mut stream: OutputStream<Value>,
+    cancellation_token: CancellationToken,
+) -> anyhow::Result<()> {
+    let mut cancelled = cancellation_token.cancelled().fuse();
+    loop {
+        futures::select_biased! {
+            _ = cancelled => {
+                return Ok(());
+            },
+            data = stream.next().fuse() => {
+                if data.is_none() {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 pub struct VarData {
@@ -47,7 +80,10 @@ pub struct RedisOutputHandler {
     pub port: Option<u16>,
     pub aux_info: Vec<VarName>,
     pub uri: String,
+    executor: Rc<LocalExecutor<'static>>,
+    cancellation_drop_guard: DropGuard,
     client_tx: Option<OSSender<redis::Client>>,
+
     client_rx: Option<OSReceiver<redis::Client>>,
     connected: bool,
 }
@@ -67,15 +103,20 @@ impl OutputHandler for RedisOutputHandler {
             .var_map
             .iter_mut()
             .map(|(_, var_data)| {
+                let var_name = var_data.variable.clone();
                 let channel_name = var_data.topic_name.clone();
                 let stream = mem::take(&mut var_data.stream).expect("Stream not found");
-                (channel_name, stream)
+                (var_name, channel_name, stream)
             })
             .collect::<Vec<_>>();
         let client_rx = mem::take(&mut self.client_rx)
             .expect("Redis output handler client receiver already taken");
+        let aux_info = self.aux_info.clone();
+        let executor = self.executor.clone();
+        let cancellation_token = self.cancellation_drop_guard.clone_tok();
         let connected = self.connected;
-        info!(?self.hostname, num_streams = ?streams.len(), "OutputProvider MQTT startup task launched");
+
+        info!(?self.hostname, num_streams = ?streams.len(), "OutputProvider Redis startup task launched");
 
         Box::pin(async move {
             if !connected {
@@ -87,14 +128,21 @@ impl OutputHandler for RedisOutputHandler {
             let client = client_rx.await.ok_or_else(|| {
                 anyhow::anyhow!("Failed to receive Redis client for output handler")
             })?;
-            RedisOutputHandler::inner_handler(client, streams).await
+            RedisOutputHandler::inner_handler(
+                client,
+                streams,
+                aux_info,
+                executor,
+                cancellation_token,
+            )
+            .await
         })
     }
 }
 
 impl RedisOutputHandler {
     pub fn new(
-        _executor: Rc<LocalExecutor<'static>>,
+        executor: Rc<LocalExecutor<'static>>,
         hostname: &str,
         port: Option<u16>,
         var_topics: OutputChannelMap,
@@ -106,6 +154,7 @@ impl RedisOutputHandler {
             None => format!("redis://{}", hostname),
         };
         let (client_tx, client_rx) = unsync::oneshot::channel();
+        let cancellation_drop_guard = CancellationToken::new().drop_guard();
 
         let var_map = var_topics
             .into_iter()
@@ -127,7 +176,10 @@ impl RedisOutputHandler {
             port,
             aux_info,
             uri,
+            executor,
+            cancellation_drop_guard,
             client_tx: Some(client_tx),
+
             client_rx: Some(client_rx),
             connected: false,
         })
@@ -147,14 +199,32 @@ impl RedisOutputHandler {
 
     async fn inner_handler(
         client: redis::Client,
-        streams: Vec<(String, OutputStream<Value>)>,
+        streams: Vec<(VarName, String, OutputStream<Value>)>,
+        aux_info: Vec<VarName>,
+        executor: Rc<LocalExecutor<'static>>,
+        cancellation_token: CancellationToken,
     ) -> anyhow::Result<()> {
-        join_all(streams.into_iter().map(|(channel_name, stream)| async {
-            let con = client.get_multiplexed_async_connection().await.unwrap();
-            // TODO: Only call `publish_stream` if the var_name is not in aux_info. Else call
-            // `await_stream` (see mqtt/output_handler)
-            // (Reason I haven't done it is because my redis setup does not seem to work)
-            publish_stream(channel_name, stream, con).await
+        join_all(streams.into_iter().map(|(var_name, channel_name, stream)| {
+            let aux_info = aux_info.clone();
+            let client = client.clone();
+            let executor = executor.clone();
+            let cancellation_token = cancellation_token.clone();
+            async move {
+                if aux_info.contains(&var_name) {
+                    executor
+                        .spawn(async move {
+                            if let Err(err) = drain_stream(stream, cancellation_token.clone()).await
+                            {
+                                debug!(?err, "Failed to drain Redis auxiliary stream");
+                            }
+                        })
+                        .detach();
+                    return Ok(());
+                }
+
+                let con = client.get_multiplexed_async_connection().await.unwrap();
+                publish_stream(channel_name, stream, con, cancellation_token).await
+            }
         }))
         .await
         .into_iter()
@@ -163,6 +233,7 @@ impl RedisOutputHandler {
             Err(e) => Err(e),
         })?;
 
+        cancellation_token.cancel();
         Ok(())
     }
 }

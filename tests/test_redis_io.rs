@@ -1294,6 +1294,132 @@ mod integration_tests {
     }
 
     #[apply(smol_test)]
+    async fn test_redis_output_handler_with_aux_stream(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let redis = start_redis().await;
+        let host = redis.get_host_port_ipv4(6379).await.unwrap();
+        let host_uri = format!("redis://127.0.0.1:{}", host);
+
+        let main_var = VarName::new("z");
+        let aux_var = VarName::new("w");
+
+        let mut var_topics = BTreeMap::new();
+        var_topics.insert(main_var.clone(), "main_topic".to_string());
+        var_topics.insert(aux_var.clone(), "aux_topic".to_string());
+
+        let aux_info = vec![aux_var.clone()];
+
+        let mut handler = RedisOutputHandler::new(
+            executor.clone(),
+            REDIS_HOSTNAME,
+            Some(host),
+            var_topics,
+            aux_info,
+        )?;
+        handler.connect().await?;
+
+        let main_stream = create_test_output_stream(vec![Value::Int(10), Value::Int(20)]);
+        let aux_stream = create_test_output_stream(vec![Value::Int(30), Value::Int(40)]);
+
+        let streams = BTreeMap::from([
+            (main_var.clone(), main_stream),
+            (aux_var.clone(), aux_stream),
+        ]);
+        handler.provide_streams(streams);
+
+        let ready_channel1 = oneshot::channel();
+        let (ready_tx1, ready_rx1) = ready_channel1.into_split();
+        let ready_channel2 = oneshot::channel();
+        let (ready_tx2, ready_rx2) = ready_channel2.into_split();
+
+        let main_consumer_task = executor.spawn(consume_redis_messages(
+            host_uri.clone(),
+            "main_topic".to_string(),
+            2,
+            5000,
+            ready_tx1,
+        ));
+        let aux_consumer_task = executor.spawn(consume_redis_messages(
+            host_uri.clone(),
+            "aux_topic".to_string(),
+            1,
+            1000,
+            ready_tx2,
+        ));
+
+        ready_rx1.await.unwrap();
+        ready_rx2.await.unwrap();
+
+        let handler_task = handler.run();
+
+        let (handler_result, main_messages, aux_messages) =
+            futures::join!(handler_task, main_consumer_task, aux_consumer_task);
+
+        handler_result?;
+        let main_messages = main_messages?;
+        let aux_messages = aux_messages?;
+
+        assert_eq!(main_messages, vec![Value::Int(10), Value::Int(20)]);
+        assert_eq!(aux_messages.len(), 0, "Aux stream should not be published");
+
+        Ok(())
+    }
+
+    #[apply(smol_test)]
+    async fn test_redis_output_handler_aux_only_stream(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let redis = start_redis().await;
+        let host = redis.get_host_port_ipv4(6379).await.unwrap();
+        let host_uri = format!("redis://127.0.0.1:{}", host);
+
+        let aux_var = VarName::new("w");
+
+        let mut var_topics = BTreeMap::new();
+        var_topics.insert(aux_var.clone(), "aux_only_topic".to_string());
+
+        let mut handler = RedisOutputHandler::new(
+            executor.clone(),
+            REDIS_HOSTNAME,
+            Some(host),
+            var_topics,
+            vec![aux_var.clone()],
+        )?;
+        handler.connect().await?;
+
+        let aux_stream = create_test_output_stream(vec![Value::Int(1), Value::Int(2)]);
+        let streams = BTreeMap::from([(aux_var.clone(), aux_stream)]);
+        handler.provide_streams(streams);
+
+        let ready_channel = oneshot::channel();
+        let (ready_tx, ready_rx) = ready_channel.into_split();
+
+        let aux_consumer_task = executor.spawn(consume_redis_messages(
+            host_uri.clone(),
+            "aux_only_topic".to_string(),
+            1,
+            1000,
+            ready_tx,
+        ));
+
+        ready_rx.await.unwrap();
+
+        let handler_task = handler.run();
+        let (handler_result, aux_messages) = futures::join!(handler_task, aux_consumer_task);
+
+        handler_result?;
+        let aux_messages = aux_messages?;
+        assert_eq!(
+            aux_messages.len(),
+            0,
+            "Aux-only stream should not be published"
+        );
+
+        Ok(())
+    }
+
+    #[apply(smol_test)]
     async fn test_redis_output_handler_error_handling(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
