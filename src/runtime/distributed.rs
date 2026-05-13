@@ -56,59 +56,51 @@ use crate::io::ros::ros_scheduler_communicator::RosSchedulerCommunicator;
 #[derive(Debug, Clone)]
 pub enum DistGraphMode {
     Static(LabelledDistributionGraph),
-    MQTTCentralised(
+    MqttCentralised(
         /// Locations
         BTreeMap<NodeName, String>,
     ),
-    MQTTRandom(
+    MqttRandom(
         /// Locations
         BTreeMap<NodeName, String>,
     ),
-    MQTTStaticOptimized(
-        /// Locations
-        BTreeMap<NodeName, String>,
-        /// Output variables containing distribution constraints
-        Vec<VarName>,
-    ),
-    MQTTDynamicOptimized(
+    MqttStaticOptimized(
         /// Locations
         BTreeMap<NodeName, String>,
         /// Output variables containing distribution constraints
         Vec<VarName>,
     ),
-    MQTTStaticOptimizedSat(
+    MqttDynamicOptimized(
         /// Locations
         BTreeMap<NodeName, String>,
         /// Output variables containing distribution constraints
         Vec<VarName>,
     ),
-    MQTTDynamicOptimizedSat(
+    MqttStaticOptimizedSat(
         /// Locations
         BTreeMap<NodeName, String>,
         /// Output variables containing distribution constraints
         Vec<VarName>,
     ),
-    ROSCentralised(
+    MqttDynamicOptimizedSat(
+        /// Locations
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+    ),
+    RosCentralised(
         /// Locations (logical node -> RVData source_robot_id)
         BTreeMap<NodeName, String>,
         /// ROS topic used by distribution graph provider
         String,
     ),
-    ROSRandom(
+    RosRandom(
         /// Locations (logical node -> RVData source_robot_id)
         BTreeMap<NodeName, String>,
         /// ROS topic used by distribution graph provider
         String,
     ),
-    ROSStaticOptimized(
-        /// Locations (logical node -> RVData source_robot_id)
-        BTreeMap<NodeName, String>,
-        /// Output variables containing distribution constraints
-        Vec<VarName>,
-        /// ROS topic used by distribution graph provider
-        String,
-    ),
-    ROSDynamicOptimized(
+    RosStaticOptimized(
         /// Locations (logical node -> RVData source_robot_id)
         BTreeMap<NodeName, String>,
         /// Output variables containing distribution constraints
@@ -116,7 +108,7 @@ pub enum DistGraphMode {
         /// ROS topic used by distribution graph provider
         String,
     ),
-    ROSStaticOptimizedSat(
+    RosDynamicOptimized(
         /// Locations (logical node -> RVData source_robot_id)
         BTreeMap<NodeName, String>,
         /// Output variables containing distribution constraints
@@ -124,7 +116,15 @@ pub enum DistGraphMode {
         /// ROS topic used by distribution graph provider
         String,
     ),
-    ROSDynamicOptimizedSat(
+    RosStaticOptimizedSat(
+        /// Locations (logical node -> RVData source_robot_id)
+        BTreeMap<NodeName, String>,
+        /// Output variables containing distribution constraints
+        Vec<VarName>,
+        /// ROS topic used by distribution graph provider
+        String,
+    ),
+    RosDynamicOptimizedSat(
         /// Locations (logical node -> RVData source_robot_id)
         BTreeMap<NodeName, String>,
         /// Output variables containing distribution constraints
@@ -176,12 +176,12 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
     }
 
     pub fn mqtt_centralised_dist_graph(mut self, locations: BTreeMap<NodeName, String>) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::MQTTCentralised(locations));
+        self.dist_graph_mode = Some(DistGraphMode::MqttCentralised(locations));
         self
     }
 
     pub fn mqtt_random_dist_graph(mut self, locations: BTreeMap<NodeName, String>) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::MQTTRandom(locations));
+        self.dist_graph_mode = Some(DistGraphMode::MqttRandom(locations));
         self
     }
 
@@ -190,7 +190,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         locations: BTreeMap<NodeName, String>,
         dist_constraints: Vec<VarName>,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::MQTTStaticOptimized(
+        self.dist_graph_mode = Some(DistGraphMode::MqttStaticOptimized(
             locations,
             dist_constraints,
         ));
@@ -202,7 +202,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         locations: BTreeMap<NodeName, String>,
         dist_constraints: Vec<VarName>,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::MQTTDynamicOptimized(
+        self.dist_graph_mode = Some(DistGraphMode::MqttDynamicOptimized(
             locations,
             dist_constraints,
         ));
@@ -214,7 +214,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         locations: BTreeMap<NodeName, String>,
         dist_constraints: Vec<VarName>,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::MQTTStaticOptimizedSat(
+        self.dist_graph_mode = Some(DistGraphMode::MqttStaticOptimizedSat(
             locations,
             dist_constraints,
         ));
@@ -226,7 +226,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         locations: BTreeMap<NodeName, String>,
         dist_constraints: Vec<VarName>,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::MQTTDynamicOptimizedSat(
+        self.dist_graph_mode = Some(DistGraphMode::MqttDynamicOptimizedSat(
             locations,
             dist_constraints,
         ));
@@ -238,7 +238,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         locations: BTreeMap<NodeName, String>,
         dist_graph_topic: String,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::ROSCentralised(locations, dist_graph_topic));
+        self.dist_graph_mode = Some(DistGraphMode::RosCentralised(locations, dist_graph_topic));
         self
     }
 
@@ -247,7 +247,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         locations: BTreeMap<NodeName, String>,
         dist_graph_topic: String,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::ROSRandom(locations, dist_graph_topic));
+        self.dist_graph_mode = Some(DistGraphMode::RosRandom(locations, dist_graph_topic));
         self
     }
 
@@ -257,7 +257,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         dist_constraints: Vec<VarName>,
         dist_graph_topic: String,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::ROSStaticOptimized(
+        self.dist_graph_mode = Some(DistGraphMode::RosStaticOptimized(
             locations,
             dist_constraints,
             dist_graph_topic,
@@ -271,7 +271,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         dist_constraints: Vec<VarName>,
         dist_graph_topic: String,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::ROSDynamicOptimized(
+        self.dist_graph_mode = Some(DistGraphMode::RosDynamicOptimized(
             locations,
             dist_constraints,
             dist_graph_topic,
@@ -285,7 +285,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         dist_constraints: Vec<VarName>,
         dist_graph_topic: String,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::ROSStaticOptimizedSat(
+        self.dist_graph_mode = Some(DistGraphMode::RosStaticOptimizedSat(
             locations,
             dist_constraints,
             dist_graph_topic,
@@ -299,7 +299,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
         dist_constraints: Vec<VarName>,
         dist_graph_topic: String,
     ) -> Self {
-        self.dist_graph_mode = Some(DistGraphMode::ROSDynamicOptimizedSat(
+        self.dist_graph_mode = Some(DistGraphMode::RosDynamicOptimizedSat(
             locations,
             dist_constraints,
             dist_graph_topic,
@@ -535,11 +535,11 @@ where
                     ReplanningCondition::Never,
                 )
             }
-            DistGraphMode::MQTTCentralised(locations) => {
+            DistGraphMode::MqttCentralised(locations) => {
                 debug!("Creating MQTT dist graph provider");
                 let location_names = locations.keys().cloned().collect();
                 let dist_graph_provider = Box::new(
-                    dist_graph_provider::MQTTDistGraphProvider::new(
+                    dist_graph_provider::MqttDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         locations,
@@ -558,11 +558,11 @@ where
                     ReplanningCondition::Always,
                 )
             }
-            DistGraphMode::MQTTRandom(locations) => {
+            DistGraphMode::MqttRandom(locations) => {
                 debug!("Creating random dist graph stream");
                 let location_names = locations.keys().cloned().collect();
                 let dist_graph_provider = Box::new(
-                    dist_graph_provider::MQTTDistGraphProvider::new(
+                    dist_graph_provider::MqttDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         locations,
@@ -580,11 +580,11 @@ where
                     ReplanningCondition::Always,
                 )
             }
-            DistGraphMode::MQTTStaticOptimized(locations, dist_constraints) => {
+            DistGraphMode::MqttStaticOptimized(locations, dist_constraints) => {
                 debug!("Creating static optimized dist graph provider");
                 let location_names = locations.keys().cloned().collect();
                 let dist_graph_provider = Box::new(
-                    dist_graph_provider::MQTTDistGraphProvider::new(
+                    dist_graph_provider::MqttDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         locations,
@@ -621,11 +621,11 @@ where
                     ReplanningCondition::Never,
                 )
             }
-            DistGraphMode::MQTTStaticOptimizedSat(locations, dist_constraints) => {
+            DistGraphMode::MqttStaticOptimizedSat(locations, dist_constraints) => {
                 debug!("Creating static optimized SAT dist graph provider");
                 let location_names = locations.keys().cloned().collect();
                 let dist_graph_provider = Box::new(
-                    dist_graph_provider::MQTTDistGraphProvider::new(
+                    dist_graph_provider::MqttDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         locations,
@@ -646,11 +646,11 @@ where
                     ReplanningCondition::Never,
                 )
             }
-            DistGraphMode::MQTTDynamicOptimized(locations, dist_constraints) => {
+            DistGraphMode::MqttDynamicOptimized(locations, dist_constraints) => {
                 debug!("Creating dynamic optimized dist graph provider");
                 let location_names = locations.keys().cloned().collect();
                 let dist_graph_provider = Box::new(
-                    dist_graph_provider::MQTTDistGraphProvider::new(
+                    dist_graph_provider::MqttDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         locations,
@@ -687,11 +687,11 @@ where
                     ReplanningCondition::ConstraintsFail,
                 )
             }
-            DistGraphMode::MQTTDynamicOptimizedSat(locations, dist_constraints) => {
+            DistGraphMode::MqttDynamicOptimizedSat(locations, dist_constraints) => {
                 debug!("Creating dynamic optimized SAT dist graph provider");
                 let location_names = locations.keys().cloned().collect();
                 let dist_graph_provider = Box::new(
-                    dist_graph_provider::MQTTDistGraphProvider::new(
+                    dist_graph_provider::MqttDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         locations,
@@ -712,7 +712,7 @@ where
                     ReplanningCondition::ConstraintsFail,
                 )
             }
-            DistGraphMode::ROSCentralised(_locations, _dist_graph_topic) => {
+            DistGraphMode::RosCentralised(_locations, _dist_graph_topic) => {
                 debug!(
                     "Creating ROS dist graph provider with topic: {}",
                     _dist_graph_topic
@@ -720,7 +720,7 @@ where
                 #[cfg(feature = "ros")]
                 {
                     let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         _locations,
@@ -746,7 +746,7 @@ where
                     panic!("ROS dist graph mode requires building with feature 'ros'");
                 }
             }
-            DistGraphMode::ROSRandom(_locations, _dist_graph_topic) => {
+            DistGraphMode::RosRandom(_locations, _dist_graph_topic) => {
                 debug!(
                     "Creating ROS random dist graph stream with topic: {}",
                     _dist_graph_topic
@@ -754,7 +754,7 @@ where
                 #[cfg(feature = "ros")]
                 {
                     let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         _locations,
@@ -778,7 +778,7 @@ where
                     panic!("ROS dist graph mode requires building with feature 'ros'");
                 }
             }
-            DistGraphMode::ROSStaticOptimized(_locations, _dist_constraints, _dist_graph_topic) => {
+            DistGraphMode::RosStaticOptimized(_locations, _dist_constraints, _dist_graph_topic) => {
                 debug!(
                     "Creating ROS static optimized dist graph provider with topic: {}",
                     _dist_graph_topic
@@ -786,7 +786,7 @@ where
                 #[cfg(feature = "ros")]
                 {
                     let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         _locations,
@@ -828,7 +828,7 @@ where
                     panic!("ROS dist graph mode requires building with feature 'ros'");
                 }
             }
-            DistGraphMode::ROSStaticOptimizedSat(
+            DistGraphMode::RosStaticOptimizedSat(
                 _locations,
                 _dist_constraints,
                 _dist_graph_topic,
@@ -840,7 +840,7 @@ where
                 #[cfg(feature = "ros")]
                 {
                     let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         _locations,
@@ -866,7 +866,7 @@ where
                     panic!("ROS dist graph mode requires building with feature 'ros'");
                 }
             }
-            DistGraphMode::ROSDynamicOptimized(
+            DistGraphMode::RosDynamicOptimized(
                 _locations,
                 _dist_constraints,
                 _dist_graph_topic,
@@ -878,7 +878,7 @@ where
                 #[cfg(feature = "ros")]
                 {
                     let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         _locations,
@@ -920,7 +920,7 @@ where
                     panic!("ROS dist graph mode requires building with feature 'ros'");
                 }
             }
-            DistGraphMode::ROSDynamicOptimizedSat(
+            DistGraphMode::RosDynamicOptimizedSat(
                 _locations,
                 _dist_constraints,
                 _dist_graph_topic,
@@ -932,7 +932,7 @@ where
                 #[cfg(feature = "ros")]
                 {
                     let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::ROSDistGraphProvider::new(
+                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                         executor.clone(),
                         "central".to_string().into(),
                         _locations,

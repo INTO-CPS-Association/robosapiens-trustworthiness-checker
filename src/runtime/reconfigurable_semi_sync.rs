@@ -258,7 +258,7 @@ where
                 );
                 input_builder.spec.clone()
             }
-            InputProviderSpec::MQTT(topics) | InputProviderSpec::Redis(topics) => {
+            InputProviderSpec::Mqtt(topics) | InputProviderSpec::Redis(topics) => {
                 info!(
                     ?reconf_topic,
                     "Injecting reconf variable into InputProvider"
@@ -277,7 +277,7 @@ where
                 var_topics.insert(reconf_topic.clone(), reconf_topic.name());
 
                 match input_builder.spec {
-                    InputProviderSpec::MQTT(_) => InputProviderSpec::MQTT(Some(var_topics)),
+                    InputProviderSpec::Mqtt(_) => InputProviderSpec::Mqtt(Some(var_topics)),
                     InputProviderSpec::Redis(_) => InputProviderSpec::Redis(Some(var_topics)),
                     _ => unreachable!(),
                 }
@@ -650,8 +650,8 @@ where
 
         // Update InputProvider spec
         let input_spec = match self.self_builder.input_builder.clone().unwrap().spec {
-            InputProviderSpec::MQTT(topics) => {
-                InputProviderSpec::MQTT(Some(Self::merge_topic_mappings(
+            InputProviderSpec::Mqtt(topics) => {
+                InputProviderSpec::Mqtt(Some(Self::merge_topic_mappings(
                     parsed.input_vars(),
                     &self.self_builder.known_topic_mapping,
                     topics.as_ref(),

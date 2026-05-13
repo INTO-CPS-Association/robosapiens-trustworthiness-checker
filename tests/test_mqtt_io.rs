@@ -29,7 +29,7 @@ mod integration_tests {
         core::Runtime,
         dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         dsrv_specification,
-        io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
+        io::mqtt::{MqttInputProvider, MqttOutputHandler},
     };
 
     const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
@@ -116,7 +116,7 @@ mod integration_tests {
         .await
         .unwrap();
 
-        let mut output_handler = MQTTOutputHandler::new(
+        let mut output_handler = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["z".into()],
@@ -169,7 +169,7 @@ mod integration_tests {
         .await
         .unwrap();
 
-        let mut output_handler = MQTTOutputHandler::new(
+        let mut output_handler = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["z".into()],
@@ -218,7 +218,7 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = MQTTInputProvider::new(
+        let mut input_provider = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             "localhost",
@@ -290,7 +290,7 @@ mod integration_tests {
         ]);
 
         // Create the MQTT input provider
-        let mut input_provider = MQTTInputProvider::new(
+        let mut input_provider = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             "localhost",
@@ -452,7 +452,10 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into()), (Y_TOPIC.into(), Y_TOPIC.into())])));
+        let input_spec = InputProviderSpec::Mqtt(Some(BTreeMap::from([
+            (X_TOPIC.into(), X_TOPIC.into()),
+            (Y_TOPIC.into(), Y_TOPIC.into()),
+        ])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -595,7 +598,10 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into()), (Y_TOPIC.into(), Y_TOPIC.into())])));
+        let input_spec = InputProviderSpec::Mqtt(Some(BTreeMap::from([
+            (X_TOPIC.into(), X_TOPIC.into()),
+            (Y_TOPIC.into(), Y_TOPIC.into()),
+        ])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -830,7 +836,10 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into()), (Y_TOPIC.into(), Y_TOPIC.into())])));
+        let input_spec = InputProviderSpec::Mqtt(Some(BTreeMap::from([
+            (X_TOPIC.into(), X_TOPIC.into()),
+            (Y_TOPIC.into(), Y_TOPIC.into()),
+        ])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1038,7 +1047,8 @@ mod reconf_tests {
 
         // InputProvider is MQTT server:
         // NOTE: No way of giving new Y_TOPIC after reconf - defaults to /y
-        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
+        let input_spec =
+            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1235,7 +1245,8 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
+        let input_spec =
+            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1412,7 +1423,8 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
+        let input_spec =
+            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())
@@ -1587,7 +1599,8 @@ mod reconf_tests {
         .expect("Failed to get host port for MQTT server");
 
         // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::MQTT(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
+        let input_spec =
+            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(executor.clone())

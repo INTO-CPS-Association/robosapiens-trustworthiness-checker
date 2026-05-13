@@ -16,7 +16,7 @@ use tracing::{Level, instrument};
 use unsync::spsc;
 use uuid::Uuid;
 
-use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping, VariableMappingData};
+use super::ros_topic_stream_mapping::{RosMsgType, RosStreamMapping, VariableMappingData};
 
 use crate::io::replay_history::{ReplayHistory, ReplaySnapshot};
 use crate::stream_utils::channel_to_output_stream;
@@ -45,7 +45,7 @@ pub const CHANNEL_SIZE: usize = 10;
 ///   - the received variable gets the concrete incoming value
 ///   - all other variables are recorded as `Value::NoVal`
 /// - `replay_history()` returns a clone of the recorded snapshot.
-pub struct ROSInputProvider {
+pub struct RosInputProvider {
     pub var_map: BTreeMap<VarName, VariableMappingData>,
 
     // Streams that can be taken ownership of by calling `var_stream`.
@@ -59,7 +59,7 @@ pub struct ROSInputProvider {
     replay_history: ReplayHistory,
 }
 
-impl ROSMsgType {
+impl RosMsgType {
     /* Create a stream of values received on a ROS topic */
     fn node_output_stream(
         &self,
@@ -68,23 +68,23 @@ impl ROSMsgType {
         qos: r2r::QosProfile,
     ) -> Result<OutputStream<Value>, r2r::Error> {
         Ok(match self {
-            ROSMsgType::Bool => Box::pin(
+            RosMsgType::Bool => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Bool>(topic, qos)?
                     .map(|val| Value::Bool(val.data)),
             ),
-            ROSMsgType::String => Box::pin(
+            RosMsgType::String => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::String>(topic, qos)?
                     .map(|val| Value::Str(val.data.into())),
             ),
-            ROSMsgType::Int64 => Box::pin(
+            RosMsgType::Int64 => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Int64>(topic, qos)?
                     .map(|val| Value::Int(val.data)),
             ),
-            ROSMsgType::Int32 => Box::pin(
+            RosMsgType::Int32 => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Int32>(topic, qos)?
                     .map(|val| Value::Int(val.data.into())),
             ),
-            ROSMsgType::Int32List => Box::pin(
+            RosMsgType::Int32List => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Int32MultiArray>(topic, qos)?
                     .map(|val| {
                         serde_json::to_value(val.data)
@@ -93,23 +93,23 @@ impl ROSMsgType {
                             .expect("Failed to serialize ROS2 Int32MultiArray msg to internal representation")
                     }),
             ),
-            ROSMsgType::Int16 => Box::pin(
+            RosMsgType::Int16 => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Int16>(topic, qos)?
                     .map(|val| Value::Int(val.data.into())),
             ),
-            ROSMsgType::Int8 => Box::pin(
+            RosMsgType::Int8 => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Int8>(topic, qos)?
                     .map(|val| Value::Int(val.data.into())),
             ),
-            ROSMsgType::Float64 => Box::pin(
+            RosMsgType::Float64 => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Float64>(topic, qos)?
                     .map(|val| Value::Float(val.data)),
             ),
-            ROSMsgType::Float32 => Box::pin(
+            RosMsgType::Float32 => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Float32>(topic, qos)?
                     .map(|val| Value::Float(val.data.into())),
             ),
-            ROSMsgType::HumanModelPart => Box::pin(
+            RosMsgType::HumanModelPart => Box::pin(
                 node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelPart>(topic, qos)?
                     .map(|val| {
                         serde_json::to_value(val)
@@ -118,7 +118,7 @@ impl ROSMsgType {
                             .expect("Failed to serialize ROS2 HumanModelPart msg to internal representation")
                     }),
             ),
-            ROSMsgType::HumanModel => Box::pin(
+            RosMsgType::HumanModel => Box::pin(
                 node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModel>(topic, qos)?
                     .map(|val| {
                         serde_json::to_value(val)
@@ -127,7 +127,7 @@ impl ROSMsgType {
                             .expect("Failed to serialize ROS2 HumanModel msg to internal representation")
                     }),
             ),
-            ROSMsgType::HumanModelList => Box::pin(
+            RosMsgType::HumanModelList => Box::pin(
                 node.subscribe::<r2r::robo_sapiens_interfaces::msg::HumanModelList>(topic, qos)?
                     .map(|val| {
                         serde_json::to_value(val)
@@ -136,7 +136,7 @@ impl ROSMsgType {
                             .expect("Failed to serialize ROS2 HumanModelList msg to internal representation")
                     }),
             ),
-            ROSMsgType::RVData => Box::pin(
+            RosMsgType::RVData => Box::pin(
                 node.subscribe::<r2r::id_pose_msgs::msg::RVData>(topic, qos)?
                     .map(|val| {
                         serde_json::to_value(val)
@@ -145,7 +145,7 @@ impl ROSMsgType {
                             .expect("Failed to serialize ROS2 RVData msg to internal representation")
                     }),
             ),
-            ROSMsgType::RVDataArray => Box::pin(
+            RosMsgType::RVDataArray => Box::pin(
                 node.subscribe::<r2r::id_pose_msgs::msg::RVDataArray>(topic, qos)?
                     .map(|val| {
                         serde_json::to_value(val)
@@ -154,7 +154,7 @@ impl ROSMsgType {
                             .expect("Failed to serialize ROS2 RVDataArray msg to internal representation")
                     }),
             ),
-            ROSMsgType::Odom => Box::pin(
+            RosMsgType::Odom => Box::pin(
                 node.subscribe::<r2r::nav_msgs::msg::Odometry>(topic, qos)?
                     .map(|val| {
                         serde_json::to_value(val)
@@ -169,11 +169,11 @@ impl ROSMsgType {
     }
 }
 
-impl ROSInputProvider {
+impl RosInputProvider {
     #[instrument(level = Level::INFO, skip(var_topics))]
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
-        var_topics: ROSStreamMapping,
+        var_topics: RosStreamMapping,
     ) -> Result<Self, r2r::Error> {
         Self::new_with_replay_history(executor, var_topics, ReplayHistory::disabled())
     }
@@ -181,7 +181,7 @@ impl ROSInputProvider {
     #[instrument(level = Level::INFO, skip(var_topics, replay_history))]
     pub fn new_with_replay_history(
         executor: Rc<LocalExecutor<'static>>,
-        var_topics: ROSStreamMapping,
+        var_topics: RosStreamMapping,
         replay_history: ReplayHistory,
     ) -> Result<Self, r2r::Error> {
         // Create a ROS node to subscribe to all of the input topics
@@ -390,7 +390,7 @@ impl ROSInputProvider {
 }
 
 #[async_trait(?Send)]
-impl InputProvider for ROSInputProvider {
+impl InputProvider for RosInputProvider {
     type Val = Value;
 
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {

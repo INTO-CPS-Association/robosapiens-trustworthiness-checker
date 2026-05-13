@@ -8,7 +8,7 @@ use smol::LocalExecutor;
 use tracing::{Level, debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use super::ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping};
+use super::ros_topic_stream_mapping::{RosMsgType, RosStreamMapping};
 use crate::core::OutputHandler;
 use crate::utils::cancellation_token::CancellationToken;
 use crate::{OutputStream, Value, core::VarName};
@@ -17,11 +17,11 @@ pub struct VarData {
     pub variable: VarName,
     /// None Option can be used if topic name is not set due to being an auxiliary variable
     pub topic_name: Option<String>,
-    pub msg_type: Option<ROSMsgType>,
+    pub msg_type: Option<RosMsgType>,
     stream: Option<OutputStream<Value>>,
 }
 
-pub struct ROSOutputHandler {
+pub struct RosOutputHandler {
     executor: Rc<LocalExecutor<'static>>,
     pub node_name: String,
     pub var_map: BTreeMap<VarName, VarData>,
@@ -50,11 +50,11 @@ impl<T: r2r::WrappedTypesupport> ValuePublisher for TypedValuePublisher<T> {
 fn create_value_publisher(
     node: &mut r2r::Node,
     topic: &str,
-    msg_type: &ROSMsgType,
+    msg_type: &RosMsgType,
 ) -> Result<Box<dyn ValuePublisher>, r2r::Error> {
     let qos = r2r::QosProfile::default();
     Ok(match msg_type {
-        ROSMsgType::Bool => Box::new(TypedValuePublisher {
+        RosMsgType::Bool => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::Bool>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Bool(v) => {
@@ -69,7 +69,7 @@ fn create_value_publisher(
                 )),
             },
         }),
-        ROSMsgType::String => Box::new(TypedValuePublisher {
+        RosMsgType::String => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::String>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Str(v) => {
@@ -86,7 +86,7 @@ fn create_value_publisher(
                 )),
             },
         }),
-        ROSMsgType::Int64 => Box::new(TypedValuePublisher {
+        RosMsgType::Int64 => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::Int64>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Int(v) => {
@@ -101,7 +101,7 @@ fn create_value_publisher(
                 )),
             },
         }),
-        ROSMsgType::Int32 => Box::new(TypedValuePublisher {
+        RosMsgType::Int32 => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::Int32>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Int(v) => {
@@ -116,7 +116,7 @@ fn create_value_publisher(
                 )),
             },
         }),
-        ROSMsgType::Int16 => Box::new(TypedValuePublisher {
+        RosMsgType::Int16 => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::Int16>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Int(v) => {
@@ -131,7 +131,7 @@ fn create_value_publisher(
                 )),
             },
         }),
-        ROSMsgType::Int8 => Box::new(TypedValuePublisher {
+        RosMsgType::Int8 => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::Int8>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Int(v) => {
@@ -146,7 +146,7 @@ fn create_value_publisher(
                 )),
             },
         }),
-        ROSMsgType::Float64 => Box::new(TypedValuePublisher {
+        RosMsgType::Float64 => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::Float64>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Float(v) => {
@@ -161,7 +161,7 @@ fn create_value_publisher(
                 )),
             },
         }),
-        ROSMsgType::Float32 => Box::new(TypedValuePublisher {
+        RosMsgType::Float32 => Box::new(TypedValuePublisher {
             publisher: node.create_publisher::<r2r::std_msgs::msg::Float32>(topic, qos)?,
             convert_and_publish: |pub_handle, value| match value {
                 Value::Float(v) => {
@@ -256,12 +256,12 @@ async fn await_stream(mut stream: OutputStream<Value>) {
     debug!("Auxiliary stream ended after {} values", count);
 }
 
-impl ROSOutputHandler {
+impl RosOutputHandler {
     #[instrument(level = Level::INFO, skip(var_topics))]
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,
-        var_topics: ROSStreamMapping,
+        var_topics: RosStreamMapping,
         aux_info: Vec<VarName>,
     ) -> anyhow::Result<Self> {
         let var_map = var_topics
@@ -284,7 +284,7 @@ impl ROSOutputHandler {
             })
             .collect();
 
-        Ok(ROSOutputHandler {
+        Ok(RosOutputHandler {
             executor,
             node_name,
             var_map,
@@ -298,7 +298,7 @@ impl ROSOutputHandler {
         streams: Vec<(
             VarName,
             Option<String>,
-            Option<ROSMsgType>,
+            Option<RosMsgType>,
             OutputStream<Value>,
         )>,
         aux_info: Vec<VarName>,
@@ -385,7 +385,7 @@ impl ROSOutputHandler {
     }
 }
 
-impl OutputHandler for ROSOutputHandler {
+impl OutputHandler for RosOutputHandler {
     type Val = Value;
 
     fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
@@ -460,7 +460,7 @@ impl OutputHandler for ROSOutputHandler {
         let executor = self.executor.clone();
         let aux_info = self.aux_info.clone();
 
-        Box::pin(ROSOutputHandler::inner_handler(
+        Box::pin(RosOutputHandler::inner_handler(
             executor,
             self.node_name.clone(),
             streams,

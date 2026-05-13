@@ -20,10 +20,10 @@ mod integration_tests {
     use trustworthiness_checker::Value;
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::core::OutputHandler;
-    use trustworthiness_checker::io::ros::ROSInputProvider;
-    use trustworthiness_checker::io::ros::ROSOutputHandler;
+    use trustworthiness_checker::io::ros::RosInputProvider;
+    use trustworthiness_checker::io::ros::RosOutputHandler;
     use trustworthiness_checker::io::ros::ros_topic_stream_mapping::{
-        ROSMsgType, VariableMappingData,
+        RosMsgType, VariableMappingData,
     };
 
     #[apply(async_test)]
@@ -41,20 +41,20 @@ mod integration_tests {
                 "x".to_string(),
                 VariableMappingData {
                     topic: x_topic.clone(),
-                    msg_type: ROSMsgType::Int32,
+                    msg_type: RosMsgType::Int32,
                 },
             ),
             (
                 "y".to_string(),
                 VariableMappingData {
                     topic: y_topic.clone(),
-                    msg_type: ROSMsgType::Int32,
+                    msg_type: RosMsgType::Int32,
                 },
             ),
         ]);
 
         // Create the ROS input provider
-        let mut input_provider = ROSInputProvider::new(ex.clone(), var_topics).unwrap();
+        let mut input_provider = RosInputProvider::new(ex.clone(), var_topics).unwrap();
 
         let x_stream = input_provider
             .var_stream(&"x".into())
@@ -123,14 +123,14 @@ mod integration_tests {
             "z".to_string(),
             VariableMappingData {
                 topic: z_topic.clone(),
-                msg_type: ROSMsgType::Int32,
+                msg_type: RosMsgType::Int32,
             },
         )]);
 
         let aux_info = vec!["w".into()];
 
         // Create the ROS output handler
-        let mut output_handler = ROSOutputHandler::new(
+        let mut output_handler = RosOutputHandler::new(
             ex.clone(),
             qualified_ros_name(test_add_monitor_ros_output_with_aux, "pub"),
             var_topics,
@@ -187,14 +187,14 @@ mod integration_tests {
             "z".to_string(),
             VariableMappingData {
                 topic: z_topic.clone(),
-                msg_type: ROSMsgType::Int32,
+                msg_type: RosMsgType::Int32,
             },
         )]);
 
         let aux_info = vec![];
 
         // Create the ROS output handler
-        let mut output_handler = ROSOutputHandler::new(
+        let mut output_handler = RosOutputHandler::new(
             ex.clone(),
             qualified_ros_name(test_add_monitor_ros_output_no_aux, "pub"),
             var_topics,

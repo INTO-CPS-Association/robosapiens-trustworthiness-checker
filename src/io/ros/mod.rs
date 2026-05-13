@@ -1,10 +1,10 @@
 pub mod dist_graph_provider;
-pub use dist_graph_provider::ROSDistGraphProvider;
+pub use dist_graph_provider::RosDistGraphProvider;
 pub mod input_provider;
-pub use input_provider::ROSInputProvider;
+pub use input_provider::RosInputProvider;
 pub mod ros_topic_stream_mapping;
-pub use ros_topic_stream_mapping::{ROSMsgType, ROSStreamMapping};
+pub use ros_topic_stream_mapping::{RosMsgType, RosStreamMapping};
 pub mod output_handler;
-pub use output_handler::ROSOutputHandler;
+pub use output_handler::RosOutputHandler;
 pub mod ros_scheduler_communicator;
 pub use ros_scheduler_communicator::RosSchedulerCommunicator;

@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone)]
-pub enum ROSMsgType {
+pub enum RosMsgType {
     Bool,
     String,
     Int64,
@@ -32,54 +32,54 @@ pub enum ROSMsgType {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct VariableMappingData {
     pub topic: String,
-    pub msg_type: ROSMsgType,
+    pub msg_type: RosMsgType,
 }
 
-pub type ROSStreamMapping = BTreeMap<String, VariableMappingData>;
+pub type RosStreamMapping = BTreeMap<String, VariableMappingData>;
 
-pub fn string_to_ros_msg_type(typ: &str) -> Result<ROSMsgType, anyhow::Error> {
+pub fn string_to_ros_msg_type(typ: &str) -> Result<RosMsgType, anyhow::Error> {
     match typ {
-        "Bool" => Ok(ROSMsgType::Bool),
-        "String" => Ok(ROSMsgType::String),
-        "Int64" => Ok(ROSMsgType::Int64),
-        "Int32" => Ok(ROSMsgType::Int32),
-        "Int32List" => Ok(ROSMsgType::Int32List),
-        "Int16" => Ok(ROSMsgType::Int16),
-        "Int8" => Ok(ROSMsgType::Int8),
-        "Float64" => Ok(ROSMsgType::Float64),
-        "Float32" => Ok(ROSMsgType::Float32),
-        "HumanModelPart" => Ok(ROSMsgType::HumanModelPart),
-        "HumanModel" => Ok(ROSMsgType::HumanModel),
-        "HumanModelList" => Ok(ROSMsgType::HumanModelList),
-        "RVData" => Ok(ROSMsgType::RVData),
-        "RVDataArray" => Ok(ROSMsgType::RVDataArray),
-        "Odom" => Ok(ROSMsgType::Odom),
+        "Bool" => Ok(RosMsgType::Bool),
+        "String" => Ok(RosMsgType::String),
+        "Int64" => Ok(RosMsgType::Int64),
+        "Int32" => Ok(RosMsgType::Int32),
+        "Int32List" => Ok(RosMsgType::Int32List),
+        "Int16" => Ok(RosMsgType::Int16),
+        "Int8" => Ok(RosMsgType::Int8),
+        "Float64" => Ok(RosMsgType::Float64),
+        "Float32" => Ok(RosMsgType::Float32),
+        "HumanModelPart" => Ok(RosMsgType::HumanModelPart),
+        "HumanModel" => Ok(RosMsgType::HumanModel),
+        "HumanModelList" => Ok(RosMsgType::HumanModelList),
+        "RVData" => Ok(RosMsgType::RVData),
+        "RVDataArray" => Ok(RosMsgType::RVDataArray),
+        "Odom" => Ok(RosMsgType::Odom),
         typ => Err(anyhow!("Unsupported type {}", typ)),
     }
 }
 
-pub fn ros_msg_type_to_string(typ: ROSMsgType) -> Result<String, anyhow::Error> {
+pub fn ros_msg_type_to_string(typ: RosMsgType) -> Result<String, anyhow::Error> {
     match typ {
-        ROSMsgType::Bool => Ok("Bool".to_string()),
-        ROSMsgType::String => Ok("String".to_string()),
-        ROSMsgType::Int64 => Ok("Int64".to_string()),
-        ROSMsgType::Int32 => Ok("Int32".to_string()),
-        ROSMsgType::Int32List => Ok("Int32List".to_string()),
-        ROSMsgType::Int16 => Ok("Int16".to_string()),
-        ROSMsgType::Int8 => Ok("Int8".to_string()),
-        ROSMsgType::Float64 => Ok("Float64".to_string()),
-        ROSMsgType::Float32 => Ok("Float32".to_string()),
-        ROSMsgType::HumanModelPart => Ok("HumanModelPart".to_string()),
-        ROSMsgType::HumanModel => Ok("HumanModel".to_string()),
-        ROSMsgType::HumanModelList => Ok("HumanModelList".to_string()),
-        ROSMsgType::RVData => Ok("RVData".to_string()),
-        ROSMsgType::RVDataArray => Ok("RVDataArray".to_string()),
-        ROSMsgType::Odom => Ok("Odom".to_string()),
+        RosMsgType::Bool => Ok("Bool".to_string()),
+        RosMsgType::String => Ok("String".to_string()),
+        RosMsgType::Int64 => Ok("Int64".to_string()),
+        RosMsgType::Int32 => Ok("Int32".to_string()),
+        RosMsgType::Int32List => Ok("Int32List".to_string()),
+        RosMsgType::Int16 => Ok("Int16".to_string()),
+        RosMsgType::Int8 => Ok("Int8".to_string()),
+        RosMsgType::Float64 => Ok("Float64".to_string()),
+        RosMsgType::Float32 => Ok("Float32".to_string()),
+        RosMsgType::HumanModelPart => Ok("HumanModelPart".to_string()),
+        RosMsgType::HumanModel => Ok("HumanModel".to_string()),
+        RosMsgType::HumanModelList => Ok("HumanModelList".to_string()),
+        RosMsgType::RVData => Ok("RVData".to_string()),
+        RosMsgType::RVDataArray => Ok("RVDataArray".to_string()),
+        RosMsgType::Odom => Ok("Odom".to_string()),
     }
 }
 
 pub fn ros_variable_map_to_string_variable_map(
-    map: ROSStreamMapping,
+    map: RosStreamMapping,
 ) -> Result<BTreeMap<VarName, String>, anyhow::Error> {
     map.into_iter()
         .map(
@@ -93,7 +93,7 @@ pub fn ros_variable_map_to_string_variable_map(
 }
 
 pub fn ros_stream_mapping_to_topic_mapping(
-    map: ROSStreamMapping,
+    map: RosStreamMapping,
 ) -> Result<BTreeMap<VarName, String>, anyhow::Error> {
     map.into_iter()
         .map(
@@ -116,8 +116,8 @@ pub fn ros_stream_mapping_to_topic_mapping(
 pub fn ros_stream_mapping_from_topic_and_msg_type_mapping(
     topic_map: TopicMapping,
     msg_type_map: MsgTypeMapping,
-) -> Result<ROSStreamMapping, anyhow::Error> {
-    let mut ros_stream_mapping: ROSStreamMapping = BTreeMap::new();
+) -> Result<RosStreamMapping, anyhow::Error> {
+    let mut ros_stream_mapping: RosStreamMapping = BTreeMap::new();
 
     for (var_name, topic) in topic_map.iter() {
         let topic = topic.clone();
@@ -140,7 +140,7 @@ mod tests {
         io::{
             config::{MsgTypeMapping, TopicMapping},
             ros::ros_topic_stream_mapping::{
-                ROSMsgType, ros_stream_mapping_from_topic_and_msg_type_mapping,
+                RosMsgType, ros_stream_mapping_from_topic_and_msg_type_mapping,
             },
         },
     };
@@ -161,9 +161,9 @@ mod tests {
 
         assert_eq!(mapping.len(), 2);
         assert_eq!(mapping["x"].topic, "/r1/x");
-        assert_eq!(mapping["x"].msg_type, ROSMsgType::Int32);
+        assert_eq!(mapping["x"].msg_type, RosMsgType::Int32);
         assert_eq!(mapping["y"].topic, "/r2/y");
-        assert_eq!(mapping["y"].msg_type, ROSMsgType::String);
+        assert_eq!(mapping["y"].msg_type, RosMsgType::String);
         Ok(())
     }
 

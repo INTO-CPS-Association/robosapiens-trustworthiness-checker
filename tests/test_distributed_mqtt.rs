@@ -23,7 +23,7 @@ mod integration_tests {
 
     use trustworthiness_checker::{
         VarName, dsrv_specification,
-        io::mqtt::{MQTTInputProvider, MQTTOutputHandler},
+        io::mqtt::{MqttInputProvider, MqttOutputHandler},
         semantics::distributed::localisation::Localisable,
     };
 
@@ -167,7 +167,7 @@ mod integration_tests {
             .await
             .expect("Failed to get host port for MQTT server");
         let mqtt_host = "localhost";
-        let mut input_provider_1 = MQTTInputProvider::new(
+        let mut input_provider_1 = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             mqtt_host,
@@ -179,7 +179,7 @@ mod integration_tests {
             .await
             .expect("Failed to connect to MQTT with input provider 1");
 
-        let mut output_handler_1 = MQTTOutputHandler::new(
+        let mut output_handler_1 = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["w".into()],
@@ -194,7 +194,7 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 1");
 
-        let mut input_provider_2 = MQTTInputProvider::new(
+        let mut input_provider_2 = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             mqtt_host,
@@ -206,7 +206,7 @@ mod integration_tests {
             .await
             .expect("Failed to connect to MQTT with input provider 2");
 
-        let mut output_handler_2 = MQTTOutputHandler::new(
+        let mut output_handler_2 = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["v".into()],
@@ -300,7 +300,7 @@ mod integration_tests {
             .collect();
         warn!(?var_topics1, "Var topics 1");
 
-        let mut input_provider_1 = MQTTInputProvider::new(
+        let mut input_provider_1 = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             mqtt_host,
@@ -320,7 +320,7 @@ mod integration_tests {
             .collect();
         warn!(?var_topics_2, "Var topics 2");
 
-        let mut input_provider_2 = MQTTInputProvider::new(
+        let mut input_provider_2 = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             mqtt_host,
@@ -340,7 +340,7 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_1, "Var out topics 1");
 
-        let mut output_handler_1 = MQTTOutputHandler::new(
+        let mut output_handler_1 = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["w".into()],
@@ -361,7 +361,7 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_2, "Var out topics 2");
 
-        let mut output_handler_2 = MQTTOutputHandler::new(
+        let mut output_handler_2 = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["v".into()],
@@ -455,7 +455,7 @@ mod integration_tests {
             .expect("Failed to get host port for MQTT server");
         let mqtt_host = "localhost";
 
-        let mut input_provider_1 = MQTTInputProvider::new(
+        let mut input_provider_1 = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             mqtt_host,
@@ -472,7 +472,7 @@ mod integration_tests {
             .await
             .expect("Failed to connect to MQTT with input provider 1");
 
-        let mut input_provider_2 = MQTTInputProvider::new(
+        let mut input_provider_2 = MqttInputProvider::new(
             executor.clone(),
             MQTT_FACTORY,
             mqtt_host,
@@ -494,7 +494,7 @@ mod integration_tests {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let mut output_handler_1 = MQTTOutputHandler::new(
+        let mut output_handler_1 = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["w".into()],
@@ -513,7 +513,7 @@ mod integration_tests {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let mut output_handler_2 = MQTTOutputHandler::new(
+        let mut output_handler_2 = MqttOutputHandler::new(
             executor.clone(),
             MQTT_FACTORY,
             vec!["v".into()],

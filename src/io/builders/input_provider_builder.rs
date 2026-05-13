@@ -28,7 +28,7 @@ pub enum InputProviderSpec {
         MsgTypeMapping,
     ),
     /// MQTT topics input provider
-    MQTT(
+    Mqtt(
         /// Topic mapping
         Option<TopicMapping>,
     ),
@@ -73,7 +73,7 @@ impl InputProviderBuilder {
     }
 
     pub fn mqtt(topics: Option<TopicMapping>) -> Self {
-        Self::new(InputProviderSpec::MQTT(topics))
+        Self::new(InputProviderSpec::Mqtt(topics))
     }
 
     pub fn redis(topics: Option<TopicMapping>) -> Self {
@@ -184,7 +184,7 @@ impl InputProviderBuilder {
             InputProviderSpec::Ros(_topic_mapping, _msg_type_mapping) => {
                 #[cfg(feature = "ros")]
                 {
-                    use crate::io::ros::input_provider::ROSInputProvider;
+                    use crate::io::ros::input_provider::RosInputProvider;
                     use crate::io::ros::ros_topic_stream_mapping::{
                         VariableMappingData, ros_stream_mapping_from_topic_and_msg_type_mapping,
                     };
@@ -238,7 +238,7 @@ impl InputProviderBuilder {
                         );
 
                     Box::new(
-                        ROSInputProvider::new_with_replay_history(
+                        RosInputProvider::new_with_replay_history(
                             self.executor.clone().expect(""),
                             input_mapping,
                             self.replay_history.clone(),
@@ -251,7 +251,7 @@ impl InputProviderBuilder {
                     unimplemented!("ROS support not enabled")
                 }
             }
-            InputProviderSpec::MQTT(topics) => {
+            InputProviderSpec::Mqtt(topics) => {
                 let var_topics: BTreeMap<_, _> = match topics {
                     Some(topics) => Self::filter_cli_topics(topics, &input_vars)
                         .expect("Provided MQTT topics do not match input variables"),
@@ -262,7 +262,7 @@ impl InputProviderBuilder {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                let mut mqtt_input_provider = tc::io::mqtt::MQTTInputProvider::new(
+                let mut mqtt_input_provider = tc::io::mqtt::MqttInputProvider::new(
                     self.executor.unwrap().clone(),
                     MQTT_FACTORY,
                     MQTT_HOSTNAME,

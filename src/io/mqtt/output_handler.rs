@@ -27,7 +27,7 @@ pub struct VarData {
 // correspond to
 pub type OutputChannelMap = BTreeMap<VarName, String>;
 
-pub struct MQTTOutputHandler {
+pub struct MqttOutputHandler {
     factory: MqttFactory,
     var_names: Vec<VarName>,
     pub var_map: BTreeMap<VarName, VarData>,
@@ -136,7 +136,7 @@ async fn await_stream(mut stream: OutputStream<Value>) {
     debug!("Auxiliary stream ended after {} values", count);
 }
 
-impl OutputHandler for MQTTOutputHandler {
+impl OutputHandler for MqttOutputHandler {
     type Val = Value;
 
     fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
@@ -213,12 +213,12 @@ impl OutputHandler for MQTTOutputHandler {
             let client = client_rx
                 .await
                 .ok_or_else(|| anyhow!("Failed to receive MQTT client for output handler"))?;
-            MQTTOutputHandler::inner_handler(client, streams, aux_info).await
+            MqttOutputHandler::inner_handler(client, streams, aux_info).await
         })
     }
 }
 
-impl MQTTOutputHandler {
+impl MqttOutputHandler {
     #[instrument(level = Level::INFO)]
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
@@ -282,7 +282,7 @@ impl MQTTOutputHandler {
 
         debug!("Auxiliary variables (not published): {:?}", aux_info);
 
-        Ok(MQTTOutputHandler {
+        Ok(MqttOutputHandler {
             factory,
             var_names,
             var_map,

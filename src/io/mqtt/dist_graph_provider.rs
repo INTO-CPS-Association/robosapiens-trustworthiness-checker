@@ -66,14 +66,14 @@ impl DistGraphProvider for StaticDistGraphProvider {
     }
 }
 
-pub struct MQTTDistGraphProvider {
+pub struct MqttDistGraphProvider {
     pub executor: Rc<LocalExecutor<'static>>,
     pub central_node: NodeName,
     pub locations: BTreeMap<NodeName, String>,
     position_stream: Option<OutputStream<Vec<Pos>>>,
 }
 
-impl DistGraphProvider for MQTTDistGraphProvider {
+impl DistGraphProvider for MqttDistGraphProvider {
     fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
         let central_node = self.central_node.clone();
         let locations = self.locations.keys().cloned().collect::<Vec<_>>();
@@ -90,7 +90,7 @@ impl DistGraphProvider for MQTTDistGraphProvider {
 
 static PROVIDER_ID: LazyLock<AtomicUsize> = LazyLock::new(|| 0.into());
 
-impl MQTTDistGraphProvider {
+impl MqttDistGraphProvider {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         central_node: NodeName,

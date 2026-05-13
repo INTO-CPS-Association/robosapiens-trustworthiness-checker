@@ -19,7 +19,7 @@ use crate::{
 ///
 /// This provider subscribes to a shared RVData topic (typically `/dist_graph`)
 /// and routes updates to logical nodes by `source_robot_id`.
-pub struct ROSDistGraphProvider {
+pub struct RosDistGraphProvider {
     pub executor: Rc<LocalExecutor<'static>>,
     pub central_node: NodeName,
     /// Mapping from logical node name to RVData `source_robot_id`
@@ -27,7 +27,7 @@ pub struct ROSDistGraphProvider {
     position_stream: Option<OutputStream<Vec<Pos>>>,
 }
 
-impl DistGraphProvider for ROSDistGraphProvider {
+impl DistGraphProvider for RosDistGraphProvider {
     fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
         let central_node = self.central_node.clone();
         let locations = self.locations.keys().cloned().collect::<Vec<_>>();
@@ -42,7 +42,7 @@ impl DistGraphProvider for ROSDistGraphProvider {
     }
 }
 
-impl ROSDistGraphProvider {
+impl RosDistGraphProvider {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         central_node: NodeName,

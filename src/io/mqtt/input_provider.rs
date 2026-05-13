@@ -17,14 +17,14 @@ use crate::{
 
 use super::common_input_provider::common;
 
-pub struct MQTTInputProvider {
+pub struct MqttInputProvider {
     base: common::Base,
 
     // Streams that can be taken ownership of by calling `input_stream`
     available_streams: BTreeMap<VarName, OutputStream<Value>>,
 }
 
-impl MQTTInputProvider {
+impl MqttInputProvider {
     #[instrument(level = Level::INFO, skip(var_topics))]
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
@@ -109,7 +109,7 @@ impl MQTTInputProvider {
 }
 
 #[async_trait(?Send)]
-impl InputProvider for MQTTInputProvider {
+impl InputProvider for MqttInputProvider {
     type Val = Value;
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Value>> {
         // Take ownership of the stream for the variable, if it exists

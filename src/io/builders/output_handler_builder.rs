@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::cli::StdoutOutputHandler;
 use crate::io::config::{MsgTypeMapping, TopicMapping};
-use crate::io::mqtt::{MQTTOutputHandler, MqttFactory};
+use crate::io::mqtt::{MqttFactory, MqttOutputHandler};
 use crate::io::redis::RedisOutputHandler;
 use crate::{Value, VarName, core::OutputHandler};
 
@@ -123,7 +123,7 @@ impl OutputHandlerBuilder {
             OutputHandlerSpec::Ros(_topic_mapping, _msg_type_mapping) => {
                 #[cfg(feature = "ros")]
                 {
-                    use crate::io::ros::output_handler::ROSOutputHandler;
+                    use crate::io::ros::output_handler::RosOutputHandler;
                     use crate::io::ros::ros_topic_stream_mapping::{
                         VariableMappingData, ros_stream_mapping_from_topic_and_msg_type_mapping,
                     };
@@ -184,7 +184,7 @@ impl OutputHandlerBuilder {
                     )
                     .expect("ROS mapping file does not contain all variables from the spec");
                     Box::new(
-                        ROSOutputHandler::new(
+                        RosOutputHandler::new(
                             executor,
                             "tc_ros_output".into(),
                             output_mapping,
@@ -222,7 +222,7 @@ impl OutputHandlerBuilder {
 
                 // TODO: OutputHandler should not need both output_vars and
                 // output_mapping, since the mapping already contains the exact variable names.
-                let mut handler = MQTTOutputHandler::new(
+                let mut handler = MqttOutputHandler::new(
                     executor.clone(),
                     MQTT_FACTORY,
                     output_vars.into_iter().collect(),

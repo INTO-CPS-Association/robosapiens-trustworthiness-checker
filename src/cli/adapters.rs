@@ -41,7 +41,7 @@ impl From<InputMode> for InputProviderSpec {
                     .expect("Input MQTT topic mapping file could not be read");
                 let topic_mapping = json_to_topic_mapping(&json_string)
                     .expect("Input MQTT topic mapping file could not be parsed");
-                InputProviderSpec::MQTT(Some(topic_mapping))
+                InputProviderSpec::Mqtt(Some(topic_mapping))
             }
             InputMode {
                 input_redis_file: Some(input_redis_file),
@@ -55,7 +55,7 @@ impl From<InputMode> for InputProviderSpec {
             }
             InputMode {
                 mqtt_input: true, ..
-            } => InputProviderSpec::MQTT(None),
+            } => InputProviderSpec::Mqtt(None),
             InputMode {
                 redis_input: true, ..
             } => InputProviderSpec::Redis(None),
