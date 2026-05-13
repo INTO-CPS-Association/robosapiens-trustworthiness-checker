@@ -673,13 +673,10 @@ fn atom(s: &mut &str) -> Result<SExpr> {
                 defer,
                 update,
                 monitored_at,
-                dist,
-                sin,
-                cos,
-                tan,
-                abs,
             )),
             // Group 4
+            alt((dist, sin, cos, tan, abs)),
+            // Group 5
             alt((
                 default, when, latch, init, is_defined, sexpr_list, sexpr_map, var, paren,
             )),

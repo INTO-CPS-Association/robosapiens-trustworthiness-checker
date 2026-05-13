@@ -1929,7 +1929,7 @@ mod integration_tests {
 
             // Create and connect the subscriber client
             let mut client = mqtt::AsyncClient::new(create_opts).unwrap();
-            let mut stream = client.get_stream(10);
+            let mut stream = Box::pin(client.get_stream(10));
 
             client.connect(subscriber_opts).await.unwrap();
             client.subscribe("z", 1).await.unwrap();
@@ -1948,8 +1948,10 @@ mod integration_tests {
             let timeout = Timer::after(Duration::from_millis(50));
             let mut connection_verified = false;
 
+            let mut pinned_stream = stream.as_mut();
+            let mut next_msg = pinned_stream.next().fuse();
             futures::select! {
-                msg_opt = stream.next().fuse() => {
+                msg_opt = next_msg => {
                     if let Some(opt_msg) = msg_opt {
                         if let Some(msg) = opt_msg {
                             if msg.topic() == conn_test_topic {
@@ -2005,8 +2007,10 @@ mod integration_tests {
 
             while !collection_done && retry_count < MAX_RETRIES {
                 let timeout = Timer::after(Duration::from_secs(15));
+                let mut pinned_stream = stream.as_mut();
+                let mut next_msg = pinned_stream.next().fuse();
                 futures::select! {
-                    msg_opt = stream.next().fuse() => {
+                    msg_opt = next_msg => {
                         if let Some(opt_msg) = msg_opt {
                             if let Some(msg) = opt_msg {
                                 if msg.topic() == "z" {  // Only process messages from our expected topic

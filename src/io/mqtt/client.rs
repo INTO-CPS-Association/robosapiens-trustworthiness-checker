@@ -188,7 +188,7 @@ mod paho {
         // we risk MQTT client receiving messages before stream is registered
         let stream = client.get_stream(10);
         Box::pin(stream! {
-            let mut stream = stream;
+            let mut stream = Box::pin(stream);
             while let Some(msg) = stream.next().await {
                 match msg {
                     Some(message) => {
@@ -203,7 +203,7 @@ mod paho {
                     None => {
                         debug!("MQTT connection lost, waiting for auto-reconnect");
                         smol::Timer::after(Duration::from_millis(200)).await;
-                        stream = client.get_stream(10);
+                        stream = Box::pin(client.get_stream(10));
                     }
                 }
             }

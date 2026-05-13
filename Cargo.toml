@@ -18,10 +18,10 @@ bench = false
 lalrpop = "0.23.1"
 
 [dependencies]
-winnow = { version = "0.7.5", features = ["simd"] } # TODO: Update and fix breaking changes in v1.0.0
+winnow = { version = "1.0.2", features = ["simd"] }
 futures = "0.3.32"
 
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 async-stream = "0.3.6"
 r2r = { version = "0.9.5", optional = true }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
@@ -29,10 +29,10 @@ serde_json = "1.0.149"
 serde_json5 = "0.2.1"
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = { version = "0.13.3", default-features = false, features = [
+paho-mqtt = { version = "0.14.0", default-features = false, features = [
     "bundled",
     "ssl",
-] } # TODO: Update and fix breaking changes in v0.14.0
+] }
 async-trait = "0.1.89"
 tracing = { version = "0.1.44", features = [
     "attributes",
@@ -41,9 +41,9 @@ tracing = { version = "0.1.44", features = [
     "async-await",
     "release_max_level_warn",
 ] }
-tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
-tracing-appender = "0.2.3"
-uuid = { version = "1.22.0", features = [
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2.5"
+uuid = { version = "1.23.1", features = [
     "v4",                # Lets you generate random UUIDs
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
@@ -57,21 +57,21 @@ async-unsync = "0.3.0"
 smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.2"
 async-compat = {version = "0.2.5", optional = true}
-tikv-jemallocator = "0.6.0"
+tikv-jemallocator = "0.6.1"
 ecow = { version = "0.2.6", features = ["serde"] }
 async_cell = "0.2.3"
 async-channel = "2.5.0"
-ordered-float = "5.1.0"
+ordered-float = "5.3.0"
 approx = "0.5.1"
 lalrpop-util = { version = "0.23.1", features = ["lexer", "unicode"] }
 contracts = "0.6.7"
 static_assertions = "1.1.0"
 thiserror = "2.0.18"
-rand = "0.10.0"
+rand = "0.10.1"
 unsync = "0.1.2"
 itertools = "0.14.0"
 sat-solver = "0.2.1"
-redis = { version = "1.0.5", default-features = false, features = ["smol-comp"] }
+redis = { version = "1.2.1", default-features = false, features = ["smol-comp"] }
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 fs2 = "0.4.3"
 
@@ -96,8 +96,8 @@ span-tracing = []
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_smol", "html_reports"] }
-test-log = { version = "0.2.19", features = ["trace"] }
-proptest = "1.10.0"
+test-log = { version = "0.2.20", features = ["trace"] }
+proptest = "1.11.0"
 tc-testutils = { path = "libs/tc-testutils" }
 
 [[bin]]
