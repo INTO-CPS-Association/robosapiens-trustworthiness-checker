@@ -20,8 +20,8 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::{
     FutureExt, StreamExt,
-    future::LocalBoxFuture,
-    stream::{FuturesUnordered, LocalBoxStream},
+    future::{LocalBoxFuture, join_all},
+    stream::LocalBoxStream,
 };
 use serde::Deserialize;
 use smol::LocalExecutor;
@@ -250,13 +250,18 @@ where
 
         // Compute new spec with reconf_topic injected when applicable
         let new_spec = match &input_builder.spec {
-            InputProviderSpec::Manual(_) | InputProviderSpec::File(_) => {
+            InputProviderSpec::File(_) => {
                 warn!(
-                    "Limited support for reconfiguration of file inputs, ros inputs and manual. \
+                    "Limited support for reconfiguration of file inputs. \
                  Treating var '{:?}' as reconfiguration variable",
                     reconf_topic
                 );
                 input_builder.spec.clone()
+            }
+            InputProviderSpec::Manual(fan_rx) => {
+                // No need to change enything here, as ManualInputProvider simply forwards whatever
+                // it receives on the channel
+                InputProviderSpec::Manual(fan_rx.clone())
             }
             InputProviderSpec::Mqtt(topics) | InputProviderSpec::Redis(topics) => {
                 info!(
@@ -383,24 +388,20 @@ where
     async fn await_inputs(
         streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
     ) -> BTreeMap<VarName, Option<AC::Val>> {
-        // Create input tasks
-        let mut futs: FuturesUnordered<_> = streams
+        // Collect (name, future) pairs to preserve key association
+        let (names, futs): (Vec<_>, Vec<_>) = streams
             .iter_mut()
-            .map(|(name, stream)| {
-                stream
-                    .next()
-                    .map(move |val| (name.clone(), val))
-                    .boxed_local()
-            })
-            .collect();
+            .map(|(name, stream)| (name.clone(), stream.next()))
+            .unzip();
 
-        // Futs returns None when empty - does not indicate tasks result
+        // Await all futures concurrently, results come back in the same order as names
+        let results = join_all(futs).await;
+
         let mut ret = BTreeMap::new();
-        while let Some((name, res)) = futs.next().await {
+        for (name, res) in names.into_iter().zip(results) {
             if let Some(val) = res {
                 ret.insert(name, Some(val));
             } else {
-                // Not an error, most likely because the channel is done
                 debug!("ReconfSemiSyncRuntime: Input stream for {} has ended", name);
                 ret.insert(name, None);
             }
@@ -671,6 +672,8 @@ where
             InputProviderSpec::File(_path) => {
                 // TODO: Maybe this could be implemented if FileInputProvider had a way of telling us which line it
                 // currently read on
+                // (or simply by having a counter inside our RT and forwarding inputs up until that
+                // point)
                 unimplemented!(
                     "Reconfiguration of file inputs is not supported as it requires re-reading the input file, which causes the inputs to start over."
                 )
@@ -682,7 +685,7 @@ where
                     topics.as_ref(),
                 )))
             }
-            InputProviderSpec::Manual(_) => unimplemented!("Not needed yet"),
+            InputProviderSpec::Manual(tx) => InputProviderSpec::Manual(tx),
         };
         if let Some(ref mut input_builder) = self.self_builder.input_builder {
             input_builder.spec = input_spec;
@@ -718,7 +721,7 @@ where
                     topics.as_ref(),
                 )))
             }
-            OutputHandlerSpec::Manual(_) => unimplemented!("Not needed yet"),
+            OutputHandlerSpec::Manual(tx) => OutputHandlerSpec::Manual(tx),
         };
         if let Some(ref mut output_builder) = self.self_builder.output_builder {
             output_builder.spec = output_spec;

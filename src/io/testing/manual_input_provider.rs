@@ -32,6 +32,10 @@ impl<AC: AsyncConfig> ManualInputProvider<AC> {
     //
     // On top of the regular InputProvider interface, it needs to have a sender channel for pushing
     // values.
+    //
+    // NOTE: This InputProvider does NOT automatically forward NoVal values to implement async
+    // streams, as it would result in too many NoVals being sent when chaining this to other
+    // InputProviders.
     pub fn new(input_vars: BTreeSet<VarName>) -> Self {
         let mut map = BTreeMap::new();
         let mut senders = BTreeMap::new();

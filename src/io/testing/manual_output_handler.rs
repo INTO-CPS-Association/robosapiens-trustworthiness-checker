@@ -22,6 +22,9 @@ use crate::{
  * construction by provide_streams or once they are used they are taken and
  * cannot be used again; this allows us to manage the lifetimes of our data
  * without mutexes or arcs. */
+// NOTE: This OutputHandler does NOT automatically forward NoVal values to implement async
+// streams, as it would result in too many NoVals being sent when chaining this to other
+// OutputHandlers.
 pub struct ManualOutputHandler<V: StreamData> {
     pub var_names: BTreeSet<VarName>,
     #[allow(dead_code)]

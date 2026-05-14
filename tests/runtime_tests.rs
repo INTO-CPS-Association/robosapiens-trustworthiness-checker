@@ -2585,3 +2585,124 @@ async fn test_benchmark_regression_long_add_defer(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod reconf_tests {
+    use super::*;
+    use async_unsync::bounded;
+    use std::collections::BTreeSet;
+    use tc_testutils::streams::{with_timeout, with_timeout_res};
+    use trustworthiness_checker::io::builders::output_handler_builder::OutputHandlerSpec;
+    use trustworthiness_checker::io::builders::{
+        InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
+    };
+    use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
+    use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
+    use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
+    use trustworthiness_checker::semantics::UntimedDsrvSemantics;
+    use trustworthiness_checker::stream_utils::Fanout;
+
+    type TestRuntimeBuilder = ReconfSemiSyncRuntimeBuilder<
+        SemiSyncValueConfig,
+        UntimedDsrvSemantics<LALRParser>,
+        LALRParser,
+    >;
+
+    const RECONF_TOPIC: &str = "RECONF_ME";
+
+    async fn send_values(
+        inp_tx: &mut bounded::Sender<(VarName, Value)>,
+        var_val_map: BTreeMap<&str, Value>,
+    ) {
+        for (var, val) in var_val_map {
+            with_timeout_res(
+                inp_tx.send((var.into(), val)),
+                1,
+                format!("inp_tx.send for var {}", var).as_str(),
+            )
+            .await
+            .expect(&format!("Failed to send value for var {}", var));
+        }
+    }
+
+    async fn send_value_noval_others(
+        inp_tx: &mut bounded::Sender<(VarName, Value)>,
+        var_val: (&str, Value),
+        vars_to_set_noval: &Vec<&str>,
+    ) {
+        let mut var_val_map: BTreeMap<_, _> = vars_to_set_noval
+            .into_iter()
+            .map(|var| (*var, Value::NoVal))
+            .collect();
+        var_val_map.insert(var_val.0, var_val.1.clone());
+        send_values(inp_tx, var_val_map).await
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_simple_add_manual_no_reconf(ex: Rc<LocalExecutor<'static>>) {
+        // Tests the ReconfSemiSyncRuntime with the simple add monitor, without actually sending a
+        // reconfiguration, to check that the basic input/output works as expected.
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let xs = vec![Value::Int(1), Value::Int(3)];
+        let ys = vec![Value::Int(2), Value::Int(4)];
+        let expected = vec![Value::NoVal, Value::Int(3), Value::Int(5), Value::Int(7)];
+        let inputs = vec!["x", "y", RECONF_TOPIC];
+
+        // Manual providers:
+        let (mut inp_tx, inp_rx) = bounded::channel::<(VarName, Value)>(4).into_split();
+        let fan = Rc::new(Fanout::new(inp_rx));
+        let input_spec = InputProviderSpec::Manual(fan);
+        let input_builder = InputProviderBuilder::new(input_spec)
+            .model(spec.clone())
+            .executor(ex.clone());
+
+        let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
+        let output_spec = OutputHandlerSpec::Manual(out_tx);
+        let output_builder = OutputHandlerBuilder::new(output_spec)
+            .executor(ex.clone())
+            .output_var_names(BTreeSet::from(["z".into()]))
+            .aux_info(vec![]);
+        let monitor_builder = Box::new(
+            TestRuntimeBuilder::new()
+                .executor(ex.clone())
+                .model(spec.clone())
+                .input_builder(input_builder)
+                .output_builder(output_builder)
+                .reconf_topic(RECONF_TOPIC.into()),
+        );
+        let monitor = monitor_builder.async_build().await;
+        ex.spawn(monitor.run()).detach();
+
+        let mut z_iter = expected.into_iter();
+
+        for (x_exp, y_exp) in xs.into_iter().zip(ys.into_iter()) {
+            tracing::warn!("Sending x-value: {:?}", x_exp.clone());
+            send_value_noval_others(&mut inp_tx, ("x", x_exp), &inputs).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            tracing::warn!("Received output: {:?}", out_res);
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+
+            tracing::warn!("Sending y-value: {:?}", y_exp.clone());
+            send_value_noval_others(&mut inp_tx, ("y", y_exp), &inputs).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            tracing::warn!("Received output: {:?}", out_res);
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+        }
+    }
+}
