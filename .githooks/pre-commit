@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 cargo fmt --all
-git add -u
+git update-index --again
