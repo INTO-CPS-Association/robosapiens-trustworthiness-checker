@@ -6,6 +6,7 @@ use crate::{
         builders::{
             InputProviderSpec, OutputHandlerBuilder, output_handler_builder::OutputHandlerSpec,
         },
+        map::MapInputProvider,
         testing::ManualInputProvider,
     },
     lang::core::parser::SpecParser,
@@ -266,7 +267,7 @@ where
             InputProviderSpec::Mqtt(topics) | InputProviderSpec::Redis(topics) => {
                 info!(
                     ?reconf_topic,
-                    "Injecting reconf variable into InputProvider"
+                    "Injecting reconf variable into InputProvider topics"
                 );
 
                 let mut var_topics: TopicMapping = topics.clone().unwrap_or_else(|| {
@@ -292,7 +293,7 @@ where
                 let mut msg_type_mapping = msg_type_mapping.clone();
                 info!(
                     ?reconf_topic,
-                    "Injecting reconf variable into InputProvider"
+                    "Injecting reconf variable into InputProvider topics"
                 );
                 let reconf_topic_name = format!("/{}", reconf_topic.name());
                 topic_mapping.insert(reconf_topic.clone(), reconf_topic_name.into());
@@ -763,6 +764,8 @@ where
 
         self.self_builder.starting_history = Some(starting_history);
         warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
+        // For now, reassign existing InputProvider with empty to shut down. In future when we can reconfig them, we should do that instead.
+        self.input_provider = Box::new(MapInputProvider::new(BTreeMap::new()));
         let new_self = Box::new(self.self_builder.clone()).async_build().await;
         new_self.run().await
     }
