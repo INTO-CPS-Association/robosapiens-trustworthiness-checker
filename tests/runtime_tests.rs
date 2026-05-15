@@ -2592,6 +2592,7 @@ mod reconf_tests {
     use async_unsync::bounded;
     use std::collections::BTreeSet;
     use tc_testutils::streams::{with_timeout, with_timeout_res};
+    use tracing::info;
     use trustworthiness_checker::io::builders::output_handler_builder::OutputHandlerSpec;
     use trustworthiness_checker::io::builders::{
         InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
@@ -2676,28 +2677,151 @@ mod reconf_tests {
         let mut z_iter = expected.into_iter();
 
         for (x_exp, y_exp) in xs.into_iter().zip(ys.into_iter()) {
-            tracing::warn!("Sending x-value: {:?}", x_exp.clone());
             send_value_noval_others(&mut inp_tx, ("x", x_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
                 .await
                 .expect("failed to get result")
                 .expect("output channel closed");
-            tracing::warn!("Received output: {:?}", out_res);
             let z_res = out_res
                 .remove(&"z".into())
                 .expect("output did not contain z");
             let z_exp = z_iter.next().unwrap();
             assert_eq!(z_res, z_exp);
 
-            tracing::warn!("Sending y-value: {:?}", y_exp.clone());
             send_value_noval_others(&mut inp_tx, ("y", y_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
                 .await
                 .expect("failed to get result")
                 .expect("output channel closed");
-            tracing::warn!("Received output: {:?}", out_res);
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
+        // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure but do
+        // not introduce/remove any streams
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
+        let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
+        let expected = vec![
+            Value::NoVal,
+            Value::Int(3),
+            Value::Int(5),
+            Value::Int(7),
+            // Here we reconf:
+            Value::NoVal,
+            Value::Int(12),
+            Value::Int(14),
+            Value::Int(16),
+        ];
+        let inputs = vec!["x", "y", RECONF_TOPIC];
+        let in_len = xs.len();
+
+        let (mut inp_tx, inp_rx) = bounded::channel::<(VarName, Value)>(4).into_split();
+        let fan = Rc::new(Fanout::new(inp_rx));
+        let input_spec = InputProviderSpec::Manual(fan);
+        let input_builder = InputProviderBuilder::new(input_spec)
+            .model(spec.clone())
+            .executor(ex.clone());
+
+        let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
+        let output_spec = OutputHandlerSpec::Manual(out_tx);
+        let output_builder = OutputHandlerBuilder::new(output_spec)
+            .executor(ex.clone())
+            .output_var_names(BTreeSet::from(["z".into()]))
+            .aux_info(vec![]);
+        let monitor_builder = Box::new(
+            TestRuntimeBuilder::new()
+                .executor(ex.clone())
+                .model(spec.clone())
+                .input_builder(input_builder)
+                .output_builder(output_builder)
+                .reconf_topic(RECONF_TOPIC.into()),
+        );
+        let monitor = monitor_builder.async_build().await;
+        ex.spawn(monitor.run()).detach();
+
+        let mut x_iter1 = xs.clone().into_iter().take(in_len / 2);
+        let mut x_iter2 = xs.into_iter().skip(in_len / 2);
+        let mut y_iter1 = ys.clone().into_iter().take(in_len / 2);
+        let mut y_iter2 = ys.into_iter().skip(in_len / 2);
+        let mut z_iter = expected.into_iter();
+
+        // Pre-reconf: interleave x and y with NoVal for the others
+        for (x_exp, y_exp) in x_iter1.zip(y_iter1) {
+            send_value_noval_others(&mut inp_tx, ("x", x_exp), &inputs).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+
+            send_value_noval_others(&mut inp_tx, ("y", y_exp), &inputs).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+        }
+
+        info!("Finished pre-reconf phase, now sending reconf");
+        // Reconfigure: send the new spec via RECONF_TOPIC
+        let reconf_json = serde_json::json!({
+            "spec": spec_simple_add_monitor_plus_one(),
+            "type_info": {},
+            "topic_mapping": {}
+        })
+        .to_string();
+        send_value_noval_others(
+            &mut inp_tx,
+            (RECONF_TOPIC, Value::Str(reconf_json.into())),
+            &inputs,
+        )
+        .await;
+
+        // Unfortunately, need to wait for detached InputProviderBuilder task to be polled...
+        // Otherwise, we risk the control-flow of the test to be wrong, causing a deadlock.
+        // Perhaps related to the channel-types we are using inside Fanout
+        smol::Timer::after(std::time::Duration::from_millis(10)).await;
+        info!("Finished reconf, now sending post-reconf values");
+
+        // Post-reconf: same interleave pattern
+        for (x_exp, y_exp) in x_iter2.zip(y_iter2) {
+            send_value_noval_others(&mut inp_tx, ("x", x_exp), &inputs).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x_post")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+
+            send_value_noval_others(&mut inp_tx, ("y", y_exp), &inputs).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y_post")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
             let z_res = out_res
                 .remove(&"z".into())
                 .expect("output did not contain z");

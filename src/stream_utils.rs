@@ -148,6 +148,9 @@ where
 /// This is conceptually "SPMC over a bounded channel" — the user pushes
 /// values through a single `bounded::Sender` and each call to `subscribe`
 /// returns an independent `bounded::Receiver`.
+/// TODO: Try to implement this more like MapInputProvider.
+/// Should be possible without spawning a task, which means we no longer depend on the order of
+/// task execution for not deadlocking.
 pub struct Fanout<T> {
     source: RefCell<Option<bounded::Receiver<T>>>,
     subs: RefCell<Vec<bounded::Sender<T>>>,
@@ -188,6 +191,10 @@ impl<T: Clone + 'static> Fanout<T> {
                     while let Some(msg) = source.recv().await {
                         let snapshot: Vec<_> = fanout.subs.borrow().iter().cloned().collect();
                         let mut alive = Vec::new();
+                        tracing::debug!(
+                            "Fanout: sending message to {} subscribers",
+                            snapshot.len()
+                        );
                         for sub in snapshot {
                             if sub.send(msg.clone()).await.is_ok() {
                                 alive.push(sub);
