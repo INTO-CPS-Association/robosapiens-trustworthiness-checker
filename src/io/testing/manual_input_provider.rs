@@ -5,7 +5,7 @@ use crate::{
 };
 use async_stream::stream;
 use async_trait::async_trait;
-use futures::stream::FuturesUnordered;
+use futures::future::join_all;
 use futures::{FutureExt, StreamExt};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
@@ -97,24 +97,28 @@ impl<AC: AsyncConfig> InputProvider for ManualInputProvider<AC> {
             loop {
                 // Must be in scope to ensure only one mutable borrow
                 let dead = {
-                    let mut futs = FuturesUnordered::new();
-
-                    // Create sender tasks
-                    for (name, sender) in &mut ctrl_tx {
-                        let task = sender.send(()).map(|res| (name.clone(), res));
-                        futs.push(task);
-                    }
-
-                    let mut dead = Vec::new();
-                    // Futs returns None when empty - does not indicate tasks result
-                    while let Some((name, res)) = futs.next().await {
-                        if let Err(e) = res {
-                            // Not an error, most likely because the channel is done
-                            debug!("Failed to send tick to var stream {}: {}", name, e);
-                            dead.push(name);
-                        }
-                    }
-                    dead
+                    // Tick all stream to let them know they can do a step
+                    let tasks: Vec<_> = ctrl_tx
+                        .iter_mut()
+                        .map(|(name, sender)| {
+                            let name = name.clone();
+                            sender.send(()).map(move |res| (name, res))
+                        })
+                        .collect();
+                    let results = join_all(tasks).await;
+                    // Remove those that have been dropped (i.e. their var stream has been
+                    // exhausted)
+                    results
+                        .into_iter()
+                        .filter_map(|(name, res)| {
+                            if let Err(e) = res {
+                                debug!("Failed to send tick to var stream {}: {}", name, e);
+                                Some(name)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
                 };
 
                 for name in dead {
