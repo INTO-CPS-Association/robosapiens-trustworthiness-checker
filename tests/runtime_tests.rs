@@ -2611,31 +2611,27 @@ mod reconf_tests {
 
     const RECONF_TOPIC: &str = "RECONF_ME";
 
-    async fn send_values(
-        inp_tx: &FanoutSender<(VarName, Value)>,
-        var_val_map: BTreeMap<&str, Value>,
-    ) {
-        for (var, val) in var_val_map {
-            let _ = with_timeout(
-                inp_tx.send((var.into(), val)),
-                1,
-                format!("inp_tx.send for var {}", var).as_str(),
-            )
-            .await;
-        }
+    async fn send_value(tx: &FanoutSender<Value>, val: Value, var: VarName) {
+        let _ = with_timeout(
+            tx.send(val),
+            1,
+            format!("tx.send for var {:?}", var).as_str(),
+        )
+        .await;
     }
 
     async fn send_value_noval_others(
-        inp_tx: &FanoutSender<(VarName, Value)>,
         var_val: (&str, Value),
-        vars_to_set_noval: &Vec<&str>,
+        tx_fans: &mut BTreeMap<VarName, FanoutSender<Value>>,
     ) {
-        let mut var_val_map: BTreeMap<_, _> = vars_to_set_noval
-            .into_iter()
-            .map(|var| (*var, Value::NoVal))
-            .collect();
-        var_val_map.insert(var_val.0, var_val.1.clone());
-        send_values(inp_tx, var_val_map).await
+        for (var, fan) in tx_fans.iter() {
+            let val = if var.name() == var_val.0 {
+                var_val.1.clone()
+            } else {
+                Value::NoVal
+            };
+            send_value(fan, val, var.clone()).await;
+        }
     }
 
     #[apply(async_test)]
@@ -2646,11 +2642,22 @@ mod reconf_tests {
         let xs = vec![Value::Int(1), Value::Int(3)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let expected = vec![Value::NoVal, Value::Int(3), Value::Int(5), Value::Int(7)];
-        let inputs = vec!["x", "y", RECONF_TOPIC];
+        let (tx_x, fx) = Fanout::new();
+        let (tx_y, fy) = Fanout::new();
+        let (tx_r, fr) = Fanout::new();
+        let inp_fans = BTreeMap::from([
+            ("x".into(), fx),
+            ("y".into(), fy),
+            (RECONF_TOPIC.into(), fr),
+        ]);
+        let mut tx_fans = BTreeMap::from([
+            ("x".into(), tx_x),
+            ("y".into(), tx_y),
+            (RECONF_TOPIC.into(), tx_r),
+        ]);
 
         // Manual providers:
-        let (inp_tx, fan) = Fanout::new();
-        let input_spec = InputProviderSpec::Manual(fan);
+        let input_spec = InputProviderSpec::Manual(inp_fans);
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(ex.clone());
@@ -2675,7 +2682,7 @@ mod reconf_tests {
         let mut z_iter = expected.into_iter();
 
         for (x_exp, y_exp) in xs.into_iter().zip(ys.into_iter()) {
-            send_value_noval_others(&inp_tx, ("x", x_exp), &inputs).await;
+            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
                 .await
@@ -2687,7 +2694,7 @@ mod reconf_tests {
             let z_exp = z_iter.next().unwrap();
             assert_eq!(z_res, z_exp);
 
-            send_value_noval_others(&inp_tx, ("y", y_exp), &inputs).await;
+            send_value_noval_others(("y", y_exp), &mut tx_fans).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
                 .await
@@ -2719,11 +2726,22 @@ mod reconf_tests {
             Value::Int(14),
             Value::Int(16),
         ];
-        let inputs = vec!["x", "y", RECONF_TOPIC];
+        let (tx_x, fx) = Fanout::new();
+        let (tx_y, fy) = Fanout::new();
+        let (tx_r, fr) = Fanout::new();
+        let inp_fans = BTreeMap::from([
+            ("x".into(), fx),
+            ("y".into(), fy),
+            (RECONF_TOPIC.into(), fr),
+        ]);
+        let mut tx_fans = BTreeMap::from([
+            ("x".into(), tx_x),
+            ("y".into(), tx_y),
+            (RECONF_TOPIC.into(), tx_r),
+        ]);
         let in_len = xs.len();
 
-        let (inp_tx, fan) = Fanout::new();
-        let input_spec = InputProviderSpec::Manual(fan);
+        let input_spec = InputProviderSpec::Manual(inp_fans);
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
             .executor(ex.clone());
@@ -2753,7 +2771,7 @@ mod reconf_tests {
 
         // Pre-reconf: interleave x and y with NoVal for the others
         for (x_exp, y_exp) in x_iter1.zip(y_iter1) {
-            send_value_noval_others(&inp_tx, ("x", x_exp), &inputs).await;
+            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
                 .await
@@ -2765,7 +2783,7 @@ mod reconf_tests {
             let z_exp = z_iter.next().unwrap();
             assert_eq!(z_res, z_exp);
 
-            send_value_noval_others(&inp_tx, ("y", y_exp), &inputs).await;
+            send_value_noval_others(("y", y_exp), &mut tx_fans).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y")
                 .await
@@ -2786,21 +2804,16 @@ mod reconf_tests {
             "topic_mapping": {}
         })
         .to_string();
-        send_value_noval_others(
-            &inp_tx,
-            (RECONF_TOPIC, Value::Str(reconf_json.into())),
-            &inputs,
-        )
-        .await;
+        send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans).await;
 
-        // Give the detached InputProviderBuilder task time to forward the reconf
-        // value to the per-var channels before sending post-reconf data.
-        smol::Timer::after(std::time::Duration::from_millis(10)).await;
+        // I am not sure why this yield_now is needed, but without it seems like we never
+        // seem to progress after a reconfiguration.
+        smol::future::yield_now().await;
         info!("Finished reconf, now sending post-reconf values");
 
         // Post-reconf: same interleave pattern
         for (x_exp, y_exp) in x_iter2.zip(y_iter2) {
-            send_value_noval_others(&inp_tx, ("x", x_exp), &inputs).await;
+            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x_post")
                 .await
@@ -2812,7 +2825,7 @@ mod reconf_tests {
             let z_exp = z_iter.next().unwrap();
             assert_eq!(z_res, z_exp);
 
-            send_value_noval_others(&inp_tx, ("y", y_exp), &inputs).await;
+            send_value_noval_others(("y", y_exp), &mut tx_fans).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y_post")
                 .await

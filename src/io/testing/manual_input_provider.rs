@@ -9,7 +9,7 @@ use futures::future::join_all;
 use futures::{FutureExt, StreamExt};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
-use unsync::spsc::Sender as SpscSender;
+use unsync::spsc::{self, Sender as SpscSender};
 
 const CHANNEL_SIZE: usize = 10;
 
@@ -39,29 +39,55 @@ impl<AC: AsyncConfig> ManualInputProvider<AC> {
         let mut map = BTreeMap::new();
         let mut senders = BTreeMap::new();
         for name in input_vars.into_iter() {
-            let (tx, mut rx) = unsync::spsc::channel(CHANNEL_SIZE);
-            let (ctrl_tx, mut ctrl_rx) = stream_utils::channel_with_ack(CHANNEL_SIZE);
-            let var_stream: OutputStream<AC::Val> = Box::pin(stream! {
-            while let Some(_) = ctrl_rx.next().await {
-                if let Some(val) = rx.recv().await {
+            let (tx, mut rx) = spsc::channel(CHANNEL_SIZE);
+            let source: OutputStream<AC::Val> = Box::pin(stream! {
+                while let Some(val) = rx.recv().await {
                     yield val;
-                } else {
-                    return;
                 }
-            }});
-            map.insert(
-                name.clone(),
-                Channel {
-                    sender: Some(tx),
-                    receiver: Some(var_stream),
-                },
-            );
+            });
+            let (mut channel, ctrl_tx) = Self::make_channel(source);
+            channel.sender = Some(tx);
+            map.insert(name.clone(), channel);
             senders.insert(name, ctrl_tx);
         }
         Self {
             map,
             senders: Some(senders),
         }
+    }
+
+    pub fn new_from_streams(input_streams: BTreeMap<VarName, OutputStream<AC::Val>>) -> Self {
+        let mut map = BTreeMap::new();
+        let mut senders = BTreeMap::new();
+        for (name, stream) in input_streams.into_iter() {
+            let (channel, ctrl_tx) = Self::make_channel(stream);
+            map.insert(name.clone(), channel);
+            senders.insert(name, ctrl_tx);
+        }
+        Self {
+            map,
+            senders: Some(senders),
+        }
+    }
+
+    fn make_channel(mut source: OutputStream<AC::Val>) -> (Channel<AC>, SenderWithAck<()>) {
+        let (ctrl_tx, mut ctrl_rx) = stream_utils::channel_with_ack::<()>(CHANNEL_SIZE);
+        let var_stream: OutputStream<AC::Val> = Box::pin(stream! {
+            while ctrl_rx.next().await.is_some() {
+                if let Some(val) = source.next().await {
+                    yield val;
+                } else {
+                    return;
+                }
+            }
+        });
+        (
+            Channel {
+                sender: None,
+                receiver: Some(var_stream),
+            },
+            ctrl_tx,
+        )
     }
 
     pub fn sender_channel(&mut self, var: &VarName) -> Option<SpscSender<AC::Val>> {

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use async_stream::stream;
 use smol::LocalExecutor;
 use tracing::{debug_span, warn};
 
@@ -13,7 +14,7 @@ use crate::io::testing::ManualInputProvider;
 use crate::runtime::builder::ValueConfig;
 
 use crate::stream_utils::Fanout;
-use crate::{self as tc, Value};
+use crate::{self as tc, OutputStream, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
 
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
@@ -41,7 +42,7 @@ pub enum InputProviderSpec {
     ),
     /// Manually receives results based on the Fanout channel, and forwards them to any
     /// constructed InputProviders. Useful for testing.
-    Manual(Rc<Fanout<(VarName, Value)>>),
+    Manual(BTreeMap<VarName, Rc<Fanout<Value>>>),
 }
 
 #[derive(Clone, Debug)]
@@ -310,48 +311,23 @@ impl InputProviderBuilder {
                 let input_vars = self
                     .input_vars
                     .expect("Input vars must be provided for manual input provider");
-                let executor = self
-                    .executor
-                    .expect("Executor must be provided for manual input provider");
-
-                let sub_rx = fanout.subscribe();
-
-                let input_var_names: Vec<VarName> = input_vars.iter().cloned().collect();
-                let mut provider = ManualInputProvider::<ValueConfig>::new(input_vars);
-
-                let mut senders = BTreeMap::new();
-                for var in &input_var_names {
-                    let sender = provider
-                        .sender_channel(var)
-                        .expect("Sender should exist for each var");
-                    senders.insert(var.clone(), sender);
+                assert!(
+                    input_vars == fanout.keys().cloned().collect::<BTreeSet<_>>(),
+                    "Fanout must and input_vars must be equal"
+                );
+                let mut rxs = BTreeMap::new();
+                for (var, fanout) in fanout {
+                    // Important that this happens outside stream!
+                    let mut sub_rx = fanout.subscribe();
+                    let rx: OutputStream<Value> = Box::pin(stream! {
+                        while let Some(val) = sub_rx.recv().await {
+                            yield val;
+                        }
+                    });
+                    rxs.insert(var.clone(), rx);
                 }
 
-                // Forwarding task: reads from this subscriber and forwards to per-var channels
-                executor
-                    .spawn(async move {
-                        let mut sub_rx = sub_rx;
-                        while let Some((var_name, value)) = sub_rx.recv().await {
-                            match senders.get_mut(&var_name) {
-                                Some(sender) => {
-                                    if sender.send(value).await.is_err() {
-                                        tracing::debug!(
-                                            "Failed to send to var stream {}, stream closed",
-                                            var_name
-                                        );
-                                        break;
-                                    }
-                                }
-                                None => {
-                                    tracing::warn!(
-                                        "Received value for unknown variable: {}",
-                                        var_name
-                                    );
-                                }
-                            }
-                        }
-                    })
-                    .detach();
+                let provider = ManualInputProvider::<ValueConfig>::new_from_streams(rxs);
 
                 Box::new(provider) as Box<dyn InputProvider<Val = Value>>
             }
@@ -378,8 +354,10 @@ mod tests {
         // call `sender_channel` directly.)
         let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let (tx, fanout) = Fanout::new();
-        let mut provider = InputProviderBuilder::new(InputProviderSpec::Manual(fanout))
+        let (tx_x, fx) = Fanout::new();
+        let (tx_y, fy) = Fanout::new();
+        let fanouts = BTreeMap::from([(VarName::new("x"), fx), (VarName::new("y"), fy)]);
+        let mut provider = InputProviderBuilder::new(InputProviderSpec::Manual(fanouts))
             .executor(ex.clone())
             .model(model)
             .async_build()
@@ -394,8 +372,8 @@ mod tests {
 
         let mut control_stream = provider.control_stream().await;
 
-        tx.send((VarName::new("x"), Value::Int(1))).await;
-        tx.send((VarName::new("y"), Value::Int(3))).await;
+        tx_x.send(Value::Int(1)).await;
+        tx_y.send(Value::Int(3)).await;
 
         let _ = with_timeout(control_stream.next(), 1, "ctrl_1")
             .await
@@ -412,8 +390,8 @@ mod tests {
         assert_eq!(x_val, Value::Int(1));
         assert_eq!(y_val, Value::Int(3));
 
-        tx.send((VarName::new("x"), Value::Int(2))).await;
-        tx.send((VarName::new("y"), Value::Int(4))).await;
+        tx_x.send(Value::Int(2)).await;
+        tx_y.send(Value::Int(4)).await;
 
         let _ = with_timeout(control_stream.next(), 1, "ctrl_2")
             .await
@@ -430,7 +408,8 @@ mod tests {
         assert_eq!(x_val, Value::Int(2));
         assert_eq!(y_val, Value::Int(4));
 
-        drop(tx);
+        drop(tx_x);
+        drop(tx_y);
 
         let _ = with_timeout(control_stream.next(), 1, "ctrl_end")
             .await
@@ -456,8 +435,10 @@ mod tests {
         // receive values through the same user channel.
         let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let (tx, fanout) = Fanout::new();
-        let builder1 = InputProviderBuilder::new(InputProviderSpec::Manual(fanout))
+        let (tx_x, fx) = Fanout::new();
+        let (tx_y, fy) = Fanout::new();
+        let fanouts = BTreeMap::from([(VarName::new("x"), fx), (VarName::new("y"), fy)]);
+        let builder1 = InputProviderBuilder::new(InputProviderSpec::Manual(fanouts))
             .executor(ex.clone())
             .model(model.clone());
         let builder2 = builder1.clone();
@@ -475,8 +456,8 @@ mod tests {
         let mut ctrl2 = provider2.control_stream().await;
 
         // Send one pair — both providers should receive the same values
-        tx.send((VarName::new("x"), Value::Int(10))).await;
-        tx.send((VarName::new("y"), Value::Int(20))).await;
+        tx_x.send(Value::Int(10)).await;
+        tx_y.send(Value::Int(20)).await;
 
         let _ = with_timeout(ctrl1.next(), 1, "c1_1").await.unwrap();
         let _ = with_timeout(ctrl2.next(), 1, "c2_1").await.unwrap();
@@ -510,8 +491,10 @@ mod tests {
         // clone still receives values through the same user channel.
         let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let (tx, fanout) = Fanout::new();
-        let builder1 = InputProviderBuilder::new(InputProviderSpec::Manual(fanout))
+        let (tx_x, fx) = Fanout::new();
+        let (_tx_y, fy) = Fanout::new();
+        let fanouts = BTreeMap::from([(VarName::new("x"), fx), (VarName::new("y"), fy)]);
+        let builder1 = InputProviderBuilder::new(InputProviderSpec::Manual(fanouts))
             .executor(ex.clone())
             .model(model.clone());
         let builder2 = builder1.clone();
@@ -522,7 +505,7 @@ mod tests {
             let mut xs = provider1.var_stream(&VarName::new("x")).expect("x");
             let mut ctrl = provider1.control_stream().await;
 
-            tx.send((VarName::new("x"), Value::Int(100))).await;
+            tx_x.send(Value::Int(100)).await;
             let _ = with_timeout(ctrl.next(), 1, "c1").await.unwrap();
             let v = with_timeout(xs.next(), 1, "x1").await.unwrap().unwrap();
             assert_eq!(v, Value::Int(100));
@@ -534,7 +517,7 @@ mod tests {
         let mut xs2 = provider2.var_stream(&VarName::new("x")).expect("x");
         let mut ctrl2 = provider2.control_stream().await;
 
-        tx.send((VarName::new("x"), Value::Int(200))).await;
+        tx_x.send(Value::Int(200)).await;
         let _ = with_timeout(ctrl2.next(), 1, "c2").await.unwrap();
         let v2 = with_timeout(xs2.next(), 1, "x2").await.unwrap().unwrap();
         assert_eq!(v2, Value::Int(200));
