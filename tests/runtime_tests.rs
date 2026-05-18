@@ -2748,10 +2748,10 @@ mod reconf_tests {
         let monitor = monitor_builder.async_build().await;
         ex.spawn(monitor.run()).detach();
 
-        let mut x_iter1 = xs.clone().into_iter().take(in_len / 2);
-        let mut x_iter2 = xs.into_iter().skip(in_len / 2);
-        let mut y_iter1 = ys.clone().into_iter().take(in_len / 2);
-        let mut y_iter2 = ys.into_iter().skip(in_len / 2);
+        let x_iter1 = xs.clone().into_iter().take(in_len / 2);
+        let x_iter2 = xs.into_iter().skip(in_len / 2);
+        let y_iter1 = ys.clone().into_iter().take(in_len / 2);
+        let y_iter2 = ys.into_iter().skip(in_len / 2);
         let mut z_iter = expected.into_iter();
 
         // Pre-reconf: interleave x and y with NoVal for the others
