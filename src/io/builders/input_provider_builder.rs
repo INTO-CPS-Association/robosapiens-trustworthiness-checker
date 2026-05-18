@@ -11,6 +11,7 @@ use crate::io::mqtt::MqttFactory;
 use crate::io::replay_history::ReplayHistory;
 use crate::io::testing::ManualInputProvider;
 use crate::runtime::builder::ValueConfig;
+
 use crate::stream_utils::Fanout;
 use crate::{self as tc, Value};
 use crate::{InputProvider, Specification, VarName, cli::args::Language};
@@ -40,7 +41,6 @@ pub enum InputProviderSpec {
     ),
     /// Manually receives results based on the Fanout channel, and forwards them to any
     /// constructed InputProviders. Useful for testing.
-    /// NOTE: Building this spawns multiple detached background tasks!
     Manual(Rc<Fanout<(VarName, Value)>>),
 }
 
@@ -314,11 +314,11 @@ impl InputProviderBuilder {
                     .executor
                     .expect("Executor must be provided for manual input provider");
 
-                let mut sub_rx = fanout.subscribe(&executor);
+                let sub_rx = fanout.subscribe();
 
-                // Per-provider forwarding task
                 let input_var_names: Vec<VarName> = input_vars.iter().cloned().collect();
                 let mut provider = ManualInputProvider::<ValueConfig>::new(input_vars);
+
                 let mut senders = BTreeMap::new();
                 for var in &input_var_names {
                     let sender = provider
@@ -327,8 +327,10 @@ impl InputProviderBuilder {
                     senders.insert(var.clone(), sender);
                 }
 
+                // Forwarding task: reads from this subscriber and forwards to per-var channels
                 executor
                     .spawn(async move {
+                        let mut sub_rx = sub_rx;
                         while let Some((var_name, value)) = sub_rx.recv().await {
                             match senders.get_mut(&var_name) {
                                 Some(sender) => {
@@ -376,13 +378,12 @@ mod tests {
         // call `sender_channel` directly.)
         let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let (tx, rx) = async_unsync::bounded::channel::<(VarName, Value)>(10).into_split();
-        let mut provider =
-            InputProviderBuilder::new(InputProviderSpec::Manual(Rc::new(Fanout::new(rx))))
-                .executor(ex.clone())
-                .model(model)
-                .async_build()
-                .await;
+        let (tx, fanout) = Fanout::new();
+        let mut provider = InputProviderBuilder::new(InputProviderSpec::Manual(fanout))
+            .executor(ex.clone())
+            .model(model)
+            .async_build()
+            .await;
 
         let mut x_stream = provider
             .var_stream(&VarName::new("x"))
@@ -393,8 +394,8 @@ mod tests {
 
         let mut control_stream = provider.control_stream().await;
 
-        tx.send((VarName::new("x"), Value::Int(1))).await.unwrap();
-        tx.send((VarName::new("y"), Value::Int(3))).await.unwrap();
+        tx.send((VarName::new("x"), Value::Int(1))).await;
+        tx.send((VarName::new("y"), Value::Int(3))).await;
 
         let _ = with_timeout(control_stream.next(), 1, "ctrl_1")
             .await
@@ -411,8 +412,8 @@ mod tests {
         assert_eq!(x_val, Value::Int(1));
         assert_eq!(y_val, Value::Int(3));
 
-        tx.send((VarName::new("x"), Value::Int(2))).await.unwrap();
-        tx.send((VarName::new("y"), Value::Int(4))).await.unwrap();
+        tx.send((VarName::new("x"), Value::Int(2))).await;
+        tx.send((VarName::new("y"), Value::Int(4))).await;
 
         let _ = with_timeout(control_stream.next(), 1, "ctrl_2")
             .await
@@ -429,14 +430,24 @@ mod tests {
         assert_eq!(x_val, Value::Int(2));
         assert_eq!(y_val, Value::Int(4));
 
-        std::mem::drop(tx);
+        drop(tx);
 
         let _ = with_timeout(control_stream.next(), 1, "ctrl_end")
             .await
             .unwrap();
 
-        assert!(x_stream.next().await.is_none());
-        assert!(y_stream.next().await.is_none());
+        assert!(
+            with_timeout(x_stream.next(), 1, "x_end")
+                .await
+                .expect("x stream should end")
+                .is_none()
+        );
+        assert!(
+            with_timeout(y_stream.next(), 1, "y_end")
+                .await
+                .expect("x stream should end")
+                .is_none()
+        )
     }
 
     #[apply(async_test)]
@@ -445,8 +456,7 @@ mod tests {
         // receive values through the same user channel.
         let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let (tx, rx) = async_unsync::bounded::channel::<(VarName, Value)>(10).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
+        let (tx, fanout) = Fanout::new();
         let builder1 = InputProviderBuilder::new(InputProviderSpec::Manual(fanout))
             .executor(ex.clone())
             .model(model.clone());
@@ -465,8 +475,8 @@ mod tests {
         let mut ctrl2 = provider2.control_stream().await;
 
         // Send one pair — both providers should receive the same values
-        tx.send((VarName::new("x"), Value::Int(10))).await.unwrap();
-        tx.send((VarName::new("y"), Value::Int(20))).await.unwrap();
+        tx.send((VarName::new("x"), Value::Int(10))).await;
+        tx.send((VarName::new("y"), Value::Int(20))).await;
 
         let _ = with_timeout(ctrl1.next(), 1, "c1_1").await.unwrap();
         let _ = with_timeout(ctrl2.next(), 1, "c2_1").await.unwrap();
@@ -500,8 +510,7 @@ mod tests {
         // clone still receives values through the same user channel.
         let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
 
-        let (tx, rx) = async_unsync::bounded::channel::<(VarName, Value)>(10).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
+        let (tx, fanout) = Fanout::new();
         let builder1 = InputProviderBuilder::new(InputProviderSpec::Manual(fanout))
             .executor(ex.clone())
             .model(model.clone());
@@ -513,7 +522,7 @@ mod tests {
             let mut xs = provider1.var_stream(&VarName::new("x")).expect("x");
             let mut ctrl = provider1.control_stream().await;
 
-            tx.send((VarName::new("x"), Value::Int(100))).await.unwrap();
+            tx.send((VarName::new("x"), Value::Int(100))).await;
             let _ = with_timeout(ctrl.next(), 1, "c1").await.unwrap();
             let v = with_timeout(xs.next(), 1, "x1").await.unwrap().unwrap();
             assert_eq!(v, Value::Int(100));
@@ -525,7 +534,7 @@ mod tests {
         let mut xs2 = provider2.var_stream(&VarName::new("x")).expect("x");
         let mut ctrl2 = provider2.control_stream().await;
 
-        tx.send((VarName::new("x"), Value::Int(200))).await.unwrap();
+        tx.send((VarName::new("x"), Value::Int(200))).await;
         let _ = with_timeout(ctrl2.next(), 1, "c2").await.unwrap();
         let v2 = with_timeout(xs2.next(), 1, "x2").await.unwrap().unwrap();
         assert_eq!(v2, Value::Int(200));

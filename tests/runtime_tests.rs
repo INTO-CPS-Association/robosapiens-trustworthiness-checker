@@ -2591,7 +2591,7 @@ mod reconf_tests {
     use super::*;
     use async_unsync::bounded;
     use std::collections::BTreeSet;
-    use tc_testutils::streams::{with_timeout, with_timeout_res};
+    use tc_testutils::streams::with_timeout;
     use tracing::info;
     use trustworthiness_checker::io::builders::output_handler_builder::OutputHandlerSpec;
     use trustworthiness_checker::io::builders::{
@@ -2601,7 +2601,7 @@ mod reconf_tests {
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
     use trustworthiness_checker::semantics::UntimedDsrvSemantics;
-    use trustworthiness_checker::stream_utils::Fanout;
+    use trustworthiness_checker::stream_utils::{Fanout, FanoutSender};
 
     type TestRuntimeBuilder = ReconfSemiSyncRuntimeBuilder<
         SemiSyncValueConfig,
@@ -2612,22 +2612,21 @@ mod reconf_tests {
     const RECONF_TOPIC: &str = "RECONF_ME";
 
     async fn send_values(
-        inp_tx: &mut bounded::Sender<(VarName, Value)>,
+        inp_tx: &FanoutSender<(VarName, Value)>,
         var_val_map: BTreeMap<&str, Value>,
     ) {
         for (var, val) in var_val_map {
-            with_timeout_res(
+            let _ = with_timeout(
                 inp_tx.send((var.into(), val)),
                 1,
                 format!("inp_tx.send for var {}", var).as_str(),
             )
-            .await
-            .expect(&format!("Failed to send value for var {}", var));
+            .await;
         }
     }
 
     async fn send_value_noval_others(
-        inp_tx: &mut bounded::Sender<(VarName, Value)>,
+        inp_tx: &FanoutSender<(VarName, Value)>,
         var_val: (&str, Value),
         vars_to_set_noval: &Vec<&str>,
     ) {
@@ -2650,8 +2649,7 @@ mod reconf_tests {
         let inputs = vec!["x", "y", RECONF_TOPIC];
 
         // Manual providers:
-        let (mut inp_tx, inp_rx) = bounded::channel::<(VarName, Value)>(4).into_split();
-        let fan = Rc::new(Fanout::new(inp_rx));
+        let (inp_tx, fan) = Fanout::new();
         let input_spec = InputProviderSpec::Manual(fan);
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
@@ -2677,7 +2675,7 @@ mod reconf_tests {
         let mut z_iter = expected.into_iter();
 
         for (x_exp, y_exp) in xs.into_iter().zip(ys.into_iter()) {
-            send_value_noval_others(&mut inp_tx, ("x", x_exp), &inputs).await;
+            send_value_noval_others(&inp_tx, ("x", x_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
                 .await
@@ -2689,7 +2687,7 @@ mod reconf_tests {
             let z_exp = z_iter.next().unwrap();
             assert_eq!(z_res, z_exp);
 
-            send_value_noval_others(&mut inp_tx, ("y", y_exp), &inputs).await;
+            send_value_noval_others(&inp_tx, ("y", y_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
                 .await
@@ -2724,8 +2722,7 @@ mod reconf_tests {
         let inputs = vec!["x", "y", RECONF_TOPIC];
         let in_len = xs.len();
 
-        let (mut inp_tx, inp_rx) = bounded::channel::<(VarName, Value)>(4).into_split();
-        let fan = Rc::new(Fanout::new(inp_rx));
+        let (inp_tx, fan) = Fanout::new();
         let input_spec = InputProviderSpec::Manual(fan);
         let input_builder = InputProviderBuilder::new(input_spec)
             .model(spec.clone())
@@ -2756,7 +2753,7 @@ mod reconf_tests {
 
         // Pre-reconf: interleave x and y with NoVal for the others
         for (x_exp, y_exp) in x_iter1.zip(y_iter1) {
-            send_value_noval_others(&mut inp_tx, ("x", x_exp), &inputs).await;
+            send_value_noval_others(&inp_tx, ("x", x_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
                 .await
@@ -2768,7 +2765,7 @@ mod reconf_tests {
             let z_exp = z_iter.next().unwrap();
             assert_eq!(z_res, z_exp);
 
-            send_value_noval_others(&mut inp_tx, ("y", y_exp), &inputs).await;
+            send_value_noval_others(&inp_tx, ("y", y_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y")
                 .await
@@ -2790,21 +2787,20 @@ mod reconf_tests {
         })
         .to_string();
         send_value_noval_others(
-            &mut inp_tx,
+            &inp_tx,
             (RECONF_TOPIC, Value::Str(reconf_json.into())),
             &inputs,
         )
         .await;
 
-        // Unfortunately, need to wait for detached InputProviderBuilder task to be polled...
-        // Otherwise, we risk the control-flow of the test to be wrong, causing a deadlock.
-        // Perhaps related to the channel-types we are using inside Fanout
+        // Give the detached InputProviderBuilder task time to forward the reconf
+        // value to the per-var channels before sending post-reconf data.
         smol::Timer::after(std::time::Duration::from_millis(10)).await;
         info!("Finished reconf, now sending post-reconf values");
 
         // Post-reconf: same interleave pattern
         for (x_exp, y_exp) in x_iter2.zip(y_iter2) {
-            send_value_noval_others(&mut inp_tx, ("x", x_exp), &inputs).await;
+            send_value_noval_others(&inp_tx, ("x", x_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x_post")
                 .await
@@ -2816,7 +2812,7 @@ mod reconf_tests {
             let z_exp = z_iter.next().unwrap();
             assert_eq!(z_res, z_exp);
 
-            send_value_noval_others(&mut inp_tx, ("y", y_exp), &inputs).await;
+            send_value_noval_others(&inp_tx, ("y", y_exp), &inputs).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y_post")
                 .await

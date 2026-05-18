@@ -9,8 +9,6 @@ use futures::{
     FutureExt, StreamExt,
     stream::{self, LocalBoxStream},
 };
-use smol::LocalExecutor;
-
 /* Converts a `oneshot::Receiver` of an `OutputStream` into an `OutputStream`.
  * Is done by first waiting for the oneshot to resolve to an OutputStream and
  * then continuously yielding the values from the stream. This is implemented
@@ -138,85 +136,96 @@ where
     (sender_with_ack, receiver_stream)
 }
 
-/// A fan-out that demultiplexes a single `bounded::Receiver` to multiple
-/// subscribers.  Every value received from the source is cloned to each
-/// live subscriber.  Dead subscribers (whose receivers have been dropped)
-/// are pruned automatically.
+/// A fan-out that broadcasts every value pushed through a [`FanoutSender`]
+/// to all live subscribers.  Dead subscribers (whose receivers have been
+/// dropped) are pruned automatically.
 ///
-/// The fan-out task is started lazily on the first call to `subscribe`.
+/// Created via [`Fanout::new`], which returns a `(FanoutSender<T>, Rc<Fanout<T>>)`
+/// pair.  Each call to [`subscribe`] on the `Fanout` returns a
+/// `bounded::Receiver` that will receive a clone of every subsequent value
+/// sent through the sender.
 ///
-/// This is conceptually "SPMC over a bounded channel" — the user pushes
-/// values through a single `bounded::Sender` and each call to `subscribe`
-/// returns an independent `bounded::Receiver`.
-/// TODO: Try to implement this more like MapInputProvider.
-/// Should be possible without spawning a task, which means we no longer depend on the order of
-/// task execution for not deadlocking.
+/// The fan-out is driven inline by [`FanoutSender::send`] — no background
+/// tasks and no separate drive stream are needed.  Dropping the last
+/// `FanoutSender` clears all subscribers, causing their receivers to return
+/// `None`.
 pub struct Fanout<T> {
-    source: RefCell<Option<bounded::Receiver<T>>>,
     subs: RefCell<Vec<bounded::Sender<T>>>,
+}
+
+/// The sending half of a [`Fanout`].  Each call to [`send`] distributes a
+/// value to every live subscriber.
+///
+/// Dropping the sender signals end-of-stream: all subscriber senders are
+/// dropped and their receivers will return `None`.
+pub struct FanoutSender<T> {
+    fanout: Rc<Fanout<T>>,
 }
 
 impl<T: Clone + 'static> Fanout<T> {
     /// Capacity used for each subscriber's internal channel.
     const SUB_CAPACITY: usize = 1024;
 
-    /// Wrap an existing `bounded::Receiver` so its values are fanned out to
-    /// every subscriber created via `subscribe`.
-    pub fn new(source: bounded::Receiver<T>) -> Self {
-        Self {
-            source: RefCell::new(Some(source)),
+    /// Create a new fan-out channel.  Returns a sender for pushing values
+    /// and an `Rc<Fanout<T>>` used to create subscribers via [`subscribe`].
+    pub fn new() -> (FanoutSender<T>, Rc<Self>) {
+        let fanout = Rc::new(Self {
             subs: RefCell::new(Vec::new()),
-        }
+        });
+        let sender = FanoutSender {
+            fanout: Rc::clone(&fanout),
+        };
+        (sender, fanout)
     }
 
     /// Register a new subscriber.  Returns a `bounded::Receiver` that will
-    /// receive a clone of every value arriving on the source.
-    ///
-    /// On the very first call the fan-out background task is spawned on the
-    /// given executor.
-    pub fn subscribe(
-        self: &Rc<Self>,
-        executor: &Rc<LocalExecutor<'static>>,
-    ) -> bounded::Receiver<T> {
+    /// receive a clone of every value sent through the [`FanoutSender`]
+    /// after this call.
+    pub fn subscribe(self: &Rc<Self>) -> bounded::Receiver<T> {
         let (tx, rx) = bounded::channel::<T>(Self::SUB_CAPACITY).into_split();
         self.subs.borrow_mut().push(tx);
-
-        let start = self.source.borrow().is_some();
-        if start {
-            let source = self.source.borrow_mut().take().unwrap();
-            let fanout = self.clone();
-            executor
-                .spawn(async move {
-                    let mut source = source;
-                    while let Some(msg) = source.recv().await {
-                        let snapshot: Vec<_> = fanout.subs.borrow().iter().cloned().collect();
-                        let mut alive = Vec::new();
-                        tracing::debug!(
-                            "Fanout: sending message to {} subscribers",
-                            snapshot.len()
-                        );
-                        for sub in snapshot {
-                            if sub.send(msg.clone()).await.is_ok() {
-                                alive.push(sub);
-                            }
-                        }
-                        *fanout.subs.borrow_mut() = alive;
-                    }
-                    // Source exhausted — drop all senders so subscribers see None
-                    fanout.subs.borrow_mut().clear();
-                })
-                .detach();
-        }
-
         rx
+    }
+}
+
+impl<T: Clone + 'static> FanoutSender<T> {
+    /// Send a value to all current subscribers.  Dead subscribers are
+    /// pruned automatically.  If no subscribers exist the value is
+    /// silently dropped.
+    pub async fn send(&self, msg: T) {
+        let subs = self.fanout.subs.borrow();
+        let snapshot: Vec<_> = subs.iter().cloned().collect();
+        drop(subs);
+
+        let mut alive = Vec::new();
+        tracing::debug!("Fanout: sending message to {} subscribers", snapshot.len());
+        for sub in snapshot {
+            if sub.send(msg.clone()).await.is_ok() {
+                alive.push(sub);
+            }
+        }
+        *self.fanout.subs.borrow_mut() = alive;
+    }
+}
+
+impl<T> Drop for FanoutSender<T> {
+    fn drop(&mut self) {
+        self.fanout.subs.borrow_mut().clear();
     }
 }
 
 impl<T> std::fmt::Debug for Fanout<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Fanout")
-            .field("has_source", &self.source.borrow().is_some())
             .field("sub_count", &self.subs.borrow().len())
+            .finish()
+    }
+}
+
+impl<T> std::fmt::Debug for FanoutSender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FanoutSender")
+            .field("sub_count", &self.fanout.subs.borrow().len())
             .finish()
     }
 }
@@ -309,15 +318,14 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn fanout_single_subscriber(ex: Rc<LocalExecutor<'static>>) {
-        let (tx, rx) = bounded::channel::<i32>(4).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
-        let mut sub = fanout.subscribe(&ex);
+    async fn fanout_single_subscriber(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
+        let mut sub = fanout.subscribe();
 
-        tx.send(1).await.unwrap();
-        tx.send(2).await.unwrap();
-
+        tx.send(1).await;
         assert_eq!(with_timeout(sub.recv(), 1, "r1").await.unwrap(), Some(1));
+
+        tx.send(2).await;
         assert_eq!(with_timeout(sub.recv(), 1, "r2").await.unwrap(), Some(2));
 
         drop(tx);
@@ -325,18 +333,16 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn fanout_multiple_subscribers(ex: Rc<LocalExecutor<'static>>) {
-        let (tx, rx) = bounded::channel::<i32>(4).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
-        let mut sub1 = fanout.subscribe(&ex);
-        let mut sub2 = fanout.subscribe(&ex);
+    async fn fanout_multiple_subscribers(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
+        let mut sub1 = fanout.subscribe();
+        let mut sub2 = fanout.subscribe();
 
-        tx.send(10).await.unwrap();
-        tx.send(20).await.unwrap();
-
+        tx.send(10).await;
         assert_eq!(with_timeout(sub1.recv(), 1, "s1").await.unwrap(), Some(10));
         assert_eq!(with_timeout(sub2.recv(), 1, "s2").await.unwrap(), Some(10));
 
+        tx.send(20).await;
         assert_eq!(
             with_timeout(sub1.recv(), 1, "s1_2").await.unwrap(),
             Some(20)
@@ -348,48 +354,44 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn fanout_late_subscriber(ex: Rc<LocalExecutor<'static>>) {
-        let (tx, rx) = bounded::channel::<i32>(4).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
-        let mut sub1 = fanout.subscribe(&ex);
+    async fn fanout_late_subscriber(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
+        let mut sub1 = fanout.subscribe();
 
-        tx.send(1).await.unwrap();
+        tx.send(1).await;
         assert_eq!(with_timeout(sub1.recv(), 1, "s1").await.unwrap(), Some(1));
 
         // Late subscriber only sees subsequent messages
-        let mut sub2 = fanout.subscribe(&ex);
-        tx.send(2).await.unwrap();
-
+        let mut sub2 = fanout.subscribe();
+        tx.send(2).await;
         assert_eq!(with_timeout(sub1.recv(), 1, "s1_2").await.unwrap(), Some(2));
         assert_eq!(with_timeout(sub2.recv(), 1, "s2_2").await.unwrap(), Some(2));
     }
 
     #[apply(async_test)]
-    async fn fanout_subscriber_drop_prunes_dead(ex: Rc<LocalExecutor<'static>>) {
-        let (tx, rx) = bounded::channel::<i32>(4).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
-        let mut sub1 = fanout.subscribe(&ex);
-        let sub2 = fanout.subscribe(&ex);
+    async fn fanout_subscriber_drop_prunes_dead(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
+        let mut sub1 = fanout.subscribe();
+        let sub2 = fanout.subscribe();
 
-        tx.send(1).await.unwrap();
+        tx.send(1).await;
         with_timeout(sub1.recv(), 1, "s1").await.unwrap();
 
         // Drop sub2 — its sender should be pruned on next send
         drop(sub2);
-        tx.send(2).await.unwrap();
+        tx.send(2).await;
 
         // sub1 still receives; sub2 is gone so no panic or stall
         assert_eq!(with_timeout(sub1.recv(), 1, "s1_2").await.unwrap(), Some(2));
     }
 
     #[apply(async_test)]
-    async fn fanout_source_exhausted_ends_all_subs(ex: Rc<LocalExecutor<'static>>) {
-        let (tx, rx) = bounded::channel::<i32>(4).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
-        let mut sub1 = fanout.subscribe(&ex);
-        let mut sub2 = fanout.subscribe(&ex);
+    async fn fanout_source_exhausted_ends_all_subs(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
+        let mut sub1 = fanout.subscribe();
+        let mut sub2 = fanout.subscribe();
 
-        tx.send(7).await.unwrap();
+        tx.send(7).await;
         assert_eq!(with_timeout(sub1.recv(), 1, "s1").await.unwrap(), Some(7));
         assert_eq!(with_timeout(sub2.recv(), 1, "s2").await.unwrap(), Some(7));
 
@@ -399,15 +401,62 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn fanout_resubscribe_after_all_dropped(ex: Rc<LocalExecutor<'static>>) {
-        let (tx, rx) = bounded::channel::<i32>(4).into_split();
-        let fanout = Rc::new(Fanout::new(rx));
+    async fn fanout_resubscribe_after_all_dropped(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
 
-        let sub1 = fanout.subscribe(&ex);
+        let sub1 = fanout.subscribe();
         drop(sub1); // last subscriber gone, fan-out still alive
 
-        let mut sub2 = fanout.subscribe(&ex);
-        tx.send(42).await.unwrap();
+        let mut sub2 = fanout.subscribe();
+        tx.send(42).await;
         assert_eq!(with_timeout(sub2.recv(), 1, "s2").await.unwrap(), Some(42));
+    }
+
+    /// Values sent before any subscriber exists are silently dropped.
+    /// A late subscriber only sees values sent after it subscribed.
+    #[apply(async_test)]
+    async fn fanout_values_dropped_before_first_subscriber(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
+
+        // Send values before any subscriber exists — they are silently dropped
+        tx.send(0).await;
+        tx.send(1).await;
+
+        // Late subscriber joins, only sees subsequent values
+        let mut sub = fanout.subscribe();
+        tx.send(2).await;
+        tx.send(3).await;
+
+        assert_eq!(with_timeout(sub.recv(), 1, "r1").await.unwrap(), Some(2));
+        assert_eq!(with_timeout(sub.recv(), 1, "r2").await.unwrap(), Some(3));
+
+        drop(tx);
+        assert_eq!(sub.recv().await, None);
+    }
+
+    /// Verifies that a subscriber added between two sends only receives
+    /// values from that point forward.
+    #[apply(async_test)]
+    async fn fanout_subscriber_added_between_sends(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::new();
+
+        let mut sub1 = fanout.subscribe();
+        tx.send(10).await;
+        assert_eq!(
+            with_timeout(sub1.recv(), 1, "sub1_a").await.unwrap(),
+            Some(10)
+        );
+
+        // Add sub2 after the first value was already sent
+        let mut sub2 = fanout.subscribe();
+        tx.send(20).await;
+        assert_eq!(
+            with_timeout(sub1.recv(), 1, "sub1_b").await.unwrap(),
+            Some(20)
+        );
+        assert_eq!(
+            with_timeout(sub2.recv(), 1, "sub2_b").await.unwrap(),
+            Some(20)
+        );
     }
 }

@@ -20,8 +20,7 @@ struct Channel<AC: AsyncConfig> {
 
 pub struct ManualInputProvider<AC: AsyncConfig> {
     map: BTreeMap<VarName, Channel<AC>>,
-    senders: Option<BTreeMap<VarName, SenderWithAck<()>>>, // Control tick'er used within
-                                                           // control_stream
+    senders: Option<BTreeMap<VarName, SenderWithAck<()>>>, // Control tick'er used within control_stream
 }
 
 impl<AC: AsyncConfig> ManualInputProvider<AC> {
