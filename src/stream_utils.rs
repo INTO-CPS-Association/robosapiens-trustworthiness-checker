@@ -1,10 +1,11 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::{OutputStream, utils::cancellation_token::DropGuard};
 use anyhow::anyhow;
 use async_stream::stream;
 use async_unsync::{bounded, oneshot};
+use event_listener::Event;
 use futures::{
     FutureExt, StreamExt,
     stream::{self, LocalBoxStream},
@@ -145,12 +146,14 @@ where
 /// `bounded::Receiver` that will receive a clone of every subsequent value
 /// sent through the sender.
 ///
-/// The fan-out is driven inline by [`FanoutSender::send`] — no background
-/// tasks and no separate drive stream are needed.  Dropping the last
-/// `FanoutSender` clears all subscribers, causing their receivers to return
-/// `None`.
+/// The fan-out is driven inline by [`FanoutSender::send`]. Dropping the
+/// `FanoutSender` clears all subscribers, causing their receivers to return `None`.
 pub struct Fanout<T> {
     subs: RefCell<Vec<bounded::Sender<T>>>,
+    change_event: Event,
+    sub_events: Cell<u64>,
+    prune_events: Cell<u64>,
+    any_events: Cell<u64>,
 }
 
 /// The sending half of a [`Fanout`].  Each call to [`send`] distributes a
@@ -171,6 +174,10 @@ impl<T: Clone + 'static> Fanout<T> {
     pub fn new() -> (FanoutSender<T>, Rc<Self>) {
         let fanout = Rc::new(Self {
             subs: RefCell::new(Vec::new()),
+            change_event: Event::new(),
+            sub_events: Cell::new(0),
+            prune_events: Cell::new(0),
+            any_events: Cell::new(0),
         });
         let sender = FanoutSender {
             fanout: Rc::clone(&fanout),
@@ -178,13 +185,67 @@ impl<T: Clone + 'static> Fanout<T> {
         (sender, fanout)
     }
 
-    /// Register a new subscriber.  Returns a `bounded::Receiver` that will
+    /// Register a new subscriber and send event signal.  Returns a `bounded::Receiver` that will
     /// receive a clone of every value sent through the [`FanoutSender`]
     /// after this call.
     pub fn subscribe(self: &Rc<Self>) -> bounded::Receiver<T> {
         let (tx, rx) = bounded::channel::<T>(Self::SUB_CAPACITY).into_split();
         self.subs.borrow_mut().push(tx);
+
+        self.sub_events.set(self.sub_events.get().wrapping_add(1));
+        self.any_events.set(self.any_events.get().wrapping_add(1));
+        self.change_event.notify(usize::MAX);
+
         rx
+    }
+
+    /// Wait for at least one new subscriber to be observed
+    pub async fn wait_for_sub_event(&self, seen: u64) -> u64 {
+        self.wait_for_event(seen, |this| this.sub_events.get())
+            .await
+    }
+
+    /// Wait until at least one dead subscriber has been observed and pruned
+    pub async fn wait_for_prune_event(&self, seen: u64) -> u64 {
+        self.wait_for_event(seen, |this| this.prune_events.get())
+            .await
+    }
+
+    /// Wait until at least one event of any kind (new subscriber or prune) has been observed
+    pub async fn wait_for_any_event(&self, seen: u64) -> u64 {
+        self.wait_for_event(seen, |this| this.any_events.get())
+            .await
+    }
+
+    /// Helper function to wait for an event counter to change
+    async fn wait_for_event(&self, seen: u64, getter: impl Fn(&Self) -> u64) -> u64 {
+        loop {
+            let current = getter(self);
+            if current != seen {
+                return current;
+            }
+
+            let listener = self.change_event.listen();
+
+            let current = getter(self);
+            if current != seen {
+                return current;
+            }
+
+            listener.await;
+        }
+    }
+
+    pub fn sub_events(&self) -> u64 {
+        self.sub_events.get()
+    }
+
+    pub fn prune_events(&self) -> u64 {
+        self.prune_events.get()
+    }
+
+    pub fn any_events(&self) -> u64 {
+        self.any_events.get()
     }
 }
 
@@ -197,20 +258,60 @@ impl<T: Clone + 'static> FanoutSender<T> {
         let snapshot: Vec<_> = subs.iter().cloned().collect();
         drop(subs);
 
-        let mut alive = Vec::new();
-        tracing::debug!("Fanout: sending message to {} subscribers", snapshot.len());
+        let snapshot_len = snapshot.len();
+        let mut alive = Vec::with_capacity(snapshot_len);
+        let mut removed_any = false;
+
         for sub in snapshot {
             if sub.send(msg.clone()).await.is_ok() {
                 alive.push(sub);
+            } else {
+                removed_any = true;
             }
         }
-        *self.fanout.subs.borrow_mut() = alive;
+
+        let mut subs = self.fanout.subs.borrow_mut();
+        // Preserve subscribers that were added after our snapshot was taken
+        // (e.g. via `subscribe` called from another task while we were yielding
+        // at `sub.send().await`).  Without this, newly-added subscribers would be
+        // silently lost.
+        let drain_start = snapshot_len.min(subs.len());
+        alive.extend(subs.drain(drain_start..));
+        *subs = alive;
+        drop(subs);
+
+        if removed_any {
+            self.fanout
+                .prune_events
+                .set(self.fanout.prune_events.get().wrapping_add(1));
+            self.fanout
+                .any_events
+                .set(self.fanout.any_events.get().wrapping_add(1));
+            self.fanout.change_event.notify(usize::MAX);
+        }
+    }
+
+    pub fn fanout(&self) -> Rc<Fanout<T>> {
+        Rc::clone(&self.fanout)
     }
 }
 
 impl<T> Drop for FanoutSender<T> {
+    // Note: This implementation of Drop only works when FanoutSender is the only owner of the
+    // fanout. I.e., FanoutSender is not Clone.
     fn drop(&mut self) {
+        let had_subs = !self.fanout.subs.borrow().is_empty();
         self.fanout.subs.borrow_mut().clear();
+
+        if had_subs {
+            self.fanout
+                .prune_events
+                .set(self.fanout.prune_events.get().wrapping_add(1));
+            self.fanout
+                .any_events
+                .set(self.fanout.any_events.get().wrapping_add(1));
+            self.fanout.change_event.notify(usize::MAX);
+        }
     }
 }
 
@@ -457,6 +558,195 @@ mod tests {
         assert_eq!(
             with_timeout(sub2.recv(), 1, "sub2_b").await.unwrap(),
             Some(20)
+        );
+    }
+
+    // ─── fanout event emitter tests ──────────────────────────────────────
+
+    #[apply(async_test)]
+    async fn fanout_wait_for_sub_event_triggered_by_subscribe(_ex: Rc<LocalExecutor<'static>>) {
+        let (_tx, fanout) = Fanout::<i32>::new();
+        let seen = 0u64;
+
+        // Spawn subscribe after a delay so the wait actually blocks
+        let fan = fanout.clone();
+        let subscribe_task = _ex.spawn(async move {
+            smol::Timer::after(Duration::from_millis(10)).await;
+            let _sub = fan.subscribe();
+        });
+
+        let new_count = fanout.wait_for_sub_event(seen).await;
+        assert!(
+            new_count > seen,
+            "sub count should increase after subscribe"
+        );
+        subscribe_task.await;
+    }
+
+    #[apply(async_test)]
+    async fn fanout_wait_for_sub_event_returns_immediately_when_already_changed(
+        _ex: Rc<LocalExecutor<'static>>,
+    ) {
+        let (_tx, fanout) = Fanout::<i32>::new();
+
+        // Subscribe first
+        let _sub = fanout.subscribe();
+        let seen = fanout.sub_events.get();
+
+        // Second subscribe increases the counter
+        let _sub2 = fanout.subscribe();
+
+        // wait_for_sub_event should return immediately since seen is stale
+        let deadline = smol::Timer::after(Duration::from_secs(1));
+        let result = futures::future::select(
+            Box::pin(fanout.wait_for_sub_event(seen)),
+            Box::pin(deadline),
+        )
+        .await;
+        match result {
+            futures::future::Either::Left((count, _)) => {
+                assert!(count > seen);
+            }
+            futures::future::Either::Right(_) => {
+                panic!("wait_for_sub_event timed out even though event already occurred");
+            }
+        }
+    }
+
+    #[apply(async_test)]
+    async fn fanout_wait_for_prune_event_triggered_by_dead_subscriber(
+        _ex: Rc<LocalExecutor<'static>>,
+    ) {
+        let (tx, fanout) = Fanout::<i32>::new();
+        let sub = fanout.subscribe();
+        let seen = fanout.prune_events.get();
+
+        // Drop the subscriber so it's dead, then send to trigger pruning
+        drop(sub);
+
+        let send_task = _ex.spawn(async move {
+            tx.send(1).await;
+        });
+
+        let new_count = fanout.wait_for_prune_event(seen).await;
+        assert!(
+            new_count > seen,
+            "prune count should increase after dead sub pruned"
+        );
+        send_task.await;
+    }
+
+    #[apply(async_test)]
+    async fn fanout_wait_for_any_event_triggered_by_subscribe(_ex: Rc<LocalExecutor<'static>>) {
+        let (_tx, fanout) = Fanout::<i32>::new();
+        let seen = fanout.any_events.get();
+
+        let _sub = fanout.subscribe();
+
+        let new_count = fanout.wait_for_any_event(seen).await;
+        assert!(
+            new_count > seen,
+            "any count should increase after subscribe"
+        );
+    }
+
+    #[apply(async_test)]
+    async fn fanout_wait_for_any_event_triggered_by_prune(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::<i32>::new();
+        let sub = fanout.subscribe();
+        let seen = fanout.any_events.get();
+
+        drop(sub);
+
+        let send_task = _ex.spawn(async move {
+            tx.send(1).await;
+        });
+
+        let new_count = fanout.wait_for_any_event(seen).await;
+        assert!(new_count > seen, "any count should increase after prune");
+        send_task.await;
+    }
+
+    #[apply(async_test)]
+    async fn fanout_event_counters_increment_independently(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::<i32>::new();
+
+        assert_eq!(fanout.sub_events.get(), 0);
+        assert_eq!(fanout.prune_events.get(), 0);
+        assert_eq!(fanout.any_events.get(), 0);
+
+        let sub1 = fanout.subscribe();
+        assert_eq!(fanout.sub_events.get(), 1);
+        assert_eq!(fanout.any_events.get(), 1);
+        assert_eq!(fanout.prune_events.get(), 0, "prune unchanged by subscribe");
+
+        // Drop and prune
+        drop(sub1);
+        tx.send(1).await;
+        assert_eq!(fanout.prune_events.get(), 1);
+        assert_eq!(fanout.any_events.get(), 2);
+
+        let _sub2 = fanout.subscribe();
+        assert_eq!(fanout.sub_events.get(), 2);
+        assert_eq!(fanout.any_events.get(), 3);
+    }
+
+    #[apply(async_test)]
+    async fn fanout_drop_sender_triggers_prune_event(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::<i32>::new();
+        let _sub = fanout.subscribe();
+        let seen = fanout.prune_events.get();
+
+        drop(tx);
+
+        let new_count = fanout.wait_for_prune_event(seen).await;
+        assert!(new_count > seen, "dropping sender should trigger prune");
+    }
+
+    /// Regression: subscriber added by another task during `send` should
+    /// not be lost when the send loop finishes and replaces the subscriber
+    /// list.
+    #[apply(async_test)]
+    async fn fanout_subscriber_not_lost_during_concurrent_send(_ex: Rc<LocalExecutor<'static>>) {
+        let (tx, fanout) = Fanout::<i32>::new();
+        let fan2 = fanout.clone();
+
+        let mut sub1 = fanout.subscribe();
+
+        // Spawn a task that subscribes a new sub while send is in-flight
+        let late_sub_task = _ex.spawn(async move {
+            // Yielding a bit to ensure send is already in its send loop
+            smol::Timer::after(Duration::from_millis(5)).await;
+            fan2.subscribe()
+        });
+
+        // Send a value (this yields internally, allowing late_sub_task to run)
+        tx.send(99).await;
+        let mut sub2 = late_sub_task.await;
+
+        // Send another value — both subs should receive it
+        tx.send(100).await;
+
+        with_timeout(sub1.recv(), 1, "s1_a").await.unwrap();
+        with_timeout(sub1.recv(), 1, "s1_b").await.unwrap();
+
+        // sub2 should only receive the second value (added after first send)
+        assert_eq!(
+            with_timeout(sub2.recv(), 1, "s2_b").await.unwrap(),
+            Some(100),
+            "late subscriber should receive the value sent after it subscribed"
+        );
+
+        // Verify sub2 is still alive — send a third value
+        tx.send(200).await;
+        assert_eq!(
+            with_timeout(sub1.recv(), 1, "s1_c").await.unwrap(),
+            Some(200)
+        );
+        assert_eq!(
+            with_timeout(sub2.recv(), 1, "s2_c").await.unwrap(),
+            Some(200),
+            "late subscriber should still be alive after first send completed"
         );
     }
 }

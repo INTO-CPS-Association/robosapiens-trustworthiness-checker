@@ -3854,6 +3854,7 @@ dependencies = [
  "criterion",
  "ecow",
  "enum_inner_method",
+ "event-listener",
  "fs2",
  "futures",
  "itertools 0.14.0",

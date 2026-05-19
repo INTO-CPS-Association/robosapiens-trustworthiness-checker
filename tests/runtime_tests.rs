@@ -2590,6 +2590,7 @@ async fn test_benchmark_regression_long_add_defer(
 mod reconf_tests {
     use super::*;
     use async_unsync::bounded;
+    use futures::future;
     use std::collections::BTreeSet;
     use tc_testutils::streams::with_timeout;
     use tracing::info;
@@ -2804,11 +2805,25 @@ mod reconf_tests {
             "topic_mapping": {}
         })
         .to_string();
+
+        // Wait for sub events to be triggered, i.e., new InputProvider has subscribed
+        let sub_event_futs: Vec<_> = tx_fans
+            .iter()
+            .map(|(var, fan_tx)| {
+                let fan_rc = fan_tx.fanout();
+                let label = format!("sub event on {}", var);
+                let wait_fut = async move {
+                    let fan = fan_rc.as_ref();
+                    let seen = fan.sub_events();
+                    with_timeout(fan.wait_for_sub_event(seen), 3, label.as_str()).await
+                };
+                Box::pin(wait_fut)
+            })
+            .collect();
+
         send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans).await;
 
-        // I am not sure why this yield_now is needed, but without it seems like we never
-        // seem to progress after a reconfiguration.
-        smol::future::yield_now().await;
+        future::join_all(sub_event_futs).await;
         info!("Finished reconf, now sending post-reconf values");
 
         // Post-reconf: same interleave pattern
