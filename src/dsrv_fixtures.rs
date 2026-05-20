@@ -236,6 +236,13 @@ pub fn spec_count_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_count_bounded_monitor() -> &'static str {
+    "in x\n\
+     out z\n\
+     z = default(z[1], 0) + 1 + x - x"
+}
+
+#[allow(dead_code)]
 pub fn spec_dynamic_monitor() -> &'static str {
     "in x\n\
     in y\n\
