@@ -223,6 +223,13 @@ pub fn spec_sindex() -> &'static str {
 }
 
 #[allow(dead_code)]
+pub fn spec_sindex_plus() -> &'static str {
+    "in x\n\
+     out z\n\
+     z = x[1] + 1"
+}
+
+#[allow(dead_code)]
 pub fn spec_count_monitor() -> &'static str {
     "out x\n\
      x = 1 + default(x[1], 0)"

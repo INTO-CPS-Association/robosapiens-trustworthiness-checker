@@ -147,8 +147,12 @@ where
         expr: AC::Expr,
         sender: spsc::Sender<AC::Val>,
         ctx: &AC::Ctx,
+        starting_history: Vec<AC::Val>,
     ) -> Self {
+        let hist_len = starting_history.len();
         let eval_stream = MS::to_async_stream(expr.clone(), ctx);
+        let eval_stream: OutputStream<AC::Val> =
+            Box::pin(futures::stream::iter(starting_history).chain(eval_stream.skip(hist_len)));
         Self {
             var_name,
             _expr: expr,
@@ -752,7 +756,13 @@ where
         let mut context = Self::build_context(var_managers, input_streams, model.clone());
         let mut expr_evals = expr_eval_components
             .into_iter()
-            .map(|(var_name, expr, sender)| ExprEvalutor::new(var_name, expr, sender, &context))
+            .map(|(var_name, expr, sender)| {
+                let hist = starting_history
+                    .get(&var_name)
+                    .cloned()
+                    .unwrap_or_else(|| vec![AC::Val::no_val_value(); hist_len]);
+                ExprEvalutor::new(var_name, expr, sender, &context, hist)
+            })
             .collect();
         for _ in 0..hist_len {
             Self::step(&mut context, &mut expr_evals)
