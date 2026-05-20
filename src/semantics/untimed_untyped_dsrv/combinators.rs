@@ -46,6 +46,7 @@ fn stream_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
     })
 }
 
+// Lifting function which propagates both NoVal and Deferred values
 pub fn stream_lift1(
     f: impl CloneFn1<Value, Value>,
     x_mon: OutputStream<Value>,
@@ -53,6 +54,8 @@ pub fn stream_lift1(
     Box::pin(stream_lift_base(x_mon).map(move |x| {
         if x == Value::NoVal {
             Value::NoVal
+        } else if x == Value::Deferred {
+            Value::Deferred
         } else {
             f(x)
         }
@@ -68,6 +71,7 @@ impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T whe
 {
 }
 
+// Lifting function which propagates both NoVal and Deferred values
 pub fn stream_lift2(
     f: impl CloneFn2<Value, Value, Value>,
     x_mon: OutputStream<Value>,
@@ -79,37 +83,10 @@ pub fn stream_lift2(
             .map(move |(x, y)| {
                 if x == Value::NoVal || y == Value::NoVal {
                     Value::NoVal
+                } else if x == Value::Deferred || y == Value::Deferred {
+                    Value::Deferred
                 } else {
                     f(x, y)
-                }
-            }),
-    )
-}
-
-pub trait CloneFn3<S: StreamData, R: StreamData, U: StreamData, V: StreamData>:
-    Fn(S, R, U) -> V + Clone + 'static
-{
-}
-impl<T, S: StreamData, R: StreamData, U: StreamData, V: StreamData> CloneFn3<S, R, U, V> for T where
-    T: Fn(S, R, U) -> V + Clone + 'static
-{
-}
-
-pub fn stream_lift3(
-    f: impl CloneFn3<Value, Value, Value, Value>,
-    x_mon: OutputStream<Value>,
-    y_mon: OutputStream<Value>,
-    z_mon: OutputStream<Value>,
-) -> OutputStream<Value> {
-    Box::pin(
-        stream_lift_base(x_mon)
-            .zip(stream_lift_base(y_mon))
-            .zip(stream_lift_base(z_mon))
-            .map(move |((x, y), z)| {
-                if x == Value::NoVal || y == Value::NoVal || z == Value::NoVal {
-                    Value::NoVal
-                } else {
-                    f(x, y, z)
                 }
             }),
     )
@@ -119,9 +96,6 @@ pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
     stream_lift2(
         |x, y| match (x, y) {
             (Value::Bool(x), Value::Bool(y)) => Value::Bool(x && y),
-            (Value::Bool(_), Value::Deferred)
-            | (Value::Deferred, Value::Bool(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid boolean AND with values: {:?}, {:?}", x, y),
         },
         x,
@@ -133,9 +107,6 @@ pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
     stream_lift2(
         |x, y| match (x, y) {
             (Value::Bool(x), Value::Bool(y)) => Value::Bool(x || y),
-            (Value::Bool(_), Value::Deferred)
-            | (Value::Deferred, Value::Bool(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid boolean OR with values: {:?}, {:?}", x, y),
         },
         x,
@@ -147,9 +118,6 @@ pub fn implication(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStre
     stream_lift2(
         |x, y| match (x, y) {
             (Value::Bool(x), Value::Bool(y)) => Value::Bool(!x || y),
-            (Value::Bool(_), Value::Deferred)
-            | (Value::Deferred, Value::Bool(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid boolean OR with values: {:?}, {:?}", x, y),
         },
         x,
@@ -161,13 +129,16 @@ pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift1(
         |x| match x {
             Value::Bool(b) => Value::Bool(!b),
-            Value::Deferred => Value::Deferred,
             x => panic!("Invalid boolean NOT with value: {:?}", x),
         },
         x,
     )
 }
 
+// Semantic detail: deferred == deferred === deferred
+// rather than true. This is consistent with three-valued logic style semantics.
+// For the old, value equality, you can use:
+// default(x == y, is_defined(x) == is_defined(y))
 pub fn eq(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(|x, y| Value::Bool(x == y), x, y)
 }
@@ -181,15 +152,6 @@ pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Str(_), Value::Deferred)
-            | (Value::Bool(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Str(_))
-            | (Value::Deferred, Value::Bool(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -206,15 +168,6 @@ pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(!a & b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a < b),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Str(_), Value::Deferred)
-            | (Value::Bool(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Str(_))
-            | (Value::Deferred, Value::Bool(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -231,15 +184,6 @@ pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a >= b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Str(_), Value::Deferred)
-            | (Value::Bool(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Str(_))
-            | (Value::Deferred, Value::Bool(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -256,15 +200,6 @@ pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value>
             (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a & !b),
             (Value::Str(a), Value::Str(b)) => Value::Bool(a > b),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Str(_), Value::Deferred)
-            | (Value::Bool(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Str(_))
-            | (Value::Deferred, Value::Bool(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
         },
         x,
@@ -281,15 +216,25 @@ pub fn if_stm(
     y: OutputStream<Value>,
     z: OutputStream<Value>,
 ) -> OutputStream<Value> {
-    stream_lift3(
-        |x, y, z| match x {
-            Value::Bool(true) => y,
-            Value::Bool(false) => z,
-            x => panic!("Invalid conditional for if statement with type: {:?}", x),
-        },
-        x,
-        y,
-        z,
+    // Uses manual stream lifting rather than a lifting function since deferred values from
+    // excluded branches do not propagate (i.e. we evaluate lazily with respect to
+    // deferred values — only the condition being deferred yields Deferred)
+    Box::pin(
+        stream_lift_base(x)
+            .zip(stream_lift_base(y))
+            .zip(stream_lift_base(z))
+            .map(move |((x, y), z)| {
+                if x == Value::NoVal || y == Value::NoVal || z == Value::NoVal {
+                    Value::NoVal
+                } else {
+                    match x {
+                        Value::Bool(true) => y,
+                        Value::Bool(false) => z,
+                        Value::Deferred => Value::Deferred,
+                        x => panic!("Invalid conditional for if statement with type: {:?}", x),
+                    }
+                }
+            }),
     )
 }
 
@@ -367,19 +312,10 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
                 (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 + y),
                 (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f64),
                 (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                (Value::Int(_), Value::Deferred)
-                | (Value::Float(_), Value::Deferred)
-                | (Value::Deferred, Value::Int(_))
-                | (Value::Deferred, Value::Float(_))
-                | (Value::Deferred, Value::Deferred) => {
-                    debug!("Addition with Deferred value, resulting in Deferred");
-                    Value::Deferred
-                }
                 _ => {
                     panic!("Cannot add incompatible types")
                 }
             };
-            debug!("Plus operation completed");
             result
         },
         x,
@@ -394,11 +330,6 @@ pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 % y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x % y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x % y),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid modulo with types: {:?}, {:?}", x, y),
         },
         x,
@@ -413,11 +344,6 @@ pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Val
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 - y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x - y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid subtraction with types: {:?}, {:?}", x, y),
         },
         x,
@@ -432,11 +358,6 @@ pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 * y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x * y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid multiplication with types: {:?}, {:?}", x, y),
         },
         x,
@@ -451,11 +372,6 @@ pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
             (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 / y),
             (Value::Float(x), Value::Int(y)) => Value::Float(x / y as f64),
             (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
-            (Value::Int(_), Value::Deferred)
-            | (Value::Float(_), Value::Deferred)
-            | (Value::Deferred, Value::Int(_))
-            | (Value::Deferred, Value::Float(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
             (x, y) => panic!("Invalid division with types: {:?}, {:?}", x, y),
         },
         x,
@@ -466,13 +382,7 @@ pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value
 pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(
         |x, y| match (x, y) {
-            (Value::Str(x), Value::Str(y)) => {
-                // ConcreteStreamData::Str(format!("{x}{y}").into());
-                Value::Str(format!("{x}{y}").into())
-            }
-            (Value::Str(_), Value::Deferred)
-            | (Value::Deferred, Value::Str(_))
-            | (Value::Deferred, Value::Deferred) => Value::Deferred,
+            (Value::Str(x), Value::Str(y)) => Value::Str(format!("{x}{y}").into()),
             (x, y) => panic!("Invalid concatenation with types: {:?}, {:?}", x, y),
         },
         x,
@@ -1004,7 +914,6 @@ pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift1(
         |v| match v {
             Value::Float(v) => v.sin().into(),
-            Value::Deferred => Value::Deferred,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -1015,7 +924,6 @@ pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift1(
         |v| match v {
             Value::Float(v) => v.cos().into(),
-            Value::Deferred => Value::Deferred,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -1026,7 +934,6 @@ pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift1(
         |v| match v {
             Value::Float(v) => v.tan().into(),
-            Value::Deferred => Value::Deferred,
             _ => panic!("Invalid type of angle input stream"),
         },
         v,
@@ -1038,7 +945,6 @@ pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
         |v| match v {
             Value::Int(v) => v.abs().into(),
             Value::Float(v) => v.abs().into(),
-            Value::Deferred => Value::Deferred,
             x => panic!("Invalid abs with type: {:?}", x),
         },
         v,
@@ -1709,6 +1615,21 @@ mod combinator_tests {
     }
 
     #[apply(async_test)]
+    #[should_panic(expected = "Missing key for map get: z")]
+    async fn test_map_get_missing_key() {
+        // TODO: we currently do not handle missing map keys well
+        // The language would need some kind of error handling strategy to remove the panics here.
+        // Neither NoVal nor Deferred make sense, since they interpret the missing values
+        // inappropriately in other combinators (since in-language errors do not behave the same as
+        // missing or deferred inputs)
+        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into()]));
+        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into()]));
+        let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
+        // "z" is not a key in the map — mget must panic
+        let _res: Vec<Value> = mget(map(m), "z".into()).collect().await;
+    }
+
+    #[apply(async_test)]
     async fn test_map_remove() {
         let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
         let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
@@ -1778,6 +1699,129 @@ mod combinator_tests {
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         let res: Vec<Value> = mhas_key(map(m), "z".into()).collect().await;
         let exp: Vec<Value> = vec![false.into(), false.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_get_with_deferred() {
+        // mget must propagate Deferred rather than panicking
+        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Map(BTreeMap::from([("y".into(), 2.into())])),
+            Value::Deferred,
+            Value::Map(BTreeMap::from([("y".into(), 4.into())])),
+        ]));
+        let res: Vec<Value> = mget(map_stream, "y".into()).collect().await;
+        let exp: Vec<Value> = vec![2.into(), Value::Deferred, 4.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_has_key_with_deferred() {
+        // mhas_key must propagate Deferred rather than panicking
+        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Deferred,
+            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+        ]));
+        let res: Vec<Value> = mhas_key(map_stream, "x".into()).collect().await;
+        let exp: Vec<Value> = vec![true.into(), Value::Deferred, true.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_remove_with_deferred() {
+        // mremove must propagate Deferred rather than panicking
+        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), 1.into()),
+                ("y".into(), 2.into()),
+            ])),
+            Value::Deferred,
+            Value::Map(BTreeMap::from([
+                ("x".into(), 3.into()),
+                ("y".into(), 4.into()),
+            ])),
+        ]));
+        let res: Vec<Value> = mremove(map_stream, "y".into()).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Deferred,
+            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_insert_with_deferred_map() {
+        // When the map argument is Deferred the whole output tick is Deferred
+        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Deferred,
+            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+        ]));
+        let val_stream: OutputStream<Value> =
+            Box::pin(stream::iter(vec![10.into(), 20.into(), 30.into()]));
+        let res: Vec<Value> = minsert(map_stream, "z".into(), val_stream).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), 1.into()),
+                ("z".into(), 10.into()),
+            ])),
+            Value::Deferred,
+            Value::Map(BTreeMap::from([
+                ("x".into(), 3.into()),
+                ("z".into(), 30.into()),
+            ])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_map_insert_with_deferred_value() {
+        // When the value argument is Deferred the whole output tick is also Deferred
+        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Map(BTreeMap::from([("x".into(), 2.into())])),
+            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+        ]));
+        let val_stream: OutputStream<Value> =
+            Box::pin(stream::iter(vec![10.into(), Value::Deferred, 30.into()]));
+        let res: Vec<Value> = minsert(map_stream, "z".into(), val_stream).collect().await;
+        let exp: Vec<Value> = vec![
+            Value::Map(BTreeMap::from([
+                ("x".into(), 1.into()),
+                ("z".into(), 10.into()),
+            ])),
+            Value::Deferred,
+            Value::Map(BTreeMap::from([
+                ("x".into(), 3.into()),
+                ("z".into(), 30.into()),
+            ])),
+        ];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_eq_with_deferred() {
+        // eq now propagates Deferred rather than treating it as a comparable value
+        let x: OutputStream<Value> =
+            Box::pin(stream::iter(vec![1.into(), Value::Deferred, 3.into()]));
+        let y: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 1.into(), 2.into()]));
+        let res: Vec<Value> = eq(x, y).collect().await;
+        let exp: Vec<Value> = vec![true.into(), Value::Deferred, false.into()];
+        assert_eq!(res, exp);
+    }
+
+    #[apply(async_test)]
+    async fn test_lhead_with_deferred() {
+        // lhead must propagate Deferred rather than panicking
+        let list_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+            Value::List(eco_vec![1.into(), 2.into()]),
+            Value::Deferred,
+            Value::List(eco_vec![3.into(), 4.into()]),
+        ]));
+        let res: Vec<Value> = lhead(list_stream).collect().await;
+        let exp: Vec<Value> = vec![1.into(), Value::Deferred, 3.into()];
         assert_eq!(res, exp);
     }
 

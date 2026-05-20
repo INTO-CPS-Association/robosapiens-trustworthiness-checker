@@ -19,7 +19,7 @@ use futures::{
 };
 use tracing::debug;
 
-fn deferred_stream_lift_base<T: StreamData>(
+fn stream_lift_base<T: StreamData>(
     mut x_mon: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<T>> {
     Box::pin(stream! {
@@ -47,11 +47,12 @@ fn deferred_stream_lift_base<T: StreamData>(
     })
 }
 
-pub fn deferred_lift1<S: StreamData, R: StreamData>(
+pub fn stream_lift1<S: StreamData, R: StreamData>(
     f: impl CloneFn1<S, R>,
     x_mon: OutputStream<PartialStreamValue<S>>,
 ) -> OutputStream<PartialStreamValue<R>> {
     let f = f.clone();
+    let x_mon = stream_lift_base(x_mon);
     Box::pin(x_mon.map(move |x| match x {
         PartialStreamValue::Known(x) => PartialStreamValue::Known(f(x)),
         PartialStreamValue::NoVal => PartialStreamValue::NoVal,
@@ -59,17 +60,14 @@ pub fn deferred_lift1<S: StreamData, R: StreamData>(
     }))
 }
 
-// Note that this might not cover all cases. Certain operators may want to yield
-// the known value if either x or y is known.
-// Currently wrong
-pub fn deferred_lift2<S: StreamData, R: StreamData, U: StreamData>(
+pub fn stream_lift2<S: StreamData, R: StreamData, U: StreamData>(
     f: impl CloneFn2<S, R, U>,
     x_mon: OutputStream<PartialStreamValue<S>>,
     y_mon: OutputStream<PartialStreamValue<R>>,
 ) -> OutputStream<PartialStreamValue<U>> {
     let f = f.clone();
-    let x_mon = deferred_stream_lift_base(x_mon);
-    let y_mon = deferred_stream_lift_base(y_mon);
+    let x_mon = stream_lift_base(x_mon);
+    let y_mon = stream_lift_base(y_mon);
     Box::pin(x_mon.zip(y_mon).map(move |(x, y)| match (x, y) {
         (PartialStreamValue::Known(x), PartialStreamValue::Known(y)) => {
             PartialStreamValue::Known(f(x, y))
@@ -89,102 +87,102 @@ pub fn and(
     x: OutputStream<PartialStreamValue<bool>>,
     y: OutputStream<PartialStreamValue<bool>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x && y, x, y)
+    stream_lift2(|x, y| x && y, x, y)
 }
 
 pub fn or(
     x: OutputStream<PartialStreamValue<bool>>,
     y: OutputStream<PartialStreamValue<bool>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x || y, x, y)
+    stream_lift2(|x, y| x || y, x, y)
 }
 
 pub fn implication(
     x: OutputStream<PartialStreamValue<bool>>,
     y: OutputStream<PartialStreamValue<bool>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| !x || y, x, y)
+    stream_lift2(|x, y| !x || y, x, y)
 }
 
 pub fn not(x: OutputStream<PartialStreamValue<bool>>) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift1(|x| !x, x)
+    stream_lift1(|x| !x, x)
 }
 
 pub fn eq<X: Eq + StreamData>(
     x: OutputStream<PartialStreamValue<X>>,
     y: OutputStream<PartialStreamValue<X>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x == y, x, y)
+    stream_lift2(|x, y| x == y, x, y)
 }
 
 pub fn eq_partial<X: PartialEq + StreamData>(
     x: OutputStream<PartialStreamValue<X>>,
     y: OutputStream<PartialStreamValue<X>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x == y, x, y)
+    stream_lift2(|x, y| x == y, x, y)
 }
 
 pub fn le(
     x: OutputStream<PartialStreamValue<i64>>,
     y: OutputStream<PartialStreamValue<i64>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x <= y, x, y)
+    stream_lift2(|x, y| x <= y, x, y)
 }
 
 pub fn le_partial<T: PartialOrd + StreamData>(
     x: OutputStream<PartialStreamValue<T>>,
     y: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x <= y, x, y)
+    stream_lift2(|x, y| x <= y, x, y)
 }
 
 pub fn lt<T: PartialOrd + StreamData>(
     x: OutputStream<PartialStreamValue<T>>,
     y: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x < y, x, y)
+    stream_lift2(|x, y| x < y, x, y)
 }
 
 pub fn ge<T: PartialOrd + StreamData>(
     x: OutputStream<PartialStreamValue<T>>,
     y: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x >= y, x, y)
+    stream_lift2(|x, y| x >= y, x, y)
 }
 
 pub fn gt<T: PartialOrd + StreamData>(
     x: OutputStream<PartialStreamValue<T>>,
     y: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    deferred_lift2(|x, y| x > y, x, y)
+    stream_lift2(|x, y| x > y, x, y)
 }
 
 pub fn sin(x: OutputStream<PartialStreamValue<f64>>) -> OutputStream<PartialStreamValue<f64>> {
-    deferred_lift1(|x: f64| x.sin(), x)
+    stream_lift1(|x: f64| x.sin(), x)
 }
 
 pub fn cos(x: OutputStream<PartialStreamValue<f64>>) -> OutputStream<PartialStreamValue<f64>> {
-    deferred_lift1(|x: f64| x.cos(), x)
+    stream_lift1(|x: f64| x.cos(), x)
 }
 
 pub fn tan(x: OutputStream<PartialStreamValue<f64>>) -> OutputStream<PartialStreamValue<f64>> {
-    deferred_lift1(|x: f64| x.tan(), x)
+    stream_lift1(|x: f64| x.tan(), x)
 }
 
 pub fn abs_int(x: OutputStream<PartialStreamValue<i64>>) -> OutputStream<PartialStreamValue<i64>> {
-    deferred_lift1(|x: i64| x.abs(), x)
+    stream_lift1(|x: i64| x.abs(), x)
 }
 
 pub fn abs_float(
     x: OutputStream<PartialStreamValue<f64>>,
 ) -> OutputStream<PartialStreamValue<f64>> {
-    deferred_lift1(|x: f64| x.abs(), x)
+    stream_lift1(|x: f64| x.abs(), x)
 }
 
 pub fn is_defined<T: StreamData>(
     x: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    let x = deferred_stream_lift_base(x);
+    let x = stream_lift_base(x);
     Box::pin(x.map(|x| match x {
         PartialStreamValue::Deferred => PartialStreamValue::Known(false),
         PartialStreamValue::NoVal => PartialStreamValue::NoVal,
@@ -195,7 +193,7 @@ pub fn is_defined<T: StreamData>(
 pub fn when<T: StreamData>(
     x: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<bool>> {
-    let mut x = deferred_stream_lift_base(x);
+    let mut x = stream_lift_base(x);
     Box::pin(stream! {
         while let Some(x_val) = x.next().await {
             match x_val {
@@ -279,7 +277,7 @@ pub fn sindex<X: Clone + 'static>(
         // Delay x by i defers
         let mut delayed = cs.chain(x);
 
-        // Handle NoVals manually (we cannot use deferred_stream_lift_base
+        // Handle NoVals manually (we cannot use stream_lift_base
         // since we need to manually handle deferred)
         Box::pin(stream! {
             let mut last : Option<PartialStreamValue<X>> = None;
@@ -316,7 +314,7 @@ pub fn plus<T>(
 where
     T: std::ops::Add<Output = T> + StreamData,
 {
-    deferred_lift2(|x, y| x + y, x, y)
+    stream_lift2(|x, y| x + y, x, y)
 }
 
 pub fn modulo<T>(
@@ -326,14 +324,14 @@ pub fn modulo<T>(
 where
     T: std::ops::Rem<Output = T> + StreamData,
 {
-    deferred_lift2(|x, y| x % y, x, y)
+    stream_lift2(|x, y| x % y, x, y)
 }
 
 pub fn concat(
     x: OutputStream<PartialStreamValue<String>>,
     y: OutputStream<PartialStreamValue<String>>,
 ) -> OutputStream<PartialStreamValue<String>> {
-    deferred_lift2(
+    stream_lift2(
         |mut x, y| {
             x.push_str(&y);
             x
@@ -350,7 +348,7 @@ pub fn minus<T>(
 where
     T: std::ops::Sub<Output = T> + StreamData,
 {
-    deferred_lift2(|x, y| x - y, x, y)
+    stream_lift2(|x, y| x - y, x, y)
 }
 
 pub fn mult<T>(
@@ -360,7 +358,7 @@ pub fn mult<T>(
 where
     T: std::ops::Mul<Output = T> + StreamData,
 {
-    deferred_lift2(|x, y| x * y, x, y)
+    stream_lift2(|x, y| x * y, x, y)
 }
 
 pub fn div<T>(
@@ -370,7 +368,7 @@ pub fn div<T>(
 where
     T: std::ops::Div<Output = T> + StreamData,
 {
-    deferred_lift2(|x, y| x / y, x, y)
+    stream_lift2(|x, y| x / y, x, y)
 }
 
 // Evaluates to a placeholder value whenever Deferred is received.
@@ -414,7 +412,7 @@ where
         None => ctx.subcontext(history_length),
     };
     let type_info = type_info.clone();
-    let mut eval_stream = deferred_stream_lift_base(eval_stream);
+    let mut eval_stream = stream_lift_base(eval_stream);
 
     // Build an output stream for dynamic of x over the subcontext
     Box::pin(stream! {
@@ -1100,7 +1098,8 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_noval_propagation_unary() {
-        // Test that NoVal is properly propagated through unary operators
+        // Test that NoVal is sticky through unary operators (consistent with binary operators):
+        // the stream_lift_base inside stream_lift1 replaces NoVal with the last known value.
         let x: OutputStream<PartialStreamValue<bool>> = Box::pin(stream::iter(vec![
             PartialStreamValue::Known(true),
             PartialStreamValue::NoVal,
@@ -1109,7 +1108,7 @@ mod tests {
         let res: Vec<PartialStreamValue<bool>> = not(x).collect().await;
         let exp: Vec<PartialStreamValue<bool>> = vec![
             PartialStreamValue::Known(false),
-            PartialStreamValue::NoVal, // NoVal passes through unary operators directly
+            PartialStreamValue::Known(false), // NoVal repeats last value (true), !true = false
             PartialStreamValue::Known(true),
         ];
         assert_eq!(res, exp)
@@ -1135,6 +1134,37 @@ mod tests {
             PartialStreamValue::Known(8),
         ];
         assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_noval_sticky_through_unary() {
+        // stream_lift1 applies stream_lift_base first, so NoVal is sticky through
+        // unary operators just as it is through binary operators.
+        // After a Known(0.0), a NoVal is replaced by Known(0.0) before sin is applied.
+        let x: OutputStream<PartialStreamValue<f64>> = Box::pin(stream::iter(vec![
+            PartialStreamValue::Known(0.0),
+            PartialStreamValue::NoVal,
+            PartialStreamValue::Known(std::f64::consts::FRAC_PI_2),
+        ]));
+        let res: Vec<PartialStreamValue<f64>> = sin(x).collect().await;
+        assert_eq!(res.len(), 3);
+        match &res[0] {
+            PartialStreamValue::Known(v) => assert!((v - 0.0).abs() < 1e-10),
+            other => panic!("Expected Known(0.0), got {:?}", other),
+        }
+        // NoVal repeats the last known value (0.0), then sin(0.0) = 0.0
+        match &res[1] {
+            PartialStreamValue::Known(v) => assert!(
+                (v - 0.0).abs() < 1e-10,
+                "NoVal should be sticky: expected sin(0.0) = 0.0, got {}",
+                v
+            ),
+            other => panic!("Expected Known(0.0) for sticky NoVal, got {:?}", other),
+        }
+        match &res[2] {
+            PartialStreamValue::Known(v) => assert!((v - 1.0).abs() < 1e-10),
+            other => panic!("Expected Known(1.0), got {:?}", other),
+        }
     }
 
     #[apply(async_test)]

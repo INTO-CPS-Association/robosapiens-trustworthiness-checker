@@ -2586,6 +2586,59 @@ async fn test_benchmark_regression_long_add_defer(
     Ok(())
 }
 
+// Map operations with deferred values use untyped configurations only:
+// StreamType has no Map variant, so map specs must remain annotation-free.
+
+#[apply(async_test)]
+async fn test_map_get_deferred_propagates(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    for config in TestConfiguration::untyped_configurations() {
+        // Map.get should propagate Deferred rather than panicking when the map
+        // input stream carries a Deferred tick.
+        let mut spec_str = "in m\nout z\nz = Map.get(m, \"x\")";
+        let spec = dsrv_specification(&mut spec_str).unwrap();
+
+        let input_streams = MapInputProvider::new(BTreeMap::from([(
+            "m".into(),
+            vec![
+                Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+                Value::Deferred,
+                Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+            ],
+        )]));
+
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input(Box::new(input_streams))
+            .output(output_handler);
+        let builder = create_builder_from_config(builder, config);
+        executor.spawn(builder.build().run()).detach();
+
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+            with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
+
+        assert_eq!(
+            outputs,
+            vec![
+                (0, BTreeMap::from([("z".into(), 1.into())])),
+                (1, BTreeMap::from([("z".into(), Value::Deferred)])),
+                (2, BTreeMap::from([("z".into(), 3.into())])),
+            ],
+            "Map.get deferred propagation failed for config {:?}",
+            config,
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod reconf_tests {
     use super::*;
