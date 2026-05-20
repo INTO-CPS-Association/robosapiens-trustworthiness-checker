@@ -1574,7 +1574,7 @@ mod reconf_tests {
     }
 
     #[apply(async_test)]
-    async fn test_reconf_sindex_context_transfer(executor: Rc<LocalExecutor<'static>>) {
+    async fn test_reconf_sindex_context_transfer_simple(executor: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
         // new one
 
