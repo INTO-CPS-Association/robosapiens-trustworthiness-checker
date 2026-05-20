@@ -1,11 +1,30 @@
-.devcontainer/*
+.git/*
 .github/*
+.devcontainer/*
 .idea/*
 .vscode/*
-.git/*
+.zed/*
+
+# Build outputs and local artifacts
 target/*
-docker/Dockerfile
-docker/docker-compose.yaml
+log/*
+out.log
+test.log
+perf.data
+flamegraph.svg
+distributed_graph.png
+
+# Non-runtime project assets
+docs/*
+examples/*
+fixtures/*
+proptest-regressions/*
+
+# ROS generated directories
 ros_interfaces/build/*
 ros_interfaces/log/*
 ros_interfaces/install/*
+
+# Development-only Docker files
+docker/Dockerfile
+docker/docker-compose.yaml
