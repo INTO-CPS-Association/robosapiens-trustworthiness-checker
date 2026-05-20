@@ -2636,7 +2636,7 @@ mod reconf_tests {
     }
 
     #[apply(async_test)]
-    async fn test_reconf_simple_add_manual_no_reconf(ex: Rc<LocalExecutor<'static>>) {
+    async fn test_reconf_simple_add_no_reconf(ex: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, without actually sending a
         // reconfiguration, to check that the basic input/output works as expected.
         let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
@@ -2843,6 +2843,139 @@ mod reconf_tests {
             send_value_noval_others(("y", y_exp), &mut tx_fans).await;
 
             let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y_post")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_delete_input_stream(ex: Rc<LocalExecutor<'static>>) {
+        // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure to a
+        // spec that does not require a y stream
+
+        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
+        let ys = vec![Value::Int(2), Value::Int(4)];
+        let y_len = ys.len();
+        let expected = vec![
+            Value::NoVal,
+            Value::Int(3),
+            Value::Int(5),
+            Value::Int(7),
+            // Here we reconf:
+            Value::Int(5),
+            Value::Int(12),
+        ];
+
+        let (tx_x, fx) = Fanout::new();
+        let (tx_y, fy) = Fanout::new();
+        let (tx_r, fr) = Fanout::new();
+        let inp_fans = BTreeMap::from([
+            ("x".into(), fx),
+            ("y".into(), fy),
+            (RECONF_TOPIC.into(), fr),
+        ]);
+        let mut tx_fans = BTreeMap::from([
+            ("x".into(), tx_x),
+            ("y".into(), tx_y),
+            (RECONF_TOPIC.into(), tx_r),
+        ]);
+
+        let input_spec = InputProviderSpec::Manual(inp_fans);
+        let input_builder = InputProviderBuilder::new(input_spec)
+            .model(spec.clone())
+            .executor(ex.clone());
+
+        let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
+        let output_spec = OutputHandlerSpec::Manual(out_tx);
+        let output_builder = OutputHandlerBuilder::new(output_spec)
+            .executor(ex.clone())
+            .output_var_names(BTreeSet::from(["z".into()]))
+            .aux_info(vec![]);
+        let monitor_builder = Box::new(
+            TestRuntimeBuilder::new()
+                .executor(ex.clone())
+                .model(spec.clone())
+                .input_builder(input_builder)
+                .output_builder(output_builder)
+                .reconf_topic(RECONF_TOPIC.into()),
+        );
+        let monitor = monitor_builder.async_build().await;
+        ex.spawn(monitor.run()).detach();
+
+        let x_iter1 = xs.clone().into_iter().take(y_len);
+        let x_iter2 = xs.into_iter().skip(y_len);
+        let y_iter = ys.into_iter();
+        let mut z_iter = expected.into_iter();
+
+        // Pre-reconf: interleave x and y with NoVal for the others
+        for (x_exp, y_exp) in x_iter1.zip(y_iter) {
+            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+
+            send_value_noval_others(("y", y_exp), &mut tx_fans).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.y")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            let z_res = out_res
+                .remove(&"z".into())
+                .expect("output did not contain z");
+            let z_exp = z_iter.next().unwrap();
+            assert_eq!(z_res, z_exp);
+        }
+
+        info!("Finished pre-reconf phase, now sending reconf");
+        // Reconfigure: send the new spec via RECONF_TOPIC
+        let reconf_json = serde_json::json!({
+            "spec": spec_acc_monitor(),
+            "type_info": {},
+            "topic_mapping": {}
+        })
+        .to_string();
+
+        // Wait for sub events to be triggered, i.e., new InputProvider has subscribed
+        let sub_event_futs: Vec<_> = tx_fans
+            .iter()
+            .filter(|(var, _)| var.name() != "y") // New spec does not have y
+            .map(|(var, fan_tx)| {
+                let fan_rc = fan_tx.fanout();
+                let label = format!("sub event on {}", var);
+                let wait_fut = async move {
+                    let fan = fan_rc.as_ref();
+                    let seen = fan.sub_events();
+                    with_timeout(fan.wait_for_sub_event(seen), 3, label.as_str()).await
+                };
+                Box::pin(wait_fut)
+            })
+            .collect();
+
+        send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans).await;
+
+        future::join_all(sub_event_futs).await;
+        info!("Finished reconf, now sending post-reconf values");
+
+        // Post-reconf: Only x
+        for x_exp in x_iter2 {
+            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+
+            let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x_post")
                 .await
                 .expect("failed to get result")
                 .expect("output channel closed");

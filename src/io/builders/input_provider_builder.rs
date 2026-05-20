@@ -312,8 +312,12 @@ impl InputProviderBuilder {
                     .input_vars
                     .expect("Input vars must be provided for manual input provider");
                 assert!(
-                    input_vars == fanout.keys().cloned().collect::<BTreeSet<_>>(),
-                    "Fanout must and input_vars must be equal"
+                    fanout
+                        .keys()
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                        .is_superset(&input_vars),
+                    "Fanout keys must contain all input variables from the spec"
                 );
                 let mut rxs = BTreeMap::new();
                 for (var, fanout) in fanout {
