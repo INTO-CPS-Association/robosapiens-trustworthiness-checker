@@ -217,8 +217,8 @@ pub fn if_stm(
     z: OutputStream<Value>,
 ) -> OutputStream<Value> {
     // Uses manual stream lifting rather than a lifting function since deferred values from
-    // excluded branches do not propagate (i.e. we evaluate lazily with respect to
-    // deferred values — only the condition being deferred yields Deferred)
+    // excluded branches do not propagate (i.e. we propagate lazily with respect to
+    // deferred values — only the selected branch potentially yields Deferred)
     Box::pin(
         stream_lift_base(x)
             .zip(stream_lift_base(y))
