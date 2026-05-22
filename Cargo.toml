@@ -108,16 +108,20 @@ name = "work_scheduler"
 name = "simple_add"
 harness = false
 
-[[bench]]
-name = "maple_sequence"
-harness = false
+# [[bench]]
+# name = "maple_sequence"
+# harness = false
 
 [[bench]]
 name = "dup_defer"
 harness = false
 
+# [[bench]]
+# name = "dyn_paper"
+# harness = false
+
 [[bench]]
-name = "dyn_paper"
+name = "dsrv_paper"
 harness = false
 
 [[bench]]

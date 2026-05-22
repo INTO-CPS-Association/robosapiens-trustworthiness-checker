@@ -1,23 +1,38 @@
 // This file defines the common functions used by the benchmarks.
 // Dead code is allowed as it is only used when compiling benchmarks.
 
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::DsrvSpecification;
 use crate::Value;
+use crate::VarName;
 use crate::core::OutputHandler;
 use crate::core::Runtime;
 use crate::core::RuntimeSpec;
 use crate::core::Semantics;
+use crate::io::InputProviderBuilder;
+use crate::io::builders::InputProviderSpec;
+use crate::io::builders::OutputHandlerBuilder;
+use crate::io::builders::output_handler_builder::OutputHandlerSpec;
 use crate::io::map::MapInputProvider;
 use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::lang::dsrv::lalr_parser::LALRParser;
 use crate::lang::dsrv::type_checker::TypedDsrvSpecification;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
+use crate::runtime::builder::SemiSyncValueConfig;
 use crate::runtime::builder::TypedValueConfig;
+use crate::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
+use crate::semantics::UntimedDsrvSemantics;
+use crate::stream_utils::Fanout;
+use crate::stream_utils::FanoutSender;
 
+use async_unsync::bounded;
 use smol::LocalExecutor;
+
+pub const RECONF_TOPIC: &str = "R";
 
 pub async fn monitor_runtime_outputs(
     runtime: RuntimeSpec,
@@ -65,6 +80,26 @@ pub async fn monitor_outputs_untyped_async_limited(
         Some(limit),
     )
     .await;
+}
+
+pub async fn monitor_outputs_untyped_reconf_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input_provider_builder: InputProviderBuilder,
+    output_handler_builder: OutputHandlerBuilder,
+) {
+    let builder: ReconfSemiSyncRuntimeBuilder<
+        SemiSyncValueConfig,
+        UntimedDsrvSemantics<LALRParser>,
+        LALRParser,
+    > = ReconfSemiSyncRuntimeBuilder::new()
+        .executor(executor)
+        .model(spec)
+        .input_builder(input_provider_builder)
+        .output_builder(output_handler_builder)
+        .reconf_topic(RECONF_TOPIC.into());
+    let monitor = Box::new(builder).async_build().await;
+    monitor.run().await.expect("Error running monitor");
 }
 
 pub async fn monitor_outputs_untyped_async(
@@ -120,4 +155,45 @@ pub async fn monitor_outputs_typed_async(
     .output(output_handler)
     .build();
     async_monitor.run().await.expect("Error running monitor");
+}
+
+pub fn input_builder_dsrv_paper_bench(
+    spec: DsrvSpecification,
+    ex: Rc<LocalExecutor<'static>>,
+) -> (
+    InputProviderBuilder,
+    BTreeMap<&'static str, FanoutSender<Value>>,
+) {
+    let (tx_x, fx) = Fanout::new();
+    let (tx_y, fy) = Fanout::new();
+    let (tx_r, fr) = Fanout::new();
+    let inp_fans = BTreeMap::from([
+        ("x".into(), fx),
+        ("y".into(), fy),
+        (RECONF_TOPIC.into(), fr),
+    ]);
+    let tx_fans = BTreeMap::from([("x", tx_x), ("y", tx_y), (RECONF_TOPIC, tx_r)]);
+
+    let input_spec = InputProviderSpec::Manual(inp_fans);
+    let input_builder = InputProviderBuilder::new(input_spec)
+        .model(spec.clone())
+        .executor(ex.clone());
+
+    (input_builder, tx_fans)
+}
+
+pub fn output_builder_dsrv_paper_bench(
+    ex: Rc<LocalExecutor<'static>>,
+) -> (
+    OutputHandlerBuilder,
+    bounded::Receiver<BTreeMap<VarName, Value>>,
+) {
+    let (out_tx, out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(1024).into_split();
+    let output_spec = OutputHandlerSpec::Manual(out_tx);
+    let output_builder = OutputHandlerBuilder::new(output_spec)
+        .executor(ex.clone())
+        .output_var_names(BTreeSet::from(["z".into()]))
+        .aux_info(vec![]);
+
+    (output_builder, out_rx)
 }
