@@ -531,7 +531,7 @@ where
         &mut self,
         val: Value,
         context: &'a mut SemiSyncContext<AC>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<Self>> {
         let deserialized = match val {
             Value::Str(config) => {
                 info!("Received reconfiguration command: {:?}", config);
@@ -616,7 +616,7 @@ where
             info!(
                 "Reconfiguration does not change input vars or output expressions, skipping rebuild"
             );
-            return Ok(());
+            return Ok(None);
         }
 
         let added_inputs: Vec<_> = new_input_set.difference(&old_input_set).cloned().collect();
@@ -767,7 +767,7 @@ where
         // For now, reassign existing InputProvider with empty to shut down. In future when we can reconfig them, we should do that instead.
         self.input_provider = Box::new(MapInputProvider::new(BTreeMap::new()));
         let new_self = Box::new(self.self_builder.clone()).async_build().await;
-        new_self.run().await
+        Ok(Some(new_self))
     }
 
     async fn handle_regular_input_update(
@@ -807,7 +807,7 @@ where
         reconf_topic: &'a VarName,
         context: &'a mut SemiSyncContext<AC>,
         expr_evals: &'a mut Vec<ExprEvalutor<AC, MS>>,
-    ) -> LocalBoxStream<'a, anyhow::Result<()>> {
+    ) -> LocalBoxStream<'a, anyhow::Result<Option<Self>>> {
         Box::pin(try_stream! {
             loop {
                 info!("ReconfSemiSyncRuntime: Waiting for inputs",);
@@ -821,8 +821,15 @@ where
                             info!("Ignoring NoVal for reconfiguration command");
                         }
                         Some(val) => {
-                            self.handle_reconfig_input(val, context).await?;
-                            values.clear(); // In case we receive duplicate reconf
+                            let new_self = self.handle_reconfig_input(val, context).await?;
+                            if let Some(new_self) = new_self {
+                                yield Some(new_self);
+                            }
+                            else {
+                                // In case we received reconfig input but it did not lead to new
+                                // RT, e.g., due to duplicate specs
+                                values.clear();
+                            }
                         }
                         None => {
                             info!("Input stream for variable {:?} ended", reconf_topic);
@@ -843,7 +850,7 @@ where
                 if forwarded_regular_input {
                     SemiSyncRuntime::<AC, MS>::step(context, expr_evals).await?;
                 }
-                yield ();
+                yield None;
             }
         })
     }
@@ -858,55 +865,81 @@ where
     P: SpecParser<AC::Spec>,
 {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
-        let reconf_topic: VarName = self
-            .self_builder
-            .reconf_topic
-            .clone()
-            .expect("Reconf topic must be set")
-            .into();
+        // TODO: Refactor inner loop to function
 
-        // Includes reconf stream:
-        let mut input_streams = self.setup_input_provider().await;
-        let mut input_provider_stream = self.input_provider.control_stream().await;
+        // Outer loop that starts a new, potentially reconfigured, reconf monitor
+        loop {
+            let reconf_topic: VarName = self
+                .self_builder
+                .reconf_topic
+                .clone()
+                .expect("Reconf topic must be set")
+                .into();
 
-        let monitor = self
-            .semi_sync_monitor
-            .take()
-            .expect("SemiSyncRuntime must exist");
-        let (inner_input_task, output_task, mut context, mut expr_evals) =
-            Self::inner_monitor_tasks(monitor).await?;
-        // TODO: Don't spawn these
-        self.executor.spawn(inner_input_task).detach();
-        self.executor.spawn(output_task).detach();
+            // Includes reconf stream:
+            let mut input_streams = self.setup_input_provider().await;
+            let mut input_provider_stream = self.input_provider.control_stream().await;
 
-        let mut process_stream = self.process_input_updates(
-            &mut input_streams,
-            &reconf_topic,
-            &mut context,
-            &mut expr_evals,
-        );
+            let monitor = self
+                .semi_sync_monitor
+                .take()
+                .expect("SemiSyncRuntime must exist");
+            let (inner_input_task, output_task, mut context, mut expr_evals) =
+                Self::inner_monitor_tasks(monitor).await?;
+            // TODO: Don't spawn these
+            self.executor.spawn(inner_input_task).detach();
+            self.executor.spawn(output_task).detach();
 
-        while let Some(ip_res) = input_provider_stream.next().await {
-            ip_res.map_err(|err| {
-                error!(
-                    "ReconfSemiSyncRuntime: Input provider stream returned error: {:?}",
+            let mut process_stream = self.process_input_updates(
+                &mut input_streams,
+                &reconf_topic,
+                &mut context,
+                &mut expr_evals,
+            );
+            let mut pending_update = None;
+
+            // Inner loop that runs the current reconf monitor as long as inputs are available and
+            // checks for reconfiguration commands. If a reconfiguration command is received, it
+            // breaks to start the new monitor with the new config.
+            while let Some(ip_res) = input_provider_stream.next().await {
+                ip_res.map_err(|err| {
+                    error!(
+                        "ReconfSemiSyncRuntime: Input provider stream returned error: {:?}",
+                        err
+                    );
                     err
-                );
-                err
-            })?;
+                })?;
 
-            let Some(process_res) = process_stream.next().await else {
-                info!("Process stream ended, shutting down ReconfSemiSyncRuntime");
+                let Some(process_res) = process_stream.next().await else {
+                    info!("ReconfSemiSyncRuntime: Input streams ended. Shutting down.");
+                    return Ok(());
+                };
+                match process_res {
+                    Ok(Some(new_self)) => {
+                        debug!(
+                            "ReconfSemiSyncRuntime: Received new configuration, preparing to switch runtimes"
+                        );
+                        pending_update = Some(new_self);
+                        break;
+                    }
+                    Ok(None) => continue, // No reconfiguration, continue processing inputs
+                    Err(err) => {
+                        error!(
+                            "Error processing inputs in ReconfSemiSyncRuntime: {:?}",
+                            err
+                        );
+                        return Err(err);
+                    }
+                };
+            }
+            drop(process_stream);
+
+            if let Some(new_self) = pending_update {
+                self = Box::new(new_self);
+                info!("ReconfSemiSyncRuntime: Starting reconfigured runtime");
+            } else {
                 return Ok(());
-            };
-
-            process_res.map_err(|err| {
-                error!("Error in ReconfSemiSyncRuntime main loop: {:?}", err);
-                err
-            })?;
+            }
         }
-
-        info!("Input provider control stream ended, shutting down ReconfSemiSyncRuntime");
-        Ok(())
     }
 }
