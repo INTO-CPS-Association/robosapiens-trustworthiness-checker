@@ -58,6 +58,7 @@ where
     input_builder: Option<InputProviderBuilder>,
     output_builder: Option<OutputHandlerBuilder>,
     reconf_topic: Option<String>,
+    use_context_transfer: bool,
     starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
     known_topic_mapping: TopicMapping,
     known_type_info: MsgTypeMapping,
@@ -84,6 +85,7 @@ where
             input_builder: None,
             output_builder: None,
             reconf_topic: None,
+            use_context_transfer: true,
             starting_history: None,
             known_topic_mapping: BTreeMap::new(),
             known_type_info: BTreeMap::new(),
@@ -140,6 +142,7 @@ where
             let executor = self.executor.clone().unwrap();
             let output_builder = self.output_builder.clone().unwrap();
             let model = self.model.clone().unwrap();
+            let use_context_transfer = self.use_context_transfer;
             let starting_history = self.starting_history.clone().unwrap_or_default();
             let mut inner_input = Box::new(ManualInputProvider::<AC>::new(model.input_vars()));
             let sender_channels = model
@@ -196,6 +199,7 @@ where
                 input_provider,
                 self_builder: *self,
                 sender_channels,
+                use_context_transfer,
                 _marker: (std::marker::PhantomData, std::marker::PhantomData),
             }
         })
@@ -225,6 +229,11 @@ where
 
     pub fn reconf_topic(mut self, reconf_topic: String) -> Self {
         self.reconf_topic = Some(reconf_topic);
+        self
+    }
+
+    pub fn use_context_transfer(mut self, use_context_transfer: bool) -> Self {
+        self.use_context_transfer = use_context_transfer;
         self
     }
 
@@ -335,6 +344,7 @@ where
     input_provider: Box<dyn InputProvider<Val = AC::Val>>,
     self_builder: ReconfSemiSyncRuntimeBuilder<AC, MS, P>,
     sender_channels: BTreeMap<VarName, SpscSender<AC::Val>>,
+    use_context_transfer: bool,
     _marker: (std::marker::PhantomData<MS>, std::marker::PhantomData<P>),
 }
 
@@ -729,40 +739,42 @@ where
             self.self_builder.output_builder = Some(output_builder.clone());
         }
 
-        // Make history for new runtime of equal length, containing all variables, and padded with NoVal if needed.
-        // NOTE: Using NoVal here, because this indicates the start of a new trace where no
-        // values have previously been received on the stream.
-        // Also, Deferred messes up signal semantics outputs. E.g., z = x + y and
-        let mut retained_history = context.get_retained_history();
-        let vars = self
-            .self_builder
-            .model
-            .clone()
-            .expect("Model must exist")
-            .var_names();
-        // Retain only variables that are still present in the new model
-        retained_history.retain(|var_name, _| vars.contains(var_name));
-        // Add empty history for new variables (should not be needed but better safe than sorry)
-        vars.iter().for_each(|var| {
-            retained_history.entry(var.clone()).or_default();
-        });
-        let longest_history = retained_history
-            .values()
-            .map(|h| h.len())
-            .max()
-            .unwrap_or(0);
-        // Pad histories to be of equal length
-        let starting_history = retained_history
-            .into_iter()
-            .map(|(var_name, hist)| {
-                let padding_needed = longest_history.saturating_sub(hist.len());
-                let mut padded_hist = vec![AC::Val::no_val_value(); padding_needed];
-                padded_hist.extend(hist);
-                (var_name, padded_hist)
-            })
-            .collect();
+        if self.use_context_transfer {
+            // Make history for new runtime of equal length, containing all variables, and padded with NoVal if needed.
+            // NOTE: Using NoVal here, because this indicates the start of a new trace where no
+            // values have previously been received on the stream.
+            // Also, Deferred messes up signal semantics outputs. E.g., z = x + y and
+            let mut retained_history = context.get_retained_history();
+            let vars = self
+                .self_builder
+                .model
+                .clone()
+                .expect("Model must exist")
+                .var_names();
+            // Retain only variables that are still present in the new model
+            retained_history.retain(|var_name, _| vars.contains(var_name));
+            // Add empty history for new variables (should not be needed but better safe than sorry)
+            vars.iter().for_each(|var| {
+                retained_history.entry(var.clone()).or_default();
+            });
+            let longest_history = retained_history
+                .values()
+                .map(|h| h.len())
+                .max()
+                .unwrap_or(0);
+            // Pad histories to be of equal length
+            let starting_history = retained_history
+                .into_iter()
+                .map(|(var_name, hist)| {
+                    let padding_needed = longest_history.saturating_sub(hist.len());
+                    let mut padded_hist = vec![AC::Val::no_val_value(); padding_needed];
+                    padded_hist.extend(hist);
+                    (var_name, padded_hist)
+                })
+                .collect();
 
-        self.self_builder.starting_history = Some(starting_history);
+            self.self_builder.starting_history = Some(starting_history);
+        }
         warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
         // For now, reassign existing InputProvider with empty to shut down. In future when we can reconfig them, we should do that instead.
         self.input_provider = Box::new(MapInputProvider::new(BTreeMap::new()));

@@ -1312,6 +1312,51 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
+    async fn test_no_context_transfer_arg(_executor: Rc<LocalExecutor>) {
+        // Tests that the TC runs with --no-context-transfer argument
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--runtime",
+            "reconf-semi-sync",
+            "--no-context-transfer",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_topic_arg(_executor: Rc<LocalExecutor>) {
+        // Tests that the TC runs with --reconf-topic argument
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--runtime",
+            "reconf-semi-sync",
+            "--reconf-topic",
+            "/reconf",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[apply(async_test)]
     async fn test_multiple_distribution_modes_conflict(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.dsrv"),

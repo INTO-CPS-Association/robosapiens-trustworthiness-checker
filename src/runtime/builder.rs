@@ -532,6 +532,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub scheduler_mode: SchedulerCommunication,
     pub parser: ParserMode,
     pub reconf_topic: String,
+    pub use_context_transfer: bool,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
     pub topic_mapping: Option<TopicMapping>,
 }
@@ -628,6 +629,13 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             ..self
         }
     }
+
+    pub fn use_context_transfer(self, use_context_transfer: bool) -> Self {
+        Self {
+            use_context_transfer,
+            ..self
+        }
+    }
 }
 
 impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpecification, Value> {
@@ -652,6 +660,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
             scheduler_mode: SchedulerCommunication::Null,
             parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
+            use_context_transfer: true,
         }
     }
 
@@ -712,6 +721,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
+                self.use_context_transfer,
                 self.topic_mapping.clone(),
                 self.var_msg_types.clone(),
             );
@@ -748,6 +758,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         input_provider_builder: Option<InputProviderBuilder>,
         output_handler_builder: Option<OutputHandlerBuilder>,
         reconf_topic: String,
+        use_context_transfer: bool,
         topic_mapping: Option<TopicMapping>,
         var_msg_types: Option<MsgTypeMapping>,
     ) -> Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> {
@@ -783,6 +794,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     LALRParser,
                 >::new();
                 builder = builder.reconf_topic(reconf_topic);
+                builder = builder.use_context_transfer(use_context_transfer);
                 builder =
                     builder.input_builder(input_provider_builder.expect(
                         "Input provider builder required for ReconfigurableSemiSync runtime",
@@ -1010,6 +1022,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.input_provider_builder.clone(),
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
+                self.use_context_transfer,
                 self.topic_mapping.clone(),
                 self.var_msg_types.clone(),
             );

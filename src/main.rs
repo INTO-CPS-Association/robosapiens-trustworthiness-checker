@@ -75,6 +75,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.reconf_topic(cli.reconf_topic.clone());
 
+    let builder = builder.use_context_transfer(!cli.no_context_transfer);
+
     let model_parser = match cli.language {
         Language::DSRV => tc::lang::dsrv::parser::dsrv_specification,
     };

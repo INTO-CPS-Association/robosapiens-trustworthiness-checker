@@ -292,6 +292,13 @@ pub struct Cli {
     pub reconf_topic: String,
 
     #[arg(
+        long = "no-context-transfer",
+        default_value_t = false,
+        help = "Disable context transfer between old and new runtimes during reconfiguration"
+    )]
+    pub no_context_transfer: bool,
+
+    #[arg(
         long,
         help = "Topic name used by ROS distribution graph provider",
         default_value = "/dist_graph"
