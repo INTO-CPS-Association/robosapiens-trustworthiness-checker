@@ -87,6 +87,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
     spec: DsrvSpecification,
     input_provider_builder: InputProviderBuilder,
     output_handler_builder: OutputHandlerBuilder,
+    use_context_transfer: bool,
 ) {
     let builder: ReconfSemiSyncRuntimeBuilder<
         SemiSyncValueConfig,
@@ -97,7 +98,8 @@ pub async fn monitor_outputs_untyped_reconf_limited(
         .model(spec)
         .input_builder(input_provider_builder)
         .output_builder(output_handler_builder)
-        .reconf_topic(RECONF_TOPIC.into());
+        .reconf_topic(RECONF_TOPIC.into())
+        .use_context_transfer(use_context_transfer);
     let monitor = Box::new(builder).async_build().await;
     monitor.run().await.expect("Error running monitor");
 }
@@ -159,20 +161,20 @@ pub async fn monitor_outputs_typed_async(
 
 pub fn input_builder_dsrv_paper_bench(
     spec: DsrvSpecification,
+    var_names: BTreeSet<VarName>,
     ex: Rc<LocalExecutor<'static>>,
-) -> (
-    InputProviderBuilder,
-    BTreeMap<&'static str, FanoutSender<Value>>,
-) {
-    let (tx_x, fx) = Fanout::new();
-    let (tx_y, fy) = Fanout::new();
+) -> (InputProviderBuilder, BTreeMap<VarName, FanoutSender<Value>>) {
+    let mut tx_fans: BTreeMap<VarName, FanoutSender<Value>> = BTreeMap::new();
+    let mut inp_fans: BTreeMap<VarName, Rc<Fanout<Value>>> = BTreeMap::new();
+
+    for name in var_names {
+        let (tx, fan) = Fanout::new();
+        inp_fans.insert(name.clone(), fan);
+        tx_fans.insert(name, tx);
+    }
     let (tx_r, fr) = Fanout::new();
-    let inp_fans = BTreeMap::from([
-        ("x".into(), fx),
-        ("y".into(), fy),
-        (RECONF_TOPIC.into(), fr),
-    ]);
-    let tx_fans = BTreeMap::from([("x", tx_x), ("y", tx_y), (RECONF_TOPIC, tx_r)]);
+    inp_fans.insert(RECONF_TOPIC.into(), fr);
+    tx_fans.insert(RECONF_TOPIC.into(), tx_r);
 
     let input_spec = InputProviderSpec::Manual(inp_fans);
     let input_builder = InputProviderBuilder::new(input_spec)
@@ -183,6 +185,7 @@ pub fn input_builder_dsrv_paper_bench(
 }
 
 pub fn output_builder_dsrv_paper_bench(
+    output_var_names: BTreeSet<VarName>,
     ex: Rc<LocalExecutor<'static>>,
 ) -> (
     OutputHandlerBuilder,
@@ -192,7 +195,7 @@ pub fn output_builder_dsrv_paper_bench(
     let output_spec = OutputHandlerSpec::Manual(out_tx);
     let output_builder = OutputHandlerBuilder::new(output_spec)
         .executor(ex.clone())
-        .output_var_names(BTreeSet::from(["z".into()]))
+        .output_var_names(output_var_names)
         .aux_info(vec![]);
 
     (output_builder, out_rx)
