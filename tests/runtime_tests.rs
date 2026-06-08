@@ -62,6 +62,177 @@ fn create_builder_from_config(
     }
 }
 
+async fn run_typed_runtime(
+    executor: Rc<LocalExecutor<'static>>,
+    spec_str: &str,
+    input_streams: BTreeMap<VarName, Vec<Value>>,
+) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+    let mut spec_input = spec_str;
+    let spec = dsrv_specification(&mut spec_input).unwrap();
+    let input_streams = MapInputProvider::new(input_streams);
+    let mut output_handler = Box::new(ManualOutputHandler::new(
+        executor.clone(),
+        spec.output_vars.clone(),
+    ));
+    let outputs = output_handler.get_output();
+
+    let monitor = GeneralRuntimeBuilder::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(Box::new(input_streams))
+        .output(output_handler)
+        .runtime(RuntimeSpec::Async)
+        .semantics(Semantics::TypedUntimed)
+        .build();
+
+    executor.spawn(monitor.run()).detach();
+    with_timeout(
+        outputs.enumerate().collect(),
+        5,
+        "typed runtime outputs.collect()",
+    )
+    .await
+}
+
+#[apply(async_test)]
+async fn test_typed_runtime_nested_list_operations(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+out head: List<Int>
+out elt: Int
+head = List.head(List(List(tick, tick + 1), List(tick + 2, tick + 3)))
+elt = List.get(List.head(List(List(tick, tick + 1), List(tick + 2, tick + 3))), 1)
+"#;
+
+    let outputs = run_typed_runtime(
+        executor,
+        spec,
+        BTreeMap::from([("tick".into(), vec![10.into(), 20.into()])]),
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    (
+                        "head".into(),
+                        Value::List(vec![Value::Int(10), Value::Int(11)].into()),
+                    ),
+                    ("elt".into(), Value::Int(11)),
+                ]),
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    (
+                        "head".into(),
+                        Value::List(vec![Value::Int(20), Value::Int(21)].into()),
+                    ),
+                    ("elt".into(), Value::Int(21)),
+                ]),
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_typed_runtime_map_get_nested_list_value(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+out selected: List<Bool>
+out hasflags: Bool
+selected = Map.get(Map("flags": List(tick == 1, tick == 2)), "flags")
+hasflags = Map.has_key(Map("flags": List(true)), "flags")
+"#;
+
+    let outputs = run_typed_runtime(
+        executor,
+        spec,
+        BTreeMap::from([("tick".into(), vec![1.into(), 2.into()])]),
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    (
+                        "selected".into(),
+                        Value::List(vec![Value::Bool(true), Value::Bool(false)].into()),
+                    ),
+                    ("hasflags".into(), Value::Bool(true)),
+                ]),
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    (
+                        "selected".into(),
+                        Value::List(vec![Value::Bool(false), Value::Bool(true)].into()),
+                    ),
+                    ("hasflags".into(), Value::Bool(true)),
+                ]),
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_typed_runtime_map_of_nested_list_output(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+out nested: Map<List<Int>>
+nested = Map.insert(Map(), "xs", List(tick, tick + 1))
+"#;
+
+    let outputs = run_typed_runtime(
+        executor,
+        spec,
+        BTreeMap::from([("tick".into(), vec![3.into(), 4.into()])]),
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([(
+                    "nested".into(),
+                    Value::Map(BTreeMap::from([(
+                        "xs".into(),
+                        Value::List(vec![Value::Int(3), Value::Int(4)].into()),
+                    )])),
+                )]),
+            ),
+            (
+                1,
+                BTreeMap::from([(
+                    "nested".into(),
+                    Value::Map(BTreeMap::from([(
+                        "xs".into(),
+                        Value::List(vec![Value::Int(4), Value::Int(5)].into()),
+                    )])),
+                )]),
+            ),
+        ]
+    );
+    Ok(())
+}
+
 #[apply(async_test)]
 async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {

@@ -807,22 +807,44 @@ pub fn sexpr(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+fn stream_type(s: &mut &str) -> Result<StreamType> {
+    delimited(
+        whitespace,
+        alt((
+            seq!(literal("List"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
+                .map(|(_, inner)| StreamType::List(Box::new(inner))),
+            seq!(literal("Map"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
+                .map(|(_, inner)| StreamType::Map(Box::new(inner))),
+            alt((
+                literal("Int"),
+                literal("Float"),
+                literal("Bool"),
+                literal("Str"),
+                literal("Unit"),
+            ))
+            .map(|typ| match typ {
+                "Int" => StreamType::Int,
+                "Float" => StreamType::Float,
+                "Bool" => StreamType::Bool,
+                "Str" => StreamType::Str,
+                "Unit" => StreamType::Unit,
+                _ => unreachable!(),
+            }),
+        )),
+        whitespace,
+    )
+    .parse_next(s)
+}
+
 pub(crate) fn type_annotation(s: &mut &str) -> Result<StreamType> {
     seq!((
         _: whitespace,
         _: literal(":"),
         _: loop_ms_or_lb_or_lc,
-        alt((literal("Int"), literal("Float"), literal("Bool"), literal("Str"), literal("Unit"))),
+        stream_type,
         _: whitespace,
     ))
-    .map(|(typ,)| match typ {
-        "Int" => StreamType::Int,
-        "Float" => StreamType::Float,
-        "Bool" => StreamType::Bool,
-        "Str" => StreamType::Str,
-        "Unit" => StreamType::Unit,
-        _ => unreachable!(),
-    })
+    .map(|(typ,)| typ)
     .parse_next(s)
 }
 
@@ -1070,6 +1092,22 @@ mod tests {
 
         let res = input_decl(&mut "in x: Float");
         let exp = Ok(("x".into(), Some(StreamType::Float)));
+        assert_eq!(res, exp);
+
+        let res = input_decl(&mut "in xs: List<Int>");
+        let exp = Ok((
+            "xs".into(),
+            Some(StreamType::List(Box::new(StreamType::Int))),
+        ));
+        assert_eq!(res, exp);
+
+        let res = input_decl(&mut "in m: Map<List<Bool>>");
+        let exp = Ok((
+            "m".into(),
+            Some(StreamType::Map(Box::new(StreamType::List(Box::new(
+                StreamType::Bool,
+            ))))),
+        ));
         assert_eq!(res, exp);
 
         // TODO: This should not be allowed... In should be followed by at least one space

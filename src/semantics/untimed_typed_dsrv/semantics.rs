@@ -1,14 +1,18 @@
 use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::Value;
-use crate::core::stream_casting::{from_typed_stream, to_typed_stream};
+use crate::core::stream_casting::{from_typed_stream, to_typed_partial_stream, to_typed_stream};
+use crate::core::values::StreamType;
 use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::SExpr;
-use crate::lang::dsrv::ast::{BoolBinOp, FloatBinOp, IntBinOp, StrBinOp};
+use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dsrv::type_checker::{
     PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
+    TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind,
 };
+use crate::semantics::untimed_untyped_dsrv::combinators as uc;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
+use ecow::EcoVec;
 
 #[derive(Clone)]
 pub struct TypedUntimedDsrvSemantics<Parser>
@@ -41,6 +45,179 @@ where
             SExprTE::Unit(e) => from_typed_stream::<PartialStreamValue<()>>(
                 to_async_stream_unit::<AC, Parser>(e, ctx),
             ),
+            SExprTE::List(tl) => from_typed_stream::<PartialStreamValue<EcoVec<Value>>>(
+                eval_typed_list::<AC, Parser>(tl, ctx),
+            ),
+            SExprTE::Map(tm) => eval_typed_map::<AC, Parser>(tm, ctx),
+        }
+    }
+}
+
+fn eval_typed_list<AC, Parser>(typed_list: TypedListExpr, ctx: &AC::Ctx) -> mc::ListStream
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    let list_stream_type = typed_list
+        .list_tc_type()
+        .to_stream_type()
+        .expect("list_tc_type should be a concrete type at runtime");
+
+    match typed_list.kind {
+        TypedListExprKind::Var(v) => to_typed_partial_stream::<EcoVec<Value>>(ctx.var(&v).unwrap()),
+        TypedListExprKind::If(b, e1, e2) => {
+            let b = to_async_stream_bool::<AC, Parser>(*b, ctx);
+            let e1 = eval_typed_list::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_list::<AC, Parser>(*e2, ctx);
+            mc::if_stm(b, e1, e2)
+        }
+        TypedListExprKind::SIndex(e, i) => {
+            let e = eval_typed_list::<AC, Parser>(*e, ctx);
+            mc::sindex(e, i)
+        }
+        TypedListExprKind::Default(e1, e2) => {
+            let e1 = eval_typed_list::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_list::<AC, Parser>(*e2, ctx);
+            mc::default(e1, e2)
+        }
+        TypedListExprKind::Init(e1, e2) => {
+            let e1 = eval_typed_list::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_list::<AC, Parser>(*e2, ctx);
+            mc::init(e1, e2)
+        }
+        TypedListExprKind::Defer(e, type_ctx) => {
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            mc::defer::<AC, Parser, EcoVec<Value>>(
+                ctx,
+                e,
+                EcoVec::new(),
+                1,
+                &type_ctx,
+                list_stream_type,
+            )
+        }
+        TypedListExprKind::Dynamic(e, type_ctx) => {
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            mc::dynamic::<AC, Parser, EcoVec<Value>>(ctx, e, None, 1, &type_ctx, list_stream_type)
+        }
+        TypedListExprKind::RestrictedDynamic(e, vs, type_ctx) => {
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            mc::dynamic::<AC, Parser, EcoVec<Value>>(
+                ctx,
+                e,
+                Some(vs),
+                1,
+                &type_ctx,
+                list_stream_type,
+            )
+        }
+        TypedListExprKind::Literal(exprs) => {
+            let streams: Vec<OutputStream<Value>> = exprs
+                .into_iter()
+                .map(|e| {
+                    <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                        e, ctx,
+                    )
+                })
+                .collect();
+            mc::list(streams, list_stream_type)
+        }
+        TypedListExprKind::LTail(inner) => {
+            let inner_stream = eval_typed_list::<AC, Parser>(*inner, ctx);
+            mc::ltail(inner_stream)
+        }
+        TypedListExprKind::LConcat(a, b) => {
+            let a_stream = eval_typed_list::<AC, Parser>(*a, ctx);
+            let b_stream = eval_typed_list::<AC, Parser>(*b, ctx);
+            mc::lconcat(a_stream, b_stream, list_stream_type)
+        }
+        TypedListExprKind::LAppend(list, elem) => {
+            let list_stream = eval_typed_list::<AC, Parser>(*list, ctx);
+            let elem_stream =
+                <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                    *elem, ctx,
+                );
+            let elem_partial = mc::to_partial_value_stream(elem_stream);
+            mc::lappend(list_stream, elem_partial, list_stream_type)
+        }
+        TypedListExprKind::LHeadList(inner_list) => {
+            let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
+            mc::lhead::<EcoVec<Value>>(inner_stream)
+        }
+        TypedListExprKind::LIndexList(inner_list, idx) => {
+            let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            mc::lindex::<EcoVec<Value>>(inner_stream, idx_stream)
+        }
+        TypedListExprKind::MGetMap(map, key) => to_typed_partial_stream::<EcoVec<Value>>(uc::mget(
+            eval_typed_map::<AC, Parser>(*map, ctx),
+            key,
+        )),
+    }
+}
+
+fn eval_typed_map<AC, Parser>(typed_map: TypedMapExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    match typed_map.kind {
+        TypedMapExprKind::Var(v) => ctx.var(&v).unwrap(),
+        TypedMapExprKind::Literal(entries) => {
+            let streams = entries
+                .into_iter()
+                .map(|(k, e)| {
+                    (
+                        k,
+                        <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                            e, ctx,
+                        ),
+                    )
+                })
+                .collect();
+            uc::map(streams)
+        }
+        TypedMapExprKind::Default(e1, e2) => {
+            let e1 = eval_typed_map::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_map::<AC, Parser>(*e2, ctx);
+            uc::default(e1, e2)
+        }
+        TypedMapExprKind::If(b, e1, e2) => {
+            let b = from_typed_stream::<PartialStreamValue<bool>>(
+                to_async_stream_bool::<AC, Parser>(*b, ctx),
+            );
+            let e1 = eval_typed_map::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_map::<AC, Parser>(*e2, ctx);
+            uc::if_stm(b, e1, e2)
+        }
+        TypedMapExprKind::Init(e1, e2) => {
+            let e1 = eval_typed_map::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_map::<AC, Parser>(*e2, ctx);
+            uc::init(e1, e2)
+        }
+        TypedMapExprKind::SIndex(e, i) => {
+            let e = eval_typed_map::<AC, Parser>(*e, ctx);
+            uc::sindex(e, i)
+        }
+        TypedMapExprKind::MInsert(map, key, value) => {
+            let map_stream = eval_typed_map::<AC, Parser>(*map, ctx);
+            let value_stream =
+                <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                    *value, ctx,
+                );
+            uc::minsert(map_stream, key, value_stream)
+        }
+        TypedMapExprKind::MRemove(map, key) => {
+            let map_stream = eval_typed_map::<AC, Parser>(*map, ctx);
+            uc::mremove(map_stream, key)
+        }
+        TypedMapExprKind::MGetMap(map, key) => {
+            uc::mget(eval_typed_map::<AC, Parser>(*map, ctx), key)
+        }
+        TypedMapExprKind::Defer(_, _)
+        | TypedMapExprKind::Dynamic(_, _)
+        | TypedMapExprKind::RestrictedDynamic(_, _, _) => {
+            todo!("typed dynamic/defer map runtime semantics are not implemented yet")
         }
     }
 }
@@ -84,15 +261,15 @@ where
         }
         SExprInt::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, i64>(ctx, e, vs, 1, &type_ctx)
+            mc::defer::<AC, Parser, i64>(ctx, e, vs, 1, &type_ctx, StreamType::Int)
         }
         SExprInt::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, i64>(ctx, e, None, 1, &type_ctx)
+            mc::dynamic::<AC, Parser, i64>(ctx, e, None, 1, &type_ctx, StreamType::Int)
         }
         SExprInt::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, i64>(ctx, e, Some(vs), 1, &type_ctx)
+            mc::dynamic::<AC, Parser, i64>(ctx, e, Some(vs), 1, &type_ctx, StreamType::Int)
         }
         SExprInt::Abs(e) => {
             let e = to_async_stream_int::<AC, Parser>(*e, ctx);
@@ -102,6 +279,22 @@ where
             let e1 = to_async_stream_int::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_int::<AC, Parser>(*e2, ctx);
             mc::init(e1, e2)
+        }
+        SExprInt::LLen(typed_list) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            mc::llen(list_stream)
+        }
+        SExprInt::LHeadList(typed_list) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            mc::lhead::<i64>(list_stream)
+        }
+        SExprInt::LIndexList(typed_list, idx) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            mc::lindex::<i64>(list_stream, idx_stream)
+        }
+        SExprInt::MGetMap(map, key) => {
+            to_typed_partial_stream::<i64>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
         }
     }
 }
@@ -145,15 +338,15 @@ where
         }
         SExprFloat::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, f64>(ctx, e, vs, 1, &type_ctx)
+            mc::defer::<AC, Parser, f64>(ctx, e, vs, 1, &type_ctx, StreamType::Float)
         }
         SExprFloat::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, f64>(ctx, e, None, 1, &type_ctx)
+            mc::dynamic::<AC, Parser, f64>(ctx, e, None, 1, &type_ctx, StreamType::Float)
         }
         SExprFloat::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, f64>(ctx, e, Some(vs), 1, &type_ctx)
+            mc::dynamic::<AC, Parser, f64>(ctx, e, Some(vs), 1, &type_ctx, StreamType::Float)
         }
         SExprFloat::Sin(e) => {
             let e = to_async_stream_float::<AC, Parser>(*e, ctx);
@@ -175,6 +368,18 @@ where
             let e1 = to_async_stream_float::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_float::<AC, Parser>(*e2, ctx);
             mc::init(e1, e2)
+        }
+        SExprFloat::LHeadList(typed_list) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            mc::lhead::<f64>(list_stream)
+        }
+        SExprFloat::LIndexList(typed_list, idx) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            mc::lindex::<f64>(list_stream, idx_stream)
+        }
+        SExprFloat::MGetMap(map, key) => {
+            to_typed_partial_stream::<f64>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
         }
     }
 }
@@ -202,11 +407,11 @@ where
         }
         SExprStr::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, String>(ctx, e, None, 1, &type_ctx)
+            mc::dynamic::<AC, Parser, String>(ctx, e, None, 1, &type_ctx, StreamType::Str)
         }
         SExprStr::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, String>(ctx, e, Some(vs), 1, &type_ctx)
+            mc::dynamic::<AC, Parser, String>(ctx, e, Some(vs), 1, &type_ctx, StreamType::Str)
         }
         SExprStr::BinOp(e1, e2, op) => {
             let e1 = to_async_stream_str::<AC, Parser>(*e1, ctx);
@@ -222,12 +427,126 @@ where
         }
         SExprStr::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, String>(ctx, e, vs, 1, &type_ctx)
+            mc::defer::<AC, Parser, String>(ctx, e, vs, 1, &type_ctx, StreamType::Str)
         }
         SExprStr::Init(e1, e2) => {
             let e1 = to_async_stream_str::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_str::<AC, Parser>(*e2, ctx);
             mc::init(e1, e2)
+        }
+        SExprStr::LHeadList(typed_list) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            mc::lhead::<String>(list_stream)
+        }
+        SExprStr::LIndexList(typed_list, idx) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            mc::lindex::<String>(list_stream, idx_stream)
+        }
+        SExprStr::MGetMap(map, key) => {
+            to_typed_partial_stream::<String>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
+        }
+    }
+}
+
+/// Evaluate a `Cmp` node by dispatching on the operand type and comparison operator.
+fn eval_cmp<AC, Parser>(
+    op: CompBinOp,
+    e1: SExprTE,
+    e2: SExprTE,
+    ctx: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<bool>>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    match (e1, e2) {
+        (SExprTE::Int(a), SExprTE::Int(b)) => {
+            let a = to_async_stream_int::<AC, Parser>(a, ctx);
+            let b = to_async_stream_int::<AC, Parser>(b, ctx);
+            match op {
+                CompBinOp::Eq => mc::eq(a, b),
+                CompBinOp::Le => mc::le(a, b),
+                CompBinOp::Lt => mc::lt(a, b),
+                CompBinOp::Ge => mc::ge(a, b),
+                CompBinOp::Gt => mc::gt(a, b),
+            }
+        }
+        (SExprTE::Float(a), SExprTE::Float(b)) => {
+            let a = to_async_stream_float::<AC, Parser>(a, ctx);
+            let b = to_async_stream_float::<AC, Parser>(b, ctx);
+            match op {
+                CompBinOp::Eq => mc::eq_partial(a, b),
+                CompBinOp::Le => mc::le_partial(a, b),
+                CompBinOp::Lt => mc::lt(a, b),
+                CompBinOp::Ge => mc::ge(a, b),
+                CompBinOp::Gt => mc::gt(a, b),
+            }
+        }
+        (SExprTE::Str(a), SExprTE::Str(b)) => {
+            let a = to_async_stream_str::<AC, Parser>(a, ctx);
+            let b = to_async_stream_str::<AC, Parser>(b, ctx);
+            match op {
+                CompBinOp::Eq => mc::eq(a, b),
+                CompBinOp::Le => mc::le_partial(a, b),
+                CompBinOp::Lt => mc::lt(a, b),
+                CompBinOp::Ge => mc::ge(a, b),
+                CompBinOp::Gt => mc::gt(a, b),
+            }
+        }
+        (SExprTE::Bool(a), SExprTE::Bool(b)) => {
+            let a = to_async_stream_bool::<AC, Parser>(a, ctx);
+            let b = to_async_stream_bool::<AC, Parser>(b, ctx);
+            // Only Eq is valid for Bool (enforced by the type checker)
+            mc::eq(a, b)
+        }
+        (SExprTE::Unit(a), SExprTE::Unit(b)) => {
+            let a = to_async_stream_unit::<AC, Parser>(a, ctx);
+            let b = to_async_stream_unit::<AC, Parser>(b, ctx);
+            // Only Eq is valid for Unit (enforced by the type checker)
+            mc::eq(a, b)
+        }
+        _ => panic!("eval_cmp: type checker should have ensured operand types match"),
+    }
+}
+
+/// Evaluate an `IsDefined` node by dispatching on the inner expression type.
+fn eval_is_defined<AC, Parser>(
+    inner: SExprTE,
+    ctx: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<bool>>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    match inner {
+        SExprTE::Int(e) => mc::is_defined(to_async_stream_int::<AC, Parser>(e, ctx)),
+        SExprTE::Float(e) => mc::is_defined(to_async_stream_float::<AC, Parser>(e, ctx)),
+        SExprTE::Str(e) => mc::is_defined(to_async_stream_str::<AC, Parser>(e, ctx)),
+        SExprTE::Bool(e) => mc::is_defined(to_async_stream_bool::<AC, Parser>(e, ctx)),
+        SExprTE::Unit(e) => mc::is_defined(to_async_stream_unit::<AC, Parser>(e, ctx)),
+        SExprTE::List(tl) => mc::is_defined_list(eval_typed_list::<AC, Parser>(tl, ctx)),
+        SExprTE::Map(e) => {
+            to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_map::<AC, Parser>(e, ctx)))
+        }
+    }
+}
+
+/// Evaluate a `When` node by dispatching on the inner expression type.
+fn eval_when<AC, Parser>(inner: SExprTE, ctx: &AC::Ctx) -> OutputStream<PartialStreamValue<bool>>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    match inner {
+        SExprTE::Int(e) => mc::when(to_async_stream_int::<AC, Parser>(e, ctx)),
+        SExprTE::Float(e) => mc::when(to_async_stream_float::<AC, Parser>(e, ctx)),
+        SExprTE::Str(e) => mc::when(to_async_stream_str::<AC, Parser>(e, ctx)),
+        SExprTE::Bool(e) => mc::when(to_async_stream_bool::<AC, Parser>(e, ctx)),
+        SExprTE::Unit(e) => mc::when(to_async_stream_unit::<AC, Parser>(e, ctx)),
+        SExprTE::List(tl) => mc::when_list(eval_typed_list::<AC, Parser>(tl, ctx)),
+        SExprTE::Map(e) => {
+            to_typed_partial_stream::<bool>(uc::when(eval_typed_map::<AC, Parser>(e, ctx)))
         }
     }
 }
@@ -242,91 +561,7 @@ where
 {
     match expr {
         SExprBool::Val(b) => mc::val(b),
-        SExprBool::EqInt(e1, e2) => {
-            let e1 = to_async_stream_int::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_int::<AC, Parser>(e2, ctx);
-            mc::eq(e1, e2)
-        }
-        SExprBool::EqBool(e1, e2) => {
-            let e1 = to_async_stream_bool::<AC, Parser>(*e1, ctx);
-            let e2 = to_async_stream_bool::<AC, Parser>(*e2, ctx);
-            mc::eq(e1, e2)
-        }
-        SExprBool::EqStr(e1, e2) => {
-            let e1 = to_async_stream_str::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_str::<AC, Parser>(e2, ctx);
-            mc::eq(e1, e2)
-        }
-        SExprBool::EqFloat(e1, e2) => {
-            let e1 = to_async_stream_float::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_float::<AC, Parser>(e2, ctx);
-            mc::eq_partial(e1, e2)
-        }
-        SExprBool::EqUnit(e1, e2) => {
-            let e1 = to_async_stream_unit::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_unit::<AC, Parser>(e2, ctx);
-            mc::eq(e1, e2)
-        }
-        SExprBool::LeInt(e1, e2) => {
-            let e1 = to_async_stream_int::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_int::<AC, Parser>(e2, ctx);
-            mc::le(e1, e2)
-        }
-        SExprBool::LeFloat(e1, e2) => {
-            let e1 = to_async_stream_float::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_float::<AC, Parser>(e2, ctx);
-            mc::le_partial(e1, e2)
-        }
-        SExprBool::LeStr(e1, e2) => {
-            let e1 = to_async_stream_str::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_str::<AC, Parser>(e2, ctx);
-            mc::le_partial(e1, e2)
-        }
-        SExprBool::LtInt(e1, e2) => {
-            let e1 = to_async_stream_int::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_int::<AC, Parser>(e2, ctx);
-            mc::lt(e1, e2)
-        }
-        SExprBool::LtFloat(e1, e2) => {
-            let e1 = to_async_stream_float::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_float::<AC, Parser>(e2, ctx);
-            mc::lt(e1, e2)
-        }
-        SExprBool::LtStr(e1, e2) => {
-            let e1 = to_async_stream_str::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_str::<AC, Parser>(e2, ctx);
-            mc::lt(e1, e2)
-        }
-        SExprBool::GeInt(e1, e2) => {
-            let e1 = to_async_stream_int::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_int::<AC, Parser>(e2, ctx);
-            mc::ge(e1, e2)
-        }
-        SExprBool::GeFloat(e1, e2) => {
-            let e1 = to_async_stream_float::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_float::<AC, Parser>(e2, ctx);
-            mc::ge(e1, e2)
-        }
-        SExprBool::GeStr(e1, e2) => {
-            let e1 = to_async_stream_str::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_str::<AC, Parser>(e2, ctx);
-            mc::ge(e1, e2)
-        }
-        SExprBool::GtInt(e1, e2) => {
-            let e1 = to_async_stream_int::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_int::<AC, Parser>(e2, ctx);
-            mc::gt(e1, e2)
-        }
-        SExprBool::GtFloat(e1, e2) => {
-            let e1 = to_async_stream_float::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_float::<AC, Parser>(e2, ctx);
-            mc::gt(e1, e2)
-        }
-        SExprBool::GtStr(e1, e2) => {
-            let e1 = to_async_stream_str::<AC, Parser>(e1, ctx);
-            let e2 = to_async_stream_str::<AC, Parser>(e2, ctx);
-            mc::gt(e1, e2)
-        }
+        SExprBool::Cmp(op, e1, e2) => eval_cmp::<AC, Parser>(op, *e1, *e2, ctx),
         SExprBool::BinOp(e1, e2, op) => {
             let e1 = to_async_stream_bool::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_bool::<AC, Parser>(*e2, ctx);
@@ -358,61 +593,39 @@ where
         }
         SExprBool::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, bool>(ctx, e, vs, 1, &type_ctx)
+            mc::defer::<AC, Parser, bool>(ctx, e, vs, 1, &type_ctx, StreamType::Bool)
         }
         SExprBool::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, bool>(ctx, e, None, 1, &type_ctx)
+            mc::dynamic::<AC, Parser, bool>(ctx, e, None, 1, &type_ctx, StreamType::Bool)
         }
         SExprBool::RestrictedDynamic(e, vs, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, bool>(ctx, e, Some(vs), 1, &type_ctx)
+            mc::dynamic::<AC, Parser, bool>(ctx, e, Some(vs), 1, &type_ctx, StreamType::Bool)
         }
-        SExprBool::IsDefinedInt(e) => {
-            let e = to_async_stream_int::<AC, Parser>(e, ctx);
-            mc::is_defined(e)
-        }
-        SExprBool::IsDefinedFloat(e) => {
-            let e = to_async_stream_float::<AC, Parser>(e, ctx);
-            mc::is_defined(e)
-        }
-        SExprBool::IsDefinedStr(e) => {
-            let e = to_async_stream_str::<AC, Parser>(e, ctx);
-            mc::is_defined(e)
-        }
-        SExprBool::IsDefinedBool(e) => {
-            let e = to_async_stream_bool::<AC, Parser>(*e, ctx);
-            mc::is_defined(e)
-        }
-        SExprBool::IsDefinedUnit(e) => {
-            let e = to_async_stream_unit::<AC, Parser>(e, ctx);
-            mc::is_defined(e)
-        }
-        SExprBool::WhenInt(e) => {
-            let e = to_async_stream_int::<AC, Parser>(e, ctx);
-            mc::when(e)
-        }
-        SExprBool::WhenFloat(e) => {
-            let e = to_async_stream_float::<AC, Parser>(e, ctx);
-            mc::when(e)
-        }
-        SExprBool::WhenStr(e) => {
-            let e = to_async_stream_str::<AC, Parser>(e, ctx);
-            mc::when(e)
-        }
-        SExprBool::WhenBool(e) => {
-            let e = to_async_stream_bool::<AC, Parser>(*e, ctx);
-            mc::when(e)
-        }
-        SExprBool::WhenUnit(e) => {
-            let e = to_async_stream_unit::<AC, Parser>(e, ctx);
-            mc::when(e)
-        }
+        SExprBool::IsDefined(inner) => eval_is_defined::<AC, Parser>(*inner, ctx),
+        SExprBool::When(inner) => eval_when::<AC, Parser>(*inner, ctx),
         SExprBool::Init(e1, e2) => {
             let e1 = to_async_stream_bool::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_bool::<AC, Parser>(*e2, ctx);
             mc::init(e1, e2)
         }
+        SExprBool::LHeadList(typed_list) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            mc::lhead::<bool>(list_stream)
+        }
+        SExprBool::LIndexList(typed_list, idx) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            mc::lindex::<bool>(list_stream, idx_stream)
+        }
+        SExprBool::MGetMap(map, key) => {
+            to_typed_partial_stream::<bool>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
+        }
+        SExprBool::MHasKeyMap(map, key) => to_typed_partial_stream::<bool>(uc::mhas_key(
+            eval_typed_map::<AC, Parser>(map, ctx),
+            key,
+        )),
     }
 }
 
@@ -444,20 +657,32 @@ where
         }
         SExprUnit::Defer(e, type_info, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, ()>(ctx, e, vs, 1, &type_info)
+            mc::defer::<AC, Parser, ()>(ctx, e, vs, 1, &type_info, StreamType::Unit)
         }
         SExprUnit::Dynamic(e, type_info) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, ()>(ctx, e, None, 1, &type_info)
+            mc::dynamic::<AC, Parser, ()>(ctx, e, None, 1, &type_info, StreamType::Unit)
         }
         SExprUnit::RestrictedDynamic(e, vs, type_info) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::dynamic::<AC, Parser, ()>(ctx, e, Some(vs), 1, &type_info)
+            mc::dynamic::<AC, Parser, ()>(ctx, e, Some(vs), 1, &type_info, StreamType::Unit)
         }
         SExprUnit::Init(e1, e2) => {
             let e1 = to_async_stream_unit::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_unit::<AC, Parser>(*e2, ctx);
             mc::init(e1, e2)
+        }
+        SExprUnit::LHeadList(typed_list) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            mc::lhead::<()>(list_stream)
+        }
+        SExprUnit::LIndexList(typed_list, idx) => {
+            let list_stream = eval_typed_list::<AC, Parser>(typed_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            mc::lindex::<()>(list_stream, idx_stream)
+        }
+        SExprUnit::MGetMap(map, key) => {
+            to_typed_partial_stream::<()>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
         }
     }
 }
@@ -876,7 +1101,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_lt_int_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::LtInt(SExprInt::Var("x".into()), SExprInt::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Lt,
+            Box::new(SExprTE::Int(SExprInt::Var("x".into()))),
+            Box::new(SExprTE::Int(SExprInt::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![1.into(), 5.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![2.into(), 5.into(), 1.into()]));
@@ -901,7 +1130,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_ge_int_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::GeInt(SExprInt::Var("x".into()), SExprInt::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Ge,
+            Box::new(SExprTE::Int(SExprInt::Var("x".into()))),
+            Box::new(SExprTE::Int(SExprInt::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![1.into(), 5.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![2.into(), 5.into(), 1.into()]));
@@ -926,7 +1159,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_gt_int_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::GtInt(SExprInt::Var("x".into()), SExprInt::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Gt,
+            Box::new(SExprTE::Int(SExprInt::Var("x".into()))),
+            Box::new(SExprTE::Int(SExprInt::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![1.into(), 5.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![2.into(), 5.into(), 1.into()]));
@@ -951,7 +1188,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_eq_float_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::EqFloat(SExprFloat::Var("x".into()), SExprFloat::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Eq,
+            Box::new(SExprTE::Float(SExprFloat::Var("x".into()))),
+            Box::new(SExprTE::Float(SExprFloat::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Float(3.0)]));
         let y = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Float(2.0)]));
@@ -975,7 +1216,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_le_float_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::LeFloat(SExprFloat::Var("x".into()), SExprFloat::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Le,
+            Box::new(SExprTE::Float(SExprFloat::Var("x".into()))),
+            Box::new(SExprTE::Float(SExprFloat::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Float(1.0),
@@ -1008,7 +1253,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_lt_float_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::LtFloat(SExprFloat::Var("x".into()), SExprFloat::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Lt,
+            Box::new(SExprTE::Float(SExprFloat::Var("x".into()))),
+            Box::new(SExprTE::Float(SExprFloat::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Float(1.0),
@@ -1041,7 +1290,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_ge_float_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::GeFloat(SExprFloat::Var("x".into()), SExprFloat::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Ge,
+            Box::new(SExprTE::Float(SExprFloat::Var("x".into()))),
+            Box::new(SExprTE::Float(SExprFloat::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Float(1.0),
@@ -1074,7 +1327,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_gt_float_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::GtFloat(SExprFloat::Var("x".into()), SExprFloat::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Gt,
+            Box::new(SExprTE::Float(SExprFloat::Var("x".into()))),
+            Box::new(SExprTE::Float(SExprFloat::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Float(1.0),
@@ -1107,7 +1364,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_le_str_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::LeStr(SExprStr::Var("x".into()), SExprStr::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Le,
+            Box::new(SExprTE::Str(SExprStr::Var("x".into()))),
+            Box::new(SExprTE::Str(SExprStr::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Str("apple".into()),
@@ -1140,7 +1401,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_lt_str_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::LtStr(SExprStr::Var("x".into()), SExprStr::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Lt,
+            Box::new(SExprTE::Str(SExprStr::Var("x".into()))),
+            Box::new(SExprTE::Str(SExprStr::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Str("apple".into()),
@@ -1170,7 +1435,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_ge_str_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::GeStr(SExprStr::Var("x".into()), SExprStr::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Ge,
+            Box::new(SExprTE::Str(SExprStr::Var("x".into()))),
+            Box::new(SExprTE::Str(SExprStr::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Str("apple".into()),
@@ -1200,7 +1469,11 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_gt_str_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::GtStr(SExprStr::Var("x".into()), SExprStr::Var("y".into()));
+        let expr = SExprBool::Cmp(
+            CompBinOp::Gt,
+            Box::new(SExprTE::Str(SExprStr::Var("x".into()))),
+            Box::new(SExprTE::Str(SExprStr::Var("y".into()))),
+        );
 
         let x = Box::pin(stream::iter(vec![
             Value::Str("cherry".into()),
@@ -1364,7 +1637,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_is_defined_int_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::IsDefinedInt(SExprInt::Var("x".into()));
+        let expr = SExprBool::IsDefined(Box::new(SExprTE::Int(SExprInt::Var("x".into()))));
 
         let x = Box::pin(stream::iter(vec![
             Value::Int(1),
@@ -1387,7 +1660,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_is_defined_float_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::IsDefinedFloat(SExprFloat::Var("x".into()));
+        let expr = SExprBool::IsDefined(Box::new(SExprTE::Float(SExprFloat::Var("x".into()))));
 
         let x = Box::pin(stream::iter(vec![Value::Float(1.0), Value::Deferred]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
@@ -1405,7 +1678,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_is_defined_bool_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::IsDefinedBool(Box::new(SExprBool::Var("x".into())));
+        let expr = SExprBool::IsDefined(Box::new(SExprTE::Bool(SExprBool::Var("x".into()))));
 
         let x = Box::pin(stream::iter(vec![
             Value::Bool(true),
@@ -1428,7 +1701,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_is_defined_str_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::IsDefinedStr(SExprStr::Var("x".into()));
+        let expr = SExprBool::IsDefined(Box::new(SExprTE::Str(SExprStr::Var("x".into()))));
 
         let x = Box::pin(stream::iter(vec![
             Value::Deferred,
@@ -1451,7 +1724,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_when_int_never_defined_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::WhenInt(SExprInt::Var("x".into()));
+        let expr = SExprBool::When(Box::new(SExprTE::Int(SExprInt::Var("x".into()))));
 
         let x = Box::pin(stream::iter(vec![
             Value::Deferred,
@@ -1474,7 +1747,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_when_int_eventually_defined_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::WhenInt(SExprInt::Var("x".into()));
+        let expr = SExprBool::When(Box::new(SExprTE::Int(SExprInt::Var("x".into()))));
 
         let x = Box::pin(stream::iter(vec![
             Value::Deferred,
@@ -1497,7 +1770,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_when_bool_immediately_defined_runtime(executor: Rc<LocalExecutor<'static>>) {
-        let expr = SExprBool::WhenBool(Box::new(SExprBool::Var("x".into())));
+        let expr = SExprBool::When(Box::new(SExprTE::Bool(SExprBool::Var("x".into()))));
 
         let x = Box::pin(stream::iter(vec![Value::Bool(true), Value::Bool(false)]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);

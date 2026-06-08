@@ -291,6 +291,7 @@ impl StreamData for f64 {}
 impl StreamData for String {}
 impl StreamData for bool {}
 impl StreamData for () {}
+impl StreamData for EcoVec<Value> {}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum StreamType {
@@ -299,6 +300,8 @@ pub enum StreamType {
     Str,
     Bool,
     Unit,
+    List(Box<StreamType>),
+    Map(Box<StreamType>),
 }
 
 impl Display for StreamType {
@@ -309,6 +312,8 @@ impl Display for StreamType {
             StreamType::Str => write!(f, "Str"),
             StreamType::Bool => write!(f, "Bool"),
             StreamType::Unit => write!(f, "Unit"),
+            StreamType::List(inner) => write!(f, "List<{}>", inner),
+            StreamType::Map(inner) => write!(f, "Map<{}>", inner),
         }
     }
 }

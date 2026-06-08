@@ -235,6 +235,24 @@ mod tests {
         let exp = r#"Ok(Input(VarName::new("x"), Some(Float)))"#;
         assert_eq!(presult_to_string(&parsed), exp);
 
+        assert_eq!(
+            parse_stopdecl("in xs: List<Int>").unwrap(),
+            STopDecl::Input(
+                "xs".into(),
+                Some(StreamType::List(Box::new(StreamType::Int)))
+            )
+        );
+
+        assert_eq!(
+            parse_stopdecl("in m: Map<List<Bool>>").unwrap(),
+            STopDecl::Input(
+                "m".into(),
+                Some(StreamType::Map(Box::new(StreamType::List(Box::new(
+                    StreamType::Bool
+                )))))
+            )
+        );
+
         // Not sure if we should allow this, but this is how it currently works. As long as we
         // start with "in"
         let parsed = parse_stopdecl("inx:Int");

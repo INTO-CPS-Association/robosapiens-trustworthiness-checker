@@ -1,4 +1,4 @@
-use ecow::EcoVec;
+use ecow::{EcoString, EcoVec};
 
 use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::{StreamData, StreamType, StreamTypeAscription};
@@ -8,11 +8,127 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
 
+/// Type constructors used by the type-checker internal representation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TCTypeConstructor {
+    List,
+    Map,
+}
+
+impl std::fmt::Display for TCTypeConstructor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TCTypeConstructor::List => write!(f, "List"),
+            TCTypeConstructor::Map => write!(f, "Map"),
+        }
+    }
+}
+
+/// Type-checker–internal type representation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TCType {
+    Int,
+    Float,
+    Str,
+    Bool,
+    Unit,
+    /// General application of a type constructor to type arguments. Recursive
+    /// data types such as `List<List<Int>>` are represented uniformly here.
+    Construct(TCTypeConstructor, Vec<TCType>),
+    /// Placeholder used for empty list literals whose element type is not yet known.
+    EmptyList,
+    /// Placeholder used for empty map literals whose value type is not yet known.
+    EmptyMap,
+    /// Unknown non-container type used for special values such as Deferred/NoVal.
+    Unknown,
+}
+
+impl TCType {
+    pub fn list(inner: TCType) -> Self {
+        TCType::Construct(TCTypeConstructor::List, vec![inner])
+    }
+
+    pub fn map(value: TCType) -> Self {
+        TCType::Construct(TCTypeConstructor::Map, vec![value])
+    }
+
+    pub fn list_element_type(&self) -> Option<&TCType> {
+        match self {
+            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => args.first(),
+            _ => None,
+        }
+    }
+
+    pub fn map_value_type(&self) -> Option<&TCType> {
+        match self {
+            TCType::Construct(TCTypeConstructor::Map, args) if args.len() == 1 => args.first(),
+            _ => None,
+        }
+    }
+
+    /// Convert StreamTypes into type checker types
+    pub fn from_stream_type(st: &StreamType) -> Self {
+        match st {
+            StreamType::Int => TCType::Int,
+            StreamType::Float => TCType::Float,
+            StreamType::Str => TCType::Str,
+            StreamType::Bool => TCType::Bool,
+            StreamType::Unit => TCType::Unit,
+            StreamType::List(inner) => TCType::list(TCType::from_stream_type(inner)),
+            StreamType::Map(inner) => TCType::map(TCType::from_stream_type(inner)),
+        }
+    }
+
+    /// Convert type checker types into stream types
+    pub fn to_stream_type(&self) -> Option<StreamType> {
+        match self {
+            TCType::Int => Some(StreamType::Int),
+            TCType::Float => Some(StreamType::Float),
+            TCType::Str => Some(StreamType::Str),
+            TCType::Bool => Some(StreamType::Bool),
+            TCType::Unit => Some(StreamType::Unit),
+            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => args[0]
+                .to_stream_type()
+                .map(|i| StreamType::List(Box::new(i))),
+            TCType::Construct(TCTypeConstructor::Map, args) if args.len() == 1 => args[0]
+                .to_stream_type()
+                .map(|i| StreamType::Map(Box::new(i))),
+            TCType::Construct(_, _) | TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
+                None
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for TCType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TCType::Int => write!(f, "Int"),
+            TCType::Float => write!(f, "Float"),
+            TCType::Str => write!(f, "Str"),
+            TCType::Bool => write!(f, "Bool"),
+            TCType::Unit => write!(f, "Unit"),
+            TCType::Construct(constructor, args) => {
+                let args = args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{}<{}>", constructor, args)
+            }
+            TCType::EmptyList => write!(f, "EmptyList"),
+            TCType::EmptyMap => write!(f, "EmptyMap"),
+            TCType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemanticError {
     TypeError(String),
     DeferredError(String),
     UndeclaredVariable(String),
+    MissingTypeAnnotation(String),
 }
 
 pub type SemanticErrors = Vec<SemanticError>;
@@ -23,6 +139,7 @@ pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
 pub trait TypeCheckableHelper<TypedExpr> {
     fn type_check_raw(
         &self,
+        expected: Option<&StreamType>,
         ctx: &mut TypeInfo,
         errs: &mut SemanticErrors,
     ) -> Result<TypedExpr, ()>;
@@ -30,7 +147,7 @@ pub trait TypeCheckableHelper<TypedExpr> {
 impl<TypedExpr, R: TypeCheckableHelper<TypedExpr>> TypeCheckable<TypedExpr> for R {
     fn type_check(&self, context: &mut TypeInfo) -> SemanticResult<TypedExpr> {
         let mut errors = Vec::new();
-        let res = self.type_check_raw(context, &mut errors);
+        let res = self.type_check_raw(None, context, &mut errors);
         match res {
             Ok(se) => Ok(se),
             Err(()) => Err(errors),
@@ -39,18 +156,27 @@ impl<TypedExpr, R: TypeCheckableHelper<TypedExpr>> TypeCheckable<TypedExpr> for 
 }
 pub trait TypeCheckable<TypedExpr> {
     fn type_check_with_default(&self) -> SemanticResult<TypedExpr> {
-        let mut context = TypeInfo::new();
-        self.type_check(&mut context)
+        self.type_check(&mut TypeInfo::new())
     }
 
     fn type_check(&self, context: &mut TypeInfo) -> SemanticResult<TypedExpr>;
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub enum PartialStreamValue<T> {
     Known(T),
     NoVal,
     Deferred,
+}
+
+impl<T: Display> Display for PartialStreamValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PartialStreamValue::Known(val) => write!(f, "{}", val),
+            PartialStreamValue::NoVal => write!(f, "no_val"),
+            PartialStreamValue::Deferred => write!(f, "⊥"),
+        }
+    }
 }
 
 impl StreamData for PartialStreamValue<bool> {}
@@ -58,24 +184,18 @@ impl StreamData for PartialStreamValue<i64> {}
 impl StreamData for PartialStreamValue<f64> {}
 impl StreamData for PartialStreamValue<String> {}
 impl StreamData for PartialStreamValue<()> {}
+impl StreamData for PartialStreamValue<EcoVec<Value>> {}
+impl StreamData for PartialStreamValue<Value> {}
 
-fn extract_type(expr: &SExprTE) -> StreamType {
+pub fn extract_type(expr: &SExprTE) -> TCType {
     match expr {
-        SExprTE::Bool(_) => StreamType::Bool,
-        SExprTE::Int(_) => StreamType::Int,
-        SExprTE::Float(_) => StreamType::Float,
-        SExprTE::Str(_) => StreamType::Str,
-        SExprTE::Unit(_) => StreamType::Unit,
-    }
-}
-
-impl<T: Debug> Display for PartialStreamValue<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PartialStreamValue::Known(v) => write!(f, "{:?}", v),
-            PartialStreamValue::NoVal => write!(f, "NoVal"),
-            PartialStreamValue::Deferred => write!(f, "Deferred"),
-        }
+        SExprTE::Bool(_) => TCType::Bool,
+        SExprTE::Int(_) => TCType::Int,
+        SExprTE::Float(_) => TCType::Float,
+        SExprTE::Str(_) => TCType::Str,
+        SExprTE::Unit(_) => TCType::Unit,
+        SExprTE::List(tl) => tl.list_tc_type(),
+        SExprTE::Map(tm) => tm.map_tc_type(),
     }
 }
 
@@ -87,6 +207,8 @@ impl Display for SExprTE {
             SExprTE::Str(e) => write!(f, "{}", e),
             SExprTE::Bool(e) => write!(f, "{}", e),
             SExprTE::Unit(e) => write!(f, "{}", e),
+            SExprTE::List(e) => write!(f, "{:?}", e),
+            SExprTE::Map(e) => write!(f, "{:?}", e),
         }
     }
 }
@@ -118,6 +240,10 @@ impl Display for SExprInt {
                     .join(", ");
                 write!(f, "dynamic({}: Int, {{{}}})", e, env)
             }
+            LLen(list) => write!(f, "len({:?})", list),
+            LHeadList(list) => write!(f, "head({:?})", list),
+            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
         }
     }
 }
@@ -152,6 +278,9 @@ impl Display for SExprFloat {
                     .join(", ");
                 write!(f, "dynamic({}: Float, {{{}}})", e, env)
             }
+            LHeadList(list) => write!(f, "head({:?})", list),
+            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
         }
     }
 }
@@ -177,6 +306,9 @@ impl Display for SExprStr {
                     .join(", ");
                 write!(f, "dynamic({}: Str, {{{}}})", e, env)
             }
+            LHeadList(list) => write!(f, "head({:?})", list),
+            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
         }
     }
 }
@@ -187,7 +319,7 @@ impl Display for SExprUnit {
         match self {
             If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
-            Val(v) => write!(f, "{}", v),
+            Val(v) => write!(f, "{:?}", v),
             Var(v) => write!(f, "{}", v),
             Default(e, v) => write!(f, "default({}, {})", e, v),
             Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
@@ -201,6 +333,9 @@ impl Display for SExprUnit {
                     .join(", ");
                 write!(f, "dynamic({}: Unit, {{{}}})", e, env)
             }
+            LHeadList(list) => write!(f, "head({:?})", list),
+            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
         }
     }
 }
@@ -208,31 +343,16 @@ impl Display for SExprUnit {
 impl Display for SExprBool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use BoolBinOp::*;
+        use CompBinOp::*;
         use SExprBool::*;
         match self {
             Val(v) => write!(f, "{}", v),
 
-            EqInt(e1, e2) => write!(f, "({} == {})", e1, e2),
-            EqFloat(e1, e2) => write!(f, "({} == {})", e1, e2),
-            EqStr(e1, e2) => write!(f, "({} == {})", e1, e2),
-            EqBool(e1, e2) => write!(f, "({} == {})", e1, e2),
-            EqUnit(e1, e2) => write!(f, "({} == {})", e1, e2),
-
-            LeInt(e1, e2) => write!(f, "({} <= {})", e1, e2),
-            LeFloat(e1, e2) => write!(f, "({} <= {})", e1, e2),
-            LeStr(e1, e2) => write!(f, "({} <= {})", e1, e2),
-
-            LtInt(e1, e2) => write!(f, "({} < {})", e1, e2),
-            LtFloat(e1, e2) => write!(f, "({} < {})", e1, e2),
-            LtStr(e1, e2) => write!(f, "({} < {})", e1, e2),
-
-            GeInt(e1, e2) => write!(f, "({} >= {})", e1, e2),
-            GeFloat(e1, e2) => write!(f, "({} >= {})", e1, e2),
-            GeStr(e1, e2) => write!(f, "({} >= {})", e1, e2),
-
-            GtInt(e1, e2) => write!(f, "({} > {})", e1, e2),
-            GtFloat(e1, e2) => write!(f, "({} > {})", e1, e2),
-            GtStr(e1, e2) => write!(f, "({} > {})", e1, e2),
+            Cmp(Eq, e1, e2) => write!(f, "({} == {})", e1, e2),
+            Cmp(Le, e1, e2) => write!(f, "({} <= {})", e1, e2),
+            Cmp(Lt, e1, e2) => write!(f, "({} < {})", e1, e2),
+            Cmp(Ge, e1, e2) => write!(f, "({} >= {})", e1, e2),
+            Cmp(Gt, e1, e2) => write!(f, "({} > {})", e1, e2),
 
             BinOp(e1, e2, Or) => write!(f, "({} || {})", e1, e2),
             BinOp(e1, e2, And) => write!(f, "({} && {})", e1, e2),
@@ -245,17 +365,12 @@ impl Display for SExprBool {
             Default(e, v) => write!(f, "default({}, {})", e, v),
             Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
 
-            IsDefinedInt(sexpr) => write!(f, "is_defined({})", sexpr),
-            IsDefinedFloat(sexpr) => write!(f, "is_defined({})", sexpr),
-            IsDefinedStr(sexpr) => write!(f, "is_defined({})", sexpr),
-            IsDefinedBool(sexpr) => write!(f, "is_defined({})", sexpr),
-            IsDefinedUnit(sexpr) => write!(f, "is_defined({})", sexpr),
-
-            WhenInt(sexpr) => write!(f, "when({})", sexpr),
-            WhenFloat(sexpr) => write!(f, "when({})", sexpr),
-            WhenStr(sexpr) => write!(f, "when({})", sexpr),
-            WhenBool(sexpr) => write!(f, "when({})", sexpr),
-            WhenUnit(sexpr) => write!(f, "when({})", sexpr),
+            IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),
+            When(sexpr) => write!(f, "when({})", sexpr),
+            LHeadList(list) => write!(f, "head({:?})", list),
+            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
+            MHasKeyMap(map, key) => write!(f, "Map.has_key({:?}, {:?})", map, key),
 
             Defer(e, _, _) => write!(f, "defer({}: Bool)", e),
             Dynamic(e, _) => write!(f, "dynamic({}: Bool)", e),
@@ -276,13 +391,28 @@ impl TryFrom<Value> for PartialStreamValue<i64> {
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Int(i) => Ok(PartialStreamValue::Known(i)),
+            Value::Int(x) => Ok(PartialStreamValue::Known(x)),
             Value::NoVal => Ok(PartialStreamValue::NoVal),
             Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
         }
     }
 }
+
+// TODO: should the typed semantics actually use EcoString instead of String?
+impl TryFrom<Value> for PartialStreamValue<String> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Str(x) => Ok(PartialStreamValue::Known(x.into())),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<Value> for PartialStreamValue<f64> {
     type Error = ();
 
@@ -295,36 +425,39 @@ impl TryFrom<Value> for PartialStreamValue<f64> {
         }
     }
 }
-impl TryFrom<Value> for PartialStreamValue<String> {
-    type Error = ();
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Str(i) => Ok(PartialStreamValue::Known(i.to_string())),
-            Value::NoVal => Ok(PartialStreamValue::NoVal),
-            Value::Deferred => Ok(PartialStreamValue::Deferred),
-            _ => Err(()),
-        }
-    }
-}
 impl TryFrom<Value> for PartialStreamValue<bool> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Bool(i) => Ok(PartialStreamValue::Known(i)),
+            Value::Bool(x) => Ok(PartialStreamValue::Known(x)),
             Value::NoVal => Ok(PartialStreamValue::NoVal),
             Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
         }
     }
 }
+
 impl TryFrom<Value> for PartialStreamValue<()> {
     type Error = ();
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Unit => Ok(PartialStreamValue::Known(())),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Value> for PartialStreamValue<EcoVec<Value>> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::List(x) => Ok(PartialStreamValue::Known(x)),
             Value::NoVal => Ok(PartialStreamValue::NoVal),
             Value::Deferred => Ok(PartialStreamValue::Deferred),
             _ => Err(()),
@@ -372,7 +505,17 @@ impl From<PartialStreamValue<bool>> for Value {
 impl From<PartialStreamValue<()>> for Value {
     fn from(value: PartialStreamValue<()>) -> Self {
         match value {
-            PartialStreamValue::Known(_) => Value::Unit,
+            PartialStreamValue::Known(()) => Value::Unit,
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+
+impl From<PartialStreamValue<EcoVec<Value>>> for Value {
+    fn from(value: PartialStreamValue<EcoVec<Value>>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => Value::List(v),
             PartialStreamValue::NoVal => Value::NoVal,
             PartialStreamValue::Deferred => Value::Deferred,
         }
@@ -383,26 +526,8 @@ impl From<PartialStreamValue<()>> for Value {
 pub enum SExprBool {
     Val(PartialStreamValue<bool>),
 
-    // Equality comparisons
-    EqInt(SExprInt, SExprInt),
-    EqFloat(SExprFloat, SExprFloat),
-    EqStr(SExprStr, SExprStr),
-    EqBool(Box<Self>, Box<Self>),
-    EqUnit(SExprUnit, SExprUnit),
-
-    // Ordering comparisons
-    LeInt(SExprInt, SExprInt),
-    LeFloat(SExprFloat, SExprFloat),
-    LeStr(SExprStr, SExprStr),
-    LtInt(SExprInt, SExprInt),
-    LtFloat(SExprFloat, SExprFloat),
-    LtStr(SExprStr, SExprStr),
-    GeInt(SExprInt, SExprInt),
-    GeFloat(SExprFloat, SExprFloat),
-    GeStr(SExprStr, SExprStr),
-    GtInt(SExprInt, SExprInt),
-    GtFloat(SExprFloat, SExprFloat),
-    GtStr(SExprStr, SExprStr),
+    // Typed comparison: both operands must have the same type (enforced by the type checker).
+    Cmp(CompBinOp, Box<SExprTE>, Box<SExprTE>),
 
     BinOp(Box<Self>, Box<Self>, BoolBinOp),
     Not(Box<Self>),
@@ -424,16 +549,16 @@ pub enum SExprBool {
     Init(Box<Self>, Box<Self>),
 
     // Boolean-producing unary operators on typed streams
-    IsDefinedInt(SExprInt),
-    IsDefinedFloat(SExprFloat),
-    IsDefinedStr(SExprStr),
-    IsDefinedBool(Box<SExprBool>),
-    IsDefinedUnit(SExprUnit),
-    WhenInt(SExprInt),
-    WhenFloat(SExprFloat),
-    WhenStr(SExprStr),
-    WhenBool(Box<SExprBool>),
-    WhenUnit(SExprUnit),
+    IsDefined(Box<SExprTE>),
+    When(Box<SExprTE>),
+
+    // List element extraction producing Bool
+    LHeadList(TypedListExpr),
+    LIndexList(TypedListExpr, Box<SExprInt>),
+
+    // Map operations producing Bool
+    MGetMap(TypedMapExpr, EcoString),
+    MHasKeyMap(TypedMapExpr, EcoString),
 
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
@@ -472,6 +597,14 @@ pub enum SExprInt {
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+
+    // List operations producing Int
+    LLen(TypedListExpr),
+    LHeadList(TypedListExpr),
+    LIndexList(TypedListExpr, Box<SExprInt>),
+
+    // Map value extraction producing Int
+    MGetMap(TypedMapExpr, EcoString),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -508,6 +641,13 @@ pub enum SExprFloat {
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+
+    // List element extraction producing Float
+    LHeadList(TypedListExpr),
+    LIndexList(TypedListExpr, Box<SExprInt>),
+
+    // Map value extraction producing Float
+    MGetMap(TypedMapExpr, EcoString),
 }
 
 // Stream expressions - now with types
@@ -537,6 +677,13 @@ pub enum SExprUnit {
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+
+    // List element extraction producing Unit
+    LHeadList(TypedListExpr),
+    LIndexList(TypedListExpr, Box<SExprInt>),
+
+    // Map value extraction producing Unit
+    MGetMap(TypedMapExpr, EcoString),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -567,7 +714,307 @@ pub enum SExprStr {
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+
+    // List element extraction producing Str
+    LHeadList(TypedListExpr),
+    LIndexList(TypedListExpr, Box<SExprInt>),
+
+    // Map value extraction producing Str
+    MGetMap(TypedMapExpr, EcoString),
 }
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum TypedListExprKind {
+    If(Box<SExprBool>, Box<TypedListExpr>, Box<TypedListExpr>),
+    SIndex(Box<TypedListExpr>, u64),
+    Var(VarName),
+    Default(Box<TypedListExpr>, Box<TypedListExpr>),
+    Init(Box<TypedListExpr>, Box<TypedListExpr>),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    Literal(Vec<SExprTE>),
+    LTail(Box<TypedListExpr>),
+    LConcat(Box<TypedListExpr>, Box<TypedListExpr>),
+    LAppend(Box<TypedListExpr>, Box<SExprTE>),
+    LHeadList(Box<TypedListExpr>),
+    LIndexList(Box<TypedListExpr>, Box<SExprInt>),
+    MGetMap(Box<TypedMapExpr>, EcoString),
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedListExpr {
+    /// Full parametric type of this list expression, e.g. `List<Int>` or
+    /// `List<List<Bool>>`.
+    pub typ: TCType,
+    pub kind: TypedListExprKind,
+}
+
+impl TypedListExpr {
+    pub fn list_tc_type(&self) -> TCType {
+        self.typ.clone()
+    }
+
+    pub fn element_type(&self) -> &TCType {
+        self.typ
+            .list_element_type()
+            .expect("TypedListExpr must carry a List<T> type")
+    }
+
+    pub fn typed_default(&self, other: &TypedListExpr) -> TypedListExpr {
+        TypedListExpr {
+            typ: self.typ.clone(),
+            kind: TypedListExprKind::Default(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_if(&self, cond: Box<SExprBool>, other: &TypedListExpr) -> TypedListExpr {
+        TypedListExpr {
+            typ: self.typ.clone(),
+            kind: TypedListExprKind::If(cond, Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_init(&self, other: &TypedListExpr) -> TypedListExpr {
+        TypedListExpr {
+            typ: self.typ.clone(),
+            kind: TypedListExprKind::Init(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_tail(&self) -> TypedListExpr {
+        TypedListExpr {
+            typ: self.typ.clone(),
+            kind: TypedListExprKind::LTail(Box::new(self.clone())),
+        }
+    }
+
+    pub fn typed_sindex(&self, idx: u64) -> TypedListExpr {
+        TypedListExpr {
+            typ: self.typ.clone(),
+            kind: TypedListExprKind::SIndex(Box::new(self.clone()), idx),
+        }
+    }
+
+    pub fn typed_concat(&self, other: &TypedListExpr) -> TypedListExpr {
+        TypedListExpr {
+            typ: self.typ.clone(),
+            kind: TypedListExprKind::LConcat(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_append(&self, elem: Box<SExprTE>) -> TypedListExpr {
+        TypedListExpr {
+            typ: self.typ.clone(),
+            kind: TypedListExprKind::LAppend(Box::new(self.clone()), elem),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum TypedMapExprKind {
+    Var(VarName),
+    Literal(BTreeMap<EcoString, SExprTE>),
+    Default(Box<TypedMapExpr>, Box<TypedMapExpr>),
+    If(Box<SExprBool>, Box<TypedMapExpr>, Box<TypedMapExpr>),
+    Init(Box<TypedMapExpr>, Box<TypedMapExpr>),
+    SIndex(Box<TypedMapExpr>, u64),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    MInsert(Box<TypedMapExpr>, EcoString, Box<SExprTE>),
+    MRemove(Box<TypedMapExpr>, EcoString),
+    MGetMap(Box<TypedMapExpr>, EcoString),
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedMapExpr {
+    /// Full parametric type of this map expression. Keys are strings, and the
+    /// single type argument represents the value type, e.g. `Map<Int>`.
+    pub typ: TCType,
+    pub kind: TypedMapExprKind,
+}
+
+impl TypedMapExpr {
+    pub fn map_tc_type(&self) -> TCType {
+        self.typ.clone()
+    }
+
+    pub fn value_type(&self) -> &TCType {
+        self.typ
+            .map_value_type()
+            .expect("TypedMapExpr must carry a Map<T> type")
+    }
+
+    pub fn typed_default(&self, other: &TypedMapExpr) -> TypedMapExpr {
+        TypedMapExpr {
+            typ: self.typ.clone(),
+            kind: TypedMapExprKind::Default(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_if(&self, cond: Box<SExprBool>, other: &TypedMapExpr) -> TypedMapExpr {
+        TypedMapExpr {
+            typ: self.typ.clone(),
+            kind: TypedMapExprKind::If(cond, Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_init(&self, other: &TypedMapExpr) -> TypedMapExpr {
+        TypedMapExpr {
+            typ: self.typ.clone(),
+            kind: TypedMapExprKind::Init(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_sindex(&self, idx: u64) -> TypedMapExpr {
+        TypedMapExpr {
+            typ: self.typ.clone(),
+            kind: TypedMapExprKind::SIndex(Box::new(self.clone()), idx),
+        }
+    }
+
+    pub fn typed_insert(&self, key: EcoString, value: Box<SExprTE>) -> TypedMapExpr {
+        TypedMapExpr {
+            typ: self.typ.clone(),
+            kind: TypedMapExprKind::MInsert(Box::new(self.clone()), key, value),
+        }
+    }
+
+    pub fn typed_remove(&self, key: EcoString) -> TypedMapExpr {
+        TypedMapExpr {
+            typ: self.typ.clone(),
+            kind: TypedMapExprKind::MRemove(Box::new(self.clone()), key),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedDataList {
+    pub data: EcoVec<Value>,
+    pub element_type: TCType,
+}
+
+fn check_value_type_ref(typ: &TCType, value: &Value) -> Result<(), String> {
+    match (typ, value) {
+        (TCType::Str, Value::Str(_)) => Ok(()),
+        (TCType::Int, Value::Int(_)) => Ok(()),
+        (TCType::Bool, Value::Bool(_)) => Ok(()),
+        (TCType::Float, Value::Float(_)) => Ok(()),
+        (TCType::Unit, Value::Unit) => Ok(()),
+        (TCType::EmptyList | TCType::EmptyMap | TCType::Unknown, _) => Ok(()),
+        (typ, Value::List(inner_values)) if typ.list_element_type().is_some() => {
+            let inner_type = typ.list_element_type().expect("checked above");
+            inner_values
+                .iter()
+                .try_for_each(|val| check_value_type_ref(inner_type, val))
+        }
+        (typ, Value::Map(values)) if typ.map_value_type().is_some() => {
+            let value_type = typ.map_value_type().expect("checked above");
+            values
+                .values()
+                .try_for_each(|val| check_value_type_ref(value_type, val))
+        }
+        (typ, value) => Err(format!("Type mismatch between {} and {}", typ, value)),
+    }
+}
+
+pub fn check_value_type(typ: TCType, value: &Value) -> Result<(), String> {
+    check_value_type_ref(&typ, value)
+}
+
+pub fn check_value_stream_type(typ: &StreamType, value: &Value) -> Result<(), String> {
+    let typ = TCType::from_stream_type(typ);
+    check_value_type_ref(&typ, value)
+}
+
+pub fn extract_value_type(value: Value) -> TCType {
+    match value {
+        Value::Str(_) => TCType::Str,
+        Value::Int(_) => TCType::Int,
+        Value::Bool(_) => TCType::Bool,
+        Value::Float(_) => TCType::Float,
+        Value::Unit => TCType::Unit,
+        Value::List(_) => TCType::list(TCType::EmptyList),
+        Value::Map(_) => TCType::map(TCType::EmptyMap),
+        Value::Deferred => TCType::Unknown,
+        Value::NoVal => TCType::Unknown,
+    }
+}
+
+impl TypedDataList {
+    pub fn new(data: impl Into<EcoVec<Value>>, element_type: TCType) -> TypedDataList {
+        TypedDataList {
+            data: data.into(),
+            element_type: element_type,
+        }
+    }
+
+    pub fn coerce(
+        self: TypedDataList,
+        other: TypedDataList,
+    ) -> Result<(EcoVec<Value>, EcoVec<Value>, TCType), String> {
+        if self.element_type != other.element_type {
+            Err(format!(
+                "Type mismatch: {} != {}",
+                self.element_type, other.element_type
+            ))
+        } else {
+            Ok((self.data, other.data, self.element_type))
+        }
+    }
+
+    pub fn coerce_elem(
+        self: TypedDataList,
+        elem: Value,
+    ) -> Result<(EcoVec<Value>, Value, TCType), String> {
+        match check_value_type(self.element_type.clone(), &elem) {
+            Ok(()) => Ok((self.data, elem, self.element_type)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn concat(self, other: TypedDataList) -> Result<TypedDataList, String> {
+        self.coerce(other).map(|(mut left, right, element_type)| {
+            left.extend(right);
+            TypedDataList {
+                data: left,
+                element_type,
+            }
+        })
+    }
+
+    pub fn append(self, elem: Value) -> Result<TypedDataList, String> {
+        self.coerce_elem(elem)
+            .map(|(mut data, elem, element_type)| {
+                data.push(elem);
+                TypedDataList { data, element_type }
+            })
+    }
+
+    pub fn head(self) -> Result<Value, String> {
+        self.data
+            .first()
+            .cloned()
+            .ok_or("List is empty".to_string())
+    }
+
+    pub fn tail(self) -> Result<TypedDataList, String> {
+        self.data
+            .split_first()
+            .map(|(_, tail)| TypedDataList {
+                data: tail.into(),
+                element_type: self.element_type,
+            })
+            .ok_or("List is empty".to_string())
+    }
+
+    pub fn len(self) -> usize {
+        self.data.len()
+    }
+}
+
+impl StreamData for TypedDataList {}
 
 // Stream expression typed enum
 #[derive(Debug, PartialEq, Clone)]
@@ -577,6 +1024,8 @@ pub enum SExprTE {
     Str(SExprStr),
     Bool(SExprBool),
     Unit(SExprUnit),
+    List(TypedListExpr),
+    Map(TypedMapExpr),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -645,7 +1094,27 @@ pub fn type_check(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSpecificat
     let mut errors = vec![];
     for (var, expr) in spec.exprs.iter() {
         let mut ctx = type_context.clone();
-        let typed_expr = expr.type_check_raw(&mut ctx, &mut errors);
+        let expected = match ctx.get(var).cloned() {
+            Some(t) => t,
+            None => {
+                errors.push(SemanticError::MissingTypeAnnotation(format!(
+                    "Variable {:?} is missing a type annotation",
+                    var
+                )));
+                continue;
+            }
+        };
+        let typed_expr = expr.type_check_raw(Some(&expected), &mut ctx, &mut errors);
+        // Check consistency of inferred type with the declared type annotation
+        if let Ok(ref te) = typed_expr {
+            let actual = extract_type(te);
+            if actual != TCType::from_stream_type(&expected) {
+                errors.push(SemanticError::TypeError(format!(
+                    "Variable {:?} has declared type {:?}, but expression has type {:?}",
+                    var, expected, actual
+                )));
+            }
+        }
         typed_exprs.insert(var, typed_expr);
     }
     if errors.is_empty() {
@@ -665,7 +1134,12 @@ pub fn type_check(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSpecificat
 }
 
 impl TypeCheckableHelper<SExprTE> for Value {
-    fn type_check_raw(&self, _: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         match self {
             Value::Int(v) => Ok(SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(*v)))),
             Value::Float(v) => Ok(SExprTE::Float(SExprFloat::Val(PartialStreamValue::Known(
@@ -675,8 +1149,55 @@ impl TypeCheckableHelper<SExprTE> for Value {
                 v.into(),
             )))),
             Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(*v)))),
-            Value::List(_) => todo!(),
-            Value::Map(_) => todo!(),
+            Value::List(elems) => {
+                if elems.is_empty() {
+                    // Use expected type to resolve the element type of an empty list
+                    // Prefer the expected type when available; otherwise fall
+                    // back to Poly so that type-erasing operations like
+                    // is_defined and len can still accept the empty list.
+                    let inner = match expected {
+                        Some(StreamType::List(inner)) => TCType::from_stream_type(inner.as_ref()),
+                        _ => TCType::EmptyList,
+                    };
+                    Ok(SExprTE::List(make_list_literal(vec![], &inner)))
+                } else {
+                    // Derive inner expected type from expected (if it is a list type)
+                    let inner_expected = match expected {
+                        Some(StreamType::List(inner)) => Some(inner.as_ref()),
+                        _ => None,
+                    };
+
+                    // Type-check first element to determine the element type
+                    let first_te = elems[0].type_check_raw(inner_expected, ctx, errs)?;
+                    let first_type = extract_type(&first_te);
+
+                    // Type-check remaining elements and check consistency with first element's type
+                    let mut typed_elems = vec![first_te];
+                    for elem in elems.iter().skip(1) {
+                        let elem_te = elem.type_check_raw(inner_expected, ctx, errs)?;
+                        let elem_type = extract_type(&elem_te);
+                        if elem_type != first_type {
+                            errs.push(SemanticError::TypeError(format!(
+                                "List element type mismatch: expected {:?} (from first element), got {:?}",
+                                first_type, elem_type
+                            )));
+                            return Err(());
+                        }
+                        typed_elems.push(elem_te);
+                    }
+
+                    Ok(SExprTE::List(make_list_literal(typed_elems, &first_type)))
+                }
+            }
+            Value::Map(entries) => type_check_map_literal(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                expected,
+                ctx,
+                errs,
+            ),
             Value::Unit => Ok(SExprTE::Unit(SExprUnit::Val(PartialStreamValue::Known(())))),
             Value::Deferred => {
                 errs.push(SemanticError::DeferredError(format!(
@@ -694,10 +1215,15 @@ impl TypeCheckableHelper<SExprTE> for Value {
 
 // Type check a binary operation
 impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
-    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        _expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         let (op, se1, se2) = self;
-        let se1_check = se1.type_check_raw(ctx, errs);
-        let se2_check = se2.type_check_raw(ctx, errs);
+        let se1_check = se1.type_check_raw(None, ctx, errs);
+        let se2_check = se2.type_check_raw(None, ctx, errs);
 
         match (op, se1_check, se2_check) {
             // Integer operations
@@ -733,8 +1259,6 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 }
             }
 
-            // TODO: add casts for mixed integer/float operations
-
             // Boolean operations
             (SBinOp::BOp(op), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(SExprTE::Bool(
                 SExprBool::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
@@ -744,66 +1268,32 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 SExprStr::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
 
-            // Comparison operations
-            // Equality
-            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::EqInt(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::EqFloat(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::EqStr(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(
-                SExprTE::Bool(SExprBool::EqBool(Box::new(se1), Box::new(se2))),
-            ),
-            (SBinOp::COp(CompBinOp::Eq), Ok(SExprTE::Unit(se1)), Ok(SExprTE::Unit(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::EqUnit(se1, se2)))
-            }
-
-            // Less than or equal
-            (SBinOp::COp(CompBinOp::Le), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::LeInt(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Le), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::LeFloat(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Le), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::LeStr(se1, se2)))
-            }
-
-            // Less than
-            (SBinOp::COp(CompBinOp::Lt), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::LtInt(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Lt), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::LtFloat(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Lt), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::LtStr(se1, se2)))
-            }
-
-            // Greater than or equal
-            (SBinOp::COp(CompBinOp::Ge), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::GeInt(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Ge), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::GeFloat(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Ge), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::GeStr(se1, se2)))
-            }
-
-            // Greater than
-            (SBinOp::COp(CompBinOp::Gt), Ok(SExprTE::Int(se1)), Ok(SExprTE::Int(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::GtInt(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Gt), Ok(SExprTE::Float(se1)), Ok(SExprTE::Float(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::GtFloat(se1, se2)))
-            }
-            (SBinOp::COp(CompBinOp::Gt), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => {
-                Ok(SExprTE::Bool(SExprBool::GtStr(se1, se2)))
+            // Comparison operations — both operands must have the same type.
+            // Eq is valid for all types; ordering (Le/Lt/Ge/Gt) only for Int, Float, Str.
+            (SBinOp::COp(op), Ok(ste1), Ok(ste2)) => {
+                let ty1 = extract_type(&ste1);
+                let ty2 = extract_type(&ste2);
+                if ty1 != ty2 {
+                    errs.push(SemanticError::TypeError(format!(
+                        "Cannot apply comparison {:?} to expressions of different types: {:?} and {:?}",
+                        op, ty1, ty2
+                    )));
+                    return Err(());
+                }
+                // Ordering comparisons are only valid for Int, Float, Str
+                let ordering_ok = matches!(ty1, TCType::Int | TCType::Float | TCType::Str);
+                if *op != CompBinOp::Eq && !ordering_ok {
+                    errs.push(SemanticError::TypeError(format!(
+                        "Cannot apply ordering comparison {:?} to type {:?}",
+                        op, ty1
+                    )));
+                    return Err(());
+                }
+                Ok(SExprTE::Bool(SExprBool::Cmp(
+                    op.clone(),
+                    Box::new(ste1),
+                    Box::new(ste2),
+                )))
             }
 
             // Any other case where sub-expressions are Ok, but `op` is not supported
@@ -822,10 +1312,15 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
 
 // Type check a default operation
 impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
-    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         let (se1, se2) = *self;
-        let se1_check = se1.type_check_raw(ctx, errs);
-        let se2_check = se2.type_check_raw(ctx, errs);
+        let se1_check = se1.type_check_raw(expected, ctx, errs);
+        let se2_check = se2.type_check_raw(expected, ctx, errs);
 
         match (se1_check, se2_check) {
             (Ok(ste1), Ok(ste2)) => {
@@ -835,6 +1330,9 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
                         Box::new(se1.clone()),
                         Box::new(se2.clone()),
                     ))),
+                    (SExprTE::Float(se1), SExprTE::Float(se2)) => Ok(SExprTE::Float(
+                        SExprFloat::Default(Box::new(se1.clone()), Box::new(se2.clone())),
+                    )),
                     (SExprTE::Str(se1), SExprTE::Str(se2)) => Ok(SExprTE::Str(SExprStr::Default(
                         Box::new(se1.clone()),
                         Box::new(se2.clone()),
@@ -845,9 +1343,45 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
                     (SExprTE::Unit(se1), SExprTE::Unit(se2)) => Ok(SExprTE::Unit(
                         SExprUnit::Default(Box::new(se1.clone()), Box::new(se2.clone())),
                     )),
+                    (SExprTE::List(tl1), SExprTE::List(tl2)) => {
+                        let t1 = tl1.element_type().clone();
+                        let t2 = tl2.element_type().clone();
+                        match unify_element_types(&t1, &t2) {
+                            Some(resolved) => {
+                                let tl1 = coerce_empty_list(tl1, &resolved);
+                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                Ok(SExprTE::List(tl1.typed_default(&tl2)))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Cannot create default-expression with two different list types: {:?} and {:?}",
+                                    t1, t2
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    (SExprTE::Map(tm1), SExprTE::Map(tm2)) => {
+                        let t1 = tm1.value_type().clone();
+                        let t2 = tm2.value_type().clone();
+                        match unify_element_types(&t1, &t2) {
+                            Some(resolved) => {
+                                let tm1 = coerce_empty_map(tm1, &resolved);
+                                let tm2 = coerce_empty_map(tm2, &resolved);
+                                Ok(SExprTE::Map(tm1.typed_default(&tm2)))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Cannot create default-expression with two different map types: {:?} and {:?}",
+                                    t1, t2
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
                     (stenum1, stenum2) => {
                         errs.push(SemanticError::TypeError(format!(
-                            "Cannot create if-expression with two different types: {:?} and {:?}",
+                            "Cannot create default-expression with two different types: {:?} and {:?}",
                             stenum1, stenum2
                         )));
                         Err(())
@@ -862,11 +1396,16 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
 
 // Type check an if expression
 impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
-    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         let (b, se1, se2) = *self;
-        let b_check = b.type_check_raw(ctx, errs);
-        let se1_check = se1.type_check_raw(ctx, errs);
-        let se2_check = se2.type_check_raw(ctx, errs);
+        let b_check = b.type_check_raw(None, ctx, errs);
+        let se1_check = se1.type_check_raw(expected, ctx, errs);
+        let se2_check = se2.type_check_raw(expected, ctx, errs);
 
         match (b_check, se1_check, se2_check) {
             (Ok(SExprTE::Bool(b)), Ok(ste1), Ok(ste2)) => {
@@ -877,6 +1416,13 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
                         Box::new(se1.clone()),
                         Box::new(se2.clone()),
                     ))),
+                    (SExprTE::Float(se1), SExprTE::Float(se2)) => {
+                        Ok(SExprTE::Float(SExprFloat::If(
+                            Box::new(b.clone()),
+                            Box::new(se1.clone()),
+                            Box::new(se2.clone()),
+                        )))
+                    }
                     (SExprTE::Str(se1), SExprTE::Str(se2)) => Ok(SExprTE::Str(SExprStr::If(
                         Box::new(b.clone()),
                         Box::new(se1.clone()),
@@ -892,6 +1438,42 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
                         Box::new(se1.clone()),
                         Box::new(se2.clone()),
                     ))),
+                    (SExprTE::List(tl1), SExprTE::List(tl2)) => {
+                        let t1 = tl1.element_type().clone();
+                        let t2 = tl2.element_type().clone();
+                        match unify_element_types(&t1, &t2) {
+                            Some(resolved) => {
+                                let tl1 = coerce_empty_list(tl1, &resolved);
+                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                Ok(SExprTE::List(tl1.typed_if(Box::new(b.clone()), &tl2)))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Cannot create if-expression with two different list types: {:?} and {:?}",
+                                    t1, t2
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    (SExprTE::Map(tm1), SExprTE::Map(tm2)) => {
+                        let t1 = tm1.value_type().clone();
+                        let t2 = tm2.value_type().clone();
+                        match unify_element_types(&t1, &t2) {
+                            Some(resolved) => {
+                                let tm1 = coerce_empty_map(tm1, &resolved);
+                                let tm2 = coerce_empty_map(tm2, &resolved);
+                                Ok(SExprTE::Map(tm1.typed_if(Box::new(b.clone()), &tm2)))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Cannot create if-expression with two different map types: {:?} and {:?}",
+                                    t1, t2
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
                     (stenum1, stenum2) => {
                         errs.push(SemanticError::TypeError(format!(
                             "Cannot create if-expression with two different types: {:?} and {:?}",
@@ -915,13 +1497,22 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
 
 // Type check an index expression
 impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
-    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         let (inner, idx) = *self;
-        let inner_check = inner.type_check_raw(ctx, errs);
+        let inner_check = inner.type_check_raw(expected, ctx, errs);
 
         match inner_check {
             Ok(ste) => match ste {
                 SExprTE::Int(se) => Ok(SExprTE::Int(SExprInt::SIndex(Box::new(se.clone()), idx))),
+                SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::SIndex(
+                    Box::new(se.clone()),
+                    idx,
+                ))),
                 SExprTE::Str(se) => Ok(SExprTE::Str(SExprStr::SIndex(Box::new(se.clone()), idx))),
                 SExprTE::Bool(se) => {
                     Ok(SExprTE::Bool(SExprBool::SIndex(Box::new(se.clone()), idx)))
@@ -929,15 +1520,8 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
                 SExprTE::Unit(se) => {
                     Ok(SExprTE::Unit(SExprUnit::SIndex(Box::new(se.clone()), idx)))
                 }
-                se => {
-                    errs.push(SemanticError::TypeError(
-                        format!(
-                            "Mismatched type in Stream Index expression, expression and default does not match: {:?}",
-                            se
-                        ),
-                    ));
-                    Err(())
-                }
+                SExprTE::List(tl) => Ok(SExprTE::List(tl.typed_sindex(idx))),
+                SExprTE::Map(tm) => Ok(SExprTE::Map(tm.typed_sindex(idx))),
             },
             // If there's already an error just propagate it
             Err(_) => Err(()),
@@ -947,7 +1531,12 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
 
 // Type check a variable
 impl TypeCheckableHelper<SExprTE> for VarName {
-    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        _expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         let type_opt = ctx.get(self);
         match type_opt {
             Some(t) => match t {
@@ -956,6 +1545,14 @@ impl TypeCheckableHelper<SExprTE> for VarName {
                 StreamType::Str => Ok(SExprTE::Str(SExprStr::Var(self.clone()))),
                 StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Var(self.clone()))),
                 StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Var(self.clone()))),
+                StreamType::List(inner) => {
+                    let typed_list = make_list_var(self.clone(), &TCType::from_stream_type(inner));
+                    Ok(SExprTE::List(typed_list))
+                }
+                StreamType::Map(inner) => {
+                    let typed_map = make_map_var(self.clone(), &TCType::from_stream_type(inner));
+                    Ok(SExprTE::Map(typed_map))
+                }
             },
             None => {
                 errs.push(SemanticError::UndeclaredVariable(format!(
@@ -968,16 +1565,185 @@ impl TypeCheckableHelper<SExprTE> for VarName {
     }
 }
 
+fn make_list_var(var: VarName, element_type: &TCType) -> TypedListExpr {
+    TypedListExpr {
+        typ: TCType::list(element_type.clone()),
+        kind: TypedListExprKind::Var(var),
+    }
+}
+
+fn make_list_literal(elements: Vec<SExprTE>, element_type: &TCType) -> TypedListExpr {
+    TypedListExpr {
+        typ: TCType::list(element_type.clone()),
+        kind: TypedListExprKind::Literal(elements),
+    }
+}
+
+fn make_map_var(var: VarName, value_type: &TCType) -> TypedMapExpr {
+    TypedMapExpr {
+        typ: TCType::map(value_type.clone()),
+        kind: TypedMapExprKind::Var(var),
+    }
+}
+
+fn make_map_literal(elements: BTreeMap<EcoString, SExprTE>, value_type: &TCType) -> TypedMapExpr {
+    TypedMapExpr {
+        typ: TCType::map(value_type.clone()),
+        kind: TypedMapExprKind::Literal(elements),
+    }
+}
+
+fn type_check_map_literal<T>(
+    entries: Vec<(EcoString, T)>,
+    expected: Option<&StreamType>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()>
+where
+    T: TypeCheckableHelper<SExprTE>,
+{
+    if entries.is_empty() {
+        let value_type = match expected {
+            Some(StreamType::Map(inner)) => TCType::from_stream_type(inner.as_ref()),
+            _ => TCType::EmptyMap,
+        };
+        return Ok(SExprTE::Map(make_map_literal(BTreeMap::new(), &value_type)));
+    }
+
+    let value_expected = match expected {
+        Some(StreamType::Map(inner)) => Some(inner.as_ref()),
+        _ => None,
+    };
+
+    let mut iter = entries.into_iter();
+    let (first_key, first_value) = iter.next().expect("non-empty map checked above");
+    let first_te = first_value.type_check_raw(value_expected, ctx, errs)?;
+    let first_type = extract_type(&first_te);
+    let mut typed_entries = BTreeMap::from([(first_key, first_te)]);
+
+    for (key, value) in iter {
+        let value_te = value.type_check_raw(value_expected, ctx, errs)?;
+        let value_type = extract_type(&value_te);
+        if value_type != first_type {
+            errs.push(SemanticError::TypeError(format!(
+                "Map value type mismatch: expected {:?} (from first value), got {:?}",
+                first_type, value_type
+            )));
+            return Err(());
+        }
+        typed_entries.insert(key, value_te);
+    }
+
+    Ok(SExprTE::Map(make_map_literal(typed_entries, &first_type)))
+}
+
+/// Attempt to unify two [`TCType`]s, treating empty-container placeholders as
+/// compatible with concrete types.  Returns the resolved (concrete) type on success, or `None`
+/// when the two types are incompatible.
+fn unify_element_types(t1: &TCType, t2: &TCType) -> Option<TCType> {
+    match (t1, t2) {
+        _ if t1 == t2 => Some(t1.clone()),
+        (TCType::EmptyList, other) | (other, TCType::EmptyList) => Some(other.clone()),
+        (TCType::EmptyMap, other) | (other, TCType::EmptyMap) => Some(other.clone()),
+        (TCType::Construct(c1, args1), TCType::Construct(c2, args2))
+            if c1 == c2 && args1.len() == args2.len() =>
+        {
+            let args = args1
+                .iter()
+                .zip(args2.iter())
+                .map(|(a, b)| unify_element_types(a, b))
+                .collect::<Option<Vec<_>>>()?;
+            Some(TCType::Construct(c1.clone(), args))
+        }
+        _ => None,
+    }
+}
+
+/// If `list` has an `EmptyList` element type, reconstruct it as a concrete empty
+/// list literal of the given `target_element_type`.  Non-`EmptyList` lists are
+/// returned unchanged.
+fn coerce_empty_list(list: TypedListExpr, target_element_type: &TCType) -> TypedListExpr {
+    if list.element_type() == &TCType::EmptyList {
+        make_list_literal(vec![], target_element_type)
+    } else {
+        list
+    }
+}
+
+fn coerce_empty_map(map: TypedMapExpr, target_value_type: &TCType) -> TypedMapExpr {
+    if map.value_type() == &TCType::EmptyMap {
+        make_map_literal(BTreeMap::new(), target_value_type)
+    } else {
+        map
+    }
+}
+
+fn typed_map_get(
+    typed_map: TypedMapExpr,
+    key: EcoString,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    match typed_map.value_type().clone() {
+        TCType::Int => Ok(SExprTE::Int(SExprInt::MGetMap(typed_map, key))),
+        TCType::Float => Ok(SExprTE::Float(SExprFloat::MGetMap(typed_map, key))),
+        TCType::Bool => Ok(SExprTE::Bool(SExprBool::MGetMap(typed_map, key))),
+        TCType::Str => Ok(SExprTE::Str(SExprStr::MGetMap(typed_map, key))),
+        TCType::Unit => Ok(SExprTE::Unit(SExprUnit::MGetMap(typed_map, key))),
+        TCType::EmptyMap => {
+            errs.push(SemanticError::TypeError(
+                "Cannot determine value type for get from an empty map".into(),
+            ));
+            Err(())
+        }
+        TCType::EmptyList | TCType::Unknown => {
+            errs.push(SemanticError::TypeError(
+                "Cannot determine concrete value type for map get".into(),
+            ));
+            Err(())
+        }
+        TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
+            Ok(SExprTE::List(TypedListExpr {
+                typ: TCType::list(args[0].clone()),
+                kind: TypedListExprKind::MGetMap(Box::new(typed_map), key),
+            }))
+        }
+        TCType::Construct(TCTypeConstructor::Map, args) if args.len() == 1 => {
+            Ok(SExprTE::Map(TypedMapExpr {
+                typ: TCType::map(args[0].clone()),
+                kind: TypedMapExprKind::MGetMap(Box::new(typed_map), key),
+            }))
+        }
+        TCType::Construct(constructor, args) => {
+            errs.push(SemanticError::TypeError(format!(
+                "Unsupported type constructor application for map value type: {:?}<{:?}>",
+                constructor, args
+            )));
+            Err(())
+        }
+    }
+}
+
 impl TypeCheckableHelper<SExprTE> for (SExpr, StreamTypeAscription) {
-    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         let (expr, ascription) = self;
-        let expr_te = expr.type_check_raw(ctx, errs)?;
+        // If an explicit ascription is present, prefer it as the expected type for
+        // the inner expression; otherwise fall back to the outer expected type.
+        let effective_expected = match ascription {
+            StreamTypeAscription::Ascribed(ty) => Some(ty),
+            StreamTypeAscription::Unascribed => expected,
+        };
+        let expr_te = expr.type_check_raw(effective_expected, ctx, errs)?;
 
         match ascription {
             StreamTypeAscription::Unascribed => Ok(expr_te),
             StreamTypeAscription::Ascribed(expected_ty) => {
                 let actual_ty = extract_type(&expr_te);
-                if actual_ty == *expected_ty {
+                if actual_ty == TCType::from_stream_type(expected_ty) {
                     Ok(expr_te)
                 } else {
                     errs.push(SemanticError::TypeError(format!(
@@ -993,19 +1759,24 @@ impl TypeCheckableHelper<SExprTE> for (SExpr, StreamTypeAscription) {
 
 // Type check an expression
 impl TypeCheckableHelper<SExprTE> for SExpr {
-    fn type_check_raw(&self, ctx: &mut TypeInfo, errs: &mut SemanticErrors) -> Result<SExprTE, ()> {
+    fn type_check_raw(
+        &self,
+        expected: Option<&StreamType>,
+        ctx: &mut TypeInfo,
+        errs: &mut SemanticErrors,
+    ) -> Result<SExprTE, ()> {
         match self {
-            SExpr::Val(sdata) => sdata.type_check_raw(ctx, errs),
+            SExpr::Val(sdata) => sdata.type_check_raw(expected, ctx, errs),
             SExpr::BinOp(se1, se2, op) => {
-                (op.clone(), se1.deref(), se2.deref()).type_check_raw(ctx, errs)
+                (op.clone(), se1.deref(), se2.deref()).type_check_raw(expected, ctx, errs)
             }
             SExpr::If(b, se1, se2) => {
-                (b.deref(), se1.deref(), se2.deref()).type_check_raw(ctx, errs)
+                (b.deref(), se1.deref(), se2.deref()).type_check_raw(expected, ctx, errs)
             }
-            SExpr::SIndex(inner, idx) => (inner.deref(), *idx).type_check_raw(ctx, errs),
-            SExpr::Var(id) => id.type_check_raw(ctx, errs),
+            SExpr::SIndex(inner, idx) => (inner.deref(), *idx).type_check_raw(expected, ctx, errs),
+            SExpr::Var(id) => id.type_check_raw(expected, ctx, errs),
             SExpr::Dynamic(e, type_ascription) => {
-                let e_check = e.type_check_raw(ctx, errs)?;
+                let e_check = e.type_check_raw(None, ctx, errs)?;
 
                 // Ascriptions are required for defers in strictly-typed expressions
                 let type_ascription = match type_ascription {
@@ -1052,10 +1823,18 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         Box::new(e_str),
                         ctx.clone(),
                     ))),
+                    StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
+                        typ: TCType::list(TCType::from_stream_type(inner)),
+                        kind: TypedListExprKind::Dynamic(Box::new(e_str), ctx.clone()),
+                    })),
+                    StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
+                        typ: TCType::map(TCType::from_stream_type(inner)),
+                        kind: TypedMapExprKind::Dynamic(Box::new(e_str), ctx.clone()),
+                    })),
                 }
             }
             SExpr::RestrictedDynamic(e, type_ascription, vs) => {
-                let e_check = e.type_check_raw(ctx, errs)?;
+                let e_check = e.type_check_raw(None, ctx, errs)?;
 
                 // Inner stream type must be Str
                 let e_str = match e_check {
@@ -1107,10 +1886,26 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         vs.clone(),
                         ctx.clone(),
                     ))),
+                    StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
+                        typ: TCType::list(TCType::from_stream_type(inner)),
+                        kind: TypedListExprKind::RestrictedDynamic(
+                            Box::new(e_str),
+                            vs.clone(),
+                            ctx.clone(),
+                        ),
+                    })),
+                    StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
+                        typ: TCType::map(TCType::from_stream_type(inner)),
+                        kind: TypedMapExprKind::RestrictedDynamic(
+                            Box::new(e_str),
+                            vs.clone(),
+                            ctx.clone(),
+                        ),
+                    })),
                 }
             }
             SExpr::Defer(e, type_ascription, vs) => {
-                let e_check = e.type_check_raw(ctx, errs)?;
+                let e_check = e.type_check_raw(None, ctx, errs)?;
 
                 // Ascriptions are required for defer in strictly-typed expressions
                 let type_ascription = match type_ascription {
@@ -1162,12 +1957,20 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         ctx.clone(),
                         vs.clone(),
                     ))),
+                    StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
+                        typ: TCType::list(TCType::from_stream_type(inner)),
+                        kind: TypedListExprKind::Defer(Box::new(e_str), ctx.clone()),
+                    })),
+                    StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
+                        typ: TCType::map(TCType::from_stream_type(inner)),
+                        kind: TypedMapExprKind::Defer(Box::new(e_str), ctx.clone()),
+                    })),
                 }
             }
             SExpr::Update(_, _) => todo!("Implement support for Update"),
-            SExpr::Default(se, d) => (se.deref(), d.deref()).type_check_raw(ctx, errs),
+            SExpr::Default(se, d) => (se.deref(), d.deref()).type_check_raw(expected, ctx, errs),
             SExpr::Not(sexpr) => {
-                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                let sexpr_check = sexpr.type_check_raw(Some(&StreamType::Bool), ctx, errs)?;
                 match sexpr_check {
                     SExprTE::Bool(se) => Ok(SExprTE::Bool(SExprBool::Not(Box::new(se)))),
                     _ => {
@@ -1178,37 +1981,287 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     }
                 }
             }
-            SExpr::List(_) => todo!("Implement support for typed List"),
-            SExpr::LIndex(_, _) => todo!("Implement support for typed LIndex"),
-            SExpr::LAppend(_, _) => todo!("Implement support for typed LAppend"),
-            SExpr::LConcat(_, _) => todo!("Implement support for typed LConcat"),
-            SExpr::LHead(_) => todo!("Implement support for typed LHead"),
-            SExpr::LTail(_) => todo!("Implement support for typed LTail"),
-            SExpr::LLen(_) => todo!("Implement support for typed LLen"),
-            SExpr::IsDefined(sexpr) => {
-                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
-                match sexpr_check {
-                    SExprTE::Int(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedInt(se))),
-                    SExprTE::Float(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedFloat(se))),
-                    SExprTE::Str(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedStr(se))),
-                    SExprTE::Bool(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedBool(Box::new(se)))),
-                    SExprTE::Unit(se) => Ok(SExprTE::Bool(SExprBool::IsDefinedUnit(se))),
+            SExpr::List(exprs) => {
+                if exprs.is_empty() {
+                    // Use expected type to resolve the element type of an empty list.
+                    // Prefer the expected type when available; otherwise fall
+                    // back to Poly so that type-erasing operations like
+                    // is_defined and len can still accept the empty list.
+                    let inner = match expected {
+                        Some(StreamType::List(inner)) => TCType::from_stream_type(inner.as_ref()),
+                        _ => TCType::EmptyList,
+                    };
+                    Ok(SExprTE::List(make_list_literal(vec![], &inner)))
+                } else {
+                    // Derive inner expected type from expected (if it is a list type)
+                    let inner_expected = match expected {
+                        Some(StreamType::List(inner)) => Some(inner.as_ref()),
+                        _ => None,
+                    };
+
+                    // Type-check first element to determine element type
+                    let first_te = exprs[0].type_check_raw(inner_expected, ctx, errs)?;
+                    let first_type = extract_type(&first_te);
+
+                    // Type-check remaining elements and check consistency with first element's type
+                    let mut typed_exprs = vec![first_te];
+                    for expr in exprs.iter().skip(1) {
+                        let elem_te = expr.type_check_raw(inner_expected, ctx, errs)?;
+                        let elem_type = extract_type(&elem_te);
+                        if elem_type != first_type {
+                            errs.push(SemanticError::TypeError(format!(
+                                "List element type mismatch: expected {:?} (from first element), got {:?}",
+                                first_type, elem_type
+                            )));
+                            return Err(());
+                        }
+                        typed_exprs.push(elem_te);
+                    }
+
+                    let typed_list = make_list_literal(typed_exprs, &first_type);
+                    Ok(SExprTE::List(typed_list))
                 }
             }
-            SExpr::When(sexpr) => {
-                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
-                match sexpr_check {
-                    SExprTE::Int(se) => Ok(SExprTE::Bool(SExprBool::WhenInt(se))),
-                    SExprTE::Float(se) => Ok(SExprTE::Bool(SExprBool::WhenFloat(se))),
-                    SExprTE::Str(se) => Ok(SExprTE::Bool(SExprBool::WhenStr(se))),
-                    SExprTE::Bool(se) => Ok(SExprTE::Bool(SExprBool::WhenBool(Box::new(se)))),
-                    SExprTE::Unit(se) => Ok(SExprTE::Bool(SExprBool::WhenUnit(se))),
+            SExpr::LIndex(list_expr, idx_expr) => {
+                // If we expect element type T, then the list should be List<T>
+                let list_expected = expected.map(|t| StreamType::List(Box::new(t.clone())));
+                let list_te = list_expr.type_check_raw(list_expected.as_ref(), ctx, errs)?;
+                let idx_te = idx_expr.type_check_raw(Some(&StreamType::Int), ctx, errs)?;
+
+                let idx_int = match idx_te {
+                    SExprTE::Int(e) => e,
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "LIndex index must be Int, got {:?}",
+                            other
+                        )));
+                        return Err(());
+                    }
+                };
+
+                match list_te {
+                    SExprTE::List(typed_list) => {
+                        let elem_type = typed_list.element_type().clone();
+                        match elem_type {
+                            TCType::Int => Ok(SExprTE::Int(SExprInt::LIndexList(
+                                typed_list,
+                                Box::new(idx_int),
+                            ))),
+                            TCType::Float => Ok(SExprTE::Float(SExprFloat::LIndexList(
+                                typed_list,
+                                Box::new(idx_int),
+                            ))),
+                            TCType::Bool => Ok(SExprTE::Bool(SExprBool::LIndexList(
+                                typed_list,
+                                Box::new(idx_int),
+                            ))),
+                            TCType::Str => Ok(SExprTE::Str(SExprStr::LIndexList(
+                                typed_list,
+                                Box::new(idx_int),
+                            ))),
+                            TCType::Unit => Ok(SExprTE::Unit(SExprUnit::LIndexList(
+                                typed_list,
+                                Box::new(idx_int),
+                            ))),
+                            TCType::EmptyList => {
+                                errs.push(SemanticError::TypeError(
+                                    "Cannot determine element type for index into an empty list"
+                                        .into(),
+                                ));
+                                Err(())
+                            }
+                            TCType::EmptyMap | TCType::Unknown => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Cannot index list with unresolved element type {:?}",
+                                    elem_type
+                                )));
+                                Err(())
+                            }
+                            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
+                                Ok(SExprTE::List(TypedListExpr {
+                                    typ: TCType::list(args[0].clone()),
+                                    kind: TypedListExprKind::LIndexList(
+                                        Box::new(typed_list),
+                                        Box::new(idx_int),
+                                    ),
+                                }))
+                            }
+                            TCType::Construct(constructor, args) => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Unsupported type constructor application for list index element type: {:?}<{:?}>",
+                                    constructor, args
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "LIndex requires a List, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
                 }
+            }
+            SExpr::LAppend(list_expr, elem_expr) => {
+                let list_te = list_expr.type_check_raw(expected, ctx, errs)?;
+
+                match list_te {
+                    SExprTE::List(typed_list) => {
+                        let elem_type = typed_list.element_type().clone();
+                        // When the list is EmptyList (empty), we cannot constrain
+                        // the element; let it infer its own type instead.
+                        let elem_expected = elem_type.to_stream_type();
+                        let elem_te =
+                            elem_expr.type_check_raw(elem_expected.as_ref(), ctx, errs)?;
+                        let actual_elem_type = extract_type(&elem_te);
+                        match unify_element_types(&elem_type, &actual_elem_type) {
+                            Some(resolved) => {
+                                let typed_list = coerce_empty_list(typed_list, &resolved);
+                                Ok(SExprTE::List(typed_list.typed_append(Box::new(elem_te))))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "LAppend element type mismatch: list has element type {:?}, but got {:?}",
+                                    elem_type, actual_elem_type
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "LAppend requires a List as first argument, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::LConcat(list1_expr, list2_expr) => {
+                let list1_te = list1_expr.type_check_raw(expected, ctx, errs)?;
+                let list2_te = list2_expr.type_check_raw(expected, ctx, errs)?;
+
+                match (list1_te, list2_te) {
+                    (SExprTE::List(tl1), SExprTE::List(tl2)) => {
+                        let t1 = tl1.element_type().clone();
+                        let t2 = tl2.element_type().clone();
+                        match unify_element_types(&t1, &t2) {
+                            Some(resolved) => {
+                                let tl1 = coerce_empty_list(tl1, &resolved);
+                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                Ok(SExprTE::List(tl1.typed_concat(&tl2)))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "LConcat requires lists of the same type, got {:?} and {:?}",
+                                    t1, t2
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    (other1, other2) => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "LConcat requires two Lists, got {:?} and {:?}",
+                            other1, other2
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::LHead(list_expr) => {
+                // If we expect type T, then the list should be List<T>
+                let list_expected = expected.map(|t| StreamType::List(Box::new(t.clone())));
+                let list_te = list_expr.type_check_raw(list_expected.as_ref(), ctx, errs)?;
+                match list_te {
+                    SExprTE::List(typed_list) => {
+                        let elem_type = typed_list.element_type().clone();
+                        match elem_type {
+                            TCType::Int => Ok(SExprTE::Int(SExprInt::LHeadList(typed_list))),
+                            TCType::Float => Ok(SExprTE::Float(SExprFloat::LHeadList(typed_list))),
+                            TCType::Bool => Ok(SExprTE::Bool(SExprBool::LHeadList(typed_list))),
+                            TCType::Str => Ok(SExprTE::Str(SExprStr::LHeadList(typed_list))),
+                            TCType::Unit => Ok(SExprTE::Unit(SExprUnit::LHeadList(typed_list))),
+                            TCType::EmptyList => {
+                                errs.push(SemanticError::TypeError(
+                                    "Cannot determine element type for head of an empty list"
+                                        .into(),
+                                ));
+                                Err(())
+                            }
+                            TCType::EmptyMap | TCType::Unknown => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Cannot take head of list with unresolved element type {:?}",
+                                    elem_type
+                                )));
+                                Err(())
+                            }
+                            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
+                                Ok(SExprTE::List(TypedListExpr {
+                                    typ: TCType::list(args[0].clone()),
+                                    kind: TypedListExprKind::LHeadList(Box::new(typed_list)),
+                                }))
+                            }
+                            TCType::Construct(constructor, args) => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Unsupported type constructor application for list head element type: {:?}<{:?}>",
+                                    constructor, args
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "LHead requires a List, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::LTail(list_expr) => {
+                // LTail preserves the list type, so propagate expected directly
+                let list_te = list_expr.type_check_raw(expected, ctx, errs)?;
+                match list_te {
+                    SExprTE::List(typed_list) => Ok(SExprTE::List(typed_list.typed_tail())),
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "LTail requires a List, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::LLen(list_expr) => {
+                // LLen produces Int; the inner list can be any type
+                let list_te = list_expr.type_check_raw(None, ctx, errs)?;
+                match list_te {
+                    SExprTE::List(typed_list) => Ok(SExprTE::Int(SExprInt::LLen(typed_list))),
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "LLen requires a List, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::IsDefined(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(None, ctx, errs)?;
+                Ok(SExprTE::Bool(SExprBool::IsDefined(Box::new(sexpr_check))))
+            }
+            SExpr::When(sexpr) => {
+                let sexpr_check = sexpr.type_check_raw(None, ctx, errs)?;
+                Ok(SExprTE::Bool(SExprBool::When(Box::new(sexpr_check))))
             }
             SExpr::Latch(_, _) => todo!("Implement support for typed Latch"),
             SExpr::Init(se1, se2) => {
-                let se1_check = se1.type_check_raw(ctx, errs);
-                let se2_check = se2.type_check_raw(ctx, errs);
+                let se1_check = se1.type_check_raw(expected, ctx, errs);
+                let se2_check = se2.type_check_raw(expected, ctx, errs);
                 match (se1_check, se2_check) {
                     (Ok(SExprTE::Int(e1)), Ok(SExprTE::Int(e2))) => {
                         Ok(SExprTE::Int(SExprInt::Init(Box::new(e1), Box::new(e2))))
@@ -1225,6 +2278,42 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     (Ok(SExprTE::Unit(e1)), Ok(SExprTE::Unit(e2))) => {
                         Ok(SExprTE::Unit(SExprUnit::Init(Box::new(e1), Box::new(e2))))
                     }
+                    (Ok(SExprTE::List(tl1)), Ok(SExprTE::List(tl2))) => {
+                        let t1 = tl1.element_type().clone();
+                        let t2 = tl2.element_type().clone();
+                        match unify_element_types(&t1, &t2) {
+                            Some(resolved) => {
+                                let tl1 = coerce_empty_list(tl1, &resolved);
+                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                Ok(SExprTE::List(tl1.typed_init(&tl2)))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Init requires both arguments to have the same type, got List<{:?}> and List<{:?}>",
+                                    t1, t2
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    (Ok(SExprTE::Map(tm1)), Ok(SExprTE::Map(tm2))) => {
+                        let t1 = tm1.value_type().clone();
+                        let t2 = tm2.value_type().clone();
+                        match unify_element_types(&t1, &t2) {
+                            Some(resolved) => {
+                                let tm1 = coerce_empty_map(tm1, &resolved);
+                                let tm2 = coerce_empty_map(tm2, &resolved);
+                                Ok(SExprTE::Map(tm1.typed_init(&tm2)))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "Init requires both arguments to have the same type, got Map<{:?}> and Map<{:?}>",
+                                    t1, t2
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
                     (Ok(ste1), Ok(ste2)) => {
                         errs.push(SemanticError::TypeError(format!(
                             "Init requires both arguments to have the same type, got {:?} and {:?}",
@@ -1236,7 +2325,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 }
             }
             SExpr::Sin(sexpr) => {
-                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                let sexpr_check = sexpr.type_check_raw(Some(&StreamType::Float), ctx, errs)?;
                 match sexpr_check {
                     SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Sin(Box::new(se)))),
                     other => {
@@ -1249,7 +2338,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 }
             }
             SExpr::Cos(sexpr) => {
-                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                let sexpr_check = sexpr.type_check_raw(Some(&StreamType::Float), ctx, errs)?;
                 match sexpr_check {
                     SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Cos(Box::new(se)))),
                     other => {
@@ -1262,7 +2351,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 }
             }
             SExpr::Tan(sexpr) => {
-                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                let sexpr_check = sexpr.type_check_raw(Some(&StreamType::Float), ctx, errs)?;
                 match sexpr_check {
                     SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Tan(Box::new(se)))),
                     other => {
@@ -1275,7 +2364,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 }
             }
             SExpr::Abs(sexpr) => {
-                let sexpr_check = sexpr.type_check_raw(ctx, errs)?;
+                let sexpr_check = sexpr.type_check_raw(expected, ctx, errs)?;
                 match sexpr_check {
                     SExprTE::Int(se) => Ok(SExprTE::Int(SExprInt::Abs(Box::new(se)))),
                     SExprTE::Float(se) => Ok(SExprTE::Float(SExprFloat::Abs(Box::new(se)))),
@@ -1290,11 +2379,93 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             }
             SExpr::MonitoredAt(_, _) => todo!("Implement support for typed MonitoredAt"),
             SExpr::Dist(_, _) => todo!("Implement support for typed Dist"),
-            SExpr::Map(_) => todo!("Implement support for typed Map"),
-            SExpr::MGet(_, _) => todo!("Implement support for typed MGet"),
-            SExpr::MInsert(_, _, _) => todo!("Implement support for typed MInsert"),
-            SExpr::MRemove(_, _) => todo!("Implement support for typed MRemove"),
-            SExpr::MHasKey(_, _) => todo!("Implement support for typed MHasKey"),
+            SExpr::Map(entries) => type_check_map_literal(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                expected,
+                ctx,
+                errs,
+            ),
+            SExpr::MGet(map_expr, key) => {
+                let map_expected = expected.map(|t| StreamType::Map(Box::new(t.clone())));
+                let map_te = map_expr.type_check_raw(map_expected.as_ref(), ctx, errs)?;
+                match map_te {
+                    SExprTE::Map(typed_map) => typed_map_get(typed_map, key.clone(), errs),
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "MGet requires a Map, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::MInsert(map_expr, key, value_expr) => {
+                let map_te = map_expr.type_check_raw(expected, ctx, errs)?;
+                match map_te {
+                    SExprTE::Map(typed_map) => {
+                        let value_type = typed_map.value_type().clone();
+                        let value_expected = value_type.to_stream_type();
+                        let value_te =
+                            value_expr.type_check_raw(value_expected.as_ref(), ctx, errs)?;
+                        let actual_value_type = extract_type(&value_te);
+                        match unify_element_types(&value_type, &actual_value_type) {
+                            Some(resolved) => {
+                                let typed_map = coerce_empty_map(typed_map, &resolved);
+                                Ok(SExprTE::Map(
+                                    typed_map.typed_insert(key.clone(), Box::new(value_te)),
+                                ))
+                            }
+                            None => {
+                                errs.push(SemanticError::TypeError(format!(
+                                    "MInsert value type mismatch: map has value type {:?}, but got {:?}",
+                                    value_type, actual_value_type
+                                )));
+                                Err(())
+                            }
+                        }
+                    }
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "MInsert requires a Map as first argument, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::MRemove(map_expr, key) => {
+                let map_te = map_expr.type_check_raw(expected, ctx, errs)?;
+                match map_te {
+                    SExprTE::Map(typed_map) => {
+                        Ok(SExprTE::Map(typed_map.typed_remove(key.clone())))
+                    }
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "MRemove requires a Map, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::MHasKey(map_expr, key) => {
+                let map_te = map_expr.type_check_raw(None, ctx, errs)?;
+                match map_te {
+                    SExprTE::Map(typed_map) => {
+                        Ok(SExprTE::Bool(SExprBool::MHasKeyMap(typed_map, key.clone())))
+                    }
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "MHasKey requires a Map, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
         }
     }
 }
@@ -1305,7 +2476,7 @@ mod tests {
 
     use crate::lang::dsrv::ast::{NumericalBinOp, StrBinOp};
 
-    use super::{SemanticResult, TypeCheckable, TypeInfo};
+    use super::{SemanticResult, TypeInfo};
 
     use super::*;
     use ecow::eco_vec;
@@ -1466,13 +2637,15 @@ mod tests {
     #[test]
     fn test_vals_ok() {
         // Checks that vals returns the expected typed AST after semantic analysis
-        let vals = [
-            SExprV::Val(Value::Int(1)),
-            SExprV::Val(Value::Str("".into())),
-            SExprV::Val(Value::Bool(true)),
-            SExprV::Val(Value::Unit),
+        let vals: Vec<(SExprV, TCType)> = vec![
+            (SExprV::Val(Value::Int(1)), TCType::Int),
+            (SExprV::Val(Value::Str("".into())), TCType::Str),
+            (SExprV::Val(Value::Bool(true)), TCType::Bool),
+            (SExprV::Val(Value::Unit), TCType::Unit),
         ];
-        let results = vals.iter().map(TypeCheckable::type_check_with_default);
+        let results = vals
+            .iter()
+            .map(|(v, _t)| v.type_check(&mut TypeInfo::new()));
         let expected: Vec<SemantResultStr> = vec![
             Ok(SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(1)))),
             Ok(SExprTE::Str(SExprStr::Val(PartialStreamValue::Known(
@@ -2225,5 +3398,1710 @@ mod tests {
             prop_assert_eq!(parsed.type_annotations, spec.type_annotations);
             prop_assert_eq!(parsed.exprs.len(), spec.exprs.len());
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // List type-checking tests
+    // -----------------------------------------------------------------------
+
+    // --- Value::List literal type determination ---
+
+    #[test]
+    fn test_list_val_flat_int() {
+        let val = Value::List(EcoVec::from(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let te = result.unwrap();
+        assert_eq!(extract_type(&te), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_list_val_flat_bool() {
+        let val = Value::List(EcoVec::from(vec![Value::Bool(true), Value::Bool(false)]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let te = result.unwrap();
+        assert_eq!(extract_type(&te), TCType::list(TCType::Bool));
+    }
+
+    #[test]
+    fn test_list_val_flat_str() {
+        let val = Value::List(EcoVec::from(vec![
+            Value::Str("a".into()),
+            Value::Str("b".into()),
+        ]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let te = result.unwrap();
+        assert_eq!(extract_type(&te), TCType::list(TCType::Str));
+    }
+
+    #[test]
+    fn test_list_val_nested_list_of_list_int() {
+        // [[1, 2], [3]]
+        let val = Value::List(EcoVec::from(vec![
+            Value::List(EcoVec::from(vec![Value::Int(1), Value::Int(2)])),
+            Value::List(EcoVec::from(vec![Value::Int(3)])),
+        ]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let te = result.unwrap();
+        assert_eq!(extract_type(&te), TCType::list(TCType::list(TCType::Int)));
+    }
+
+    #[test]
+    fn test_list_val_triple_nested() {
+        // [[[true]]]
+        let val = Value::List(EcoVec::from(vec![Value::List(EcoVec::from(vec![
+            Value::List(EcoVec::from(vec![Value::Bool(true)])),
+        ]))]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let te = result.unwrap();
+        assert_eq!(
+            extract_type(&te),
+            TCType::list(TCType::list(TCType::list(TCType::Bool)))
+        );
+    }
+
+    #[test]
+    fn test_list_val_empty_without_expected() {
+        // Without expected type, empty list literal succeeds with empty-list element type
+        let val = Value::List(EcoVec::new());
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for empty list literal with empty-list element type, got {:?}",
+            result
+        );
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::EmptyList)
+        );
+    }
+
+    #[test]
+    fn test_list_val_empty_ok_with_expected() {
+        // With expected type, empty list literal succeeds
+        let val = Value::List(EcoVec::new());
+        let expected = StreamType::List(Box::new(StreamType::Int));
+        let mut errs = vec![];
+        let result = val.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for empty list with expected type, got {:?}",
+            errs
+        );
+        let te = result.unwrap();
+        assert_eq!(extract_type(&te), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_list_val_empty_nested_ok_with_expected() {
+        // [[]] with expected List<List<Int>> should succeed
+        let val = Value::List(EcoVec::from(vec![Value::List(EcoVec::new())]));
+        let expected = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int))));
+        let mut errs = vec![];
+        let result = val.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for [[]] with expected List<List<Int>>, got {:?}",
+            errs
+        );
+        let te = result.unwrap();
+        assert_eq!(extract_type(&te), TCType::list(TCType::list(TCType::Int)));
+    }
+
+    #[test]
+    fn test_list_val_nested_inner_empty_without_expected() {
+        // [[]] — without expected type, the inner empty list gets empty-list element type.
+        // The outer list's first element is List(Poly), so the outer list is
+        // List(List(Poly)).
+        let val = Value::List(EcoVec::from(vec![Value::List(EcoVec::new())]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for [[]] with empty-list element type, got {:?}",
+            result
+        );
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::EmptyList))
+        );
+    }
+
+    #[test]
+    fn test_list_val_mixed_element_types_error() {
+        // [1, "hello"] — first element is Int, second is Str
+        let val = Value::List(EcoVec::from(vec![
+            Value::Int(1),
+            Value::Str("hello".into()),
+        ]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err(), "Expected Err for mixed element types");
+    }
+
+    #[test]
+    fn test_list_val_nested_mixed_depth_error() {
+        // [[1, 2], 3] — first element is List<Int>, second is Int
+        let val = Value::List(EcoVec::from(vec![
+            Value::List(EcoVec::from(vec![Value::Int(1), Value::Int(2)])),
+            Value::Int(3),
+        ]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err(), "Expected Err for mixed nesting depths");
+    }
+
+    #[test]
+    fn test_list_val_nested_inconsistent_inner_type_error() {
+        // [[1], [true]] — first inner is List<Int>, second is List<Bool>
+        let val = Value::List(EcoVec::from(vec![
+            Value::List(EcoVec::from(vec![Value::Int(1)])),
+            Value::List(EcoVec::from(vec![Value::Bool(true)])),
+        ]));
+        let expr = SExprV::Val(val);
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_err(),
+            "Expected Err for inconsistent nested element types"
+        );
+    }
+
+    // --- SExpr::List (expression-level list literal) ---
+
+    #[test]
+    fn test_sexpr_list_flat_int() {
+        let expr = SExpr::List(EcoVec::from(vec![
+            SExpr::Val(Value::Int(10)),
+            SExpr::Val(Value::Int(20)),
+        ]));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_sexpr_list_nested() {
+        // List of list-literals: [[1], [2, 3]]
+        let expr = SExpr::List(EcoVec::from(vec![
+            SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))])),
+            SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(2)),
+                SExpr::Val(Value::Int(3)),
+            ])),
+        ]));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Int))
+        );
+    }
+
+    #[test]
+    fn test_sexpr_list_empty_without_expected() {
+        // Without expected type, empty SExpr::List succeeds with empty-list element type
+        let expr = SExpr::List(EcoVec::new());
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for empty SExpr::List with empty-list element type, got {:?}",
+            result
+        );
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::EmptyList)
+        );
+    }
+
+    #[test]
+    fn test_sexpr_list_empty_ok_with_expected() {
+        // With expected type, empty SExpr::List succeeds
+        let expr = SExpr::List(EcoVec::new());
+        let expected = StreamType::List(Box::new(StreamType::Int));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for empty SExpr::List with expected type, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_sexpr_list_empty_nested_ok_with_expected() {
+        // [[]] with expected List<List<Bool>> should succeed
+        let expr = SExpr::List(EcoVec::from(vec![SExpr::List(EcoVec::new())]));
+        let expected = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Bool))));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for [[]] with expected List<List<Bool>>, got {:?}",
+            errs
+        );
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Bool))
+        );
+    }
+
+    #[test]
+    fn test_sexpr_list_mixed_types_error() {
+        let expr = SExpr::List(EcoVec::from(vec![
+            SExpr::Val(Value::Int(1)),
+            SExpr::Val(Value::Bool(true)),
+        ]));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    // --- Empty lists in compound expressions ---
+
+    #[test]
+    fn test_default_empty_list_with_typed_list() {
+        // default([], xs) where xs : List<Int> → List<Int>
+        // The expected type from xs propagates to the empty list via the Default handler.
+        let expr = SExpr::Default(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::Var("xs".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        let expected = StreamType::List(Box::new(StreamType::Int));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&expected), &mut ctx, &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for default([], xs) with expected List<Int>, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_if_empty_list_branch_with_expected() {
+        // if true then [] else [1, 2] with expected List<Int>
+        let expr = SExpr::If(
+            Box::new(SExpr::Val(Value::Bool(true))),
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(1)),
+                SExpr::Val(Value::Int(2)),
+            ]))),
+        );
+        let expected = StreamType::List(Box::new(StreamType::Int));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for if(true, [], [1,2]) with expected List<Int>, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_init_empty_list_with_expected() {
+        // init([], xs) where xs : List<Str> with expected List<Str>
+        let expr = SExpr::Init(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::Var("xs".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Str)));
+        let expected = StreamType::List(Box::new(StreamType::Str));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&expected), &mut ctx, &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for init([], xs) with expected List<Str>, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Str));
+    }
+
+    #[test]
+    fn test_lconcat_empty_list_with_expected() {
+        // concat([], [1]) with expected List<Int>
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))]))),
+        );
+        let expected = StreamType::List(Box::new(StreamType::Int));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for concat([], [1]) with expected List<Int>, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lappend_to_empty_list_with_expected() {
+        // append([], 42) with expected List<Int>
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::Val(Value::Int(42))),
+        );
+        let expected = StreamType::List(Box::new(StreamType::Int));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for append([], 42) with expected List<Int>, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_top_level_type_check_empty_list_output() {
+        // Simulates a full spec where an output variable is assigned []
+        // and its declared type is List<Int>.
+        let mut exprs = BTreeMap::new();
+        let var: VarName = "y".into();
+        exprs.insert(var.clone(), SExpr::List(EcoVec::new()));
+        let mut type_annotations = BTreeMap::new();
+        type_annotations.insert(var.clone(), StreamType::List(Box::new(StreamType::Int)));
+        let spec = DsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([var.clone()]),
+            exprs,
+            type_annotations,
+            aux_info: vec![],
+        };
+        let result = type_check(spec);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for spec with y : List<Int> = [], got {:?}",
+            result
+        );
+        let typed_spec = result.unwrap();
+        let te = typed_spec.var_expr(&var).unwrap();
+        assert_eq!(extract_type(&te), TCType::list(TCType::Int));
+    }
+
+    // --- Empty lists in type-erasing operations ---
+    // Operations like is_defined and len produce a fixed output type (Bool / Int)
+    // that does not constrain their input type.  They pass None as the expected
+    // type to their argument, so the empty list falls back to empty-list element type.
+    // Because these operations never inspect the element type, the Poly list
+    // passes through successfully.
+
+    #[test]
+    fn test_is_defined_empty_list_ok() {
+        // is_defined([]) — the empty list gets empty-list element type; is_defined
+        // does not inspect the element type, so it succeeds.
+        let expr = SExpr::IsDefined(Box::new(SExpr::List(EcoVec::new())));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for is_defined([]) via Poly, got {:?}",
+            result
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    #[test]
+    fn test_is_defined_empty_list_ok_with_outer_expected() {
+        // With outer expected Bool, same outcome.
+        let expr = SExpr::IsDefined(Box::new(SExpr::List(EcoVec::new())));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&StreamType::Bool), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for is_defined([]) with outer expected Bool, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    #[test]
+    fn test_llen_empty_list_ok() {
+        // len([]) — the empty list gets empty-list element type; len does not
+        // inspect the element type, so it succeeds.
+        let expr = SExpr::LLen(Box::new(SExpr::List(EcoVec::new())));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for len([]) via Poly, got {:?}",
+            result
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_llen_empty_list_ok_with_outer_expected() {
+        // With outer expected Int, same outcome.
+        let expr = SExpr::LLen(Box::new(SExpr::List(EcoVec::new())));
+        let mut errs = vec![];
+        let result = expr.type_check_raw(Some(&StreamType::Int), &mut TypeInfo::new(), &mut errs);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for len([]) with outer expected Int, got {:?}",
+            errs
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_when_empty_list_ok() {
+        // when([]) — same as is_defined: does not inspect element type.
+        let expr = SExpr::When(Box::new(SExpr::List(EcoVec::new())));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for when([]) via Poly, got {:?}",
+            result
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    #[test]
+    fn test_ltail_empty_list_ok() {
+        // tail([]) — preserves the list type including Poly.
+        let expr = SExpr::LTail(Box::new(SExpr::List(EcoVec::new())));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for tail([]) via Poly, got {:?}",
+            result
+        );
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::EmptyList)
+        );
+    }
+
+    #[test]
+    fn test_lhead_empty_list_poly_errors() {
+        // head([]) — the element type is Poly and head needs a concrete element
+        // type, so this is correctly rejected.
+        let expr = SExpr::LHead(Box::new(SExpr::List(EcoVec::new())));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_err(),
+            "Expected Err for head([]) with empty-list element type"
+        );
+    }
+
+    #[test]
+    fn test_lindex_empty_list_poly_errors() {
+        // [][0] — same: index needs a concrete element type.
+        let expr = SExpr::LIndex(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::Val(Value::Int(0))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_err(),
+            "Expected Err for [][0] with empty-list element type"
+        );
+    }
+
+    #[test]
+    fn test_default_empty_list_with_concrete_no_expected() {
+        // default([], xs) where xs : List<Int>, without outer expected type.
+        // The empty list gets Poly; unification with Int succeeds.
+        let expr = SExpr::Default(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::Var("xs".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        let result = expr.type_check(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for default([], xs) via empty-literal unification, got {:?}",
+            result
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lconcat_empty_list_with_concrete_no_expected() {
+        // concat([], [1]) without outer expected type.
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))]))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for concat([], [1]) via empty-literal unification, got {:?}",
+            result
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lappend_empty_list_no_expected() {
+        // append([], 42) without outer expected type.
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::List(EcoVec::new())),
+            Box::new(SExpr::Val(Value::Int(42))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(
+            result.is_ok(),
+            "Expected Ok for append([], 42) via empty-literal unification, got {:?}",
+            result
+        );
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    // --- LHead ---
+
+    #[test]
+    fn test_lhead_flat_int() {
+        // head([1, 2]) : Int
+        let expr = SExpr::LHead(Box::new(SExpr::List(EcoVec::from(vec![
+            SExpr::Val(Value::Int(1)),
+            SExpr::Val(Value::Int(2)),
+        ]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_lhead_flat_bool() {
+        let expr = SExpr::LHead(Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(
+            Value::Bool(true),
+        )]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    #[test]
+    fn test_lhead_nested_produces_list() {
+        // head([[1, 2], [3]]) : List<Int>
+        let expr = SExpr::LHead(Box::new(SExpr::List(EcoVec::from(vec![
+            SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(1)),
+                SExpr::Val(Value::Int(2)),
+            ])),
+            SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(3))])),
+        ]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lhead_triple_nested() {
+        // head([[[1]]]) : List<List<Int>>
+        let expr = SExpr::LHead(Box::new(SExpr::List(EcoVec::from(vec![SExpr::List(
+            EcoVec::from(vec![SExpr::List(EcoVec::from(vec![SExpr::Val(
+                Value::Int(1),
+            )]))]),
+        )]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Int))
+        );
+    }
+
+    #[test]
+    fn test_lhead_of_non_list_error() {
+        let expr = SExpr::LHead(Box::new(SExpr::Val(Value::Int(42))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lhead_of_lhead_nested() {
+        // head(head([[[ 7 ]]])) : List<Int>  then head again : Int
+        // Inner: [[[7]]] is List<List<List<Int>>>
+        // head(.) → List<List<Int>>
+        // head(.) → List<Int>
+        let innermost = SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(7))]));
+        let middle = SExpr::List(EcoVec::from(vec![innermost]));
+        let outer = SExpr::List(EcoVec::from(vec![middle]));
+        let head_once = SExpr::LHead(Box::new(outer));
+        let head_twice = SExpr::LHead(Box::new(head_once));
+        let result = head_twice.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lhead_of_lhead_of_lhead_to_scalar() {
+        // head(head(head([[[42]]]))) : Int
+        let innermost = SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(42))]));
+        let middle = SExpr::List(EcoVec::from(vec![innermost]));
+        let outer = SExpr::List(EcoVec::from(vec![middle]));
+        let h1 = SExpr::LHead(Box::new(outer));
+        let h2 = SExpr::LHead(Box::new(h1));
+        let h3 = SExpr::LHead(Box::new(h2));
+        let result = h3.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    // --- LTail ---
+
+    #[test]
+    fn test_ltail_flat() {
+        // tail([1, 2, 3]) : List<Int>
+        let expr = SExpr::LTail(Box::new(SExpr::List(EcoVec::from(vec![
+            SExpr::Val(Value::Int(1)),
+            SExpr::Val(Value::Int(2)),
+            SExpr::Val(Value::Int(3)),
+        ]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_ltail_nested() {
+        // tail([[1], [2], [3]]) : List<List<Int>>
+        let expr = SExpr::LTail(Box::new(SExpr::List(EcoVec::from(vec![
+            SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))])),
+            SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(2))])),
+            SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(3))])),
+        ]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Int))
+        );
+    }
+
+    #[test]
+    fn test_ltail_of_non_list_error() {
+        let expr = SExpr::LTail(Box::new(SExpr::Val(Value::Bool(true))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    // --- LLen ---
+
+    #[test]
+    fn test_llen_flat() {
+        // len([1, 2]) : Int
+        let expr = SExpr::LLen(Box::new(SExpr::List(EcoVec::from(vec![
+            SExpr::Val(Value::Int(1)),
+            SExpr::Val(Value::Int(2)),
+        ]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_llen_nested() {
+        // len([[1], [2, 3]]) : Int  (length of outer list = 2)
+        let expr = SExpr::LLen(Box::new(SExpr::List(EcoVec::from(vec![
+            SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))])),
+            SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(2)),
+                SExpr::Val(Value::Int(3)),
+            ])),
+        ]))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_llen_of_non_list_error() {
+        let expr = SExpr::LLen(Box::new(SExpr::Val(Value::Int(1))));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    // --- LIndex ---
+
+    #[test]
+    fn test_lindex_flat_int() {
+        // [10, 20][0] : Int
+        let expr = SExpr::LIndex(
+            Box::new(SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(10)),
+                SExpr::Val(Value::Int(20)),
+            ]))),
+            Box::new(SExpr::Val(Value::Int(0))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_lindex_nested_produces_list() {
+        // [[1, 2], [3]][0] : List<Int>
+        let expr = SExpr::LIndex(
+            Box::new(SExpr::List(EcoVec::from(vec![
+                SExpr::List(EcoVec::from(vec![
+                    SExpr::Val(Value::Int(1)),
+                    SExpr::Val(Value::Int(2)),
+                ])),
+                SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(3))])),
+            ]))),
+            Box::new(SExpr::Val(Value::Int(0))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lindex_non_int_index_error() {
+        let expr = SExpr::LIndex(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))]))),
+            Box::new(SExpr::Val(Value::Bool(true))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lindex_non_list_error() {
+        let expr = SExpr::LIndex(
+            Box::new(SExpr::Val(Value::Int(1))),
+            Box::new(SExpr::Val(Value::Int(0))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    // --- LAppend ---
+
+    #[test]
+    fn test_lappend_flat() {
+        // append([1, 2], 3) : List<Int>
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(1)),
+                SExpr::Val(Value::Int(2)),
+            ]))),
+            Box::new(SExpr::Val(Value::Int(3))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lappend_nested() {
+        // append([[1]], [2, 3]) : List<List<Int>>
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::List(EcoVec::from(
+                vec![SExpr::Val(Value::Int(1))],
+            ))]))),
+            Box::new(SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(2)),
+                SExpr::Val(Value::Int(3)),
+            ]))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Int))
+        );
+    }
+
+    #[test]
+    fn test_lappend_type_mismatch_error() {
+        // append([1, 2], "hello") — element type mismatch
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))]))),
+            Box::new(SExpr::Val(Value::Str("hello".into()))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lappend_nested_type_mismatch_error() {
+        // append([[1]], 42) — expects List<Int> element, got Int
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::List(EcoVec::from(
+                vec![SExpr::Val(Value::Int(1))],
+            ))]))),
+            Box::new(SExpr::Val(Value::Int(42))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lappend_to_non_list_error() {
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::Val(Value::Int(1))),
+            Box::new(SExpr::Val(Value::Int(2))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    // --- LConcat ---
+
+    #[test]
+    fn test_lconcat_flat() {
+        // concat([1], [2, 3]) : List<Int>
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))]))),
+            Box::new(SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(2)),
+                SExpr::Val(Value::Int(3)),
+            ]))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lconcat_nested() {
+        // concat([[1]], [[2]]) : List<List<Int>>
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::List(EcoVec::from(
+                vec![SExpr::Val(Value::Int(1))],
+            ))]))),
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::List(EcoVec::from(
+                vec![SExpr::Val(Value::Int(2))],
+            ))]))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Int))
+        );
+    }
+
+    #[test]
+    fn test_lconcat_type_mismatch_error() {
+        // concat([1], ["a"]) — different element types
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))]))),
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Str(
+                "a".into(),
+            ))]))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lconcat_nesting_mismatch_error() {
+        // concat([1], [[2]]) — List<Int> vs List<List<Int>>
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(1))]))),
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::List(EcoVec::from(
+                vec![SExpr::Val(Value::Int(2))],
+            ))]))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lconcat_non_list_error() {
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::Val(Value::Int(1))),
+            Box::new(SExpr::List(EcoVec::from(vec![SExpr::Val(Value::Int(2))]))),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    // --- Var with list types ---
+
+    #[test]
+    fn test_var_list_int() {
+        let expr = SExpr::Var("xs".into());
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_var_list_nested() {
+        let expr = SExpr::Var("xss".into());
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Bool)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Bool))
+        );
+    }
+
+    #[test]
+    fn test_lhead_of_var_nested() {
+        // head(xss) where xss : List<List<Int>> → List<Int>
+        let expr = SExpr::LHead(Box::new(SExpr::Var("xss".into())));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_lhead_of_lhead_of_var_to_scalar() {
+        // head(head(xss)) where xss : List<List<Int>> → Int
+        let expr = SExpr::LHead(Box::new(SExpr::LHead(Box::new(SExpr::Var("xss".into())))));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_ltail_of_var_nested() {
+        // tail(xss) where xss : List<List<Str>> → List<List<Str>>
+        let expr = SExpr::LTail(Box::new(SExpr::Var("xss".into())));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Str)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::list(TCType::list(TCType::Str))
+        );
+    }
+
+    #[test]
+    fn test_llen_of_var_nested() {
+        // len(xss) where xss : List<List<Int>> → Int
+        let expr = SExpr::LLen(Box::new(SExpr::Var("xss".into())));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_lindex_of_var_nested() {
+        // xss[0] where xss : List<List<Float>> → List<Float>
+        let expr = SExpr::LIndex(
+            Box::new(SExpr::Var("xss".into())),
+            Box::new(SExpr::Val(Value::Int(0))),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Float)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Float));
+    }
+
+    // --- Float type checking ---
+
+    #[test]
+    fn test_default_float_ok() {
+        // default(x, y) where x, y : Float
+        let expr = SExpr::Default(
+            Box::new(SExpr::Var("x".into())),
+            Box::new(SExpr::Var("y".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("x".into(), StreamType::Float);
+        ctx.insert("y".into(), StreamType::Float);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Float);
+    }
+
+    #[test]
+    fn test_if_float_ok() {
+        // if true then x else y where x, y : Float
+        let expr = SExpr::If(
+            Box::new(SExpr::Val(Value::Bool(true))),
+            Box::new(SExpr::Var("x".into())),
+            Box::new(SExpr::Var("y".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("x".into(), StreamType::Float);
+        ctx.insert("y".into(), StreamType::Float);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Float);
+    }
+
+    #[test]
+    fn test_default_float_type_mismatch_error() {
+        // default(x, y) where x : Float, y : Int → error
+        let expr = SExpr::Default(
+            Box::new(SExpr::Var("x".into())),
+            Box::new(SExpr::Var("y".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("x".into(), StreamType::Float);
+        ctx.insert("y".into(), StreamType::Int);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_if_float_type_mismatch_error() {
+        // if true then x else y where x : Float, y : Int → error
+        let expr = SExpr::If(
+            Box::new(SExpr::Val(Value::Bool(true))),
+            Box::new(SExpr::Var("x".into())),
+            Box::new(SExpr::Var("y".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("x".into(), StreamType::Float);
+        ctx.insert("y".into(), StreamType::Int);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    // --- List operations with non-scalar types ---
+
+    #[test]
+    fn test_default_nested_lists() {
+        // default(xs, ys) where xs, ys : List<List<Int>>
+        let expr = SExpr::Default(
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("ys".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        let ty = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int))));
+        ctx.insert("xs".into(), ty.clone());
+        ctx.insert("ys".into(), ty.clone());
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::from_stream_type(&ty)
+        );
+    }
+
+    #[test]
+    fn test_default_nested_list_type_mismatch_error() {
+        // default(xs, ys) where xs : List<Int>, ys : List<Bool>
+        let expr = SExpr::Default(
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("ys".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        ctx.insert("ys".into(), StreamType::List(Box::new(StreamType::Bool)));
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_default_nested_list_depth_mismatch_error() {
+        // default(xs, ys) where xs : List<Int>, ys : List<List<Int>>
+        let expr = SExpr::Default(
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("ys".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        ctx.insert(
+            "ys".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    // --- If on nested lists ---
+
+    #[test]
+    fn test_if_nested_lists() {
+        // if true then xs else ys where xs, ys : List<List<Int>>
+        let expr = SExpr::If(
+            Box::new(SExpr::Val(Value::Bool(true))),
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("ys".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        let ty = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int))));
+        ctx.insert("xs".into(), ty.clone());
+        ctx.insert("ys".into(), ty.clone());
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::from_stream_type(&ty)
+        );
+    }
+
+    #[test]
+    fn test_if_nested_list_branch_type_mismatch_error() {
+        // if true then xs else ys where xs : List<Int>, ys : List<Str>
+        let expr = SExpr::If(
+            Box::new(SExpr::Val(Value::Bool(true))),
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("ys".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        ctx.insert("ys".into(), StreamType::List(Box::new(StreamType::Str)));
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_if_list_vs_scalar_branch_error() {
+        // if true then xs else y where xs : List<Int>, y : Int
+        let expr = SExpr::If(
+            Box::new(SExpr::Val(Value::Bool(true))),
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("y".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        ctx.insert("y".into(), StreamType::Int);
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    // --- Init on nested lists ---
+
+    #[test]
+    fn test_init_nested_lists() {
+        // init(xs, ys) where xs, ys : List<List<Bool>>
+        let expr = SExpr::Init(
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("ys".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        let ty = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Bool))));
+        ctx.insert("xs".into(), ty.clone());
+        ctx.insert("ys".into(), ty.clone());
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::from_stream_type(&ty)
+        );
+    }
+
+    #[test]
+    fn test_init_nested_list_type_mismatch_error() {
+        // init(xs, ys) where xs : List<Int>, ys : List<Float>
+        let expr = SExpr::Init(
+            Box::new(SExpr::Var("xs".into())),
+            Box::new(SExpr::Var("ys".into())),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        ctx.insert("ys".into(), StreamType::List(Box::new(StreamType::Float)));
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_err());
+    }
+
+    // --- IsDefined on nested lists ---
+
+    #[test]
+    fn test_is_defined_nested_list() {
+        // is_defined(xss) where xss : List<List<Int>> → Bool
+        let expr = SExpr::IsDefined(Box::new(SExpr::Var("xss".into())));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    #[test]
+    fn test_is_defined_flat_list() {
+        // is_defined(xs) where xs : List<Str> → Bool
+        let expr = SExpr::IsDefined(Box::new(SExpr::Var("xs".into())));
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Str)));
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    // --- When on nested lists ---
+
+    #[test]
+    fn test_when_nested_list() {
+        // when(xss) where xss : List<List<Float>> → Bool
+        let expr = SExpr::When(Box::new(SExpr::Var("xss".into())));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Float)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    #[test]
+    fn test_when_flat_list() {
+        // when(xs) where xs : List<Int> → Bool
+        let expr = SExpr::When(Box::new(SExpr::Var("xs".into())));
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    // --- SIndex on nested lists ---
+
+    #[test]
+    fn test_sindex_on_nested_list_var() {
+        // xs[-1] (stream index) where xs : List<List<Int>> → List<List<Int>>
+        let expr = SExpr::SIndex(Box::new(SExpr::Var("xs".into())), 1);
+        let mut ctx = TypeInfo::new();
+        let ty = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int))));
+        ctx.insert("xs".into(), ty.clone());
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::from_stream_type(&ty)
+        );
+    }
+
+    // --- Compositions: head of tail, len of head, etc. ---
+
+    #[test]
+    fn test_lhead_of_ltail_nested() {
+        // head(tail(xss)) where xss : List<List<Int>> → List<Int>
+        let expr = SExpr::LHead(Box::new(SExpr::LTail(Box::new(SExpr::Var("xss".into())))));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_llen_of_lhead_nested() {
+        // len(head(xss)) where xss : List<List<Int>> → Int
+        let expr = SExpr::LLen(Box::new(SExpr::LHead(Box::new(SExpr::Var("xss".into())))));
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "xss".into(),
+            StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int)))),
+        );
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_lappend_head_to_tail_nested() {
+        // append(tail(xss), head(xss)) where xss : List<List<Int>> → List<List<Int>>
+        // tail(xss) : List<List<Int>>, head(xss) : List<Int>
+        let xss = || SExpr::Var("xss".into());
+        let expr = SExpr::LAppend(
+            Box::new(SExpr::LTail(Box::new(xss()))),
+            Box::new(SExpr::LHead(Box::new(xss()))),
+        );
+        let mut ctx = TypeInfo::new();
+        let ty = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int))));
+        ctx.insert("xss".into(), ty.clone());
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::from_stream_type(&ty)
+        );
+    }
+
+    #[test]
+    fn test_lconcat_of_ltail() {
+        // concat(tail(xs), tail(xs)) where xs : List<Int> → List<Int>
+        let xs = || SExpr::Var("xs".into());
+        let expr = SExpr::LConcat(
+            Box::new(SExpr::LTail(Box::new(xs()))),
+            Box::new(SExpr::LTail(Box::new(xs()))),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert("xs".into(), StreamType::List(Box::new(StreamType::Int)));
+        let result = expr.type_check(&mut ctx);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_basic_types_matching() {
+        // These types are explicitly handled in the implementation
+        assert!(check_value_type(TCType::Int, &Value::Int(42)).is_ok());
+        assert!(check_value_type(TCType::Str, &Value::Str("hello".into())).is_ok());
+        assert!(check_value_type(TCType::Bool, &Value::Bool(true)).is_ok());
+
+        // Testing Float and Unit types to match expected functionality
+        assert!(check_value_type(TCType::Float, &Value::Float(3.14)).is_ok());
+        assert!(check_value_type(TCType::Unit, &Value::Unit).is_ok());
+    }
+
+    #[test]
+    fn test_type_mismatches() {
+        // Int type with non-Int values
+        assert!(check_value_type(TCType::Int, &Value::Str("42".into())).is_err());
+        assert!(check_value_type(TCType::Int, &Value::Bool(true)).is_err());
+        assert!(check_value_type(TCType::Int, &Value::Float(42.0)).is_err());
+
+        // Str type with non-Str values
+        assert!(check_value_type(TCType::Str, &Value::Int(42)).is_err());
+        assert!(check_value_type(TCType::Str, &Value::Bool(true)).is_err());
+
+        // Bool type with non-Bool values
+        assert!(check_value_type(TCType::Bool, &Value::Int(0)).is_err());
+        assert!(check_value_type(TCType::Bool, &Value::Str("true".into())).is_err());
+    }
+
+    #[test]
+    fn test_empty_literal_and_unknown_placeholders_accept_values() {
+        // Empty container placeholders accept any value while the literal is still unconstrained.
+        assert!(check_value_type(TCType::EmptyList, &Value::Int(42)).is_ok());
+        assert!(check_value_type(TCType::EmptyList, &Value::Str("hello".into())).is_ok());
+        assert!(check_value_type(TCType::EmptyMap, &Value::Bool(true)).is_ok());
+        assert!(check_value_type(TCType::EmptyMap, &Value::Float(3.14)).is_ok());
+
+        let list_val = Value::List(vec![Value::Int(1), Value::Int(2)].into());
+        let map_val = Value::Map(BTreeMap::from([("x".into(), Value::Int(1))]));
+        assert!(check_value_type(TCType::EmptyList, &list_val).is_ok());
+        assert!(check_value_type(TCType::EmptyMap, &map_val).is_ok());
+
+        // Special value placeholder
+        assert!(check_value_type(TCType::Unknown, &Value::Deferred).is_ok());
+        assert!(check_value_type(TCType::Unknown, &Value::NoVal).is_ok());
+    }
+
+    #[test]
+    fn test_stream_type_validation_checks_recursive_lists() {
+        let list_type = StreamType::List(Box::new(StreamType::List(Box::new(StreamType::Int))));
+        let valid = Value::List(
+            vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)].into()),
+                Value::List(vec![Value::Int(3)].into()),
+            ]
+            .into(),
+        );
+        let invalid = Value::List(
+            vec![
+                Value::List(vec![Value::Int(1)].into()),
+                Value::List(vec![Value::Str("wrong".into())].into()),
+            ]
+            .into(),
+        );
+
+        assert!(check_value_stream_type(&list_type, &valid).is_ok());
+        assert!(check_value_stream_type(&list_type, &invalid).is_err());
+    }
+
+    #[test]
+    fn test_list_type_matching() {
+        // Empty list
+        let empty_list = Value::List(vec![].into());
+        assert!(check_value_type(TCType::list(TCType::Int), &empty_list).is_ok());
+        assert!(check_value_type(TCType::list(TCType::Str), &empty_list).is_ok());
+        assert!(check_value_type(TCType::list(TCType::Bool), &empty_list).is_ok());
+
+        // Homogeneous lists
+        let int_list = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into());
+        assert!(check_value_type(TCType::list(TCType::Int), &int_list).is_ok());
+        assert!(check_value_type(TCType::list(TCType::Str), &int_list).is_err());
+
+        let str_list = Value::List(
+            vec![
+                Value::Str("a".into()),
+                Value::Str("b".into()),
+                Value::Str("c".into()),
+            ]
+            .into(),
+        );
+        assert!(check_value_type(TCType::list(TCType::Str), &str_list).is_ok());
+        assert!(check_value_type(TCType::list(TCType::Int), &str_list).is_err());
+
+        // Mixed list (should fail for any specific element type)
+        let mixed_list =
+            Value::List(vec![Value::Int(1), Value::Str("a".into()), Value::Bool(true)].into());
+        assert!(check_value_type(TCType::list(TCType::Int), &mixed_list).is_err());
+        assert!(check_value_type(TCType::list(TCType::Str), &mixed_list).is_err());
+        assert!(check_value_type(TCType::list(TCType::Bool), &mixed_list).is_err());
+    }
+
+    #[test]
+    fn test_nested_list_type_matching() {
+        // List of List of Int
+        let nested_int_list = Value::List(
+            vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)].into()),
+                Value::List(vec![Value::Int(3), Value::Int(4)].into()),
+            ]
+            .into(),
+        );
+
+        let nested_int_type = TCType::list(TCType::list(TCType::Int));
+        assert!(check_value_type(nested_int_type.clone(), &nested_int_list).is_ok());
+
+        // Nested list with type errors
+        let nested_mixed_list = Value::List(
+            vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)].into()),
+                Value::List(vec![Value::Str("a".into())].into()),
+            ]
+            .into(),
+        );
+        assert!(check_value_type(nested_int_type, &nested_mixed_list).is_err());
+    }
+
+    #[test]
+    fn test_deeply_nested_list() {
+        // Triple nested list
+        let triple_nested_list = Value::List(
+            vec![Value::List(
+                vec![Value::List(
+                    vec![Value::Bool(true), Value::Bool(false)].into(),
+                )]
+                .into(),
+            )]
+            .into(),
+        );
+
+        let triple_nested_type = TCType::list(TCType::list(TCType::list(TCType::Bool)));
+        assert!(check_value_type(triple_nested_type, &triple_nested_list).is_ok());
+    }
+
+    #[test]
+    fn test_list_depth_mismatches() {
+        // A list of integers (depth 1)
+        let simple_list = Value::List(vec![Value::Int(1), Value::Int(2)].into());
+
+        // A list of lists of integers (depth 2)
+        let nested_list = Value::List(
+            vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)].into()),
+                Value::List(vec![Value::Int(3), Value::Int(4)].into()),
+            ]
+            .into(),
+        );
+
+        // Test: Cannot use a simple list where a nested list is expected
+        assert!(check_value_type(TCType::list(TCType::list(TCType::Int)), &simple_list).is_err());
+
+        // Test: Cannot use a nested list where a simple list is expected
+        assert!(check_value_type(TCType::list(TCType::Int), &nested_list).is_err());
+
+        // Test: Make sure the error message mentions something about a type mismatch
+        let result = check_value_type(TCType::list(TCType::list(TCType::Int)), &simple_list);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("Type mismatch"));
+    }
+
+    #[test]
+    fn test_special_values() {
+        // These should fail since they're not the expected concrete types
+        assert!(check_value_type(TCType::Int, &Value::Deferred).is_err());
+        assert!(check_value_type(TCType::Str, &Value::NoVal).is_err());
+        assert!(check_value_type(TCType::list(TCType::Int), &Value::Deferred).is_err());
+    }
+
+    #[test]
+    fn test_error_messages() {
+        // Test that error messages contain useful information
+        let result = check_value_type(TCType::Int, &Value::Str("42".into()));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Type mismatch"));
+
+        // Test error propagation in nested lists
+        let str_in_int_list = Value::List(
+            vec![
+                Value::Int(1),
+                Value::Str("not an int".into()), // This will cause error
+                Value::Int(3),
+            ]
+            .into(),
+        );
+        let result = check_value_type(TCType::list(TCType::Int), &str_in_int_list);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Type mismatch"));
+    }
+
+    // These tests validate boundary cases
+    #[test]
+    fn test_boundary_cases() {
+        // Non-list value with list type
+        assert!(check_value_type(TCType::list(TCType::Int), &Value::Int(42)).is_err());
+
+        // Trying to treat a non-primitive as primitive
+        let list_val = Value::List(vec![Value::Int(1), Value::Int(2)].into());
+        assert!(check_value_type(TCType::Int, &list_val).is_err());
+
+        // Empty nested list
+        let empty_nested = Value::List(vec![Value::List(vec![].into())].into());
+        assert!(check_value_type(TCType::list(TCType::list(TCType::Int)), &empty_nested).is_ok());
+    }
+
+    #[test]
+    fn test_extract_value_type_primitives() {
+        // Test primitives
+        assert_eq!(extract_value_type(Value::Int(42)), TCType::Int);
+        assert_eq!(extract_value_type(Value::Str("hello".into())), TCType::Str);
+        assert_eq!(extract_value_type(Value::Bool(true)), TCType::Bool);
+        assert_eq!(extract_value_type(Value::Float(3.14)), TCType::Float);
+        assert_eq!(extract_value_type(Value::Unit), TCType::Unit);
+    }
+
+    #[test]
+    fn test_extract_value_type_list() {
+        // Test list type
+        let list_value = Value::List(vec![Value::Int(1), Value::Int(2)].into());
+        match extract_value_type(list_value) {
+            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
+                // Expect EmptyList as default inner type
+                assert_eq!(args[0], TCType::EmptyList);
+            }
+            _ => panic!("Expected List type for list value"),
+        }
+    }
+
+    #[test]
+    fn test_extract_value_type_special_values() {
+        assert_eq!(
+            extract_value_type(Value::Map(Default::default())),
+            TCType::map(TCType::EmptyMap)
+        );
+        assert_eq!(extract_value_type(Value::Deferred), TCType::Unknown);
+        assert_eq!(extract_value_type(Value::NoVal), TCType::Unknown);
+    }
+
+    #[test]
+    fn test_map_value_type_matching() {
+        let map = Value::Map(BTreeMap::from([
+            ("x".into(), Value::Int(1)),
+            ("y".into(), Value::Int(2)),
+        ]));
+        assert!(check_value_type(TCType::map(TCType::Int), &map).is_ok());
+        assert!(check_value_type(TCType::map(TCType::Str), &map).is_err());
+
+        let nested = Value::Map(BTreeMap::from([(
+            "xs".into(),
+            Value::List(vec![Value::Bool(true)].into()),
+        )]));
+        assert!(check_value_type(TCType::map(TCType::list(TCType::Bool)), &nested).is_ok());
+    }
+
+    #[test]
+    fn test_sexpr_map_literal_and_get() {
+        let expr = SExpr::Map(BTreeMap::from([
+            ("x".into(), SExpr::Val(Value::Int(1))),
+            ("y".into(), SExpr::Val(Value::Int(2))),
+        ]));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::map(TCType::Int));
+
+        let get = SExpr::MGet(Box::new(expr), "x".into());
+        let result = get.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Int);
+    }
+
+    #[test]
+    fn test_sexpr_map_insert_remove_and_has_key() {
+        let empty = SExpr::Map(BTreeMap::new());
+        let expected = StreamType::Map(Box::new(StreamType::Bool));
+        let mut errs = vec![];
+        let inserted = SExpr::MInsert(
+            Box::new(empty.clone()),
+            "flag".into(),
+            Box::new(SExpr::Val(Value::Bool(true))),
+        );
+        let result = inserted.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", errs);
+        assert_eq!(extract_type(&result.unwrap()), TCType::map(TCType::Bool));
+
+        let removed = SExpr::MRemove(Box::new(empty.clone()), "flag".into());
+        let mut errs = vec![];
+        let result = removed.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", errs);
+        assert_eq!(extract_type(&result.unwrap()), TCType::map(TCType::Bool));
+
+        let has_key = SExpr::MHasKey(Box::new(empty), "flag".into());
+        let mut errs = vec![];
+        let result = has_key.type_check_raw(Some(&expected), &mut TypeInfo::new(), &mut errs);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", errs);
+        assert_eq!(extract_type(&result.unwrap()), TCType::Bool);
+    }
+
+    #[test]
+    fn test_extract_and_check_compatibility() {
+        // Extract a type from a value, then check the same value against that type
+        let int_value = Value::Int(42);
+        let extracted_type = extract_value_type(int_value.clone());
+        assert_eq!(extracted_type, TCType::Int);
+        assert!(check_value_type(extracted_type, &int_value).is_ok());
+
+        // Same for string
+        let str_value = Value::Str("test".into());
+        let extracted_type = extract_value_type(str_value.clone());
+        assert_eq!(extracted_type, TCType::Str);
+        assert!(check_value_type(extracted_type, &str_value).is_ok());
+
+        // Same for list
+        let list_value = Value::List(vec![Value::Bool(true), Value::Bool(false)].into());
+        let extracted_type = extract_value_type(list_value.clone());
+        // List extraction uses EmptyList inner type, so we need to create a matching type for check
+        let list_type = TCType::list(TCType::EmptyList);
+        assert!(matches!(
+            extracted_type,
+            TCType::Construct(TCTypeConstructor::List, _)
+        ));
+        assert!(check_value_type(list_type, &list_value).is_ok());
     }
 }

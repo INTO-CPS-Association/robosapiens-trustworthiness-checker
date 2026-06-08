@@ -275,6 +275,8 @@ StreamTyp: StreamType = {
     "Float" => StreamType::Float,
     "Bool" => StreamType::Bool,
     "Unit" => StreamType::Unit,
+    "List" "<" <inner: StreamTyp> ">" => StreamType::List(Box::new(inner)),
+    "Map" "<" <inner: StreamTyp> ">" => StreamType::Map(Box::new(inner)),
 }
 
 TypeAnno: StreamType = {

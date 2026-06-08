@@ -1,0 +1,10 @@
+in x: Int
+in flag: Bool
+
+out nested_list: List<List<Int>>
+out nested_map: Map<List<Bool>>
+out value: Int
+
+nested_list = List(List(x, x + 1))
+nested_map = Map("flags": List(flag, !flag))
+value = x + 1
