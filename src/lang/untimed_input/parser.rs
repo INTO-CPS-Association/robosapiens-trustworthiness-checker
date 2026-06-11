@@ -125,6 +125,25 @@ mod tests {
     }
 
     #[test]
+    fn test_json_object_literal_assignments() {
+        let expected = Value::Map(BTreeMap::from([
+            ("x".into(), Value::Int(10)),
+            ("y".into(), Value::Int(20)),
+        ]));
+        assert_eq!(
+            value_assignment(&mut r#"payload = {"x": 10, "y": 20}"#),
+            Ok(("payload".into(), expected.clone()))
+        );
+        assert_eq!(
+            untimed_input_file(&mut r#"0: payload = {"x": 10, "y": 20}"#),
+            Ok(BTreeMap::from([(
+                0,
+                BTreeMap::from([("payload".into(), expected)])
+            )]))
+        );
+    }
+
+    #[test]
     fn test_float_assignments() {
         assert_eq!(
             presult_to_string(&value_assignment(&mut "y = 3.4")),

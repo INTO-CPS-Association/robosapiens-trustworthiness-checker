@@ -195,9 +195,12 @@ pub enum SExpr {
     LTail(Box<Self>),             // List tail -- get all but first element of list
     LLen(Box<Self>),              // List length -- returns length of the list
 
-    // Map and map expressions
-    Map(BTreeMap<EcoString, Self>), // Map from String to SExpr
-    MGet(Box<Self>, EcoString),     // Get from map
+    // Map and struct expressions
+    Map(BTreeMap<EcoString, Self>),    // Map from String to SExpr
+    Struct(BTreeMap<EcoString, Self>), // Struct record from field name to SExpr
+    ObjectLiteral(BTreeMap<EcoString, Self>), // JSON-style object literal resolved by expected type
+    MGet(Box<Self>, EcoString),        // Get from map or struct
+    SGet(Box<Self>, EcoString),        // Dot field access for typed structs only
     MInsert(Box<Self>, EcoString, Box<Self>), // Insert into map -- First is map, second is key, third is value
     MRemove(Box<Self>, EcoString),            // Remove from map -- First is map, second is key
     MHasKey(Box<Self>, EcoString),            // Check if map has key -- First is map, second is key
@@ -274,7 +277,7 @@ impl SExpr {
                 }
                 inputs
             }
-            Map(map) => {
+            Map(map) | Struct(map) | ObjectLiteral(map) => {
                 let mut inputs = vec![];
                 for (_, e) in map {
                     inputs.extend(e.inputs());
@@ -287,6 +290,7 @@ impl SExpr {
                 inputs
             }
             MGet(e, _)
+            | SGet(e, _)
             | MInsert(e, _, _)
             | MRemove(e, _)
             | MHasKey(e, _)
@@ -441,7 +445,24 @@ impl DsrvSpecification {
                     });
                     SExpr::Map(map)
                 }
+                SExpr::Struct(map) => {
+                    let m = map.clone(); // TODO: Delete when no
+                    // longer cloning and just iter() instead of into_iter()...
+                    m.into_iter().for_each(|(_, v)| {
+                        traverse_expr(v, vars);
+                    });
+                    SExpr::Struct(map)
+                }
+                SExpr::ObjectLiteral(map) => {
+                    let m = map.clone(); // TODO: Delete when no
+                    // longer cloning and just iter() instead of into_iter()...
+                    m.into_iter().for_each(|(_, v)| {
+                        traverse_expr(v, vars);
+                    });
+                    SExpr::ObjectLiteral(map)
+                }
                 SExpr::MGet(map, k) => SExpr::MGet(Box::new(traverse_expr(*map.clone(), vars)), k),
+                SExpr::SGet(st, k) => SExpr::SGet(Box::new(traverse_expr(*st.clone(), vars)), k),
                 SExpr::MInsert(map, k, v) => SExpr::MInsert(
                     Box::new(traverse_expr(*map, vars)),
                     k,
@@ -600,7 +621,18 @@ impl Display for SExpr {
                     map.iter().map(|(k, v)| format!("{:?}: {}", k, v)).collect();
                 write!(f, "Map({})", map_str.join(", "))
             }
+            Struct(map) => {
+                let map_str: Vec<String> =
+                    map.iter().map(|(k, v)| format!("{:?}: {}", k, v)).collect();
+                write!(f, "Struct({})", map_str.join(", "))
+            }
+            ObjectLiteral(map) => {
+                let map_str: Vec<String> =
+                    map.iter().map(|(k, v)| format!("{:?}: {}", k, v)).collect();
+                write!(f, "{{{}}}", map_str.join(", "))
+            }
             MGet(map, k) => write!(f, "Map.get({}, {:?})", map, k),
+            SGet(st, k) => write!(f, "{}.{}", st, k),
             MInsert(map, k, v) => write!(f, "Map.insert({}, {:?}, {})", map, k, v),
             MRemove(map, k) => write!(f, "Map.remove({}, {:?})", map, k),
             MHasKey(map, k) => write!(f, "Map.has_key({}, {:?})", map, k),

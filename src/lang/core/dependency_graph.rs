@@ -204,7 +204,7 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
                 vec.iter()
                     .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node, current_idx));
             }
-            SExpr::Map(m) => {
+            SExpr::Map(m) | SExpr::Struct(m) | SExpr::ObjectLiteral(m) => {
                 m.iter()
                     .for_each(|(_, v)| deps_impl(v, steps, map, current_node, current_idx));
             }
@@ -214,6 +214,7 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
             | SExpr::LHead(sexpr)
             | SExpr::LTail(sexpr)
             | SExpr::MGet(sexpr, _)
+            | SExpr::SGet(sexpr, _)
             | SExpr::MRemove(sexpr, _)
             | SExpr::MHasKey(sexpr, _)
             | SExpr::LLen(sexpr)

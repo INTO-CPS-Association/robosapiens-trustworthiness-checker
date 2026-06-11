@@ -1,4 +1,6 @@
+use contracts::requires;
 use ecow::{EcoString, EcoVec};
+use itertools::Itertools;
 
 use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SBinOp, SExpr, StrBinOp};
 use crate::core::{StreamData, StreamType, StreamTypeAscription};
@@ -8,22 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
 
-/// Type constructors used by the type-checker internal representation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TCTypeConstructor {
-    List,
-    Map,
-}
-
-impl std::fmt::Display for TCTypeConstructor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TCTypeConstructor::List => write!(f, "List"),
-            TCTypeConstructor::Map => write!(f, "Map"),
-        }
-    }
-}
-
 /// Type-checker–internal type representation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TCType {
@@ -32,9 +18,10 @@ pub enum TCType {
     Str,
     Bool,
     Unit,
-    /// General application of a type constructor to type arguments. Recursive
-    /// data types such as `List<List<Int>>` are represented uniformly here.
-    Construct(TCTypeConstructor, Vec<TCType>),
+    Map(Box<TCType>),
+    List(Box<TCType>),
+    /// Struct specified as a list of field/type pairs and whether extra fields are allowed.
+    Struct(EcoVec<(EcoString, TCType)>, bool),
     /// Placeholder used for empty list literals whose element type is not yet known.
     EmptyList,
     /// Placeholder used for empty map literals whose value type is not yet known.
@@ -44,24 +31,24 @@ pub enum TCType {
 }
 
 impl TCType {
-    pub fn list(inner: TCType) -> Self {
-        TCType::Construct(TCTypeConstructor::List, vec![inner])
+    pub fn list(element_type: TCType) -> Self {
+        TCType::List(Box::new(element_type))
     }
 
-    pub fn map(value: TCType) -> Self {
-        TCType::Construct(TCTypeConstructor::Map, vec![value])
+    pub fn map(value_type: TCType) -> Self {
+        TCType::Map(Box::new(value_type))
     }
 
     pub fn list_element_type(&self) -> Option<&TCType> {
         match self {
-            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => args.first(),
+            TCType::List(typ) => Some(typ),
             _ => None,
         }
     }
 
     pub fn map_value_type(&self) -> Option<&TCType> {
         match self {
-            TCType::Construct(TCTypeConstructor::Map, args) if args.len() == 1 => args.first(),
+            TCType::Map(typ) => Some(typ),
             _ => None,
         }
     }
@@ -74,8 +61,15 @@ impl TCType {
             StreamType::Str => TCType::Str,
             StreamType::Bool => TCType::Bool,
             StreamType::Unit => TCType::Unit,
-            StreamType::List(inner) => TCType::list(TCType::from_stream_type(inner)),
-            StreamType::Map(inner) => TCType::map(TCType::from_stream_type(inner)),
+            StreamType::List(inner) => TCType::List(Box::new(TCType::from_stream_type(inner))),
+            StreamType::Map(inner) => TCType::Map(Box::new(TCType::from_stream_type(inner))),
+            StreamType::Struct(inner, allow_extra) => TCType::Struct(
+                inner
+                    .iter()
+                    .map(|(n, t)| (n.clone(), TCType::from_stream_type(t)))
+                    .collect(),
+                *allow_extra,
+            ),
         }
     }
 
@@ -87,15 +81,24 @@ impl TCType {
             TCType::Str => Some(StreamType::Str),
             TCType::Bool => Some(StreamType::Bool),
             TCType::Unit => Some(StreamType::Unit),
-            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => args[0]
+            TCType::List(inner) => inner
                 .to_stream_type()
-                .map(|i| StreamType::List(Box::new(i))),
-            TCType::Construct(TCTypeConstructor::Map, args) if args.len() == 1 => args[0]
-                .to_stream_type()
-                .map(|i| StreamType::Map(Box::new(i))),
-            TCType::Construct(_, _) | TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
-                None
-            }
+                .map(|x| StreamType::List(Box::new(x))),
+            TCType::Map(inner) => inner.to_stream_type().map(|x| StreamType::Map(Box::new(x))),
+            TCType::Struct(inner, allow_extra) => inner
+                .iter()
+                .map(|(k, v)| v.to_stream_type().map(|v| (k.into(), v)))
+                .fold_options(
+                    StreamType::Struct(EcoVec::new(), *allow_extra),
+                    |acc, (k, v)| match acc {
+                        StreamType::Struct(mut inner, allow_extra) => {
+                            inner.push((k, v));
+                            StreamType::Struct(inner, allow_extra)
+                        }
+                        _ => unreachable!(),
+                    },
+                ),
+            TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => None,
         }
     }
 }
@@ -108,13 +111,17 @@ impl std::fmt::Display for TCType {
             TCType::Str => write!(f, "Str"),
             TCType::Bool => write!(f, "Bool"),
             TCType::Unit => write!(f, "Unit"),
-            TCType::Construct(constructor, args) => {
-                let args = args
+            TCType::List(typ) => write!(f, "List({})", typ),
+            TCType::Map(typ) => write!(f, "Map({})", typ),
+            TCType::Struct(inner, allow_extra) => {
+                let mut fields = inner
                     .iter()
-                    .map(|arg| arg.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "{}<{}>", constructor, args)
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>();
+                if *allow_extra {
+                    fields.push("...".into());
+                }
+                write!(f, "Struct<{}>", fields.join(", "))
             }
             TCType::EmptyList => write!(f, "EmptyList"),
             TCType::EmptyMap => write!(f, "EmptyMap"),
@@ -196,6 +203,7 @@ pub fn extract_type(expr: &SExprTE) -> TCType {
         SExprTE::Unit(_) => TCType::Unit,
         SExprTE::List(tl) => tl.list_tc_type(),
         SExprTE::Map(tm) => tm.map_tc_type(),
+        SExprTE::Struct(st) => TCType::Struct(st.typ_map.clone(), st.allow_extra_fields),
     }
 }
 
@@ -209,6 +217,7 @@ impl Display for SExprTE {
             SExprTE::Unit(e) => write!(f, "{}", e),
             SExprTE::List(e) => write!(f, "{:?}", e),
             SExprTE::Map(e) => write!(f, "{:?}", e),
+            SExprTE::Struct(e) => write!(f, "{:?}", e),
         }
     }
 }
@@ -244,6 +253,7 @@ impl Display for SExprInt {
             LHeadList(list) => write!(f, "head({:?})", list),
             LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
         }
     }
 }
@@ -281,6 +291,7 @@ impl Display for SExprFloat {
             LHeadList(list) => write!(f, "head({:?})", list),
             LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
         }
     }
 }
@@ -309,6 +320,7 @@ impl Display for SExprStr {
             LHeadList(list) => write!(f, "head({:?})", list),
             LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
         }
     }
 }
@@ -336,6 +348,7 @@ impl Display for SExprUnit {
             LHeadList(list) => write!(f, "head({:?})", list),
             LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
         }
     }
 }
@@ -370,6 +383,7 @@ impl Display for SExprBool {
             LHeadList(list) => write!(f, "head({:?})", list),
             LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
             MHasKeyMap(map, key) => write!(f, "Map.has_key({:?}, {:?})", map, key),
 
             Defer(e, _, _) => write!(f, "defer({}: Bool)", e),
@@ -556,8 +570,9 @@ pub enum SExprBool {
     LHeadList(TypedListExpr),
     LIndexList(TypedListExpr, Box<SExprInt>),
 
-    // Map operations producing Bool
+    // Map/struct operations producing Bool
     MGetMap(TypedMapExpr, EcoString),
+    SGetStruct(TypedStructExpr, EcoString),
     MHasKeyMap(TypedMapExpr, EcoString),
 
     // Deferred and dynamic expressions
@@ -603,8 +618,9 @@ pub enum SExprInt {
     LHeadList(TypedListExpr),
     LIndexList(TypedListExpr, Box<SExprInt>),
 
-    // Map value extraction producing Int
+    // Map/struct value extraction producing Int
     MGetMap(TypedMapExpr, EcoString),
+    SGetStruct(TypedStructExpr, EcoString),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -646,8 +662,9 @@ pub enum SExprFloat {
     LHeadList(TypedListExpr),
     LIndexList(TypedListExpr, Box<SExprInt>),
 
-    // Map value extraction producing Float
+    // Map/struct value extraction producing Float
     MGetMap(TypedMapExpr, EcoString),
+    SGetStruct(TypedStructExpr, EcoString),
 }
 
 // Stream expressions - now with types
@@ -682,8 +699,9 @@ pub enum SExprUnit {
     LHeadList(TypedListExpr),
     LIndexList(TypedListExpr, Box<SExprInt>),
 
-    // Map value extraction producing Unit
+    // Map/struct value extraction producing Unit
     MGetMap(TypedMapExpr, EcoString),
+    SGetStruct(TypedStructExpr, EcoString),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -719,8 +737,9 @@ pub enum SExprStr {
     LHeadList(TypedListExpr),
     LIndexList(TypedListExpr, Box<SExprInt>),
 
-    // Map value extraction producing Str
+    // Map/struct value extraction producing Str
     MGetMap(TypedMapExpr, EcoString),
+    SGetStruct(TypedStructExpr, EcoString),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -740,72 +759,70 @@ pub enum TypedListExprKind {
     LHeadList(Box<TypedListExpr>),
     LIndexList(Box<TypedListExpr>, Box<SExprInt>),
     MGetMap(Box<TypedMapExpr>, EcoString),
+    SGetStruct(Box<TypedStructExpr>, EcoString),
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct TypedListExpr {
-    /// Full parametric type of this list expression, e.g. `List<Int>` or
-    /// `List<List<Bool>>`.
-    pub typ: TCType,
+    /// Element type of this list expression, e.g. `Int` for `List<Int>`.
+    pub element_type: TCType,
     pub kind: TypedListExprKind,
 }
 
 impl TypedListExpr {
     pub fn list_tc_type(&self) -> TCType {
-        self.typ.clone()
+        TCType::List(Box::new(self.element_type.clone()))
     }
 
     pub fn element_type(&self) -> &TCType {
-        self.typ
-            .list_element_type()
-            .expect("TypedListExpr must carry a List<T> type")
+        &self.element_type
     }
 
     pub fn typed_default(&self, other: &TypedListExpr) -> TypedListExpr {
         TypedListExpr {
-            typ: self.typ.clone(),
+            element_type: self.element_type.clone(),
             kind: TypedListExprKind::Default(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
     pub fn typed_if(&self, cond: Box<SExprBool>, other: &TypedListExpr) -> TypedListExpr {
         TypedListExpr {
-            typ: self.typ.clone(),
+            element_type: self.element_type.clone(),
             kind: TypedListExprKind::If(cond, Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
     pub fn typed_init(&self, other: &TypedListExpr) -> TypedListExpr {
         TypedListExpr {
-            typ: self.typ.clone(),
+            element_type: self.element_type.clone(),
             kind: TypedListExprKind::Init(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
     pub fn typed_tail(&self) -> TypedListExpr {
         TypedListExpr {
-            typ: self.typ.clone(),
+            element_type: self.element_type.clone(),
             kind: TypedListExprKind::LTail(Box::new(self.clone())),
         }
     }
 
     pub fn typed_sindex(&self, idx: u64) -> TypedListExpr {
         TypedListExpr {
-            typ: self.typ.clone(),
+            element_type: self.element_type.clone(),
             kind: TypedListExprKind::SIndex(Box::new(self.clone()), idx),
         }
     }
 
     pub fn typed_concat(&self, other: &TypedListExpr) -> TypedListExpr {
         TypedListExpr {
-            typ: self.typ.clone(),
+            element_type: self.element_type.clone(),
             kind: TypedListExprKind::LConcat(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
     pub fn typed_append(&self, elem: Box<SExprTE>) -> TypedListExpr {
         TypedListExpr {
-            typ: self.typ.clone(),
+            element_type: self.element_type.clone(),
             kind: TypedListExprKind::LAppend(Box::new(self.clone()), elem),
         }
     }
@@ -825,65 +842,63 @@ pub enum TypedMapExprKind {
     MInsert(Box<TypedMapExpr>, EcoString, Box<SExprTE>),
     MRemove(Box<TypedMapExpr>, EcoString),
     MGetMap(Box<TypedMapExpr>, EcoString),
+    SGetStruct(Box<TypedStructExpr>, EcoString),
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct TypedMapExpr {
-    /// Full parametric type of this map expression. Keys are strings, and the
-    /// single type argument represents the value type, e.g. `Map<Int>`.
-    pub typ: TCType,
+    /// Value type of this map expression. Keys are strings.
+    pub value_type: TCType,
     pub kind: TypedMapExprKind,
 }
 
 impl TypedMapExpr {
     pub fn map_tc_type(&self) -> TCType {
-        self.typ.clone()
+        TCType::Map(Box::new(self.value_type.clone()))
     }
 
     pub fn value_type(&self) -> &TCType {
-        self.typ
-            .map_value_type()
-            .expect("TypedMapExpr must carry a Map<T> type")
+        &self.value_type
     }
 
     pub fn typed_default(&self, other: &TypedMapExpr) -> TypedMapExpr {
         TypedMapExpr {
-            typ: self.typ.clone(),
+            value_type: self.value_type.clone(),
             kind: TypedMapExprKind::Default(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
     pub fn typed_if(&self, cond: Box<SExprBool>, other: &TypedMapExpr) -> TypedMapExpr {
         TypedMapExpr {
-            typ: self.typ.clone(),
+            value_type: self.value_type.clone(),
             kind: TypedMapExprKind::If(cond, Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
     pub fn typed_init(&self, other: &TypedMapExpr) -> TypedMapExpr {
         TypedMapExpr {
-            typ: self.typ.clone(),
+            value_type: self.value_type.clone(),
             kind: TypedMapExprKind::Init(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
     pub fn typed_sindex(&self, idx: u64) -> TypedMapExpr {
         TypedMapExpr {
-            typ: self.typ.clone(),
+            value_type: self.value_type.clone(),
             kind: TypedMapExprKind::SIndex(Box::new(self.clone()), idx),
         }
     }
 
     pub fn typed_insert(&self, key: EcoString, value: Box<SExprTE>) -> TypedMapExpr {
         TypedMapExpr {
-            typ: self.typ.clone(),
+            value_type: self.value_type.clone(),
             kind: TypedMapExprKind::MInsert(Box::new(self.clone()), key, value),
         }
     }
 
     pub fn typed_remove(&self, key: EcoString) -> TypedMapExpr {
         TypedMapExpr {
-            typ: self.typ.clone(),
+            value_type: self.value_type.clone(),
             kind: TypedMapExprKind::MRemove(Box::new(self.clone()), key),
         }
     }
@@ -909,11 +924,14 @@ fn check_value_type_ref(typ: &TCType, value: &Value) -> Result<(), String> {
                 .iter()
                 .try_for_each(|val| check_value_type_ref(inner_type, val))
         }
-        (typ, Value::Map(values)) if typ.map_value_type().is_some() => {
-            let value_type = typ.map_value_type().expect("checked above");
-            values
-                .values()
-                .try_for_each(|val| check_value_type_ref(value_type, val))
+        (TCType::Map(value_type), Value::Map(values)) => values
+            .values()
+            .try_for_each(|val| check_value_type_ref(value_type, val)),
+        (TCType::Struct(struct_types, _), Value::Map(values)) => {
+            struct_types.iter().try_for_each(|(k, v)| {
+                let k: &str = k.as_str();
+                check_value_type_ref(v, values.get(k).unwrap_or(&Value::Unit))
+            })
         }
         (typ, value) => Err(format!("Type mismatch between {} and {}", typ, value)),
     }
@@ -935,8 +953,21 @@ pub fn extract_value_type(value: Value) -> TCType {
         Value::Bool(_) => TCType::Bool,
         Value::Float(_) => TCType::Float,
         Value::Unit => TCType::Unit,
-        Value::List(_) => TCType::list(TCType::EmptyList),
-        Value::Map(_) => TCType::map(TCType::EmptyMap),
+        Value::List(values) => {
+            if values.is_empty() {
+                TCType::EmptyList
+            } else {
+                TCType::List(Box::new(extract_value_type(values[0].clone())))
+            }
+        }
+        Value::Map(values) => {
+            if values.is_empty() {
+                TCType::EmptyMap
+            } else {
+                let first_key = values.keys().next().unwrap();
+                TCType::Map(Box::new(extract_value_type(values[first_key].clone())))
+            }
+        }
         Value::Deferred => TCType::Unknown,
         Value::NoVal => TCType::Unknown,
     }
@@ -1016,6 +1047,84 @@ impl TypedDataList {
 
 impl StreamData for TypedDataList {}
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum TypedStructExprKind {
+    Var(VarName),
+    Literal(Vec<(EcoString, SExprTE)>),
+    Default(Box<TypedStructExpr>, Box<TypedStructExpr>),
+    If(Box<SExprBool>, Box<TypedStructExpr>, Box<TypedStructExpr>),
+    Init(Box<TypedStructExpr>, Box<TypedStructExpr>),
+    SIndex(Box<TypedStructExpr>, u64),
+    Defer(Box<SExprStr>, TypeInfo),
+    Dynamic(Box<SExprStr>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    SUpdate(Box<TypedStructExpr>, EcoString, Box<SExprTE>),
+    SGet(Box<TypedStructExpr>, EcoString),
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedStructExpr {
+    /// Type map for the struct fields
+    pub typ_map: EcoVec<(EcoString, TCType)>,
+    pub allow_extra_fields: bool,
+    pub kind: TypedStructExprKind,
+}
+
+impl TypedStructExpr {
+    #[requires(self.typ_map == other.typ_map)]
+    pub fn typed_default(&self, other: &TypedStructExpr) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::Default(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_sindex(&self, index: u64) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::SIndex(Box::new(self.clone()), index),
+        }
+    }
+
+    #[requires(self.typ_map == other.typ_map)]
+    pub fn typed_if(&self, cond: Box<SExprBool>, other: &TypedStructExpr) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::If(cond, Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    #[requires(self.typ_map == other.typ_map)]
+    pub fn typed_init(&self, other: &TypedStructExpr) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::Init(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    #[requires(self.typ_map.iter().any(|(k, _)| *k == key))]
+    pub fn typed_update(&self, key: EcoString, value: Box<SExprTE>) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::SUpdate(Box::new(self.clone()), key, value),
+        }
+    }
+
+    #[requires(self.typ_map.iter().any(|(k, _)| *k == key))]
+    pub fn typed_get(&self, key: EcoString) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::SGet(Box::new(self.clone()), key),
+        }
+    }
+}
+
 // Stream expression typed enum
 #[derive(Debug, PartialEq, Clone)]
 pub enum SExprTE {
@@ -1026,6 +1135,7 @@ pub enum SExprTE {
     Unit(SExprUnit),
     List(TypedListExpr),
     Map(TypedMapExpr),
+    Struct(TypedStructExpr),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -1159,7 +1269,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
                         Some(StreamType::List(inner)) => TCType::from_stream_type(inner.as_ref()),
                         _ => TCType::EmptyList,
                     };
-                    Ok(SExprTE::List(make_list_literal(vec![], &inner)))
+                    Ok(SExprTE::List(make_list_literal(vec![], inner)))
                 } else {
                     // Derive inner expected type from expected (if it is a list type)
                     let inner_expected = match expected {
@@ -1186,7 +1296,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
                         typed_elems.push(elem_te);
                     }
 
-                    Ok(SExprTE::List(make_list_literal(typed_elems, &first_type)))
+                    Ok(SExprTE::List(make_list_literal(typed_elems, first_type)))
                 }
             }
             Value::Map(entries) => type_check_map_literal(
@@ -1348,8 +1458,8 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
                         let t2 = tl2.element_type().clone();
                         match unify_element_types(&t1, &t2) {
                             Some(resolved) => {
-                                let tl1 = coerce_empty_list(tl1, &resolved);
-                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                let tl1 = coerce_empty_list(tl1, resolved.clone());
+                                let tl2 = coerce_empty_list(tl2, resolved);
                                 Ok(SExprTE::List(tl1.typed_default(&tl2)))
                             }
                             None => {
@@ -1366,8 +1476,8 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
                         let t2 = tm2.value_type().clone();
                         match unify_element_types(&t1, &t2) {
                             Some(resolved) => {
-                                let tm1 = coerce_empty_map(tm1, &resolved);
-                                let tm2 = coerce_empty_map(tm2, &resolved);
+                                let tm1 = coerce_empty_map(tm1, resolved.clone());
+                                let tm2 = coerce_empty_map(tm2, resolved);
                                 Ok(SExprTE::Map(tm1.typed_default(&tm2)))
                             }
                             None => {
@@ -1443,8 +1553,8 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
                         let t2 = tl2.element_type().clone();
                         match unify_element_types(&t1, &t2) {
                             Some(resolved) => {
-                                let tl1 = coerce_empty_list(tl1, &resolved);
-                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                let tl1 = coerce_empty_list(tl1, resolved.clone());
+                                let tl2 = coerce_empty_list(tl2, resolved);
                                 Ok(SExprTE::List(tl1.typed_if(Box::new(b.clone()), &tl2)))
                             }
                             None => {
@@ -1461,8 +1571,8 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
                         let t2 = tm2.value_type().clone();
                         match unify_element_types(&t1, &t2) {
                             Some(resolved) => {
-                                let tm1 = coerce_empty_map(tm1, &resolved);
-                                let tm2 = coerce_empty_map(tm2, &resolved);
+                                let tm1 = coerce_empty_map(tm1, resolved.clone());
+                                let tm2 = coerce_empty_map(tm2, resolved);
                                 Ok(SExprTE::Map(tm1.typed_if(Box::new(b.clone()), &tm2)))
                             }
                             None => {
@@ -1522,6 +1632,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
                 }
                 SExprTE::List(tl) => Ok(SExprTE::List(tl.typed_sindex(idx))),
                 SExprTE::Map(tm) => Ok(SExprTE::Map(tm.typed_sindex(idx))),
+                SExprTE::Struct(se) => Ok(SExprTE::Struct(se.typed_sindex(idx))),
             },
             // If there's already an error just propagate it
             Err(_) => Err(()),
@@ -1546,12 +1657,20 @@ impl TypeCheckableHelper<SExprTE> for VarName {
                 StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Var(self.clone()))),
                 StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Var(self.clone()))),
                 StreamType::List(inner) => {
-                    let typed_list = make_list_var(self.clone(), &TCType::from_stream_type(inner));
+                    let typed_list = make_list_var(self.clone(), TCType::from_stream_type(inner));
                     Ok(SExprTE::List(typed_list))
                 }
                 StreamType::Map(inner) => {
-                    let typed_map = make_map_var(self.clone(), &TCType::from_stream_type(inner));
+                    let typed_map = make_map_var(self.clone(), TCType::from_stream_type(inner));
                     Ok(SExprTE::Map(typed_map))
+                }
+                StreamType::Struct(inner, allow_extra) => {
+                    let typed_inner = inner
+                        .iter()
+                        .map(|(k, v)| (k.clone(), TCType::from_stream_type(v)))
+                        .collect();
+                    let typed_struct = make_struct_var(self.clone(), typed_inner, *allow_extra);
+                    Ok(SExprTE::Struct(typed_struct))
                 }
             },
             None => {
@@ -1565,31 +1684,135 @@ impl TypeCheckableHelper<SExprTE> for VarName {
     }
 }
 
-fn make_list_var(var: VarName, element_type: &TCType) -> TypedListExpr {
+fn make_list_var(var: VarName, element_type: TCType) -> TypedListExpr {
     TypedListExpr {
-        typ: TCType::list(element_type.clone()),
+        element_type,
         kind: TypedListExprKind::Var(var),
     }
 }
 
-fn make_list_literal(elements: Vec<SExprTE>, element_type: &TCType) -> TypedListExpr {
+fn make_list_literal(elements: Vec<SExprTE>, element_type: TCType) -> TypedListExpr {
     TypedListExpr {
-        typ: TCType::list(element_type.clone()),
+        element_type,
         kind: TypedListExprKind::Literal(elements),
     }
 }
 
-fn make_map_var(var: VarName, value_type: &TCType) -> TypedMapExpr {
+fn make_map_var(var: VarName, value_type: TCType) -> TypedMapExpr {
     TypedMapExpr {
-        typ: TCType::map(value_type.clone()),
+        value_type,
         kind: TypedMapExprKind::Var(var),
     }
 }
 
-fn make_map_literal(elements: BTreeMap<EcoString, SExprTE>, value_type: &TCType) -> TypedMapExpr {
+fn make_map_literal(elements: BTreeMap<EcoString, SExprTE>, value_type: TCType) -> TypedMapExpr {
     TypedMapExpr {
-        typ: TCType::map(value_type.clone()),
+        value_type,
         kind: TypedMapExprKind::Literal(elements),
+    }
+}
+
+fn make_struct_var(
+    var: VarName,
+    value_types: EcoVec<(EcoString, TCType)>,
+    allow_extra_fields: bool,
+) -> TypedStructExpr {
+    TypedStructExpr {
+        typ_map: value_types,
+        allow_extra_fields,
+        kind: TypedStructExprKind::Var(var),
+    }
+}
+
+fn type_check_struct_literal<T>(
+    entries: Vec<(EcoString, T)>,
+    fields: &EcoVec<(EcoString, StreamType)>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+    allow_extra_fields: bool,
+) -> Result<SExprTE, ()>
+where
+    T: TypeCheckableHelper<SExprTE>,
+{
+    let mut remaining: BTreeMap<EcoString, T> = entries.into_iter().collect();
+    let mut typed_entries = Vec::new();
+    let mut field_types = EcoVec::new();
+
+    for (field, field_type) in fields {
+        let Some(expr) = remaining.remove(field) else {
+            errs.push(SemanticError::TypeError(format!(
+                "Struct literal is missing required field {:?}",
+                field
+            )));
+            return Err(());
+        };
+        let typed_expr = expr.type_check_raw(Some(field_type), ctx, errs)?;
+        let actual = extract_type(&typed_expr);
+        let expected = TCType::from_stream_type(field_type);
+        if actual != expected {
+            errs.push(SemanticError::TypeError(format!(
+                "Struct field {:?} has type {:?}, expected {:?}",
+                field, actual, expected
+            )));
+            return Err(());
+        }
+        typed_entries.push((field.clone(), typed_expr));
+        field_types.push((field.clone(), expected));
+    }
+
+    if !remaining.is_empty() {
+        if allow_extra_fields {
+            for value in remaining.into_values() {
+                value.type_check_raw(None, ctx, errs)?;
+            }
+        } else {
+            errs.push(SemanticError::TypeError(format!(
+                "Struct literal contains unknown fields: {:?}",
+                remaining.keys().collect::<Vec<_>>()
+            )));
+            return Err(());
+        }
+    }
+
+    Ok(SExprTE::Struct(TypedStructExpr {
+        typ_map: field_types,
+        allow_extra_fields,
+        kind: TypedStructExprKind::Literal(typed_entries),
+    }))
+}
+
+fn type_check_struct_constructor<T>(
+    entries: Vec<(EcoString, T)>,
+    expected: Option<&StreamType>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()>
+where
+    T: TypeCheckableHelper<SExprTE>,
+{
+    let Some(StreamType::Struct(fields, allow_extra_fields)) = expected else {
+        errs.push(SemanticError::TypeError(
+            "Struct constructor requires an expected Struct type".into(),
+        ));
+        return Err(());
+    };
+
+    type_check_struct_literal(entries, fields, ctx, errs, *allow_extra_fields)
+}
+
+fn type_check_object_literal<T>(
+    entries: Vec<(EcoString, T)>,
+    expected: Option<&StreamType>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()>
+where
+    T: TypeCheckableHelper<SExprTE>,
+{
+    if let Some(StreamType::Struct(fields, allow_extra_fields)) = expected {
+        type_check_struct_literal(entries, fields, ctx, errs, *allow_extra_fields)
+    } else {
+        type_check_map_literal(entries, expected, ctx, errs)
     }
 }
 
@@ -1602,12 +1825,19 @@ fn type_check_map_literal<T>(
 where
     T: TypeCheckableHelper<SExprTE>,
 {
+    if matches!(expected, Some(StreamType::Struct(_, _))) {
+        errs.push(SemanticError::TypeError(
+            "Map constructor cannot be used for Struct-typed expressions; use Struct(...)".into(),
+        ));
+        return Err(());
+    }
+
     if entries.is_empty() {
         let value_type = match expected {
             Some(StreamType::Map(inner)) => TCType::from_stream_type(inner.as_ref()),
             _ => TCType::EmptyMap,
         };
-        return Ok(SExprTE::Map(make_map_literal(BTreeMap::new(), &value_type)));
+        return Ok(SExprTE::Map(make_map_literal(BTreeMap::new(), value_type)));
     }
 
     let value_expected = match expected {
@@ -1634,7 +1864,7 @@ where
         typed_entries.insert(key, value_te);
     }
 
-    Ok(SExprTE::Map(make_map_literal(typed_entries, &first_type)))
+    Ok(SExprTE::Map(make_map_literal(typed_entries, first_type)))
 }
 
 /// Attempt to unify two [`TCType`]s, treating empty-container placeholders as
@@ -1645,15 +1875,29 @@ fn unify_element_types(t1: &TCType, t2: &TCType) -> Option<TCType> {
         _ if t1 == t2 => Some(t1.clone()),
         (TCType::EmptyList, other) | (other, TCType::EmptyList) => Some(other.clone()),
         (TCType::EmptyMap, other) | (other, TCType::EmptyMap) => Some(other.clone()),
-        (TCType::Construct(c1, args1), TCType::Construct(c2, args2))
-            if c1 == c2 && args1.len() == args2.len() =>
+        (TCType::Struct(fields1, allow_extra1), TCType::Struct(fields2, allow_extra2))
+            if allow_extra1 == allow_extra2
+                && fields1.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()
+                    == fields2.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>() =>
         {
-            let args = args1
+            let args = fields1
                 .iter()
-                .zip(args2.iter())
-                .map(|(a, b)| unify_element_types(a, b))
-                .collect::<Option<Vec<_>>>()?;
-            Some(TCType::Construct(c1.clone(), args))
+                .zip(fields2.iter())
+                .filter_map(|((f, a), (_, b))| match unify_element_types(a, b) {
+                    Some(u) => Some((f.clone(), u)),
+                    None => None,
+                })
+                .collect::<EcoVec<_>>();
+            if args.len() != fields1.len() {
+                return None;
+            }
+            Some(TCType::Struct(args, *allow_extra1))
+        }
+        (TCType::List(t1), TCType::List(t2)) => {
+            Some(TCType::List(Box::new(unify_element_types(t1, t2)?)))
+        }
+        (TCType::Map(t1), TCType::Map(t2)) => {
+            Some(TCType::Map(Box::new(unify_element_types(t1, t2)?)))
         }
         _ => None,
     }
@@ -1662,7 +1906,7 @@ fn unify_element_types(t1: &TCType, t2: &TCType) -> Option<TCType> {
 /// If `list` has an `EmptyList` element type, reconstruct it as a concrete empty
 /// list literal of the given `target_element_type`.  Non-`EmptyList` lists are
 /// returned unchanged.
-fn coerce_empty_list(list: TypedListExpr, target_element_type: &TCType) -> TypedListExpr {
+fn coerce_empty_list(list: TypedListExpr, target_element_type: TCType) -> TypedListExpr {
     if list.element_type() == &TCType::EmptyList {
         make_list_literal(vec![], target_element_type)
     } else {
@@ -1670,11 +1914,48 @@ fn coerce_empty_list(list: TypedListExpr, target_element_type: &TCType) -> Typed
     }
 }
 
-fn coerce_empty_map(map: TypedMapExpr, target_value_type: &TCType) -> TypedMapExpr {
+fn coerce_empty_map(map: TypedMapExpr, target_value_type: TCType) -> TypedMapExpr {
     if map.value_type() == &TCType::EmptyMap {
         make_map_literal(BTreeMap::new(), target_value_type)
     } else {
         map
+    }
+}
+
+fn typed_struct_get(
+    typed_struct: TypedStructExpr,
+    key: EcoString,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    let Some((_, field_type)) = typed_struct.typ_map.iter().find(|(field, _)| *field == key) else {
+        errs.push(SemanticError::TypeError(format!(
+            "Struct has no field {:?}",
+            key
+        )));
+        return Err(());
+    };
+
+    match field_type.clone() {
+        TCType::Int => Ok(SExprTE::Int(SExprInt::SGetStruct(typed_struct, key))),
+        TCType::Float => Ok(SExprTE::Float(SExprFloat::SGetStruct(typed_struct, key))),
+        TCType::Bool => Ok(SExprTE::Bool(SExprBool::SGetStruct(typed_struct, key))),
+        TCType::Str => Ok(SExprTE::Str(SExprStr::SGetStruct(typed_struct, key))),
+        TCType::Unit => Ok(SExprTE::Unit(SExprUnit::SGetStruct(typed_struct, key))),
+        TCType::List(inner) => Ok(SExprTE::List(TypedListExpr {
+            element_type: *inner,
+            kind: TypedListExprKind::SGetStruct(Box::new(typed_struct), key),
+        })),
+        TCType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
+            value_type: *inner,
+            kind: TypedMapExprKind::SGetStruct(Box::new(typed_struct), key),
+        })),
+        TCType::Struct(..) | TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
+            errs.push(SemanticError::TypeError(format!(
+                "Struct field {:?} has unsupported field type {:?}",
+                key, field_type
+            )));
+            Err(())
+        }
     }
 }
 
@@ -1701,22 +1982,18 @@ fn typed_map_get(
             ));
             Err(())
         }
-        TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
-            Ok(SExprTE::List(TypedListExpr {
-                typ: TCType::list(args[0].clone()),
-                kind: TypedListExprKind::MGetMap(Box::new(typed_map), key),
-            }))
-        }
-        TCType::Construct(TCTypeConstructor::Map, args) if args.len() == 1 => {
-            Ok(SExprTE::Map(TypedMapExpr {
-                typ: TCType::map(args[0].clone()),
-                kind: TypedMapExprKind::MGetMap(Box::new(typed_map), key),
-            }))
-        }
-        TCType::Construct(constructor, args) => {
+        TCType::List(t) => Ok(SExprTE::List(TypedListExpr {
+            element_type: *t,
+            kind: TypedListExprKind::MGetMap(Box::new(typed_map), key),
+        })),
+        TCType::Map(t) => Ok(SExprTE::Map(TypedMapExpr {
+            value_type: *t,
+            kind: TypedMapExprKind::MGetMap(Box::new(typed_map), key),
+        })),
+        TCType::Struct(ts, _) => {
             errs.push(SemanticError::TypeError(format!(
-                "Unsupported type constructor application for map value type: {:?}<{:?}>",
-                constructor, args
+                "Unsupported type constructor application for struct value type: {:?}",
+                ts
             )));
             Err(())
         }
@@ -1824,13 +2101,23 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         ctx.clone(),
                     ))),
                     StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
-                        typ: TCType::list(TCType::from_stream_type(inner)),
+                        element_type: TCType::from_stream_type(inner),
                         kind: TypedListExprKind::Dynamic(Box::new(e_str), ctx.clone()),
                     })),
                     StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
-                        typ: TCType::map(TCType::from_stream_type(inner)),
+                        value_type: TCType::from_stream_type(inner),
                         kind: TypedMapExprKind::Dynamic(Box::new(e_str), ctx.clone()),
                     })),
+                    StreamType::Struct(fields, allow_extra_fields) => {
+                        Ok(SExprTE::Struct(TypedStructExpr {
+                            typ_map: fields
+                                .iter()
+                                .map(|(n, t)| (n.clone(), TCType::from_stream_type(t)))
+                                .collect(),
+                            allow_extra_fields: *allow_extra_fields,
+                            kind: TypedStructExprKind::Dynamic(Box::new(e_str), ctx.clone()),
+                        }))
+                    }
                 }
             }
             SExpr::RestrictedDynamic(e, type_ascription, vs) => {
@@ -1887,7 +2174,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         ctx.clone(),
                     ))),
                     StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
-                        typ: TCType::list(TCType::from_stream_type(inner)),
+                        element_type: TCType::from_stream_type(inner),
                         kind: TypedListExprKind::RestrictedDynamic(
                             Box::new(e_str),
                             vs.clone(),
@@ -1895,13 +2182,27 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         ),
                     })),
                     StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
-                        typ: TCType::map(TCType::from_stream_type(inner)),
+                        value_type: TCType::from_stream_type(inner),
                         kind: TypedMapExprKind::RestrictedDynamic(
                             Box::new(e_str),
                             vs.clone(),
                             ctx.clone(),
                         ),
                     })),
+                    StreamType::Struct(fields, allow_extra_fields) => {
+                        Ok(SExprTE::Struct(TypedStructExpr {
+                            typ_map: fields
+                                .iter()
+                                .map(|(n, t)| (n.clone(), TCType::from_stream_type(t)))
+                                .collect(),
+                            allow_extra_fields: *allow_extra_fields,
+                            kind: TypedStructExprKind::RestrictedDynamic(
+                                Box::new(e_str),
+                                vs.clone(),
+                                ctx.clone(),
+                            ),
+                        }))
+                    }
                 }
             }
             SExpr::Defer(e, type_ascription, vs) => {
@@ -1958,13 +2259,23 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         vs.clone(),
                     ))),
                     StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
-                        typ: TCType::list(TCType::from_stream_type(inner)),
+                        element_type: TCType::from_stream_type(inner),
                         kind: TypedListExprKind::Defer(Box::new(e_str), ctx.clone()),
                     })),
                     StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
-                        typ: TCType::map(TCType::from_stream_type(inner)),
+                        value_type: TCType::from_stream_type(inner),
                         kind: TypedMapExprKind::Defer(Box::new(e_str), ctx.clone()),
                     })),
+                    StreamType::Struct(fields, allow_extra_fields) => {
+                        Ok(SExprTE::Struct(TypedStructExpr {
+                            typ_map: fields
+                                .iter()
+                                .map(|(n, t)| (n.clone(), TCType::from_stream_type(t)))
+                                .collect(),
+                            allow_extra_fields: *allow_extra_fields,
+                            kind: TypedStructExprKind::Defer(Box::new(e_str), ctx.clone()),
+                        }))
+                    }
                 }
             }
             SExpr::Update(_, _) => todo!("Implement support for Update"),
@@ -1991,7 +2302,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         Some(StreamType::List(inner)) => TCType::from_stream_type(inner.as_ref()),
                         _ => TCType::EmptyList,
                     };
-                    Ok(SExprTE::List(make_list_literal(vec![], &inner)))
+                    Ok(SExprTE::List(make_list_literal(vec![], inner)))
                 } else {
                     // Derive inner expected type from expected (if it is a list type)
                     let inner_expected = match expected {
@@ -2018,7 +2329,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         typed_exprs.push(elem_te);
                     }
 
-                    let typed_list = make_list_literal(typed_exprs, &first_type);
+                    let typed_list = make_list_literal(typed_exprs, first_type);
                     Ok(SExprTE::List(typed_list))
                 }
             }
@@ -2077,19 +2388,17 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 )));
                                 Err(())
                             }
-                            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
-                                Ok(SExprTE::List(TypedListExpr {
-                                    typ: TCType::list(args[0].clone()),
-                                    kind: TypedListExprKind::LIndexList(
-                                        Box::new(typed_list),
-                                        Box::new(idx_int),
-                                    ),
-                                }))
-                            }
-                            TCType::Construct(constructor, args) => {
+                            TCType::List(inner) => Ok(SExprTE::List(TypedListExpr {
+                                element_type: *inner,
+                                kind: TypedListExprKind::LIndexList(
+                                    Box::new(typed_list),
+                                    Box::new(idx_int),
+                                ),
+                            })),
+                            TCType::Map(_) | TCType::Struct(..) => {
                                 errs.push(SemanticError::TypeError(format!(
-                                    "Unsupported type constructor application for list index element type: {:?}<{:?}>",
-                                    constructor, args
+                                    "Unsupported list index element type: {:?}",
+                                    elem_type
                                 )));
                                 Err(())
                             }
@@ -2118,7 +2427,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         let actual_elem_type = extract_type(&elem_te);
                         match unify_element_types(&elem_type, &actual_elem_type) {
                             Some(resolved) => {
-                                let typed_list = coerce_empty_list(typed_list, &resolved);
+                                let typed_list = coerce_empty_list(typed_list, resolved);
                                 Ok(SExprTE::List(typed_list.typed_append(Box::new(elem_te))))
                             }
                             None => {
@@ -2149,8 +2458,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         let t2 = tl2.element_type().clone();
                         match unify_element_types(&t1, &t2) {
                             Some(resolved) => {
-                                let tl1 = coerce_empty_list(tl1, &resolved);
-                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                let tl1 = coerce_empty_list(tl1, resolved.clone());
+                                let tl2 = coerce_empty_list(tl2, resolved);
                                 Ok(SExprTE::List(tl1.typed_concat(&tl2)))
                             }
                             None => {
@@ -2198,16 +2507,14 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 )));
                                 Err(())
                             }
-                            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
-                                Ok(SExprTE::List(TypedListExpr {
-                                    typ: TCType::list(args[0].clone()),
-                                    kind: TypedListExprKind::LHeadList(Box::new(typed_list)),
-                                }))
-                            }
-                            TCType::Construct(constructor, args) => {
+                            TCType::List(inner) => Ok(SExprTE::List(TypedListExpr {
+                                element_type: *inner,
+                                kind: TypedListExprKind::LHeadList(Box::new(typed_list)),
+                            })),
+                            TCType::Map(_) | TCType::Struct(..) => {
                                 errs.push(SemanticError::TypeError(format!(
-                                    "Unsupported type constructor application for list head element type: {:?}<{:?}>",
-                                    constructor, args
+                                    "Unsupported list head element type: {:?}",
+                                    elem_type
                                 )));
                                 Err(())
                             }
@@ -2283,8 +2590,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         let t2 = tl2.element_type().clone();
                         match unify_element_types(&t1, &t2) {
                             Some(resolved) => {
-                                let tl1 = coerce_empty_list(tl1, &resolved);
-                                let tl2 = coerce_empty_list(tl2, &resolved);
+                                let tl1 = coerce_empty_list(tl1, resolved.clone());
+                                let tl2 = coerce_empty_list(tl2, resolved);
                                 Ok(SExprTE::List(tl1.typed_init(&tl2)))
                             }
                             None => {
@@ -2301,8 +2608,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         let t2 = tm2.value_type().clone();
                         match unify_element_types(&t1, &t2) {
                             Some(resolved) => {
-                                let tm1 = coerce_empty_map(tm1, &resolved);
-                                let tm2 = coerce_empty_map(tm2, &resolved);
+                                let tm1 = coerce_empty_map(tm1, resolved.clone());
+                                let tm2 = coerce_empty_map(tm2, resolved);
                                 Ok(SExprTE::Map(tm1.typed_init(&tm2)))
                             }
                             None => {
@@ -2388,14 +2695,50 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 ctx,
                 errs,
             ),
+            SExpr::Struct(entries) => type_check_struct_constructor(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                expected,
+                ctx,
+                errs,
+            ),
+            SExpr::ObjectLiteral(entries) => type_check_object_literal(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                expected,
+                ctx,
+                errs,
+            ),
             SExpr::MGet(map_expr, key) => {
                 let map_expected = expected.map(|t| StreamType::Map(Box::new(t.clone())));
                 let map_te = map_expr.type_check_raw(map_expected.as_ref(), ctx, errs)?;
                 match map_te {
                     SExprTE::Map(typed_map) => typed_map_get(typed_map, key.clone(), errs),
+                    SExprTE::Struct(typed_struct) => {
+                        typed_struct_get(typed_struct, key.clone(), errs)
+                    }
                     other => {
                         errs.push(SemanticError::TypeError(format!(
-                            "MGet requires a Map, got {:?}",
+                            "MGet requires a Map or Struct, got {:?}",
+                            other
+                        )));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::SGet(struct_expr, key) => {
+                let struct_te = struct_expr.type_check_raw(None, ctx, errs)?;
+                match struct_te {
+                    SExprTE::Struct(typed_struct) => {
+                        typed_struct_get(typed_struct, key.clone(), errs)
+                    }
+                    other => {
+                        errs.push(SemanticError::TypeError(format!(
+                            "Dot field access requires a Struct in typed semantics, got {:?}",
                             other
                         )));
                         Err(())
@@ -2413,7 +2756,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         let actual_value_type = extract_type(&value_te);
                         match unify_element_types(&value_type, &actual_value_type) {
                             Some(resolved) => {
-                                let typed_map = coerce_empty_map(typed_map, &resolved);
+                                let typed_map = coerce_empty_map(typed_map, resolved);
                                 Ok(SExprTE::Map(
                                     typed_map.typed_insert(key.clone(), Box::new(value_te)),
                                 ))
@@ -2426,6 +2769,33 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 Err(())
                             }
                         }
+                    }
+                    SExprTE::Struct(typed_struct) => {
+                        let Some((_, field_type)) = typed_struct
+                            .typ_map
+                            .iter()
+                            .find(|(field, _)| *field == *key)
+                        else {
+                            errs.push(SemanticError::TypeError(format!(
+                                "Struct has no field {:?}",
+                                key
+                            )));
+                            return Err(());
+                        };
+                        let value_expected = field_type.to_stream_type();
+                        let value_te =
+                            value_expr.type_check_raw(value_expected.as_ref(), ctx, errs)?;
+                        let actual_value_type = extract_type(&value_te);
+                        if actual_value_type != *field_type {
+                            errs.push(SemanticError::TypeError(format!(
+                                "Struct field {:?} has type {:?}, but got {:?}",
+                                key, field_type, actual_value_type
+                            )));
+                            return Err(());
+                        }
+                        Ok(SExprTE::Struct(
+                            typed_struct.typed_update(key.clone(), Box::new(value_te)),
+                        ))
                     }
                     other => {
                         errs.push(SemanticError::TypeError(format!(
@@ -2456,6 +2826,11 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 match map_te {
                     SExprTE::Map(typed_map) => {
                         Ok(SExprTE::Bool(SExprBool::MHasKeyMap(typed_map, key.clone())))
+                    }
+                    SExprTE::Struct(typed_struct) => {
+                        Ok(SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(
+                            typed_struct.typ_map.iter().any(|(field, _)| field == key),
+                        ))))
                     }
                     other => {
                         errs.push(SemanticError::TypeError(format!(
@@ -5002,9 +5377,8 @@ mod tests {
         // Test list type
         let list_value = Value::List(vec![Value::Int(1), Value::Int(2)].into());
         match extract_value_type(list_value) {
-            TCType::Construct(TCTypeConstructor::List, args) if args.len() == 1 => {
-                // Expect EmptyList as default inner type
-                assert_eq!(args[0], TCType::EmptyList);
+            TCType::List(inner) => {
+                assert_eq!(*inner, TCType::Int);
             }
             _ => panic!("Expected List type for list value"),
         }
@@ -5014,7 +5388,7 @@ mod tests {
     fn test_extract_value_type_special_values() {
         assert_eq!(
             extract_value_type(Value::Map(Default::default())),
-            TCType::map(TCType::EmptyMap)
+            TCType::EmptyMap
         );
         assert_eq!(extract_value_type(Value::Deferred), TCType::Unknown);
         assert_eq!(extract_value_type(Value::NoVal), TCType::Unknown);
@@ -5096,12 +5470,7 @@ mod tests {
         // Same for list
         let list_value = Value::List(vec![Value::Bool(true), Value::Bool(false)].into());
         let extracted_type = extract_value_type(list_value.clone());
-        // List extraction uses EmptyList inner type, so we need to create a matching type for check
-        let list_type = TCType::list(TCType::EmptyList);
-        assert!(matches!(
-            extracted_type,
-            TCType::Construct(TCTypeConstructor::List, _)
-        ));
-        assert!(check_value_type(list_type, &list_value).is_ok());
+        assert!(matches!(extracted_type, TCType::List(_)));
+        assert!(check_value_type(extracted_type, &list_value).is_ok());
     }
 }

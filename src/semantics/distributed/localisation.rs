@@ -129,7 +129,23 @@ fn replace_var(var: &VarName, var_expr: &SExpr, repl_expr: &SExpr) -> SExpr {
                 .map(|(k, v)| (k.clone(), replace_var(var, var_expr, v)))
                 .collect(),
         ),
+        SExpr::Struct(btree_map) => SExpr::Struct(
+            btree_map
+                .iter()
+                .map(|(k, v)| (k.clone(), replace_var(var, var_expr, v)))
+                .collect(),
+        ),
+        SExpr::ObjectLiteral(btree_map) => SExpr::ObjectLiteral(
+            btree_map
+                .iter()
+                .map(|(k, v)| (k.clone(), replace_var(var, var_expr, v)))
+                .collect(),
+        ),
         SExpr::MGet(sexpr, eco_string) => SExpr::MGet(
+            Box::new(replace_var(var, var_expr, sexpr)),
+            eco_string.clone(),
+        ),
+        SExpr::SGet(sexpr, eco_string) => SExpr::SGet(
             Box::new(replace_var(var, var_expr, sexpr)),
             eco_string.clone(),
         ),

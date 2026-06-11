@@ -424,14 +424,14 @@ fn eval_const_expr(
                 _ => None,
             }
         }
-        SExpr::Map(map) => {
+        SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
             let mut out = BTreeMap::new();
             for (k, v) in map {
                 out.insert(k, eval_const_expr(v, spec, st)?);
             }
             Some(Value::Map(out))
         }
-        SExpr::MGet(map, k) => {
+        SExpr::MGet(map, k) | SExpr::SGet(map, k) => {
             let map_v = eval_const_expr(*map, spec, st)?;
             match map_v {
                 Value::Map(m) => m.get(&k).cloned(),

@@ -15,8 +15,11 @@ mod integration_tests {
     use tracing::{error, info};
     use trustworthiness_checker::InputProvider;
     use trustworthiness_checker::async_test;
+    use trustworthiness_checker::core::{RuntimeSpec, Semantics};
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use trustworthiness_checker::io::mqtt::MqttFactory;
+    use trustworthiness_checker::io::testing::ManualOutputHandler;
+    use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
     use winnow::Parser;
 
     use approx::assert_abs_diff_eq;
@@ -25,11 +28,12 @@ mod integration_tests {
 
     use trustworthiness_checker::dsrv_fixtures::{TestRuntime, input_streams1};
     use trustworthiness_checker::{
-        Value,
+        DsrvSpecification, Value, VarName,
         core::Runtime,
         dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         dsrv_specification,
         io::mqtt::{MqttInputProvider, MqttOutputHandler},
+        runtime::RuntimeBuilder,
     };
 
     const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
@@ -271,6 +275,196 @@ mod integration_tests {
         y_publisher_task.await?;
         info!("All publishers completed, shutting down MQTT server");
 
+        Ok(())
+    }
+
+    async fn run_mqtt_json_object_input_monitor(
+        executor: Rc<LocalExecutor<'static>>,
+        spec_src: &str,
+        semantics: Semantics,
+        client_suffix: &str,
+    ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+        let mut spec_src = spec_src;
+        let spec: DsrvSpecification = dsrv_specification(&mut spec_src).unwrap();
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
+
+        let var_topics = BTreeMap::from_iter([("payload".into(), "payload".to_string())]);
+        let mut input_provider = MqttInputProvider::new(
+            executor.clone(),
+            MQTT_FACTORY,
+            "localhost",
+            Some(mqtt_port),
+            var_topics,
+            0,
+        );
+        with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
+
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input(Box::new(input_provider))
+            .output(output_handler)
+            .runtime(RuntimeSpec::Async)
+            .semantics(semantics)
+            .build();
+        executor.spawn(monitor.run()).detach();
+
+        let payloads = vec![
+            Value::Map(BTreeMap::from([
+                ("extra".into(), Value::Int(99)),
+                ("x".into(), Value::Int(10)),
+                ("y".into(), Value::Int(20)),
+            ])),
+            Value::Map(BTreeMap::from([
+                ("extra".into(), Value::Int(100)),
+                ("x".into(), Value::Int(30)),
+                ("y".into(), Value::Int(40)),
+            ])),
+        ];
+        let (mut payload_tick, payload_stream) =
+            tick_stream(stream::iter(payloads.clone()).boxed());
+        let publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                format!("payload_publisher_{client_suffix}"),
+                "payload".to_string(),
+                payload_stream,
+                payloads.len(),
+                mqtt_port,
+            ),
+            5,
+            "payload_publisher_task",
+        ));
+
+        payload_tick.send(()).await?;
+        payload_tick.send(()).await?;
+        let outputs = with_timeout(
+            outputs.enumerate().take(2).collect::<Vec<_>>(),
+            5,
+            "mqtt json object input outputs.collect()",
+        )
+        .await?;
+
+        payload_tick.send(()).await?;
+        publisher_task.await?;
+
+        Ok(outputs)
+    }
+
+    #[apply(async_test)]
+    async fn test_mqtt_json_map_input_can_be_used_as_typed_struct(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let spec = r#"
+in payload: Struct<x: Int, y: Int, ...>
+out selected: Int
+out echoed: Struct<x: Int, y: Int, ...>
+selected = Map.get(payload, "x")
+echoed = payload
+"#;
+
+        let outputs = run_mqtt_json_object_input_monitor(
+            executor,
+            spec,
+            Semantics::TypedUntimed,
+            "typed_struct_input",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![
+                (
+                    0,
+                    BTreeMap::from([
+                        (
+                            "echoed".into(),
+                            Value::Map(BTreeMap::from([
+                                ("extra".into(), Value::Int(99)),
+                                ("x".into(), Value::Int(10)),
+                                ("y".into(), Value::Int(20)),
+                            ])),
+                        ),
+                        ("selected".into(), Value::Int(10)),
+                    ]),
+                ),
+                (
+                    1,
+                    BTreeMap::from([
+                        (
+                            "echoed".into(),
+                            Value::Map(BTreeMap::from([
+                                ("extra".into(), Value::Int(100)),
+                                ("x".into(), Value::Int(30)),
+                                ("y".into(), Value::Int(40)),
+                            ])),
+                        ),
+                        ("selected".into(), Value::Int(30)),
+                    ]),
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_mqtt_json_map_input_can_be_used_as_untyped_struct_like_map(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let spec = r#"
+in payload
+out selected
+out echoed
+selected = Map.get(payload, "x")
+echoed = payload
+"#;
+
+        let outputs = run_mqtt_json_object_input_monitor(
+            executor,
+            spec,
+            Semantics::Untimed,
+            "untyped_struct_like_input",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![
+                (
+                    0,
+                    BTreeMap::from([
+                        (
+                            "echoed".into(),
+                            Value::Map(BTreeMap::from([
+                                ("extra".into(), Value::Int(99)),
+                                ("x".into(), Value::Int(10)),
+                                ("y".into(), Value::Int(20)),
+                            ])),
+                        ),
+                        ("selected".into(), Value::Int(10)),
+                    ]),
+                ),
+                (
+                    1,
+                    BTreeMap::from([
+                        (
+                            "echoed".into(),
+                            Value::Map(BTreeMap::from([
+                                ("extra".into(), Value::Int(100)),
+                                ("x".into(), Value::Int(30)),
+                                ("y".into(), Value::Int(40)),
+                            ])),
+                        ),
+                        ("selected".into(), Value::Int(30)),
+                    ]),
+                ),
+            ]
+        );
         Ok(())
     }
 

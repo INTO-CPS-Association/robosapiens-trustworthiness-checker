@@ -60,22 +60,46 @@ pub fn key_sexpr(s: &mut &str) -> Result<(EcoString, SExpr)> {
         .parse_next(s)
 }
 
+fn key_value_constructor(
+    name: &'static str,
+    make_expr: fn(BTreeMap<EcoString, SExpr>) -> SExpr,
+) -> impl FnMut(&mut &str) -> Result<SExpr> {
+    move |s: &mut &str| {
+        delimited(
+            seq!(literal(name), loop_ms_or_lb_or_lc, '('),
+            separated(
+                0..,
+                key_sexpr,
+                seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+            ),
+            ')',
+        )
+        .map(|exprs: Vec<(EcoString, SExpr)>| make_expr(BTreeMap::from_iter(exprs)))
+        .parse_next(s)
+    }
+}
+
 // Used for Maps in output streams
 fn sexpr_map(s: &mut &str) -> Result<SExpr> {
-    let res: Result<Vec<(EcoString, SExpr)>> = delimited(
-        seq!("Map", loop_ms_or_lb_or_lc, '('),
+    key_value_constructor("Map", SExpr::Map).parse_next(s)
+}
+
+fn sexpr_struct(s: &mut &str) -> Result<SExpr> {
+    key_value_constructor("Struct", SExpr::Struct).parse_next(s)
+}
+
+fn object_literal(s: &mut &str) -> Result<SExpr> {
+    delimited(
+        '{',
         separated(
             0..,
             key_sexpr,
             seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
         ),
-        ')',
+        '}',
     )
-    .parse_next(s);
-    match res {
-        Ok(exprs) => Ok(SExpr::Map(BTreeMap::from_iter(exprs.into_iter()))),
-        Err(e) => Err(e),
-    }
+    .map(|exprs: Vec<(EcoString, SExpr)>| SExpr::ObjectLiteral(BTreeMap::from_iter(exprs)))
+    .parse_next(s)
 }
 
 fn var(s: &mut &str) -> Result<SExpr> {
@@ -653,8 +677,8 @@ fn abs(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
-/// Fundamental expressions of the language
-fn atom(s: &mut &str) -> Result<SExpr> {
+/// Fundamental expressions of the language, before postfix field access.
+fn atom_base(s: &mut &str) -> Result<SExpr> {
     // Break up the large alt into smaller groups to avoid exceeding the trait implementation limit
     delimited(
         whitespace,
@@ -677,12 +701,39 @@ fn atom(s: &mut &str) -> Result<SExpr> {
             // Group 4
             alt((dist, sin, cos, tan, abs)),
             // Group 5
+            alt((default, when, latch, init, is_defined)),
+            // Group 6
             alt((
-                default, when, latch, init, is_defined, sexpr_list, sexpr_map, var, paren,
+                sexpr_list,
+                sexpr_map,
+                sexpr_struct,
+                object_literal,
+                var,
+                paren,
             )),
         )),
         whitespace,
     )
+    .parse_next(s)
+}
+
+/// Fundamental expressions of the language, including postfix field access.
+///
+/// Field access expression e.field is typed-struct-only shorthand.
+fn atom(s: &mut &str) -> Result<SExpr> {
+    seq!(
+        atom_base,
+        repeat(
+            0..,
+            seq!(_: '.', _: loop_ms_or_lb_or_lc, ident).map(|(field,)| field)
+        ),
+        _: whitespace,
+    )
+    .map(|(base, fields): (SExpr, Vec<&str>)| {
+        fields.into_iter().fold(base, |expr, field| {
+            SExpr::SGet(Box::new(expr), field.into())
+        })
+    })
     .parse_next(s)
 }
 
@@ -807,6 +858,19 @@ pub fn sexpr(s: &mut &str) -> Result<SExpr> {
     .parse_next(s)
 }
 
+fn struct_type_field(s: &mut &str) -> Result<(EcoString, StreamType)> {
+    seq!(
+        _: loop_ms_or_lb_or_lc,
+        ident,
+        _: loop_ms_or_lb_or_lc,
+        _: ':',
+        _: loop_ms_or_lb_or_lc,
+        stream_type,
+    )
+    .map(|(name, typ): (&str, _)| (name.into(), typ))
+    .parse_next(s)
+}
+
 fn stream_type(s: &mut &str) -> Result<StreamType> {
     delimited(
         whitespace,
@@ -815,6 +879,45 @@ fn stream_type(s: &mut &str) -> Result<StreamType> {
                 .map(|(_, inner)| StreamType::List(Box::new(inner))),
             seq!(literal("Map"), _: loop_ms_or_lb_or_lc, _: '<', stream_type, _: '>')
                 .map(|(_, inner)| StreamType::Map(Box::new(inner))),
+            seq!(
+                literal("Struct"),
+                _: loop_ms_or_lb_or_lc,
+                _: '<',
+                _: loop_ms_or_lb_or_lc,
+                literal("..."),
+                _: loop_ms_or_lb_or_lc,
+                _: '>'
+            )
+            .map(|(_, _)| StreamType::Struct(EcoVec::new(), true)),
+            seq!(
+                literal("Struct"),
+                _: loop_ms_or_lb_or_lc,
+                _: '<',
+                separated(
+                    1..,
+                    struct_type_field,
+                    seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+                ),
+                _: loop_ms_or_lb_or_lc,
+                _: ',',
+                _: loop_ms_or_lb_or_lc,
+                _: literal("..."),
+                _: loop_ms_or_lb_or_lc,
+                _: '>'
+            )
+            .map(|(_, fields): (_, Vec<_>)| StreamType::Struct(fields.into(), true)),
+            seq!(
+                literal("Struct"),
+                _: loop_ms_or_lb_or_lc,
+                _: '<',
+                separated(
+                    0..,
+                    struct_type_field,
+                    seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+                ),
+                _: '>'
+            )
+            .map(|(_, fields): (_, Vec<_>)| StreamType::Struct(fields.into(), false)),
             alt((
                 literal("Int"),
                 literal("Float"),
@@ -1069,6 +1172,42 @@ mod tests {
                 SBinOp::COp(CompBinOp::Eq),
             )
         );
+        assert_eq!(
+            sexpr(&mut (*"robot.id").into())?,
+            SExpr::SGet(Box::new(SExpr::Var("robot".into())), "id".into()),
+        );
+        assert_eq!(
+            sexpr(&mut (*"robot.pose.x + 1").into())?,
+            SExpr::BinOp(
+                Box::new(SExpr::SGet(
+                    Box::new(SExpr::SGet(
+                        Box::new(SExpr::Var("robot".into())),
+                        "pose".into(),
+                    )),
+                    "x".into(),
+                )),
+                Box::new(SExpr::Val(Value::Int(1))),
+                SBinOp::NOp(NumericalBinOp::Add),
+            ),
+        );
+        assert_eq!(
+            sexpr(&mut (*"robot.sensor_value").into())?,
+            SExpr::SGet(Box::new(SExpr::Var("robot".into())), "sensor_value".into(),),
+        );
+        assert_eq!(
+            sexpr(&mut (*"robot_A.pose.x + 1").into())?,
+            SExpr::BinOp(
+                Box::new(SExpr::SGet(
+                    Box::new(SExpr::SGet(
+                        Box::new(SExpr::Var("robot_A".into())),
+                        "pose".into(),
+                    )),
+                    "x".into(),
+                )),
+                Box::new(SExpr::Val(Value::Int(1))),
+                SBinOp::NOp(NumericalBinOp::Add),
+            ),
+        );
         Ok(())
     }
 
@@ -1107,6 +1246,30 @@ mod tests {
             Some(StreamType::Map(Box::new(StreamType::List(Box::new(
                 StreamType::Bool,
             ))))),
+        ));
+        assert_eq!(res, exp);
+
+        let res = input_decl(&mut "in robot: Struct<id: Int, label: Str>");
+        let exp = Ok((
+            "robot".into(),
+            Some(StreamType::Struct(
+                vec![
+                    ("id".into(), StreamType::Int),
+                    ("label".into(), StreamType::Str),
+                ]
+                .into(),
+                false,
+            )),
+        ));
+        assert_eq!(res, exp);
+
+        let res = input_decl(&mut "in robot: Struct<id: Int, ...>");
+        let exp = Ok((
+            "robot".into(),
+            Some(StreamType::Struct(
+                vec![("id".into(), StreamType::Int)].into(),
+                true,
+            )),
         ));
         assert_eq!(res, exp);
 
@@ -1852,6 +2015,10 @@ mod tests {
     fn test_parse_map() {
         assert_eq!(sexpr(&mut r#"Map()"#), Ok(SExpr::Map(BTreeMap::new())),);
         assert_eq!(presult_to_string(&sexpr(&mut r#"Map()"#)), r#"Ok(Map({}))"#);
+        assert_eq!(
+            presult_to_string(&sexpr(&mut r#"{"x": 1, "y": 2}"#)),
+            r#"Ok(ObjectLiteral({"x": Val(Int(1)), "y": Val(Int(2))}))"#
+        );
         assert_eq!(
             presult_to_string(&sexpr(&mut r#"Map("x": 1, "y": 2)"#)),
             r#"Ok(Map({"x": Val(Int(1)), "y": Val(Int(2))}))"#

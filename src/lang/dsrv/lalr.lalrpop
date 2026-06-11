@@ -102,7 +102,9 @@ SIndex: SExpr = {
 // Container constructors
 ContainerExpr: SExpr = {
     "List" "(" <SepListOpt<Expr, ",">> ")" => SExpr::List(<>),
-    "Map" "(" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> ")" => SExpr::Map(BTreeMap::from_iter(kv_pairs.into_iter()))
+    "Map" "(" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> ")" => SExpr::Map(BTreeMap::from_iter(kv_pairs.into_iter())),
+    "Struct" "(" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> ")" => SExpr::Struct(BTreeMap::from_iter(kv_pairs.into_iter())),
+    "{" <kv_pairs: SepListOpt<KVPair<String, Expr>, ",">> "}" => SExpr::ObjectLiteral(BTreeMap::from_iter(kv_pairs.into_iter()))
 }
 
 // -----------------------------------------------------------------------------
@@ -142,13 +144,22 @@ SpecialKeywords: SExpr = {
 // Atom (base expressions with same precedence)
 // -----------------------------------------------------------------------------
 
-Atom: SExpr = {
+AtomBase: SExpr = {
     SIndex,
     SpecialKeywords,
     Literal,
     ContainerExpr,
     IdentSExpr,
     Paren
+}
+
+// Field access expression e.field. This is typed-struct-only shorthand.
+Atom: SExpr = {
+    <base: AtomBase> <fields:("." <Ident>)*> => {
+        fields.into_iter().fold(base, |expr, field| {
+            SExpr::SGet(Box::new(expr), field.name().into())
+        })
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -269,6 +280,18 @@ Ifelse: SExpr = {
 // Types / annotations
 // -----------------------------------------------------------------------------
 
+StructTypeField: (EcoString, StreamType) = {
+    <name: Ident> ":" <typ: StreamTyp> => (name.name().into(), typ),
+}
+
+StructPermissiveFields: EcoVec<(EcoString, StreamType)> = {
+    "..." => EcoVec::new(),
+    <mut fields:(<StructTypeField> ",")*> <field: StructTypeField> "," "..." => {
+        fields.push(field);
+        fields.into()
+    },
+}
+
 StreamTyp: StreamType = {
     "Int" => StreamType::Int,
     "Str" => StreamType::Str,
@@ -277,6 +300,8 @@ StreamTyp: StreamType = {
     "Unit" => StreamType::Unit,
     "List" "<" <inner: StreamTyp> ">" => StreamType::List(Box::new(inner)),
     "Map" "<" <inner: StreamTyp> ">" => StreamType::Map(Box::new(inner)),
+    "Struct" "<" <fields: StructPermissiveFields> ">" => StreamType::Struct(fields, true),
+    "Struct" "<" <fields: SepListOpt<StructTypeField, ",">> ">" => StreamType::Struct(fields, false),
 }
 
 TypeAnno: StreamType = {

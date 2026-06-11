@@ -253,6 +253,32 @@ mod tests {
             )
         );
 
+        assert_eq!(
+            parse_stopdecl("in robot: Struct<id: Int, label: Str>").unwrap(),
+            STopDecl::Input(
+                "robot".into(),
+                Some(StreamType::Struct(
+                    vec![
+                        ("id".into(), StreamType::Int),
+                        ("label".into(), StreamType::Str),
+                    ]
+                    .into(),
+                    false,
+                ))
+            )
+        );
+
+        assert_eq!(
+            parse_stopdecl("in robot: Struct<id: Int, ...>").unwrap(),
+            STopDecl::Input(
+                "robot".into(),
+                Some(StreamType::Struct(
+                    vec![("id".into(), StreamType::Int)].into(),
+                    true,
+                ))
+            )
+        );
+
         // Not sure if we should allow this, but this is how it currently works. As long as we
         // start with "in"
         let parsed = parse_stopdecl("inx:Int");
@@ -987,6 +1013,10 @@ mod tests {
             r#"Ok(Map({}))"#
         );
         assert_eq!(
+            presult_to_string(&parse_sexpr(r#"{"x": 1, "y": 2}"#)),
+            r#"Ok(ObjectLiteral({"x": Val(Int(1)), "y": Val(Int(2))}))"#
+        );
+        assert_eq!(
             presult_to_string(&parse_sexpr(r#"Map("x": 1, "y": 2)"#)),
             r#"Ok(Map({"x": Val(Int(1)), "y": Val(Int(2))}))"#
         );
@@ -1034,6 +1064,26 @@ mod tests {
                 r#"Map.get(Map.get(Map.get(Map("three": Map("two": Map("one": 42))), "three"), "two"), "one")"#
             )),
             r#"Ok(MGet(MGet(MGet(Map({"three": Map({"two": Map({"one": Val(Int(42))})})}), "three"), "two"), "one"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"robot.id"#)),
+            r#"Ok(SGet(Var(VarName::new("robot")), "id"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"robot.pose.x + 1"#)),
+            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot")), "pose"), "x"), Val(Int(1)), NOp(Add)))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"Struct("id": 1).id"#)),
+            r#"Ok(SGet(Struct({"id": Val(Int(1))}), "id"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"robot.sensor_value"#)),
+            r#"Ok(SGet(Var(VarName::new("robot")), "sensor_value"))"#
+        );
+        assert_eq!(
+            presult_to_string(&parse_sexpr(r#"robot_A.pose.x + 1"#)),
+            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot_A")), "pose"), "x"), Val(Int(1)), NOp(Add)))"#
         );
     }
 

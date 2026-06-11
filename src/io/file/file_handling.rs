@@ -25,6 +25,8 @@ pub async fn parse_file<O: Clone + Debug>(
 #[cfg(test)]
 mod tests {
 
+    use std::collections::BTreeMap;
+
     use crate::{InputProvider, Value};
 
     use super::*;
@@ -43,6 +45,31 @@ mod tests {
             .collect::<Vec<_>>()
             .await;
         assert_eq!(x_vals, vec![Value::Int(1), Value::Int(3)]);
+    }
+
+    #[apply(async_test)]
+    async fn test_parse_json_object_literal_file() {
+        let parser = crate::lang::untimed_input::untimed_input_file;
+        let file = "fixtures/object_literal.input";
+        let mut data = parse_file(parser, file).await.unwrap();
+        let payload_vals = data
+            .var_stream(&"payload".into())
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(
+            payload_vals,
+            vec![
+                Value::Map(BTreeMap::from([
+                    ("x".into(), Value::Int(10)),
+                    ("y".into(), Value::Int(20)),
+                ])),
+                Value::Map(BTreeMap::from([
+                    ("x".into(), Value::Int(30)),
+                    ("y".into(), Value::Int(40)),
+                ])),
+            ]
+        );
     }
 
     #[apply(async_test)]

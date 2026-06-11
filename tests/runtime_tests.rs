@@ -6,11 +6,14 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics};
+use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::lang::dsrv::type_checker::type_check;
+use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
-use trustworthiness_checker::{Value, dsrv_specification, runtime::RuntimeBuilder};
+use trustworthiness_checker::{Value, dsrv_specification, parse_file, runtime::RuntimeBuilder};
 use trustworthiness_checker::{VarName, async_test};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -92,6 +95,495 @@ async fn run_typed_runtime(
         "typed runtime outputs.collect()",
     )
     .await
+}
+
+#[apply(async_test)]
+async fn test_typed_runtime_object_literals_assign_to_maps_and_structs(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+out objmap: Map<Int>
+out objstruct: Struct<id: Int, label: Str, ...>
+out mapvalue: Int
+out structid: Int
+objmap = {"x": tick, "y": tick + 1}
+objstruct = {"id": tick + 10, "label": "robot", "model": "extra"}
+mapvalue = Map.get(objmap, "y")
+structid = objstruct.id
+"#;
+
+    let outputs = run_typed_runtime(
+        executor,
+        spec,
+        BTreeMap::from([("tick".into(), vec![1.into(), 2.into()])]),
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    ("mapvalue".into(), Value::Int(2)),
+                    (
+                        "objmap".into(),
+                        Value::Map(BTreeMap::from([
+                            ("x".into(), Value::Int(1)),
+                            ("y".into(), Value::Int(2)),
+                        ])),
+                    ),
+                    (
+                        "objstruct".into(),
+                        Value::Map(BTreeMap::from([
+                            ("id".into(), Value::Int(11)),
+                            ("label".into(), Value::Str("robot".into())),
+                        ])),
+                    ),
+                    ("structid".into(), Value::Int(11)),
+                ]),
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    ("mapvalue".into(), Value::Int(3)),
+                    (
+                        "objmap".into(),
+                        Value::Map(BTreeMap::from([
+                            ("x".into(), Value::Int(2)),
+                            ("y".into(), Value::Int(3)),
+                        ])),
+                    ),
+                    (
+                        "objstruct".into(),
+                        Value::Map(BTreeMap::from([
+                            ("id".into(), Value::Int(12)),
+                            ("label".into(), Value::Str("robot".into())),
+                        ])),
+                    ),
+                    ("structid".into(), Value::Int(12)),
+                ]),
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_file_input_json_object_with_extra_fields_assigns_to_permissive_typed_struct(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in payload: Struct<x: Int, y: Int, ...>
+out selected: Int
+out echoed: Struct<x: Int, y: Int, ...>
+selected = Map.get(payload, "x")
+echoed = payload
+"#;
+    let mut spec_input = spec;
+    let spec = dsrv_specification(&mut spec_input).unwrap();
+    let input_data = parse_file(untimed_input_file, "fixtures/object_literal_extra.input").await?;
+    let input_provider = FileInputProvider::new(input_data);
+    let mut output_handler = Box::new(ManualOutputHandler::new(
+        executor.clone(),
+        spec.output_vars.clone(),
+    ));
+    let outputs = output_handler.get_output();
+
+    let monitor = GeneralRuntimeBuilder::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(Box::new(input_provider))
+        .output(output_handler)
+        .runtime(RuntimeSpec::Async)
+        .semantics(Semantics::TypedUntimed)
+        .build();
+
+    executor.spawn(monitor.run()).detach();
+    let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
+        outputs.enumerate().collect(),
+        5,
+        "typed file input object literal outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    (
+                        "echoed".into(),
+                        Value::Map(BTreeMap::from([
+                            ("extra".into(), Value::Int(99)),
+                            ("x".into(), Value::Int(10)),
+                            ("y".into(), Value::Int(20)),
+                        ])),
+                    ),
+                    ("selected".into(), Value::Int(10)),
+                ]),
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    (
+                        "echoed".into(),
+                        Value::Map(BTreeMap::from([
+                            ("extra".into(), Value::Int(100)),
+                            ("x".into(), Value::Int(30)),
+                            ("y".into(), Value::Int(40)),
+                        ])),
+                    ),
+                    ("selected".into(), Value::Int(30)),
+                ]),
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_typed_object_literal_struct_fields_are_checked() {
+    let mut ok_extra_fields = r#"
+out robot: Struct<id: Int, ...>
+robot = {"id": 1, "label": "robot"}
+"#;
+    let spec = dsrv_specification(&mut ok_extra_fields).unwrap();
+    type_check(spec)
+        .expect("object literal with extra fields should type-check as a permissive struct");
+
+    let cases = [
+        (
+            r#"
+out robot: Struct<id: Int>
+robot = {"id": 1, "label": "robot"}
+"#,
+            "unknown fields",
+        ),
+        (
+            r#"
+out robot: Struct<id: Int, label: Str>
+robot = {"id": 1}
+"#,
+            "missing required field",
+        ),
+        (
+            r#"
+out robot: Struct<id: Int, label: Str>
+robot = {"id": "not an int", "label": "robot"}
+"#,
+            "has type Str, expected Int",
+        ),
+        (
+            r#"
+out robot: Struct<id: Int, ...>
+robot = {"id": 1, "label": unknown}
+"#,
+            "undeclared variable",
+        ),
+        (
+            r#"
+out robot: Struct<id: Int>
+robot = Struct("id": 1, "label": "robot")
+"#,
+            "unknown fields",
+        ),
+        (
+            r#"
+out robot: Struct<id: Int>
+out label: Str
+robot = Struct("id": 1)
+label = robot.label
+"#,
+            "Struct has no field",
+        ),
+        (
+            r#"
+out values: Map<Int>
+out x: Int
+values = Map("x": 1)
+x = values.x
+"#,
+            "Dot field access requires a Struct",
+        ),
+    ];
+
+    for (spec_src, expected_error) in cases {
+        let mut spec_src = spec_src;
+        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let errors = type_check(spec).expect_err("object literal should not type-check");
+        assert!(
+            errors
+                .iter()
+                .any(|err| format!("{err:?}").contains(expected_error)),
+            "Expected error containing {expected_error:?}, got {errors:?}",
+        );
+    }
+}
+
+#[apply(async_test)]
+async fn test_typed_runtime_struct_literal_get_and_update(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+out robot: Struct<id: Int, sensor_value: Int, name: Str, flags: List<Bool>>
+out id: Int
+out sensor_value: Int
+out active: Bool
+out updated: Struct<id: Int, sensor_value: Int, name: Str, flags: List<Bool>>
+robot = Struct("id": tick, "sensor_value": tick + 100, "name": "r2d2", "flags": List(tick > 0, tick == 2))
+id = robot.id
+sensor_value = robot.sensor_value
+active = List.get(robot.flags, 0)
+updated = Map.insert(robot, "id", tick + 10)
+"#;
+
+    let outputs = run_typed_runtime(
+        executor,
+        spec,
+        BTreeMap::from([("tick".into(), vec![1.into(), 2.into()])]),
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    ("active".into(), Value::Bool(true)),
+                    ("id".into(), Value::Int(1)),
+                    (
+                        "robot".into(),
+                        Value::Map(BTreeMap::from([
+                            (
+                                "flags".into(),
+                                Value::List(vec![Value::Bool(true), Value::Bool(false)].into()),
+                            ),
+                            ("id".into(), Value::Int(1)),
+                            ("name".into(), Value::Str("r2d2".into())),
+                            ("sensor_value".into(), Value::Int(101)),
+                        ])),
+                    ),
+                    ("sensor_value".into(), Value::Int(101)),
+                    (
+                        "updated".into(),
+                        Value::Map(BTreeMap::from([
+                            (
+                                "flags".into(),
+                                Value::List(vec![Value::Bool(true), Value::Bool(false)].into()),
+                            ),
+                            ("id".into(), Value::Int(11)),
+                            ("name".into(), Value::Str("r2d2".into())),
+                            ("sensor_value".into(), Value::Int(101)),
+                        ])),
+                    ),
+                ]),
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    ("active".into(), Value::Bool(true)),
+                    ("id".into(), Value::Int(2)),
+                    (
+                        "robot".into(),
+                        Value::Map(BTreeMap::from([
+                            (
+                                "flags".into(),
+                                Value::List(vec![Value::Bool(true), Value::Bool(true)].into()),
+                            ),
+                            ("id".into(), Value::Int(2)),
+                            ("name".into(), Value::Str("r2d2".into())),
+                            ("sensor_value".into(), Value::Int(102)),
+                        ])),
+                    ),
+                    ("sensor_value".into(), Value::Int(102)),
+                    (
+                        "updated".into(),
+                        Value::Map(BTreeMap::from([
+                            (
+                                "flags".into(),
+                                Value::List(vec![Value::Bool(true), Value::Bool(true)].into()),
+                            ),
+                            ("id".into(), Value::Int(12)),
+                            ("name".into(), Value::Str("r2d2".into())),
+                            ("sensor_value".into(), Value::Int(102)),
+                        ])),
+                    ),
+                ]),
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_typed_semantics_reject_struct_constructor_assigned_to_map() {
+    let mut spec_str = r#"
+out robot: Map<Int>
+robot = Struct("id": 7)
+"#;
+    let spec = dsrv_specification(&mut spec_str).unwrap();
+
+    let errors = type_check(spec).expect_err("Struct constructor should not type-check as a Map");
+    assert!(
+        errors.iter().any(|err| format!("{err:?}")
+            .contains("Struct constructor requires an expected Struct type")),
+        "Expected a struct-constructor/map-assignment type error, got {errors:?}",
+    );
+}
+
+#[apply(async_test)]
+async fn test_untyped_runtime_struct_constructor_can_be_assigned_to_map(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    for config in TestConfiguration::untyped_configurations() {
+        let mut spec_str = r#"
+in tick
+out robot
+out id
+robot = Struct("id": tick + 7, "active": true)
+id = Map.get(robot, "id")
+"#;
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("tick".into(), vec![0.into()])]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+        let monitor = create_builder_from_config(builder, config).build();
+
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
+            outputs.enumerate().collect(),
+            5,
+            "untyped struct constructor runtime outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![(
+                0,
+                BTreeMap::from([
+                    ("id".into(), Value::Int(7)),
+                    (
+                        "robot".into(),
+                        Value::Map(BTreeMap::from([
+                            ("active".into(), Value::Bool(true)),
+                            ("id".into(), Value::Int(7)),
+                        ])),
+                    ),
+                ]),
+            )],
+            "Untyped struct constructor output mismatch for config {:?}",
+            config,
+        );
+    }
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_untyped_runtime_struct_like_map_input_and_update(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    for config in TestConfiguration::untyped_configurations() {
+        let mut spec_str = r#"
+in robot
+out id
+out active
+out renamed
+id = Map.get(robot, "id")
+active = Map.get(robot, "active")
+renamed = Map.insert(robot, "name", "bb8")
+"#;
+        let spec_untyped = dsrv_specification(&mut spec_str).unwrap();
+        let input_streams = MapInputProvider::new(BTreeMap::from([(
+            "robot".into(),
+            vec![
+                Value::Map(BTreeMap::from([
+                    ("active".into(), Value::Bool(true)),
+                    ("id".into(), Value::Int(7)),
+                    ("name".into(), Value::Str("r2d2".into())),
+                ])),
+                Value::Map(BTreeMap::from([
+                    ("active".into(), Value::Bool(false)),
+                    ("id".into(), Value::Int(8)),
+                    ("name".into(), Value::Str("c3po".into())),
+                ])),
+            ],
+        )]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec_untyped.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let builder = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec_untyped.clone())
+            .input(Box::new(input_streams))
+            .output(output_handler);
+        let monitor = create_builder_from_config(builder, config).build();
+
+        executor.spawn(monitor.run()).detach();
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
+            outputs.enumerate().collect(),
+            5,
+            "untyped struct-like runtime outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![
+                (
+                    0,
+                    BTreeMap::from([
+                        ("active".into(), Value::Bool(true)),
+                        ("id".into(), Value::Int(7)),
+                        (
+                            "renamed".into(),
+                            Value::Map(BTreeMap::from([
+                                ("active".into(), Value::Bool(true)),
+                                ("id".into(), Value::Int(7)),
+                                ("name".into(), Value::Str("bb8".into())),
+                            ])),
+                        ),
+                    ]),
+                ),
+                (
+                    1,
+                    BTreeMap::from([
+                        ("active".into(), Value::Bool(false)),
+                        ("id".into(), Value::Int(8)),
+                        (
+                            "renamed".into(),
+                            Value::Map(BTreeMap::from([
+                                ("active".into(), Value::Bool(false)),
+                                ("id".into(), Value::Int(8)),
+                                ("name".into(), Value::Str("bb8".into())),
+                            ])),
+                        ),
+                    ]),
+                ),
+            ],
+            "Untyped struct-like output mismatch for config {:?}",
+            config,
+        );
+    }
+    Ok(())
 }
 
 #[apply(async_test)]

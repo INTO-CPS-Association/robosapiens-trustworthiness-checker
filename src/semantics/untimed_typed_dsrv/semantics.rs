@@ -8,7 +8,8 @@ use crate::lang::dsrv::ast::SExpr;
 use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dsrv::type_checker::{
     PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
-    TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind,
+    TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr,
+    TypedStructExprKind,
 };
 use crate::semantics::untimed_untyped_dsrv::combinators as uc;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
@@ -49,6 +50,7 @@ where
                 eval_typed_list::<AC, Parser>(tl, ctx),
             ),
             SExprTE::Map(tm) => eval_typed_map::<AC, Parser>(tm, ctx),
+            SExprTE::Struct(st) => eval_typed_struct::<AC, Parser>(st, ctx),
         }
     }
 }
@@ -153,6 +155,74 @@ where
             eval_typed_map::<AC, Parser>(*map, ctx),
             key,
         )),
+        TypedListExprKind::SGetStruct(st, key) => to_typed_partial_stream::<EcoVec<Value>>(
+            uc::mget(eval_typed_struct::<AC, Parser>(*st, ctx), key),
+        ),
+    }
+}
+
+fn eval_typed_struct<AC, Parser>(
+    typed_struct: TypedStructExpr,
+    ctx: &AC::Ctx,
+) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    match typed_struct.kind {
+        TypedStructExprKind::Var(v) => ctx.var(&v).unwrap(),
+        TypedStructExprKind::Literal(entries) => {
+            let streams = entries
+                .into_iter()
+                .map(|(k, e)| {
+                    (
+                        k,
+                        <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                            e, ctx,
+                        ),
+                    )
+                })
+                .collect();
+            uc::map(streams)
+        }
+        TypedStructExprKind::Default(e1, e2) => {
+            let e1 = eval_typed_struct::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_struct::<AC, Parser>(*e2, ctx);
+            uc::default(e1, e2)
+        }
+        TypedStructExprKind::If(b, e1, e2) => {
+            let b = from_typed_stream::<PartialStreamValue<bool>>(
+                to_async_stream_bool::<AC, Parser>(*b, ctx),
+            );
+            let e1 = eval_typed_struct::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_struct::<AC, Parser>(*e2, ctx);
+            uc::if_stm(b, e1, e2)
+        }
+        TypedStructExprKind::Init(e1, e2) => {
+            let e1 = eval_typed_struct::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_struct::<AC, Parser>(*e2, ctx);
+            uc::init(e1, e2)
+        }
+        TypedStructExprKind::SIndex(e, i) => {
+            let e = eval_typed_struct::<AC, Parser>(*e, ctx);
+            uc::sindex(e, i)
+        }
+        TypedStructExprKind::SUpdate(st, key, value) => {
+            let struct_stream = eval_typed_struct::<AC, Parser>(*st, ctx);
+            let value_stream =
+                <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                    *value, ctx,
+                );
+            uc::minsert(struct_stream, key, value_stream)
+        }
+        TypedStructExprKind::SGet(st, key) => {
+            uc::mget(eval_typed_struct::<AC, Parser>(*st, ctx), key)
+        }
+        TypedStructExprKind::Defer(_, _)
+        | TypedStructExprKind::Dynamic(_, _)
+        | TypedStructExprKind::RestrictedDynamic(_, _, _) => {
+            todo!("typed dynamic/defer struct runtime semantics are not implemented yet")
+        }
     }
 }
 
@@ -213,6 +283,9 @@ where
         }
         TypedMapExprKind::MGetMap(map, key) => {
             uc::mget(eval_typed_map::<AC, Parser>(*map, ctx), key)
+        }
+        TypedMapExprKind::SGetStruct(st, key) => {
+            uc::mget(eval_typed_struct::<AC, Parser>(*st, ctx), key)
         }
         TypedMapExprKind::Defer(_, _)
         | TypedMapExprKind::Dynamic(_, _)
@@ -295,6 +368,9 @@ where
         }
         SExprInt::MGetMap(map, key) => {
             to_typed_partial_stream::<i64>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
+        }
+        SExprInt::SGetStruct(st, key) => {
+            to_typed_partial_stream::<i64>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
         }
     }
 }
@@ -381,6 +457,9 @@ where
         SExprFloat::MGetMap(map, key) => {
             to_typed_partial_stream::<f64>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
         }
+        SExprFloat::SGetStruct(st, key) => {
+            to_typed_partial_stream::<f64>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
+        }
     }
 }
 
@@ -446,6 +525,10 @@ where
         SExprStr::MGetMap(map, key) => {
             to_typed_partial_stream::<String>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
         }
+        SExprStr::SGetStruct(st, key) => to_typed_partial_stream::<String>(uc::mget(
+            eval_typed_struct::<AC, Parser>(st, ctx),
+            key,
+        )),
     }
 }
 
@@ -529,6 +612,9 @@ where
         SExprTE::Map(e) => {
             to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_map::<AC, Parser>(e, ctx)))
         }
+        SExprTE::Struct(e) => {
+            to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_struct::<AC, Parser>(e, ctx)))
+        }
     }
 }
 
@@ -547,6 +633,9 @@ where
         SExprTE::List(tl) => mc::when_list(eval_typed_list::<AC, Parser>(tl, ctx)),
         SExprTE::Map(e) => {
             to_typed_partial_stream::<bool>(uc::when(eval_typed_map::<AC, Parser>(e, ctx)))
+        }
+        SExprTE::Struct(e) => {
+            to_typed_partial_stream::<bool>(uc::when(eval_typed_struct::<AC, Parser>(e, ctx)))
         }
     }
 }
@@ -622,6 +711,9 @@ where
         SExprBool::MGetMap(map, key) => {
             to_typed_partial_stream::<bool>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
         }
+        SExprBool::SGetStruct(st, key) => {
+            to_typed_partial_stream::<bool>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
+        }
         SExprBool::MHasKeyMap(map, key) => to_typed_partial_stream::<bool>(uc::mhas_key(
             eval_typed_map::<AC, Parser>(map, ctx),
             key,
@@ -683,6 +775,9 @@ where
         }
         SExprUnit::MGetMap(map, key) => {
             to_typed_partial_stream::<()>(uc::mget(eval_typed_map::<AC, Parser>(map, ctx), key))
+        }
+        SExprUnit::SGetStruct(st, key) => {
+            to_typed_partial_stream::<()>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
         }
     }
 }

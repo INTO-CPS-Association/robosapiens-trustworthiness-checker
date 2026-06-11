@@ -137,7 +137,7 @@ where
                 let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst, ctx);
                 mc::llen(lst)
             }
-            SExpr::Map(map) => {
+            SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
                 let map: BTreeMap<_, _> = map
                     .into_iter()
                     .map(|(k, v)| {
@@ -152,6 +152,9 @@ where
             SExpr::MGet(map, k) => {
                 let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);
                 mc::mget(map, k)
+            }
+            SExpr::SGet(_, _) => {
+                panic!("dot field access is only supported for structs in typed semantics")
             }
             SExpr::MRemove(map, k) => {
                 let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);

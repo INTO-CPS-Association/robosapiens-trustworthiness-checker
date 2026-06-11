@@ -2,18 +2,28 @@ use ecow::{EcoString, EcoVec};
 use winnow::{
     Result,
     ascii::{line_ending, multispace1},
-    combinator::{alt, delimited, opt, separated, seq},
+    combinator::{alt, delimited, opt, separated, seq, trace},
     error::ContextError,
-    token::{literal, take_until},
+    stream::Stream,
+    token::{literal, take_until, take_while},
 };
 
 use crate::{Specification, Value};
 use std::{collections::BTreeMap, fmt::Debug};
 use winnow::Parser;
-pub use winnow::ascii::alphanumeric1 as ident;
 pub use winnow::ascii::dec_int as integer;
 pub use winnow::ascii::float;
 pub use winnow::ascii::space0 as whitespace;
+
+// TODO: do we need to refine this to e.g. disallow names starting with numbers?
+#[inline(always)]
+pub fn ident<'a>(input: &mut &'a str) -> Result<<&'a str as Stream>::Slice, ContextError> {
+    trace(
+        "ident",
+        take_while(1.., ('A'..='Z', 'a'..='z', '0'..='9', '_')),
+    )
+    .parse_next(input)
+}
 
 pub trait ExprParser<Expr>: Clone {
     fn parse(input: &mut &str) -> anyhow::Result<Expr>;
@@ -54,6 +64,16 @@ fn value_map(s: &mut &str) -> Result<BTreeMap<EcoString, Value>> {
     .parse_next(s)
 }
 
+fn value_object_literal(s: &mut &str) -> Result<BTreeMap<EcoString, Value>> {
+    delimited(
+        '{',
+        separated(0.., key_value, seq!(whitespace, ',', whitespace)),
+        '}',
+    )
+    .map(|v: Vec<_>| BTreeMap::from_iter(v.into_iter()))
+    .parse_next(s)
+}
+
 pub fn string<'a>(s: &mut &'a str) -> Result<&'a str> {
     delimited('"', take_until(0.., "\""), '\"').parse_next(s)
 }
@@ -86,7 +106,12 @@ pub fn val(s: &mut &str) -> Result<Value> {
 pub fn val_or_container(s: &mut &str) -> Result<Value> {
     delimited(
         whitespace,
-        alt((val, value_list.map(Value::List), value_map.map(Value::Map))),
+        alt((
+            val,
+            value_list.map(Value::List),
+            value_map.map(Value::Map),
+            value_object_literal.map(Value::Map),
+        )),
         whitespace,
     )
     .parse_next(s)
@@ -120,5 +145,16 @@ pub fn loop_ms_or_lb_or_lc(s: &mut &str) -> Result<()> {
             // When neither matches - not an error, we are just done
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ident_underscore() {
+        let mut input = "a_b";
+        assert_eq!(ident(&mut input), Ok("a_b"));
     }
 }

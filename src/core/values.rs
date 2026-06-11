@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::anyhow;
 use ecow::{EcoString, EcoVec};
+
 use redis::{FromRedisValue, ToRedisArgs, ToSingleRedisArg};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
@@ -302,6 +303,7 @@ pub enum StreamType {
     Unit,
     List(Box<StreamType>),
     Map(Box<StreamType>),
+    Struct(EcoVec<(EcoString, StreamType)>, bool), // ordered typed fields, true allows extra fields
 }
 
 impl Display for StreamType {
@@ -314,6 +316,16 @@ impl Display for StreamType {
             StreamType::Unit => write!(f, "Unit"),
             StreamType::List(inner) => write!(f, "List<{}>", inner),
             StreamType::Map(inner) => write!(f, "Map<{}>", inner),
+            StreamType::Struct(inner, allow_extra) => {
+                let mut fields = inner
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>();
+                if *allow_extra {
+                    fields.push("...".into());
+                }
+                write!(f, "Struct<{}>", fields.join(", "))
+            }
         }
     }
 }
@@ -814,5 +826,21 @@ mod tests {
         let v = "\"⊥\"";
         let json: Value = from_str(&v).unwrap();
         assert_eq!(json, Value::Deferred);
+    }
+
+    #[test]
+    fn test_format_struct_type() {
+        let typ = StreamType::Struct(
+            vec![
+                ("name".into(), StreamType::Str),
+                ("count".into(), StreamType::Int),
+            ]
+            .into(),
+            false,
+        );
+        assert_eq!(typ.to_string(), "Struct<name: Str, count: Int>");
+
+        let typ = StreamType::Struct(vec![("name".into(), StreamType::Str)].into(), true);
+        assert_eq!(typ.to_string(), "Struct<name: Str, ...>");
     }
 }
