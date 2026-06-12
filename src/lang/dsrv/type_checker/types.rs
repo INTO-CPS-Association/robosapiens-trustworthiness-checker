@@ -50,7 +50,7 @@ fn check_value_type_ref(typ: &TCType, value: &Value) -> Result<(), String> {
         (TCType::Bool, Value::Bool(_)) => Ok(()),
         (TCType::Float, Value::Float(_)) => Ok(()),
         (TCType::Unit, Value::Unit) => Ok(()),
-        (TCType::Dyn, _) => Ok(()),
+        (TCType::Any, _) => Ok(()),
         (TCType::EmptyList | TCType::EmptyMap | TCType::Unknown, _) => Ok(()),
         (typ, Value::List(inner_values)) if typ.list_element_type().is_some() => {
             let inner_type = typ.list_element_type().expect("checked above");

@@ -810,7 +810,7 @@ pub fn list(exprs: Vec<OutputStream<Value>>, list_type: StreamType) -> ListStrea
     })
 }
 
-/// Evaluate a `dyn TypedList` that has been wrapped by `is_defined` — the
+/// Evaluate a `any TypedList` that has been wrapped by `is_defined` — the
 /// list is converted to a `Value`-level stream so that `is_defined` can
 /// inspect `Deferred`/`NoVal` at the list granularity.
 pub fn is_defined_list(x: ListStream) -> OutputStream<PartialStreamValue<bool>> {

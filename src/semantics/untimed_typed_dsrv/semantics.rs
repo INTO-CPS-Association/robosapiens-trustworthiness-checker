@@ -12,7 +12,7 @@ use crate::lang::dsrv::ast::{
     BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp,
 };
 use crate::lang::dsrv::type_checker::{
-    SExprBool, SExprDyn, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
+    SExprBool, SExprAny, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
     TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::untimed_untyped_dsrv::combinators as uc;
@@ -55,20 +55,20 @@ where
             ),
             SExprTE::Map(tm) => eval_typed_map::<AC, Parser>(tm, ctx),
             SExprTE::Struct(st) => eval_typed_struct::<AC, Parser>(st, ctx),
-            SExprTE::Dyn(e) => eval_dyn::<AC, Parser>(e, ctx),
+            SExprTE::Any(e) => eval_dyn::<AC, Parser>(e, ctx),
         }
     }
 }
 
-fn eval_dyn<AC, Parser>(expr: SExprDyn, ctx: &AC::Ctx) -> OutputStream<Value>
+fn eval_dyn<AC, Parser>(expr: SExprAny, ctx: &AC::Ctx) -> OutputStream<Value>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     Parser: ExprParser<SExpr> + 'static,
 {
     match expr {
-        SExprDyn::Var(v) => ctx.var(&v).unwrap(),
-        SExprDyn::Val(v) => uc::val(v),
-        SExprDyn::Expr(e) => eval_untyped_expr::<AC, Parser>(e, ctx),
+        SExprAny::Var(v) => ctx.var(&v).unwrap(),
+        SExprAny::Val(v) => uc::val(v),
+        SExprAny::Expr(e) => eval_untyped_expr::<AC, Parser>(e, ctx),
     }
 }
 
@@ -164,7 +164,7 @@ where
         SExpr::Tan(v) => uc::tan(eval_untyped_expr::<AC, Parser>(*v, ctx)),
         SExpr::Abs(v) => uc::abs(eval_untyped_expr::<AC, Parser>(*v, ctx)),
         SExpr::Dynamic(_, _) | SExpr::RestrictedDynamic(_, _, _) | SExpr::Defer(_, _, _) => {
-            panic!("dynamic/defer inside gradual Dyn fallback is not supported yet")
+            panic!("dynamic/defer inside gradual Any fallback is not supported yet")
         }
         SExpr::SGet(_, _) => {
             panic!("dot field access is only supported for structs in typed semantics")
@@ -922,7 +922,7 @@ where
             // Only Eq is valid for Unit (enforced by the type checker)
             mc::eq(a, b)
         }
-        (SExprTE::Dyn(a), SExprTE::Dyn(b)) => {
+        (SExprTE::Any(a), SExprTE::Any(b)) => {
             let a = eval_dyn::<AC, Parser>(a, ctx);
             let b = eval_dyn::<AC, Parser>(b, ctx);
             to_typed_partial_stream::<bool>(match op {
@@ -959,7 +959,7 @@ where
         SExprTE::Struct(e) => {
             to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_struct::<AC, Parser>(e, ctx)))
         }
-        SExprTE::Dyn(e) => {
+        SExprTE::Any(e) => {
             to_typed_partial_stream::<bool>(uc::is_defined(eval_dyn::<AC, Parser>(e, ctx)))
         }
     }
@@ -984,7 +984,7 @@ where
         SExprTE::Struct(e) => {
             to_typed_partial_stream::<bool>(uc::when(eval_typed_struct::<AC, Parser>(e, ctx)))
         }
-        SExprTE::Dyn(e) => {
+        SExprTE::Any(e) => {
             to_typed_partial_stream::<bool>(uc::when(eval_dyn::<AC, Parser>(e, ctx)))
         }
     }

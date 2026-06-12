@@ -306,7 +306,7 @@ pub enum StreamType {
     Struct(EcoVec<(EcoString, StreamType)>, bool), // ordered typed fields, true allows extra fields
     /// Gradual/dynamic stream type. Values are represented as `Value` and checked at runtime when
     /// cast to a stricter type.
-    Dyn,
+    Any,
 }
 
 impl Display for StreamType {
@@ -329,7 +329,7 @@ impl Display for StreamType {
                 }
                 write!(f, "Struct<{}>", fields.join(", "))
             }
-            StreamType::Dyn => write!(f, "Dyn"),
+            StreamType::Any => write!(f, "Any"),
         }
     }
 }

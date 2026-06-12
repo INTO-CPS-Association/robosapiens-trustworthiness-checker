@@ -298,6 +298,7 @@ StreamTyp: StreamType = {
     "Float" => StreamType::Float,
     "Bool" => StreamType::Bool,
     "Unit" => StreamType::Unit,
+    "Any" => StreamType::Any,
     "List" "<" <inner: StreamTyp> ">" => StreamType::List(Box::new(inner)),
     "Map" "<" <inner: StreamTyp> ">" => StreamType::Map(Box::new(inner)),
     "Struct" "<" <fields: StructPermissiveFields> ">" => StreamType::Struct(fields, true),

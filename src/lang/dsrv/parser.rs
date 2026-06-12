@@ -924,6 +924,7 @@ fn stream_type(s: &mut &str) -> Result<StreamType> {
                 literal("Bool"),
                 literal("Str"),
                 literal("Unit"),
+                literal("Any"),
             ))
             .map(|typ| match typ {
                 "Int" => StreamType::Int,
@@ -931,6 +932,7 @@ fn stream_type(s: &mut &str) -> Result<StreamType> {
                 "Bool" => StreamType::Bool,
                 "Str" => StreamType::Str,
                 "Unit" => StreamType::Unit,
+                "Any" => StreamType::Any,
                 _ => unreachable!(),
             }),
         )),

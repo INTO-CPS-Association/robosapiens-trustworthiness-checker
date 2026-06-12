@@ -7,7 +7,7 @@ use petgraph::visit::{EdgeRef, IntoNodeReferences};
 use tracing::debug;
 
 use crate::lang::dsrv::type_checker::{
-    SExprBool, SExprDyn, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
+    SExprAny, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
     TypedDsrvSpecification, TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind,
     TypedStructExpr, TypedStructExprKind,
 };
@@ -299,20 +299,20 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             SExprTE::List(e) => deps_list(e, steps, map, current_node, current_idx),
             SExprTE::Map(e) => deps_map(e, steps, map, current_node, current_idx),
             SExprTE::Struct(e) => deps_struct(e, steps, map, current_node, current_idx),
-            SExprTE::Dyn(e) => deps_dyn(e, steps, map, current_node, current_idx),
+            SExprTE::Any(e) => deps_dyn(e, steps, map, current_node, current_idx),
         }
     }
 
     fn deps_dyn(
-        expr: &SExprDyn,
+        expr: &SExprAny,
         steps: &mut Vec<Weight>,
         map: &mut DepGraph,
         current_node: &NodeIndex,
         _current_idx: u64,
     ) {
         match expr {
-            SExprDyn::Var(name) => add_var_dep(map, current_node, name, steps),
-            SExprDyn::Val(_) | SExprDyn::Expr(_) => {}
+            SExprAny::Var(name) => add_var_dep(map, current_node, name, steps),
+            SExprAny::Val(_) | SExprAny::Expr(_) => {}
         }
     }
 

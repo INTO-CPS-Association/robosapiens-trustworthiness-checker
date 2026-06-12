@@ -31,7 +31,7 @@ pub enum TCType {
     /// Placeholder used for empty map literals whose value type is not yet known.
     EmptyMap,
     /// Gradual/dynamic type. Accepted statically and checked when cast to a stricter type.
-    Dyn,
+    Any,
     /// Unknown non-container type used for special values such as Deferred/NoVal.
     Unknown,
 }
@@ -76,7 +76,7 @@ impl TCType {
                     .collect(),
                 *allow_extra,
             ),
-            StreamType::Dyn => TCType::Dyn,
+            StreamType::Any => TCType::Any,
         }
     }
 
@@ -105,7 +105,7 @@ impl TCType {
                         _ => unreachable!(),
                     },
                 ),
-            TCType::Dyn => Some(StreamType::Dyn),
+            TCType::Any => Some(StreamType::Any),
             TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => None,
         }
     }
@@ -131,7 +131,7 @@ impl std::fmt::Display for TCType {
                 }
                 write!(f, "Struct<{}>", fields.join(", "))
             }
-            TCType::Dyn => write!(f, "Dyn"),
+            TCType::Any => write!(f, "Any"),
             TCType::EmptyList => write!(f, "EmptyList"),
             TCType::EmptyMap => write!(f, "EmptyMap"),
             TCType::Unknown => write!(f, "Unknown"),
@@ -667,7 +667,7 @@ impl TypedStructExpr {
 
 // Stream expression typed enum
 #[derive(Debug, PartialEq, Clone)]
-pub enum SExprDyn {
+pub enum SExprAny {
     Var(VarName),
     Val(Value),
     Expr(SExpr),
@@ -683,7 +683,7 @@ pub enum SExprTE {
     List(TypedListExpr),
     Map(TypedMapExpr),
     Struct(TypedStructExpr),
-    Dyn(SExprDyn),
+    Any(SExprAny),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -755,7 +755,7 @@ pub fn extract_type(expr: &SExprTE) -> TCType {
         SExprTE::List(tl) => tl.list_tc_type(),
         SExprTE::Map(tm) => tm.map_tc_type(),
         SExprTE::Struct(st) => TCType::Struct(st.typ_map.clone(), st.allow_extra_fields),
-        SExprTE::Dyn(_) => TCType::Dyn,
+        SExprTE::Any(_) => TCType::Any,
     }
 }
 
@@ -770,7 +770,7 @@ impl Display for SExprTE {
             SExprTE::List(e) => write!(f, "{:?}", e),
             SExprTE::Map(e) => write!(f, "{:?}", e),
             SExprTE::Struct(e) => write!(f, "{:?}", e),
-            SExprTE::Dyn(e) => write!(f, "{:?}", e),
+            SExprTE::Any(e) => write!(f, "{:?}", e),
         }
     }
 }

@@ -95,7 +95,7 @@ impl TypeCheckableHelper<SExprTE> for Value {
                 Some(StreamType::Unit) => {
                     Ok(SExprTE::Unit(SExprUnit::Val(PartialStreamValue::NoVal)))
                 }
-                Some(StreamType::Dyn) => Ok(SExprTE::Dyn(SExprDyn::Val(Value::NoVal))),
+                Some(StreamType::Any) => Ok(SExprTE::Any(SExprAny::Val(Value::NoVal))),
                 Some(StreamType::List(_))
                 | Some(StreamType::Map(_))
                 | Some(StreamType::Struct(_, _))
@@ -159,10 +159,10 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
             // Gradual numeric operations: two dynamic operands stay dynamic and
             // are checked by the runtime untyped operation.
             (SBinOp::NOp(_), Ok(lhs), Ok(rhs))
-                if matches!(extract_type(&lhs), TCType::Dyn)
-                    && matches!(extract_type(&rhs), TCType::Dyn) =>
+                if matches!(extract_type(&lhs), TCType::Any)
+                    && matches!(extract_type(&rhs), TCType::Any) =>
             {
-                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::BinOp(
+                Ok(SExprTE::Any(SExprAny::Expr(SExpr::BinOp(
                     Box::new((*se1).clone()),
                     Box::new((*se2).clone()),
                     op.clone(),
@@ -171,10 +171,10 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
 
             // Gradual numeric operations: cast dynamic operands to the concrete side.
             (SBinOp::NOp(op), Ok(lhs), Ok(rhs))
-                if matches!(extract_type(&lhs), TCType::Dyn)
+                if matches!(extract_type(&lhs), TCType::Any)
                     && matches!(extract_type(&rhs), TCType::Int)
                     || matches!(extract_type(&lhs), TCType::Int)
-                        && matches!(extract_type(&rhs), TCType::Dyn) =>
+                        && matches!(extract_type(&rhs), TCType::Any) =>
             {
                 let lhs = match cast_to_type(lhs, &StreamType::Int) {
                     SExprTE::Int(e) => e,
@@ -199,10 +199,10 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 }
             }
             (SBinOp::NOp(op), Ok(lhs), Ok(rhs))
-                if matches!(extract_type(&lhs), TCType::Dyn)
+                if matches!(extract_type(&lhs), TCType::Any)
                     && matches!(extract_type(&rhs), TCType::Float)
                     || matches!(extract_type(&lhs), TCType::Float)
-                        && matches!(extract_type(&rhs), TCType::Dyn) =>
+                        && matches!(extract_type(&rhs), TCType::Any) =>
             {
                 let lhs = match cast_to_type(lhs, &StreamType::Float) {
                     SExprTE::Float(e) => e,
@@ -232,20 +232,20 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 SExprBool::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
             (SBinOp::BOp(_), Ok(lhs), Ok(rhs))
-                if matches!(extract_type(&lhs), TCType::Dyn)
-                    && matches!(extract_type(&rhs), TCType::Dyn) =>
+                if matches!(extract_type(&lhs), TCType::Any)
+                    && matches!(extract_type(&rhs), TCType::Any) =>
             {
-                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::BinOp(
+                Ok(SExprTE::Any(SExprAny::Expr(SExpr::BinOp(
                     Box::new((*se1).clone()),
                     Box::new((*se2).clone()),
                     op.clone(),
                 ))))
             }
             (SBinOp::BOp(op), Ok(lhs), Ok(rhs))
-                if matches!(extract_type(&lhs), TCType::Dyn)
+                if matches!(extract_type(&lhs), TCType::Any)
                     && matches!(extract_type(&rhs), TCType::Bool)
                     || matches!(extract_type(&lhs), TCType::Bool)
-                        && matches!(extract_type(&rhs), TCType::Dyn) =>
+                        && matches!(extract_type(&rhs), TCType::Any) =>
             {
                 let lhs = match cast_to_type(lhs, &StreamType::Bool) {
                     SExprTE::Bool(e) => e,
@@ -266,20 +266,20 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 SExprStr::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
             (SBinOp::SOp(_), Ok(lhs), Ok(rhs))
-                if matches!(extract_type(&lhs), TCType::Dyn)
-                    && matches!(extract_type(&rhs), TCType::Dyn) =>
+                if matches!(extract_type(&lhs), TCType::Any)
+                    && matches!(extract_type(&rhs), TCType::Any) =>
             {
-                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::BinOp(
+                Ok(SExprTE::Any(SExprAny::Expr(SExpr::BinOp(
                     Box::new((*se1).clone()),
                     Box::new((*se2).clone()),
                     op.clone(),
                 ))))
             }
             (SBinOp::SOp(op), Ok(lhs), Ok(rhs))
-                if matches!(extract_type(&lhs), TCType::Dyn)
+                if matches!(extract_type(&lhs), TCType::Any)
                     && matches!(extract_type(&rhs), TCType::Str)
                     || matches!(extract_type(&lhs), TCType::Str)
-                        && matches!(extract_type(&rhs), TCType::Dyn) =>
+                        && matches!(extract_type(&rhs), TCType::Any) =>
             {
                 let lhs = match cast_to_type(lhs, &StreamType::Str) {
                     SExprTE::Str(e) => e,
@@ -302,23 +302,23 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 let ty1 = extract_type(&ste1);
                 let ty2 = extract_type(&ste2);
                 let (ste1, ste2, ty1) = match (&ty1, &ty2) {
-                    (TCType::Dyn, TCType::Dyn) => (ste1, ste2, TCType::Dyn),
-                    (TCType::Dyn, TCType::Int) | (TCType::Int, TCType::Dyn) => (
+                    (TCType::Any, TCType::Any) => (ste1, ste2, TCType::Any),
+                    (TCType::Any, TCType::Int) | (TCType::Int, TCType::Any) => (
                         cast_to_type(ste1, &StreamType::Int),
                         cast_to_type(ste2, &StreamType::Int),
                         TCType::Int,
                     ),
-                    (TCType::Dyn, TCType::Float) | (TCType::Float, TCType::Dyn) => (
+                    (TCType::Any, TCType::Float) | (TCType::Float, TCType::Any) => (
                         cast_to_type(ste1, &StreamType::Float),
                         cast_to_type(ste2, &StreamType::Float),
                         TCType::Float,
                     ),
-                    (TCType::Dyn, TCType::Str) | (TCType::Str, TCType::Dyn) => (
+                    (TCType::Any, TCType::Str) | (TCType::Str, TCType::Any) => (
                         cast_to_type(ste1, &StreamType::Str),
                         cast_to_type(ste2, &StreamType::Str),
                         TCType::Str,
                     ),
-                    (TCType::Dyn, TCType::Bool) | (TCType::Bool, TCType::Dyn) => (
+                    (TCType::Any, TCType::Bool) | (TCType::Bool, TCType::Any) => (
                         cast_to_type(ste1, &StreamType::Bool),
                         cast_to_type(ste2, &StreamType::Bool),
                         TCType::Bool,
@@ -334,7 +334,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 };
                 // Ordering comparisons are only valid for Int, Float, Str
                 let ordering_ok =
-                    matches!(ty1, TCType::Int | TCType::Float | TCType::Str | TCType::Dyn);
+                    matches!(ty1, TCType::Int | TCType::Float | TCType::Str | TCType::Any);
                 if *op != CompBinOp::Eq && !ordering_ok {
                     errs.push(SemanticError::TypeError(format!(
                         "Cannot apply ordering comparison {:?} to type {:?}",
@@ -602,7 +602,7 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, u64) {
                 SExprTE::List(tl) => Ok(SExprTE::List(tl.typed_sindex(idx))),
                 SExprTE::Map(tm) => Ok(SExprTE::Map(tm.typed_sindex(idx))),
                 SExprTE::Struct(se) => Ok(SExprTE::Struct(se.typed_sindex(idx))),
-                SExprTE::Dyn(e) => Ok(SExprTE::Dyn(e)),
+                SExprTE::Any(e) => Ok(SExprTE::Any(e)),
             },
             // If there's already an error just propagate it
             Err(_) => Err(()),
@@ -642,7 +642,7 @@ impl TypeCheckableHelper<SExprTE> for VarName {
                     let typed_struct = make_struct_var(self.clone(), typed_inner, *allow_extra);
                     Ok(SExprTE::Struct(typed_struct))
                 }
-                StreamType::Dyn => Ok(SExprTE::Dyn(SExprDyn::Var(self.clone()))),
+                StreamType::Any => Ok(SExprTE::Any(SExprAny::Var(self.clone()))),
             },
             None => {
                 errs.push(SemanticError::UndeclaredVariable(format!(
@@ -875,7 +875,7 @@ fn unify_element_types(t1: &TCType, t2: &TCType) -> Option<TCType> {
 }
 
 /// Cast `expr` to the given target type, inserting a runtime `Cast` node when
-/// the expression is not already of that type (e.g. for `Dyn` operands).
+/// the expression is not already of that type (e.g. for `Any` operands).
 pub(super) fn cast_to_type(expr: SExprTE, target: &StreamType) -> SExprTE {
     match target {
         StreamType::Int => match expr {
@@ -898,7 +898,7 @@ pub(super) fn cast_to_type(expr: SExprTE, target: &StreamType) -> SExprTE {
             SExprTE::Unit(e) => SExprTE::Unit(e),
             other => SExprTE::Unit(SExprUnit::Cast(Box::new(other))),
         },
-        StreamType::Dyn => expr,
+        StreamType::Any => expr,
         StreamType::List(_) | StreamType::Map(_) | StreamType::Struct(_, _) => expr,
     }
 }
@@ -954,7 +954,7 @@ fn typed_struct_get(
             allow_extra_fields,
             kind: TypedStructExprKind::SGet(Box::new(typed_struct), key),
         })),
-        TCType::Dyn => Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::SGet(
+        TCType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::SGet(
             Box::new(SExpr::Val(Value::Unit)),
             key,
         )))),
@@ -991,7 +991,7 @@ fn typed_map_get(
             ));
             Err(())
         }
-        TCType::Dyn => Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::MGet(
+        TCType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::MGet(
             Box::new(SExpr::Val(Value::Unit)),
             key,
         )))),
@@ -1235,7 +1235,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             kind: TypedStructExprKind::Dynamic(Box::new(e_str), ctx.clone()),
                         }))
                     }
-                    StreamType::Dyn => Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::Val(Value::Unit)))),
+                    StreamType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit)))),
                 }
             }
             SExpr::RestrictedDynamic(e, type_ascription, vs) => {
@@ -1321,7 +1321,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             ),
                         }))
                     }
-                    StreamType::Dyn => Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::Val(Value::Unit)))),
+                    StreamType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit)))),
                 }
             }
             SExpr::Defer(e, type_ascription, vs) => {
@@ -1399,7 +1399,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             ),
                         }))
                     }
-                    StreamType::Dyn => Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::Val(Value::Unit)))),
+                    StreamType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit)))),
                 }
             }
             SExpr::Update(lhs, rhs) => type_check_same_typed_stream_op(
@@ -1505,8 +1505,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 typed_list,
                                 Box::new(idx_int),
                             ))),
-                            TCType::Dyn => {
-                                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::Val(Value::Unit))))
+                            TCType::Any => {
+                                Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit))))
                             }
                             TCType::EmptyList => {
                                 errs.push(SemanticError::TypeError(
@@ -1637,8 +1637,8 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             TCType::Bool => Ok(SExprTE::Bool(SExprBool::LHeadList(typed_list))),
                             TCType::Str => Ok(SExprTE::Str(SExprStr::LHeadList(typed_list))),
                             TCType::Unit => Ok(SExprTE::Unit(SExprUnit::LHeadList(typed_list))),
-                            TCType::Dyn => {
-                                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::Val(Value::Unit))))
+                            TCType::Any => {
+                                Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit))))
                             }
                             TCType::EmptyList => {
                                 errs.push(SemanticError::TypeError(

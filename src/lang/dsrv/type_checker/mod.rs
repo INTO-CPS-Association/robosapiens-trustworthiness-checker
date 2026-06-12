@@ -8,7 +8,7 @@
 //! - `strict`: the strict `type_check` driver, which requires type
 //!   annotations on all variables
 //! - `gradual`: the gradual `type_check_gradual` driver, which infers types
-//!   for unannotated variables and falls back to `Dyn`
+//!   for unannotated variables and falls back to `Any`
 //! - `types`: semantic errors, the type-checking traits, and runtime
 //!   validation of values against types
 

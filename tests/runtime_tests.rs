@@ -216,7 +216,7 @@ async fn test_gradual_typed_runtime_infers_unannotated_output(
 async fn test_gradual_typed_runtime_casts_untyped_input(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
-    // The input `x` has no annotation, so it is treated as Dyn and cast to Int
+    // The input `x` has no annotation, so it is treated as Any and cast to Int
     // at runtime where it is used in an integer addition.
     let spec = "in x\nout z\nz = x + 1";
 
@@ -225,7 +225,7 @@ async fn test_gradual_typed_runtime_casts_untyped_input(
         RuntimeSpec::Async,
         spec,
         BTreeMap::from([("x".into(), vec![41.into(), 1.into()])]),
-        "gradual typed dyn input outputs.collect()",
+        "gradual typed any input outputs.collect()",
     )
     .await?;
 
@@ -240,11 +240,82 @@ async fn test_gradual_typed_runtime_casts_untyped_input(
 }
 
 #[apply(async_test)]
-async fn test_gradual_typed_runtime_evaluates_dyn_plus_dyn(
+async fn test_gradual_typed_runtime_accepts_explicit_any_annotations(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // Explicit Any annotations should parse and execute through the same
+    // runtime-checked path as inferred Any expressions.
+    let spec = "in x: Any\nin y: Any\nout z: Any\nz = x + y";
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_gradual_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            BTreeMap::from([
+                ("x".into(), vec![Value::Int(1), Value::Int(2)]),
+                ("y".into(), vec![Value::Int(3), Value::Float(0.5)]),
+            ]),
+            "gradual typed explicit Any outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![
+                (0, BTreeMap::from([("z".into(), Value::Int(4))])),
+                (1, BTreeMap::from([("z".into(), Value::Float(2.5))])),
+            ],
+            "unexpected gradual explicit Any outputs for runtime {runtime:?}",
+        );
+    }
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_accepts_any_inside_list_annotation(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // Any should also be accepted inside container annotations. This verifies
+    // parsing and runtime validation of a heterogeneous List<Any>.
+    let spec = "in xs: List<Any>\nout ys: List<Any>\nys = xs";
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_gradual_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            BTreeMap::from([(
+                "xs".into(),
+                vec![Value::List(
+                    vec![Value::Int(1), Value::Str("robot".into())].into(),
+                )],
+            )]),
+            "gradual typed List<Any> outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![(
+                0,
+                BTreeMap::from([(
+                    "ys".into(),
+                    Value::List(vec![Value::Int(1), Value::Str("robot".into())].into())
+                )]),
+            )],
+            "unexpected gradual List<Any> outputs for runtime {runtime:?}",
+        );
+    }
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_evaluates_any_plus_any(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     // Both inputs and the output are unannotated, so the expression remains
-    // Dyn + Dyn after type checking. The typed runtime must therefore evaluate
+    // Any + Any after type checking. The typed runtime must therefore evaluate
     // the operation through the dynamic runtime path and check/dispatch against
     // the actual Value types at each tick.
     let spec = "in x\nin y\nout z\nz = x + y";
@@ -258,7 +329,7 @@ async fn test_gradual_typed_runtime_evaluates_dyn_plus_dyn(
                 ("x".into(), vec![Value::Int(1), Value::Int(2)]),
                 ("y".into(), vec![Value::Int(3), Value::Float(0.5)]),
             ]),
-            "gradual typed dyn+dyn outputs.collect()",
+            "gradual typed any+any outputs.collect()",
         )
         .await?;
 
@@ -268,7 +339,7 @@ async fn test_gradual_typed_runtime_evaluates_dyn_plus_dyn(
                 (0, BTreeMap::from([("z".into(), Value::Int(4))])),
                 (1, BTreeMap::from([("z".into(), Value::Float(2.5))])),
             ],
-            "unexpected gradual Dyn + Dyn outputs for runtime {runtime:?}",
+            "unexpected gradual Any + Any outputs for runtime {runtime:?}",
         );
     }
     Ok(())
@@ -363,7 +434,7 @@ async fn test_gradual_typed_runtime_inference_chain_out_of_order(
 async fn test_gradual_typed_runtime_dyn_comparisons(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
-    // `gd` is untyped (Dyn); comparisons against an Int literal must cast it
+    // `gd` is untyped (Any); comparisons against an Int literal must cast it
     // to Int at runtime and produce Bool outputs.
     let spec = "in gd\nout geq\nout gle\ngeq = gd == 10\ngle = gd <= 10";
     let outputs = run_gradual_typed_runtime_with_spec(
@@ -371,7 +442,7 @@ async fn test_gradual_typed_runtime_dyn_comparisons(
         RuntimeSpec::Async,
         spec,
         BTreeMap::from([("gd".into(), vec![10.into(), 3.into(), 42.into()])]),
-        "gradual dyn comparison outputs.collect()",
+        "gradual any comparison outputs.collect()",
     )
     .await?;
 
@@ -416,7 +487,7 @@ async fn test_gradual_typed_runtime_dyn_float_arithmetic(
         RuntimeSpec::Async,
         spec,
         BTreeMap::from([("gf".into(), vec![1.0.into(), 2.5.into()])]),
-        "gradual dyn float outputs.collect()",
+        "gradual any float outputs.collect()",
     )
     .await?;
 
@@ -442,7 +513,7 @@ async fn test_gradual_typed_runtime_dyn_string_concat(
         RuntimeSpec::Async,
         spec,
         BTreeMap::from([("gs".into(), vec!["a".into(), "b".into()])]),
-        "gradual dyn string outputs.collect()",
+        "gradual any string outputs.collect()",
     )
     .await?;
 

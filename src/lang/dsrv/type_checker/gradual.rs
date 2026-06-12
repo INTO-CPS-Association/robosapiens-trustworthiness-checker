@@ -1,5 +1,5 @@
 //! Gradual type checking: a fixed-point inference driver layered on the
-//! expression-level checker, falling back to `Dyn` for unannotated variables
+//! expression-level checker, falling back to `Any` for unannotated variables
 //! that cannot be given a concrete type.
 
 use super::expr::{cast_to_type, coerce_empty_list, coerce_empty_map};
@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 
 fn gradual_fallback_type(typ: TCType) -> StreamType {
     match typ {
-        TCType::EmptyList => StreamType::List(Box::new(StreamType::Dyn)),
-        TCType::EmptyMap => StreamType::Map(Box::new(StreamType::Dyn)),
-        TCType::Unknown | TCType::Dyn => StreamType::Dyn,
+        TCType::EmptyList => StreamType::List(Box::new(StreamType::Any)),
+        TCType::EmptyMap => StreamType::Map(Box::new(StreamType::Any)),
+        TCType::Unknown | TCType::Any => StreamType::Any,
         TCType::List(inner) => StreamType::List(Box::new(gradual_fallback_type(*inner))),
         TCType::Map(inner) => StreamType::Map(Box::new(gradual_fallback_type(*inner))),
         TCType::Struct(fields, allow_extra) => StreamType::Struct(
@@ -23,18 +23,18 @@ fn gradual_fallback_type(typ: TCType) -> StreamType {
                 .collect(),
             allow_extra,
         ),
-        other => other.to_stream_type().unwrap_or(StreamType::Dyn),
+        other => other.to_stream_type().unwrap_or(StreamType::Any),
     }
 }
 
 /// Gradual type consistency between a declared stream type and an inferred
-/// checker type: `Dyn` (and unresolved placeholders) are consistent with
+/// checker type: `Any` (and unresolved placeholders) are consistent with
 /// anything, while concrete types must match structurally. This ensures that
 /// concrete static mismatches like `out y: Bool; y = 1` are still rejected
 /// instead of being deferred to a doomed runtime cast.
 fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
     match (expected, actual) {
-        (StreamType::Dyn, _) | (_, TCType::Dyn) => true,
+        (StreamType::Any, _) | (_, TCType::Any) => true,
         (_, TCType::Unknown) => true,
         (StreamType::List(_), TCType::EmptyList) => true,
         (StreamType::Map(_), TCType::EmptyMap) => true,
@@ -56,15 +56,15 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
     }
 }
 
-/// Replace unresolved empty-container placeholder element types with `Dyn` so
+/// Replace unresolved empty-container placeholder element types with `Any` so
 /// that inferred gradual expressions have concrete types at runtime.
 fn coerce_gradual_placeholders(te: SExprTE) -> SExprTE {
     match te {
         SExprTE::List(tl) if *tl.element_type() == TCType::EmptyList => {
-            SExprTE::List(coerce_empty_list(tl, TCType::Dyn))
+            SExprTE::List(coerce_empty_list(tl, TCType::Any))
         }
         SExprTE::Map(tm) if *tm.value_type() == TCType::EmptyMap => {
-            SExprTE::Map(coerce_empty_map(tm, TCType::Dyn))
+            SExprTE::Map(coerce_empty_map(tm, TCType::Any))
         }
         other => other,
     }
@@ -73,7 +73,7 @@ fn coerce_gradual_placeholders(te: SExprTE) -> SExprTE {
 pub fn type_check_gradual(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSpecification> {
     let mut type_context = spec.type_annotations.clone();
     for var in spec.input_vars.iter() {
-        type_context.entry(var.clone()).or_insert(StreamType::Dyn);
+        type_context.entry(var.clone()).or_insert(StreamType::Any);
     }
 
     let mut typed_exprs: BTreeMap<VarName, SExprTE> = BTreeMap::new();
@@ -131,14 +131,14 @@ pub fn type_check_gradual(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSp
         }
 
         // No further progress is possible. Fall back the first unannotated
-        // unresolved assignment to Dyn, which may unblock the others.
+        // unresolved assignment to Any, which may unblock the others.
         if let Some(pos) = pending
             .iter()
             .position(|(var, _)| !type_context.contains_key(var))
         {
             let (var, expr) = pending.remove(pos);
-            typed_exprs.insert(var.clone(), SExprTE::Dyn(SExprDyn::Expr(expr)));
-            type_context.insert(var, StreamType::Dyn);
+            typed_exprs.insert(var.clone(), SExprTE::Any(SExprAny::Expr(expr)));
+            type_context.insert(var, StreamType::Any);
             continue 'outer;
         }
 
@@ -217,8 +217,8 @@ mod tests {
 
     #[test]
     fn test_gradual_type_check_casts_untyped_input_to_concrete_use() {
-        let x: VarName = "x_gradual_dyn".into();
-        let y: VarName = "y_gradual_dyn".into();
+        let x: VarName = "x_gradual_any".into();
+        let y: VarName = "y_gradual_any".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(
             y.clone(),
@@ -237,7 +237,7 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("gradual type check should accept untyped x");
-        assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Dyn));
+        assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Int));
         let Some(SExprTE::Int(SExprInt::BinOp(lhs, _, _))) = typed.var_expr(&y) else {
             panic!("expected y to be an int binop");
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gradual_empty_containers_fall_back_to_dyn_elements() {
+    fn test_gradual_empty_containers_fall_back_to_any_elements() {
         let xs: VarName = "gradual_empty_xs".into();
         let m: VarName = "gradual_empty_m".into();
         let mut exprs = BTreeMap::new();
@@ -320,25 +320,25 @@ mod tests {
             aux_info: vec![],
         };
 
-        let typed = type_check_gradual(spec).expect("empty containers should fall back to Dyn");
+        let typed = type_check_gradual(spec).expect("empty containers should fall back to Any");
         assert_eq!(
             typed.type_annotations.get(&xs),
-            Some(&StreamType::List(Box::new(StreamType::Dyn)))
+            Some(&StreamType::List(Box::new(StreamType::Any)))
         );
         assert_eq!(
             typed.type_annotations.get(&m),
-            Some(&StreamType::Map(Box::new(StreamType::Dyn)))
+            Some(&StreamType::Map(Box::new(StreamType::Any)))
         );
-        // The typed expressions must have concrete (Dyn) element types so they
+        // The typed expressions must have concrete (Any) element types so they
         // can be converted to stream types at runtime.
         let Some(SExprTE::List(tl)) = typed.var_expr(&xs) else {
             panic!("expected a typed list expression for xs");
         };
-        assert_eq!(*tl.element_type(), TCType::Dyn);
+        assert_eq!(*tl.element_type(), TCType::Any);
         let Some(SExprTE::Map(tm)) = typed.var_expr(&m) else {
             panic!("expected a typed map expression for m");
         };
-        assert_eq!(*tm.value_type(), TCType::Dyn);
+        assert_eq!(*tm.value_type(), TCType::Any);
     }
 
     #[test]
@@ -383,12 +383,12 @@ mod tests {
     }
 
     #[test]
-    fn test_gradual_dyn_annotation_accepts_any_expression() {
-        let y: VarName = "gradual_dyn_annot_y".into();
+    fn test_gradual_any_annotation_accepts_any_expression() {
+        let y: VarName = "gradual_any_annot_y".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(y.clone(), SExpr::Val(Value::Str("hello".into())));
         let mut type_annotations = BTreeMap::new();
-        type_annotations.insert(y.clone(), StreamType::Dyn);
+        type_annotations.insert(y.clone(), StreamType::Any);
         let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
@@ -397,9 +397,9 @@ mod tests {
             aux_info: vec![],
         };
 
-        let typed = type_check_gradual(spec).expect("Dyn annotation should accept any value");
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Dyn));
-        // The expression keeps its precise type; only the declaration is Dyn.
+        let typed = type_check_gradual(spec).expect("Any annotation should accept any value");
+        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Any));
+        // The expression keeps its precise type; only the declaration is Any.
         assert!(matches!(typed.var_expr(&y), Some(SExprTE::Str(_))));
     }
 
@@ -431,11 +431,11 @@ mod tests {
     }
 
     #[test]
-    fn test_gradual_unannotated_contradiction_falls_back_to_dyn() {
-        // Without an annotation the same contradiction widens to Dyn. This
+    fn test_gradual_unannotated_contradiction_falls_back_to_any() {
+        // Without an annotation the same contradiction widens to Any. This
         // documents the widening policy of the gradual checker (annotate the
         // variable to get a static error instead).
-        let z: VarName = "gradual_contradiction_dyn_z".into();
+        let z: VarName = "gradual_contradiction_any_z".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(
             z.clone(),
@@ -453,16 +453,16 @@ mod tests {
             aux_info: vec![],
         };
 
-        let typed = type_check_gradual(spec).expect("unannotated contradiction widens to Dyn");
-        assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Dyn));
+        let typed = type_check_gradual(spec).expect("unannotated contradiction widens to Any");
+        assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Any));
         assert!(matches!(
             typed.var_expr(&z),
-            Some(SExprTE::Dyn(SExprDyn::Expr(_)))
+            Some(SExprTE::Any(SExprAny::Expr(_)))
         ));
     }
 
     #[test]
-    fn test_gradual_passthrough_of_untyped_input_is_dyn() {
+    fn test_gradual_passthrough_of_untyped_input_is_any() {
         let x: VarName = "gradual_pass_x".into();
         let y: VarName = "gradual_pass_y".into();
         let mut exprs = BTreeMap::new();
@@ -476,16 +476,16 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("passthrough should type check");
-        assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Dyn));
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Dyn));
+        assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Any));
         assert!(matches!(
             typed.var_expr(&y),
-            Some(SExprTE::Dyn(SExprDyn::Var(_)))
+            Some(SExprTE::Any(SExprAny::Var(_)))
         ));
     }
 
     #[test]
-    fn test_gradual_dyn_plus_dyn_falls_back_to_dyn() {
+    fn test_gradual_any_plus_any_falls_back_to_any() {
         let a: VarName = "gradual_dd_a".into();
         let b: VarName = "gradual_dd_b".into();
         let z: VarName = "gradual_dd_z".into();
@@ -506,14 +506,14 @@ mod tests {
             aux_info: vec![],
         };
 
-        let typed = type_check_gradual(spec).expect("Dyn + Dyn widens to Dyn");
-        assert_eq!(typed.type_annotations.get(&a), Some(&StreamType::Dyn));
-        assert_eq!(typed.type_annotations.get(&b), Some(&StreamType::Dyn));
-        assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Dyn));
+        let typed = type_check_gradual(spec).expect("Any + Any widens to Any");
+        assert_eq!(typed.type_annotations.get(&a), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations.get(&b), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Any));
     }
 
     #[test]
-    fn test_gradual_dyn_operand_comparisons_cast_to_concrete() {
+    fn test_gradual_any_operand_comparisons_cast_to_concrete() {
         let x: VarName = "gradual_cmp_x".into();
         for op in [
             CompBinOp::Eq,
@@ -523,7 +523,7 @@ mod tests {
             CompBinOp::Gt,
         ] {
             let mut ctx = TypeInfo::new();
-            ctx.insert(x.clone(), StreamType::Dyn);
+            ctx.insert(x.clone(), StreamType::Any);
             let expr = SExpr::BinOp(
                 Box::new(SExpr::Var(x.clone())),
                 Box::new(SExpr::Val(Value::Int(10))),
@@ -531,7 +531,7 @@ mod tests {
             );
             let te = expr
                 .type_check(&mut ctx)
-                .expect("comparison with Dyn operand should type check");
+                .expect("comparison with Any operand should type check");
             assert_eq!(extract_type(&te), TCType::Bool);
             let SExprTE::Bool(SExprBool::Cmp(got_op, lhs, rhs)) = te else {
                 panic!("expected a typed comparison");
@@ -539,25 +539,25 @@ mod tests {
             assert_eq!(got_op, op);
             assert!(
                 matches!(*lhs, SExprTE::Int(SExprInt::Cast(_))),
-                "Dyn operand should be cast to Int"
+                "Any operand should be cast to Int"
             );
             assert!(matches!(*rhs, SExprTE::Int(SExprInt::Val(_))));
         }
     }
 
     #[test]
-    fn test_gradual_dyn_operand_primitive_ops_cast_to_concrete() {
+    fn test_gradual_any_operand_primitive_ops_cast_to_concrete() {
         let x: VarName = "gradual_ops_x".into();
         let mut ctx = TypeInfo::new();
-        ctx.insert(x.clone(), StreamType::Dyn);
+        ctx.insert(x.clone(), StreamType::Any);
 
-        // Int arithmetic: x * 2 : Int with a cast on the Dyn side
+        // Int arithmetic: x * 2 : Int with a cast on the Any side
         let expr = SExpr::BinOp(
             Box::new(SExpr::Var(x.clone())),
             Box::new(SExpr::Val(Value::Int(2))),
             SBinOp::NOp(NumericalBinOp::Mul),
         );
-        let te = expr.type_check(&mut ctx).expect("Dyn * Int should check");
+        let te = expr.type_check(&mut ctx).expect("Any * Int should check");
         let SExprTE::Int(SExprInt::BinOp(lhs, _, IntBinOp::Mul)) = te else {
             panic!("expected an Int binop");
         };
@@ -569,7 +569,7 @@ mod tests {
             Box::new(SExpr::Val(Value::Float(1.5))),
             SBinOp::NOp(NumericalBinOp::Add),
         );
-        let te = expr.type_check(&mut ctx).expect("Dyn + Float should check");
+        let te = expr.type_check(&mut ctx).expect("Any + Float should check");
         let SExprTE::Float(SExprFloat::BinOp(lhs, _, FloatBinOp::Add)) = te else {
             panic!("expected a Float binop");
         };
@@ -581,7 +581,7 @@ mod tests {
             Box::new(SExpr::Val(Value::Bool(true))),
             SBinOp::BOp(BoolBinOp::And),
         );
-        let te = expr.type_check(&mut ctx).expect("Dyn && Bool should check");
+        let te = expr.type_check(&mut ctx).expect("Any && Bool should check");
         let SExprTE::Bool(SExprBool::BinOp(lhs, _, BoolBinOp::And)) = te else {
             panic!("expected a Bool binop");
         };
@@ -593,7 +593,7 @@ mod tests {
             Box::new(SExpr::Val(Value::Str("s".into()))),
             SBinOp::SOp(StrBinOp::Concat),
         );
-        let te = expr.type_check(&mut ctx).expect("Dyn ++ Str should check");
+        let te = expr.type_check(&mut ctx).expect("Any ++ Str should check");
         let SExprTE::Str(SExprStr::BinOp(lhs, _, StrBinOp::Concat)) = te else {
             panic!("expected a Str binop");
         };
@@ -602,16 +602,16 @@ mod tests {
 
     #[test]
     fn test_gradual_consistent_relation() {
-        // Dyn is consistent with everything
-        assert!(gradual_consistent(&StreamType::Dyn, &TCType::Int));
-        assert!(gradual_consistent(&StreamType::Int, &TCType::Dyn));
+        // Any is consistent with everything
+        assert!(gradual_consistent(&StreamType::Any, &TCType::Int));
+        assert!(gradual_consistent(&StreamType::Int, &TCType::Any));
         // Concrete types must match
         assert!(gradual_consistent(&StreamType::Int, &TCType::Int));
         assert!(!gradual_consistent(&StreamType::Int, &TCType::Bool));
-        // Containers compare structurally with Dyn permeating inwards
+        // Containers compare structurally with Any permeating inwards
         assert!(gradual_consistent(
             &StreamType::List(Box::new(StreamType::Int)),
-            &TCType::List(Box::new(TCType::Dyn))
+            &TCType::List(Box::new(TCType::Any))
         ));
         assert!(gradual_consistent(
             &StreamType::List(Box::new(StreamType::Int)),
@@ -644,7 +644,7 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("annotated input passthrough");
-        // The input keeps its explicit type rather than being widened to Dyn,
+        // The input keeps its explicit type rather than being widened to Any,
         // and the output inherits the concrete inferred type.
         assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Str));
         assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Str));
