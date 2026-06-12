@@ -14,6 +14,7 @@ use crate::{
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
+    lang::core::parser::SpecParser,
     lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
@@ -275,6 +276,21 @@ impl<
 
 struct TypeCheckingBuilder<Builder>(Builder);
 
+#[derive(Clone)]
+struct TypeCheckingSpecParser<P>(std::marker::PhantomData<P>);
+
+impl<P> SpecParser<TypedDsrvSpecification> for TypeCheckingSpecParser<P>
+where
+    P: SpecParser<DsrvSpecification>,
+{
+    fn parse(input: &mut &str) -> anyhow::Result<TypedDsrvSpecification> {
+        let spec = P::parse(input)?;
+        type_check(spec).map_err(|errors| {
+            anyhow::anyhow!("Reconfigured spec failed type checking: {:?}", errors)
+        })
+    }
+}
+
 impl<
     V: StreamData,
     Mon: Runtime + 'static,
@@ -309,7 +325,7 @@ impl<
     }
 
     fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { (*self).build() })
+        Box::pin(async move { Box::new(self.0).async_build().await })
     }
 }
 
@@ -818,6 +834,23 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         "Output handler builder required for ReconfigurableSemiSync runtime",
                     ));
                 Box::new(builder)
+            }
+            (RuntimeSpec::ReconfSemiSync, Semantics::TypedUntimed, ParserMode::Lalr) => {
+                let mut builder = ReconfSemiSyncRuntimeBuilder::<
+                    TypedSemiSyncValueConfig,
+                    TypedUntimedDsrvSemantics<LALRParser>,
+                    TypeCheckingSpecParser<LALRParser>,
+                >::new();
+                builder = builder.reconf_topic(reconf_topic);
+                builder =
+                    builder.input_builder(input_provider_builder.expect(
+                        "Input provider builder required for ReconfigurableSemiSync runtime",
+                    ));
+                builder =
+                    builder.output_builder(output_handler_builder.expect(
+                        "Output handler builder required for ReconfigurableSemiSync runtime",
+                    ));
+                Box::new(TypeCheckingBuilder(builder))
             }
             (RuntimeSpec::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
                 Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<

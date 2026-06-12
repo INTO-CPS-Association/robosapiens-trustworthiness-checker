@@ -1,5 +1,5 @@
 use crate::{
-    OutputStream, SExpr, Value, VarName,
+    OutputStream, Value, VarName,
     core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
     io::{
         InputProviderBuilder, MsgTypeMapping, TopicMapping,
@@ -28,6 +28,7 @@ use serde::Deserialize;
 use smol::LocalExecutor;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
     rc::Rc,
 };
 use tracing::{debug, error, info, warn};
@@ -48,8 +49,8 @@ struct ReconfInput {
 #[derive(Clone)]
 pub struct ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
-    AC::Expr: DependencyGraphExpr,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
@@ -73,8 +74,8 @@ where
 
 impl<AC, MS, P> RuntimeBuilder<AC::Spec, AC::Val> for ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
-    AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
-    AC::Expr: DependencyGraphExpr,
+    AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
@@ -212,8 +213,8 @@ where
 
 impl<AC, MS, P> ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
-    AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
-    AC::Expr: DependencyGraphExpr,
+    AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
@@ -340,8 +341,8 @@ where
 
 pub struct ReconfSemiSyncRuntime<AC, MS, P>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
-    AC::Expr: DependencyGraphExpr,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
@@ -358,8 +359,8 @@ where
 
 impl<AC, MS, P> ReconfSemiSyncRuntime<AC, MS, P>
 where
-    AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
-    AC::Expr: DependencyGraphExpr,
+    AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
@@ -881,8 +882,8 @@ where
 #[async_trait(?Send)]
 impl<AC, MS, P> Runtime for ReconfSemiSyncRuntime<AC, MS, P>
 where
-    AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
-    AC::Expr: DependencyGraphExpr,
+    AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,

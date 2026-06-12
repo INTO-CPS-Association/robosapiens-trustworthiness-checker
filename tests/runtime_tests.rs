@@ -3682,6 +3682,190 @@ mod reconf_tests {
     }
 
     #[apply(async_test)]
+    async fn test_typed_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
+        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
+        let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
+        let expected = vec![
+            Value::NoVal,
+            Value::Int(3),
+            Value::Int(5),
+            Value::Int(7),
+            Value::NoVal,
+            Value::Int(12),
+            Value::Int(14),
+            Value::Int(16),
+        ];
+        let (tx_x, fx) = Fanout::new();
+        let (tx_y, fy) = Fanout::new();
+        let (tx_r, fr) = Fanout::new();
+        let inp_fans = BTreeMap::from([
+            ("x".into(), fx),
+            ("y".into(), fy),
+            (RECONF_TOPIC.into(), fr),
+        ]);
+        let mut tx_fans = BTreeMap::from([
+            ("x".into(), tx_x),
+            ("y".into(), tx_y),
+            (RECONF_TOPIC.into(), tx_r),
+        ]);
+        let in_len = xs.len();
+
+        let input_spec = InputProviderSpec::Manual(inp_fans);
+        let input_builder = InputProviderBuilder::new(input_spec)
+            .model(spec.clone())
+            .executor(ex.clone());
+
+        let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
+        let output_spec = OutputHandlerSpec::Manual(out_tx);
+        let output_builder = OutputHandlerBuilder::new(output_spec)
+            .executor(ex.clone())
+            .output_var_names(BTreeSet::from(["z".into()]))
+            .aux_info(vec![]);
+
+        let monitor = GeneralRuntimeBuilder::new()
+            .executor(ex.clone())
+            .model(spec.clone())
+            .input_provider_builder(input_builder)
+            .output_handler_builder(output_builder)
+            .runtime(RuntimeSpec::ReconfSemiSync)
+            .semantics(Semantics::TypedUntimed)
+            .reconf_topic(RECONF_TOPIC.into())
+            .async_build()
+            .await;
+        ex.spawn(monitor.run()).detach();
+
+        let x_iter1 = xs.clone().into_iter().take(in_len / 2);
+        let x_iter2 = xs.into_iter().skip(in_len / 2);
+        let y_iter1 = ys.clone().into_iter().take(in_len / 2);
+        let y_iter2 = ys.into_iter().skip(in_len / 2);
+        let mut z_iter = expected.into_iter();
+
+        for (x_exp, y_exp) in x_iter1.zip(y_iter1) {
+            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+            let mut out_res = with_timeout(out_rx.recv(), 3, "typed out_rx.x")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            assert_eq!(out_res.remove(&"z".into()).unwrap(), z_iter.next().unwrap());
+
+            send_value_noval_others(("y", y_exp), &mut tx_fans).await;
+            let mut out_res = with_timeout(out_rx.recv(), 3, "typed out_rx.y")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            assert_eq!(out_res.remove(&"z".into()).unwrap(), z_iter.next().unwrap());
+        }
+
+        let typed_plus_one_spec = "in x: Int\nin y: Int\nout z: Int\nz = x + y + 1";
+        let reconf_json = serde_json::json!({
+            "spec": typed_plus_one_spec,
+            "type_info": {},
+            "topic_mapping": {}
+        })
+        .to_string();
+
+        let sub_event_futs: Vec<_> = tx_fans
+            .iter()
+            .map(|(var, fan_tx)| {
+                let fan_rc = fan_tx.fanout();
+                let label = format!("typed sub event on {}", var);
+                let wait_fut = async move {
+                    let fan = fan_rc.as_ref();
+                    let seen = fan.sub_events();
+                    with_timeout(fan.wait_for_sub_event(seen), 3, label.as_str()).await
+                };
+                Box::pin(wait_fut)
+            })
+            .collect();
+
+        send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans).await;
+        future::join_all(sub_event_futs).await;
+
+        for (x_exp, y_exp) in x_iter2.zip(y_iter2) {
+            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+            let mut out_res = with_timeout(out_rx.recv(), 3, "typed out_rx.x_post")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            assert_eq!(out_res.remove(&"z".into()).unwrap(), z_iter.next().unwrap());
+
+            send_value_noval_others(("y", y_exp), &mut tx_fans).await;
+            let mut out_res = with_timeout(out_rx.recv(), 3, "typed out_rx.y_post")
+                .await
+                .expect("failed to get result")
+                .expect("output channel closed");
+            assert_eq!(out_res.remove(&"z".into()).unwrap(), z_iter.next().unwrap());
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_typed_reconf_type_error_is_reported(ex: Rc<LocalExecutor<'static>>) {
+        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let (tx_x, fx) = Fanout::new();
+        let (tx_y, fy) = Fanout::new();
+        let (tx_r, fr) = Fanout::new();
+        let inp_fans = BTreeMap::from([
+            ("x".into(), fx),
+            ("y".into(), fy),
+            (RECONF_TOPIC.into(), fr),
+        ]);
+        let mut tx_fans = BTreeMap::from([
+            ("x".into(), tx_x),
+            ("y".into(), tx_y),
+            (RECONF_TOPIC.into(), tx_r),
+        ]);
+
+        let input_builder = InputProviderBuilder::new(InputProviderSpec::Manual(inp_fans))
+            .model(spec.clone())
+            .executor(ex.clone());
+
+        let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
+        let output_builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(out_tx))
+            .executor(ex.clone())
+            .output_var_names(BTreeSet::from(["z".into()]))
+            .aux_info(vec![]);
+
+        let monitor = GeneralRuntimeBuilder::new()
+            .executor(ex.clone())
+            .model(spec.clone())
+            .input_provider_builder(input_builder)
+            .output_handler_builder(output_builder)
+            .runtime(RuntimeSpec::ReconfSemiSync)
+            .semantics(Semantics::TypedUntimed)
+            .reconf_topic(RECONF_TOPIC.into())
+            .async_build()
+            .await;
+
+        let (run_tx, mut run_rx) = bounded::channel::<Result<(), String>>(1).into_split();
+        ex.spawn(async move {
+            let result = monitor.run().await.map_err(|err| err.to_string());
+            let _ = run_tx.send(result).await;
+        })
+        .detach();
+
+        let invalid_reconf_spec = "in x: Int\nin y: Int\nout z: Int\nz = x + \"not an int\"";
+        let reconf_json = serde_json::json!({
+            "spec": invalid_reconf_spec,
+            "type_info": {},
+            "topic_mapping": {}
+        })
+        .to_string();
+
+        send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans).await;
+
+        let run_result = with_timeout(run_rx.recv(), 3, "typed reconf runtime error")
+            .await
+            .expect("runtime did not report the type error")
+            .expect("runtime result channel closed");
+        let err = run_result.expect_err("invalid typed reconfiguration should fail the runtime");
+        assert!(
+            err.contains("Reconfigured spec failed type checking"),
+            "expected type-checking error, got: {err}"
+        );
+    }
+
+    #[apply(async_test)]
     async fn test_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure but do
         // not introduce/remove any streams
