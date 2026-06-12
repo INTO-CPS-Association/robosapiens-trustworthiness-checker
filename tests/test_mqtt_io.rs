@@ -132,12 +132,13 @@ mod integration_tests {
         .unwrap();
         output_handler.connect().await.unwrap();
         let output_handler = Box::new(output_handler);
-        let async_monitor = TestRuntime::new(
+        let async_monitor: TestRuntime = TestRuntime::new(
             executor.clone(),
             spec.clone(),
             Box::new(input_streams),
             output_handler,
-        );
+        )
+        .await;
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
         let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
@@ -185,12 +186,13 @@ mod integration_tests {
         .unwrap();
         output_handler.connect().await.unwrap();
         let output_handler = Box::new(output_handler);
-        let async_monitor = TestRuntime::new(
+        let async_monitor: TestRuntime = TestRuntime::new(
             executor.clone(),
             spec.clone(),
             Box::new(input_streams),
             output_handler,
-        );
+        )
+        .await;
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
         let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
@@ -305,14 +307,15 @@ mod integration_tests {
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = GeneralRuntimeBuilder::new()
+        let monitor: Box<dyn Runtime> = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec)
             .input(Box::new(input_provider))
             .output(output_handler)
             .runtime(RuntimeSpec::Async)
             .semantics(semantics)
-            .build();
+            .build()
+            .await;
         executor.spawn(monitor.run()).detach();
 
         let payloads = vec![
@@ -680,7 +683,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         executor.spawn(monitor.run()).detach();
 
         let mut x_sub = with_timeout(
@@ -826,7 +829,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         executor.spawn(monitor.run()).detach();
 
         let mut x_sub = with_timeout(
@@ -1064,7 +1067,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         executor.spawn(monitor.run()).detach();
 
         let mut x_sub = with_timeout(
@@ -1273,7 +1276,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         executor.spawn(monitor.run()).detach();
 
         let mut x_sub = with_timeout(
@@ -1471,7 +1474,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         executor.spawn(monitor.run()).detach();
 
         let mut x_sub = with_timeout(
@@ -1650,7 +1653,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         executor.spawn(monitor.run()).detach();
 
         let mut x_sub = with_timeout(
@@ -1825,7 +1828,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         executor.spawn(monitor.run()).detach();
 
         let mut x_sub = with_timeout(

@@ -165,8 +165,8 @@ impl InputProviderBuilder {
         Ok(used)
     }
 
-    pub async fn async_build(self) -> Box<dyn InputProvider<Val = Value>> {
-        let _async_build = debug_span!("async_build for input provider").entered();
+    pub async fn build(self) -> Box<dyn InputProvider<Val = Value>> {
+        let _build = debug_span!("build for input provider").entered();
         let input_vars: BTreeSet<_> = self
             .input_vars
             .clone()
@@ -364,7 +364,7 @@ mod tests {
         let mut provider = InputProviderBuilder::new(InputProviderSpec::Manual(fanouts))
             .executor(ex.clone())
             .model(model)
-            .async_build()
+            .build()
             .await;
 
         let mut x_stream = provider
@@ -448,8 +448,8 @@ mod tests {
         let builder2 = builder1.clone();
 
         // Build both providers first
-        let mut provider1 = builder1.async_build().await;
-        let mut provider2 = builder2.async_build().await;
+        let mut provider1 = builder1.build().await;
+        let mut provider2 = builder2.build().await;
 
         let mut x_stream1 = provider1.var_stream(&VarName::new("x")).expect("x stream");
         let mut y_stream1 = provider1.var_stream(&VarName::new("y")).expect("y stream");
@@ -505,7 +505,7 @@ mod tests {
 
         // Build and use the first provider
         {
-            let mut provider1 = builder1.async_build().await;
+            let mut provider1 = builder1.build().await;
             let mut xs = provider1.var_stream(&VarName::new("x")).expect("x");
             let mut ctrl = provider1.control_stream().await;
 
@@ -517,7 +517,7 @@ mod tests {
         }
 
         // Build a second provider from the clone — same channel should still work
-        let mut provider2 = builder2.async_build().await;
+        let mut provider2 = builder2.build().await;
         let mut xs2 = provider2.var_stream(&VarName::new("x")).expect("x");
         let mut ctrl2 = provider2.control_stream().await;
 

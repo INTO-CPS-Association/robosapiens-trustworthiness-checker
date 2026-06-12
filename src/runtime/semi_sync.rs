@@ -97,25 +97,23 @@ where
         self
     }
 
-    fn build(self) -> SemiSyncRuntime<AC, MS> {
-        let executor = self.executor.unwrap();
-        let model = self.model.unwrap();
-        let input = self.input.unwrap();
-        let output = self.output.unwrap();
-        let starting_history = self.starting_history.unwrap_or_default();
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move {
+            let executor = self.executor.unwrap();
+            let model = self.model.unwrap();
+            let input = self.input.unwrap();
+            let output = self.output.unwrap();
+            let starting_history = self.starting_history.unwrap_or_default();
 
-        SemiSyncRuntime {
-            _executor: executor,
-            model,
-            input_provider: input,
-            output_handler: output,
-            starting_history: starting_history,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { (*self).build() })
+            SemiSyncRuntime {
+                _executor: executor,
+                model,
+                input_provider: input,
+                output_handler: output,
+                starting_history: starting_history,
+                _marker: std::marker::PhantomData,
+            }
+        })
     }
 }
 
@@ -473,7 +471,7 @@ where
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
-    pub fn new(
+    pub async fn new(
         executor: Rc<LocalExecutor<'static>>,
         model: AC::Spec,
         input: Box<dyn InputProvider<Val = AC::Val>>,
@@ -485,6 +483,7 @@ where
             .input(input)
             .output(output)
             .build()
+            .await
     }
 
     fn setup_input_streams(

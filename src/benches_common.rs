@@ -61,7 +61,8 @@ pub async fn monitor_runtime_outputs(
         .model(spec)
         .output(output_handler)
         .input(Box::new(input_provider))
-        .build();
+        .build()
+        .await;
     monitor.run().await.expect("Error running monitor");
 }
 
@@ -100,7 +101,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
         .output_builder(output_handler_builder)
         .reconf_topic(RECONF_TOPIC.into())
         .use_context_transfer(use_context_transfer);
-    let monitor = Box::new(builder).async_build().await;
+    let monitor = Box::new(builder).build().await;
     monitor.run().await.expect("Error running monitor");
 }
 
@@ -155,7 +156,8 @@ pub async fn monitor_outputs_typed_async(
     .model(spec.clone())
     .input(Box::new(input_provider))
     .output(output_handler)
-    .build();
+    .build()
+    .await;
     async_monitor.run().await.expect("Error running monitor");
 }
 

@@ -221,20 +221,22 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 2");
 
-        let runner_1 = TestRuntime::new(
+        let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
-        );
+        )
+        .await;
         executor.spawn(runner_1.run()).detach();
 
-        let runner_2 = TestRuntime::new(
+        let runner_2: TestRuntime = TestRuntime::new(
             executor.clone(),
             model2.clone(),
             Box::new(input_provider_2),
             Box::new(output_handler_2),
-        );
+        )
+        .await;
         executor.spawn(runner_2.run()).detach();
 
         // Get the output stream before starting publishers to ensure subscription is ready
@@ -376,19 +378,21 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 2");
 
-        let runner_1 = TestRuntime::new(
+        let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
-        );
+        )
+        .await;
 
-        let runner_2 = TestRuntime::new(
+        let runner_2: TestRuntime = TestRuntime::new(
             executor.clone(),
             model2.clone(),
             Box::new(input_provider_2),
             Box::new(output_handler_2),
-        );
+        )
+        .await;
 
         executor.spawn(runner_1.run()).detach();
         executor.spawn(runner_2.run()).detach();
@@ -528,19 +532,21 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 2");
 
-        let runner_1 = TestRuntime::new(
+        let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             Box::new(input_provider_1),
             Box::new(output_handler_1),
-        );
+        )
+        .await;
 
-        let runner_2 = TestRuntime::new(
+        let runner_2: TestRuntime = TestRuntime::new(
             executor.clone(),
             model2.clone(),
             Box::new(input_provider_2),
             Box::new(output_handler_2),
-        );
+        )
+        .await;
 
         executor.spawn(runner_1.run()).detach();
         executor.spawn(runner_2.run()).detach();

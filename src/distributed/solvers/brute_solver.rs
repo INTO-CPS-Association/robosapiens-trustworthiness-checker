@@ -103,8 +103,7 @@ where
             .input(input_provider)
             .output(Box::new(output_handler));
 
-        let runtime = async_builder.build();
-        self.executor.spawn(runtime.run()).detach();
+        let executor = self.executor.clone();
 
         // Fix to OutputHandlers previously relying on an implicit ordering based on a
         // Vec<VarName>.
@@ -119,6 +118,9 @@ where
         // - Bool(true/false) => true/false
         // - NoVal/Deferred/other => false
         Box::pin(stream! {
+            let runtime = async_builder.build().await;
+            executor.spawn(runtime.run()).detach();
+
             let mut output_stream = output_stream;
             let order = order;
             while let Some(map) = output_stream.next().await {

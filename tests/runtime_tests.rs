@@ -98,7 +98,8 @@ async fn run_typed_runtime_with_spec(
         .output(output_handler)
         .runtime(runtime)
         .semantics(Semantics::TypedUntimed)
-        .build();
+        .build()
+        .await;
 
     executor.spawn(monitor.run()).detach();
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
@@ -323,7 +324,8 @@ echoed = payload
         .output(output_handler)
         .runtime(RuntimeSpec::Async)
         .semantics(Semantics::TypedUntimed)
-        .build();
+        .build()
+        .await;
 
     executor.spawn(monitor.run()).detach();
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -690,7 +692,7 @@ id = Map.get(robot, "id")
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
             .output(output_handler);
-        let monitor = create_builder_from_config(builder, config).build();
+        let monitor = create_builder_from_config(builder, config).build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -763,7 +765,7 @@ renamed = Map.insert(robot, "name", "bb8")
             .model(spec_untyped.clone())
             .input(Box::new(input_streams))
             .output(output_handler);
-        let monitor = create_builder_from_config(builder, config).build();
+        let monitor = create_builder_from_config(builder, config).build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -984,7 +986,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1040,7 +1042,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1096,7 +1098,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1152,7 +1154,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1217,7 +1219,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1279,7 +1281,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1328,7 +1330,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1386,7 +1388,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1449,7 +1451,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1606,7 +1608,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1642,7 +1644,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1688,7 +1690,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -1738,7 +1740,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1784,7 +1786,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1832,7 +1834,7 @@ async fn test_index_past_mult_dependencies(
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1890,7 +1892,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1936,7 +1938,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1981,7 +1983,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2030,7 +2032,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2079,7 +2081,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2125,7 +2127,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -2184,7 +2186,7 @@ async fn test_simple_add_monitor_does_not_go_away(
 
             // Apply configuration-specific settings
             let builder = create_builder_from_config(builder, config);
-            let monitor = builder.async_build().await;
+            let monitor = builder.build().await;
 
             // Start monitor and return outputs stream
             executor.spawn(monitor.run()).detach();
@@ -2238,7 +2240,7 @@ async fn test_simple_add_monitor_large_input(
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.async_build().await;
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -2304,7 +2306,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.async_build().await;
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2347,7 +2349,7 @@ async fn test_simple_add_monitor_untyped_spec(
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2396,7 +2398,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2438,7 +2440,7 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2484,7 +2486,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.async_build().await;
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2530,7 +2532,7 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.async_build().await;
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2573,7 +2575,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .input(Box::new(input_streams))
                 .output(output_handler)
                 .semantics(semantics)
-                .async_build()
+                .build()
                 .await;
 
             executor.spawn(monitor.run()).detach();
@@ -2611,7 +2613,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .input(Box::new(input_streams))
                 .output(output_handler)
                 .semantics(semantics)
-                .async_build()
+                .build()
                 .await;
 
             executor.spawn(monitor.run()).detach();
@@ -2727,7 +2729,7 @@ async fn test_drop_guard_cancellation_behavior(
             .input(Box::new(input_streams))
             .output(output_handler)
             .semantics(semantics)
-            .async_build()
+            .build()
             .await;
 
         executor.spawn(monitor.run()).detach();
@@ -2779,7 +2781,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -2824,7 +2826,7 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2868,7 +2870,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2913,7 +2915,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2952,7 +2954,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2994,7 +2996,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             .output(output_handler);
 
         let builder = create_builder_from_config(builder, config);
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3060,7 +3062,7 @@ async fn test_restricted_dynamic_monitor(
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3123,7 +3125,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3197,7 +3199,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3271,7 +3273,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3345,7 +3347,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3417,7 +3419,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3488,7 +3490,7 @@ async fn test_benchmark_regression_long_add_defer(
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build();
+        let monitor = builder.build().await;
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3539,7 +3541,8 @@ async fn test_map_get_deferred_propagates(
             .input(Box::new(input_streams))
             .output(output_handler);
         let builder = create_builder_from_config(builder, config);
-        executor.spawn(builder.build().run()).detach();
+        let monitor = builder.build().await;
+        executor.spawn(monitor.run()).detach();
 
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
@@ -3649,7 +3652,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         ex.spawn(monitor.run()).detach();
 
         let mut z_iter = expected.into_iter();
@@ -3731,7 +3734,7 @@ mod reconf_tests {
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
             .reconf_topic(RECONF_TOPIC.into())
-            .async_build()
+            .build()
             .await;
         ex.spawn(monitor.run()).detach();
 
@@ -3834,7 +3837,7 @@ mod reconf_tests {
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
             .reconf_topic(RECONF_TOPIC.into())
-            .async_build()
+            .build()
             .await;
 
         let (run_tx, mut run_rx) = bounded::channel::<Result<(), String>>(1).into_split();
@@ -3917,7 +3920,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         ex.spawn(monitor.run()).detach();
 
         let x_iter1 = xs.clone().into_iter().take(in_len / 2);
@@ -4062,7 +4065,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         ex.spawn(monitor.run()).detach();
 
         let x_iter1 = xs.clone().into_iter().take(y_len);
@@ -4197,7 +4200,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         ex.spawn(monitor.run()).detach();
         let x_iter1 = xs.clone().into_iter().take(y_len);
         let x_iter2 = xs.into_iter().skip(y_len);
@@ -4310,7 +4313,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         ex.spawn(monitor.run()).detach();
 
         let x_iter1 = xs.clone().into_iter().take(ws_len);
@@ -4422,7 +4425,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         ex.spawn(monitor.run()).detach();
 
         let x_iter1 = xs.clone().into_iter().take(ws_len);
@@ -4539,7 +4542,7 @@ mod reconf_tests {
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
-        let monitor = monitor_builder.async_build().await;
+        let monitor = monitor_builder.build().await;
         ex.spawn(monitor.run()).detach();
 
         let x_iter1 = xs.clone().into_iter().take(in_len / 2);
@@ -4666,7 +4669,7 @@ mod reconf_tests {
                     .reconf_topic(RECONF_TOPIC.into())
                     .use_context_transfer(use_context_transfer),
             );
-            let monitor = monitor_builder.async_build().await;
+            let monitor = monitor_builder.build().await;
             ex.spawn(monitor.run()).detach();
 
             let x_iter1 = xs.clone().into_iter().take(in_len / 2);
@@ -4795,7 +4798,7 @@ mod reconf_tests {
                     .reconf_topic(RECONF_TOPIC.into())
                     .use_context_transfer(use_context_transfer),
             );
-            let monitor = monitor_builder.async_build().await;
+            let monitor = monitor_builder.build().await;
             ex.spawn(monitor.run()).detach();
 
             let x_iter1 = xs.clone().into_iter().take(in_len / 2);

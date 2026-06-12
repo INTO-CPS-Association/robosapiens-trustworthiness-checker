@@ -78,7 +78,8 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
-        .build();
+        .build()
+        .await;
 
     executor.spawn(monitor.run()).detach();
 
@@ -164,7 +165,8 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
-        .build();
+        .build()
+        .await;
 
     executor.spawn(monitor.run()).detach();
 
@@ -250,7 +252,8 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
-        .build();
+        .build()
+        .await;
 
     executor.spawn(monitor.run()).detach();
 
@@ -336,7 +339,8 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
-        .build();
+        .build()
+        .await;
 
     executor.spawn(monitor.run()).detach();
 
@@ -422,7 +426,8 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
         .output(Box::new(output_handler))
-        .build();
+        .build()
+        .await;
 
     executor.spawn(monitor.run()).detach();
 

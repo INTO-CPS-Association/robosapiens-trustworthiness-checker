@@ -230,7 +230,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = builder.output_handler_builder(output_handler_builder);
 
     // Create the runtime
-    let monitor = builder.async_build().await;
+    let monitor = builder.build().await;
 
     monitor.run().await
 }

@@ -138,11 +138,7 @@ where
         );
     }
 
-    fn build(self) -> ReconfSemiSyncRuntime<AC, MS, P> {
-        panic!("One does not simply build a ReconfSemiSync - use async_build instead!");
-    }
-
-    fn async_build(mut self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
+    fn build(mut self) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move {
             let executor = self.executor.clone().unwrap();
             let output_builder = self.output_builder.clone().unwrap();
@@ -184,25 +180,26 @@ where
                 ?self.input_builder,
                 "Building ReconfSemiSyncRuntime input provider"
             );
-            let input_provider = self.input_builder.clone().unwrap().async_build().await;
+            let input_provider = self.input_builder.clone().unwrap().build().await;
             info!(
                 ?self.output_builder,
                 "Building ReconfSemiSyncRuntime output handler"
             );
-            let output = output_builder.async_build().await;
+            let output = output_builder.build().await;
             let semi_sync_monitor = SemiSyncRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(model)
                 .input(inner_input)
                 .output(output)
                 .starting_history(starting_history)
-                .build();
+                .build()
+                .await;
 
             ReconfSemiSyncRuntime {
                 executor,
                 semi_sync_monitor: Some(semi_sync_monitor),
                 input_provider,
-                self_builder: *self,
+                self_builder: self,
                 sender_channels,
                 use_context_transfer,
                 _marker: (std::marker::PhantomData, std::marker::PhantomData),
@@ -789,7 +786,7 @@ where
         warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
         // For now, reassign existing InputProvider with empty to shut down. In future when we can reconfig them, we should do that instead.
         self.input_provider = Box::new(MapInputProvider::new(BTreeMap::new()));
-        let new_self = Box::new(self.self_builder.clone()).async_build().await;
+        let new_self = Box::new(self.self_builder.clone()).build().await;
         Ok(Some(new_self))
     }
 

@@ -107,7 +107,7 @@ impl OutputHandlerBuilder {
         Ok(())
     }
 
-    pub async fn async_build(self) -> Box<dyn OutputHandler<Val = Value>> {
+    pub async fn build(self) -> Box<dyn OutputHandler<Val = Value>> {
         let executor = self
             .executor
             .expect("Cannot build without executor")
@@ -322,7 +322,7 @@ mod tests {
         let builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(sender))
             .executor(ex.clone())
             .output_var_names(output_var_names.clone());
-        let mut handler = builder.async_build().await;
+        let mut handler = builder.build().await;
 
         let xs: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let ys: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
@@ -355,7 +355,7 @@ mod tests {
             .executor(ex.clone())
             .output_var_names(output_var_names.clone());
         let builder2 = builder1.clone();
-        let mut handler1 = builder1.async_build().await;
+        let mut handler1 = builder1.build().await;
 
         let xs: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let ys: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(results[1].get(&VarName::new("x")).unwrap(), &Value::Int(2));
         assert_eq!(results[1].get(&VarName::new("y")).unwrap(), &Value::Int(4));
 
-        let mut handler2 = builder2.async_build().await;
+        let mut handler2 = builder2.build().await;
 
         let xs: OutputStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
         let ys: OutputStream<Value> = Box::pin(stream::iter(vec![7.into(), 8.into()]));
@@ -417,8 +417,8 @@ mod tests {
             .executor(ex.clone())
             .output_var_names(output_var_names.clone());
         let builder2 = builder1.clone();
-        let mut handler1 = builder1.async_build().await;
-        let mut handler2 = builder2.async_build().await;
+        let mut handler1 = builder1.build().await;
+        let mut handler2 = builder2.build().await;
 
         let xs1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let ys1: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));

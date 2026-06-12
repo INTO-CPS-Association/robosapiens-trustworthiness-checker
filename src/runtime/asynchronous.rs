@@ -1014,117 +1014,115 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
         }
     }
 
-    fn build(self) -> Self::Runtime {
-        debug!("AsyncRuntimeBuilder: Starting build process");
-        let executor = self.executor.expect("Executor not supplied");
-        let model = self.model.expect("Model not supplied");
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move {
+            debug!("AsyncRuntimeBuilder: Starting build process");
+            let executor = self.executor.expect("Executor not supplied");
+            let model = self.model.expect("Model not supplied");
 
-        debug!(
-            "AsyncRuntimeBuilder: Model variables: input={:?}, output={:?}",
-            model.input_vars(),
-            model.output_vars()
-        );
+            debug!(
+                "AsyncRuntimeBuilder: Model variables: input={:?}, output={:?}",
+                model.input_vars(),
+                model.output_vars()
+            );
 
-        let mut input_provider = self.input.expect("Input streams not supplied");
+            let mut input_provider = self.input.expect("Input streams not supplied");
 
-        let output_handler = self.output.expect("Output handler not supplied");
+            let output_handler = self.output.expect("Output handler not supplied");
 
-        let context_builder = self
-            .context_builder
-            .unwrap_or_else(<AC::Ctx as StreamContext>::Builder::new);
-        debug!("AsyncRuntimeBuilder: Context builder initialized");
+            let context_builder = self
+                .context_builder
+                .unwrap_or_else(<AC::Ctx as StreamContext>::Builder::new);
+            debug!("AsyncRuntimeBuilder: Context builder initialized");
 
-        let input_vars = model.input_vars().clone();
-        let output_vars = model.output_vars().clone();
-        let var_names: Vec<VarName> = input_vars
-            .iter()
-            .chain(output_vars.iter())
-            .cloned()
-            .collect();
+            let input_vars = model.input_vars().clone();
+            let output_vars = model.output_vars().clone();
+            let var_names: Vec<VarName> = input_vars
+                .iter()
+                .chain(output_vars.iter())
+                .cloned()
+                .collect();
 
-        let input_streams = input_vars.iter().map(|var| {
-            input_provider
-                .var_stream(var)
-                .expect(format!("Input stream not found for {}", var).as_str())
-        });
+            let input_streams = input_vars.iter().map(|var| {
+                input_provider
+                    .var_stream(var)
+                    .expect(format!("Input stream not found for {}", var).as_str())
+            });
 
-        // Create deferred streams based on each of the output variables
-        let output_oneshots: Vec<_> = output_vars
-            .iter()
-            .cloned()
-            .map(|_| oneshot::channel::<OutputStream<AC::Val>>().into_split())
-            .collect();
-        let (output_txs, output_rxs): (Vec<_>, Vec<_>) = output_oneshots.into_iter().unzip();
-        let output_txs: BTreeMap<_, _> = output_vars.iter().cloned().zip(output_txs).collect();
-        let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
+            // Create deferred streams based on each of the output variables
+            let output_oneshots: Vec<_> = output_vars
+                .iter()
+                .cloned()
+                .map(|_| oneshot::channel::<OutputStream<AC::Val>>().into_split())
+                .collect();
+            let (output_txs, output_rxs): (Vec<_>, Vec<_>) = output_oneshots.into_iter().unzip();
+            let output_txs: BTreeMap<_, _> = output_vars.iter().cloned().zip(output_txs).collect();
+            let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
 
-        // Combine the input and output streams into a single map
-        let streams: Vec<OutputStream<AC::Val>> = input_streams.chain(output_streams).collect();
+            // Combine the input and output streams into a single map
+            let streams: Vec<OutputStream<AC::Val>> = input_streams.chain(output_streams).collect();
 
-        let mut context = context_builder
-            .executor(executor.clone())
-            .var_names(var_names)
-            .input_streams(streams)
-            .build();
+            let mut context = context_builder
+                .executor(executor.clone())
+                .var_names(var_names)
+                .input_streams(streams)
+                .build();
 
-        // Get cancellation token from context and create drop guard
-        let cancellation_token = context.cancellation_token();
-        let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
-        debug!("AsyncRuntimeBuilder: Created drop guard for cancellation token");
+            // Get cancellation token from context and create drop guard
+            let cancellation_token = context.cancellation_token();
+            let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
+            debug!("AsyncRuntimeBuilder: Created drop guard for cancellation token");
 
-        // Create a map of the output variables to their streams
-        // based on using the context
-        let output_streams: BTreeMap<VarName, OutputStream<AC::Val>> = model
-            .output_vars()
-            .iter()
-            .map(|var| {
-                let stream = context.var(var).unwrap_or_else(|| {
+            // Create a map of the output variables to their streams
+            // based on using the context
+            let output_streams: BTreeMap<VarName, OutputStream<AC::Val>> = model
+                .output_vars()
+                .iter()
+                .map(|var| {
+                    let stream = context.var(var).unwrap_or_else(|| {
+                        panic!("Failed to find expression for var {}", var.name().as_str())
+                    });
+                    // Wrap stream with drop guard so cancellation happens when the last output stream
+                    // is dropped
+                    let guarded_stream = drop_guard_stream(stream, drop_guard.clone());
+                    debug!(
+                        "AsyncRuntimeBuilder: Wrapped output stream for var {} with drop guard",
+                        var
+                    );
+                    (var.clone(), guarded_stream)
+                })
+                .collect();
+
+            // Send outputs computed based on the context to the
+            // output handler
+            for (var, tx) in output_txs {
+                let expr = model.var_expr(&var).unwrap_or_else(|| {
                     panic!("Failed to find expression for var {}", var.name().as_str())
                 });
-                // Wrap stream with drop guard so cancellation happens when the last output stream
-                // is dropped
-                let guarded_stream = drop_guard_stream(stream, drop_guard.clone());
-                debug!(
-                    "AsyncRuntimeBuilder: Wrapped output stream for var {} with drop guard",
-                    var
-                );
-                (var.clone(), guarded_stream)
-            })
-            .collect();
-
-        // Send outputs computed based on the context to the
-        // output handler
-        for (var, tx) in output_txs {
-            let expr = model.var_expr(&var).unwrap_or_else(|| {
-                panic!("Failed to find expression for var {}", var.name().as_str())
-            });
-            let stream = S::to_async_stream(expr, &context);
-            if tx.send(stream).is_err() {
-                warn!(?var, "Failed to send stream for var to requester");
+                let stream = S::to_async_stream(expr, &context);
+                if tx.send(stream).is_err() {
+                    warn!(?var, "Failed to send stream for var to requester");
+                }
             }
-        }
 
-        executor
-            .spawn(async move {
-                context.run().await;
-            })
-            .detach();
+            executor
+                .spawn(async move {
+                    context.run().await;
+                })
+                .detach();
 
-        debug!("AsyncRuntimeBuilder: Returning runner with cancellation token");
-        let runner = AsyncRuntime {
-            executor,
-            input_provider,
-            output_handler,
-            output_streams,
-            cancellation_token,
-            semantics_t: PhantomData,
-        };
-        debug!("AsyncRuntimeBuilder: Build process complete, runner created");
-        runner
-    }
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { self.build() })
+            debug!("AsyncRuntimeBuilder: Returning runner with cancellation token");
+            let runner = AsyncRuntime {
+                executor,
+                input_provider,
+                output_handler,
+                output_streams,
+                cancellation_token,
+                semantics_t: PhantomData,
+            };
+            debug!("AsyncRuntimeBuilder: Build process complete, runner created");
+            runner
+        })
     }
 }
 
@@ -1133,7 +1131,7 @@ where
     AC: AsyncConfig,
     S: MonitoringSemantics<AC>,
 {
-    pub fn new(
+    pub async fn new(
         executor: Rc<LocalExecutor<'static>>,
         model: AC::Spec,
         input: Box<dyn InputProvider<Val = AC::Val>>,
@@ -1145,6 +1143,7 @@ where
             .input(input)
             .output(output)
             .build()
+            .await
     }
 }
 

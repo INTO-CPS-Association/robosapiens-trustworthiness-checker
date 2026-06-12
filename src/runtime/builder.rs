@@ -128,9 +128,7 @@ pub trait RuntimeBuilder<M, V: StreamData> {
         }
     }
 
-    fn build(self) -> Self::Runtime;
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime>;
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime>;
 }
 
 /* Builders which construct a given runtime in an object-safe manner.
@@ -184,9 +182,7 @@ pub trait RuntimeBuilderDyn<M, V: StreamData>: 'static {
         output: Option<Box<dyn OutputHandler<Val = V>>>,
     ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    fn build(self: Box<Self>) -> Box<dyn Runtime>;
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>>;
+    fn build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>>;
 }
 
 assert_obj_safe!(RuntimeBuilderDyn<(), ()>);
@@ -262,13 +258,9 @@ impl<
         Box::new(MonBuilder::maybe_output(*self, output))
     }
 
-    fn build(self: Box<Self>) -> Box<dyn Runtime> {
-        Box::new(MonBuilder::build(*self))
-    }
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>> {
+    fn build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>> {
         Box::pin(async move {
-            let mon = <MonBuilder as RuntimeBuilder<M, V>>::async_build(self).await;
+            let mon = <MonBuilder as RuntimeBuilder<M, V>>::build(*self).await;
             Box::new(mon) as Box<dyn Runtime>
         })
     }
@@ -320,12 +312,8 @@ impl<
         Self(self.0.output(output))
     }
 
-    fn build(self) -> Self::Runtime {
-        self.0.build()
-    }
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { Box::new(self.0).async_build().await })
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move { self.0.build().await })
     }
 }
 
@@ -717,49 +705,8 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
         }
     }
 
-    fn build(self) -> Self::Runtime {
-        // WARNING: when updating this, also update async_build
-
-        if self.distribution_mode_builder.is_some()
-            || self.input_provider_builder.is_some()
-            || self.output_handler_builder.is_some()
-        {
-            panic!("Call async_build instead");
-        }
-
-        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
-            Self::create_common_builder(
-                self.runtime,
-                self.semantics,
-                self.parser,
-                self.executor,
-                self.model,
-                self.distribution_mode,
-                self.scheduler_mode,
-                self.input_provider_builder.clone(),
-                self.output_handler_builder.clone(),
-                self.reconf_topic.clone(),
-                self.use_context_transfer,
-                self.topic_mapping.clone(),
-                self.var_msg_types.clone(),
-            );
-
-        let builder = if let Some(output) = self.output {
-            builder.output(output)
-        } else {
-            builder
-        };
-        let builder = if let Some(input) = self.input {
-            builder.input(input)
-        } else {
-            builder
-        };
-
-        builder.build()
-    }
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { (*self).async_build().await })
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move { GeneralRuntimeBuilder::build(self).await })
     }
 }
 
@@ -1036,9 +983,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         builder
     }
 
-    pub async fn async_build(self) -> Box<dyn Runtime> {
-        // WARNING: when updating this, also update build
-
+    pub async fn build(self) -> Box<dyn Runtime> {
         let distribution_mode = match self.distribution_mode_builder {
             // TODO: add error handling to this method
             Some(distribution_mode_builder) => {
@@ -1081,10 +1026,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         } else {
             // Normal handling for non-reconfigurable runtimes
             let builder = if let Some(input_provider_builder) = self.input_provider_builder {
-                let input = input_provider_builder
-                    .runtime(self.runtime)
-                    .async_build()
-                    .await;
+                let input = input_provider_builder.runtime(self.runtime).build().await;
                 builder.input(input)
             } else if let Some(input) = self.input {
                 builder.input(input)
@@ -1093,7 +1035,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             };
 
             if let Some(output_handler_builder) = self.output_handler_builder {
-                let output = output_handler_builder.async_build().await;
+                let output = output_handler_builder.build().await;
                 builder.output(output)
             } else if let Some(output) = self.output {
                 builder.output(output)
@@ -1102,6 +1044,6 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             }
         };
 
-        builder.async_build().await
+        builder.build().await
     }
 }

@@ -461,60 +461,61 @@ where
         self
     }
 
-    fn build(self) -> Self::Runtime {
-        let dist_graph_mode = self
-            .dist_graph_mode
-            .as_ref()
-            .expect("Dist graph mode not set")
-            .clone();
-        let spec = self
-            .async_monitor_builder
-            .model
-            .as_ref()
-            .expect("Specification expected to be present")
-            .clone();
-        let var_msg_types = self
-            .var_msg_types
-            .as_ref()
-            .cloned()
-            .expect("Variable message types not set");
-        let topic_mapping = self.topic_mapping.as_ref().cloned().unwrap_or_else(|| {
-            var_msg_types
-                .keys()
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move {
+            let dist_graph_mode = self
+                .dist_graph_mode
+                .as_ref()
+                .expect("Dist graph mode not set")
+                .clone();
+            let spec = self
+                .async_monitor_builder
+                .model
+                .as_ref()
+                .expect("Specification expected to be present")
+                .clone();
+            let var_msg_types = self
+                .var_msg_types
+                .as_ref()
                 .cloned()
-                .map(|var| {
-                    let topic = format!("/{}", var.name());
-                    (var, topic)
-                })
-                .collect()
-        });
-        let executor = self
-            .async_monitor_builder
-            .executor
-            .as_ref()
-            .expect("Executor")
-            .clone();
-        // TODO: TW - potential bug here. It only considers output vars from the model
-        // TODO: Use set here to avoid collecting into vec
-        let var_names = self
-            .async_monitor_builder
-            .model
-            .as_ref()
-            .expect("Var names not set")
-            .output_vars()
-            .into_iter()
-            .collect();
+                .expect("Variable message types not set");
+            let topic_mapping = self.topic_mapping.as_ref().cloned().unwrap_or_else(|| {
+                var_msg_types
+                    .keys()
+                    .cloned()
+                    .map(|var| {
+                        let topic = format!("/{}", var.name());
+                        (var, topic)
+                    })
+                    .collect()
+            });
+            let executor = self
+                .async_monitor_builder
+                .executor
+                .as_ref()
+                .expect("Executor")
+                .clone();
+            // TODO: TW - potential bug here. It only considers output vars from the model
+            // TODO: Use set here to avoid collecting into vec
+            let var_names = self
+                .async_monitor_builder
+                .model
+                .as_ref()
+                .expect("Var names not set")
+                .output_vars()
+                .into_iter()
+                .collect();
 
-        // TODO: Use set here to avoid collecting into vec
-        let output_vars: Vec<_> = self
-            .async_monitor_builder
-            .model
-            .as_ref()
-            .unwrap()
-            .output_vars()
-            .into_iter()
-            .collect();
-        let (planner, locations, dist_graph_provider, dist_constraints, replanning_condition): (
+            // TODO: Use set here to avoid collecting into vec
+            let output_vars: Vec<_> = self
+                .async_monitor_builder
+                .model
+                .as_ref()
+                .unwrap()
+                .output_vars()
+                .into_iter()
+                .collect();
+            let (planner, locations, dist_graph_provider, dist_constraints, replanning_condition): (
             Box<dyn SchedulerPlanner>,
             Vec<NodeName>,
             Box<dyn DistGraphProvider>,
@@ -1024,103 +1025,100 @@ where
                 )
             }
         };
-        let scheduler_mode = self.scheduler_mode.unwrap_or(SchedulerCommunication::Null);
-        let scheduler_communicator = match scheduler_mode {
-            SchedulerCommunication::Null => {
-                Box::new(NullSchedulerCommunicator) as Box<dyn SchedulerCommunicator<AC::Spec>>
-            }
-            SchedulerCommunication::Ros {
-                #[allow(unused_variables)]
-                ros_node_name,
-                #[allow(unused_variables)]
-                reconf_topic,
-            } => {
-                #[cfg(feature = "ros")]
-                {
-                    Box::new(
-                        RosSchedulerCommunicator::new(
-                            executor.clone(),
-                            locations.clone(),
-                            ros_node_name,
-                            reconf_topic,
-                        )
-                        .expect("Failed to create ROS scheduler communicator"),
-                    ) as Box<dyn SchedulerCommunicator<AC::Spec>>
+            let scheduler_mode = self.scheduler_mode.unwrap_or(SchedulerCommunication::Null);
+            let scheduler_communicator = match scheduler_mode {
+                SchedulerCommunication::Null => {
+                    Box::new(NullSchedulerCommunicator) as Box<dyn SchedulerCommunicator<AC::Spec>>
                 }
-                #[cfg(not(feature = "ros"))]
-                {
-                    panic!(
-                        "Scheduler communication mode 'ros' requires building with feature 'ros'"
-                    );
+                SchedulerCommunication::Ros {
+                    #[allow(unused_variables)]
+                    ros_node_name,
+                    #[allow(unused_variables)]
+                    reconf_topic,
+                } => {
+                    #[cfg(feature = "ros")]
+                    {
+                        Box::new(
+                            RosSchedulerCommunicator::new(
+                                executor.clone(),
+                                locations.clone(),
+                                ros_node_name,
+                                reconf_topic,
+                            )
+                            .expect("Failed to create ROS scheduler communicator"),
+                        ) as Box<dyn SchedulerCommunicator<AC::Spec>>
+                    }
+                    #[cfg(not(feature = "ros"))]
+                    {
+                        panic!(
+                            "Scheduler communication mode 'ros' requires building with feature 'ros'"
+                        );
+                    }
                 }
+            };
+            let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
+                spec.clone(),
+                var_msg_types,
+                topic_mapping,
+                planner,
+                scheduler_communicator,
+                dist_graph_provider,
+                replanning_condition,
+                false,
+            ))));
+            let dist_graph_stream = scheduler.borrow_mut().as_mut().unwrap().take_graph_stream();
+            let scheduler_clone = scheduler.clone();
+            let dist_constraints_for_callback = dist_constraints.clone();
+            let context_builder = self
+                .context_builder
+                .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
+                .node_names(locations.clone())
+                .add_callback(Box::new(move |ctx| {
+                    let mut scheduler_borrow = scheduler_clone.borrow_mut();
+                    let scheduler_ref = (&mut *scheduler_borrow).as_mut().unwrap();
+                    scheduler_ref.provide_dist_constraints_streams(
+                        dist_constraints_for_callback
+                            .iter()
+                            .map(|x| {
+                                let stream = ctx.var(x).unwrap();
+                                // TODO: This should be an Option<bool> stream where None means NoVal.
+                                // Currently, NoVal triggers false which means we replan on NoVal.
+                                Box::pin(stream.map(|v| match v {
+                                    Value::Bool(b) => b,
+                                    _ => false,
+                                })) as crate::OutputStream<bool>
+                            })
+                            .collect(),
+                    )
+                }));
+
+            let localised_spec = if dist_constraints.is_empty() {
+                spec
+            } else {
+                spec.localise(&dist_constraints)
+            };
+
+            let mut async_builder = self
+                .async_monitor_builder
+                .maybe_input(self.input)
+                .context_builder(context_builder)
+                .model(localised_spec);
+
+            if !dist_constraints.is_empty() {
+                let null_output = Box::new(NullOutputHandler::new(
+                    executor.clone(),
+                    dist_constraints.clone().into_iter().collect(),
+                ));
+                async_builder = async_builder.output(null_output);
             }
-        };
-        let scheduler = Rc::new(RefCell::new(Some(Scheduler::new(
-            spec.clone(),
-            var_msg_types,
-            topic_mapping,
-            planner,
-            scheduler_communicator,
-            dist_graph_provider,
-            replanning_condition,
-            false,
-        ))));
-        let dist_graph_stream = scheduler.borrow_mut().as_mut().unwrap().take_graph_stream();
-        let scheduler_clone = scheduler.clone();
-        let dist_constraints_for_callback = dist_constraints.clone();
-        let context_builder = self
-            .context_builder
-            .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
-            .node_names(locations.clone())
-            .add_callback(Box::new(move |ctx| {
-                let mut scheduler_borrow = scheduler_clone.borrow_mut();
-                let scheduler_ref = (&mut *scheduler_borrow).as_mut().unwrap();
-                scheduler_ref.provide_dist_constraints_streams(
-                    dist_constraints_for_callback
-                        .iter()
-                        .map(|x| {
-                            let stream = ctx.var(x).unwrap();
-                            // TODO: This should be an Option<bool> stream where None means NoVal.
-                            // Currently, NoVal triggers false which means we replan on NoVal.
-                            Box::pin(stream.map(|v| match v {
-                                Value::Bool(b) => b,
-                                _ => false,
-                            })) as crate::OutputStream<bool>
-                        })
-                        .collect(),
-                )
-            }));
 
-        let localised_spec = if dist_constraints.is_empty() {
-            spec
-        } else {
-            spec.localise(&dist_constraints)
-        };
+            let async_monitor = async_builder.build().await;
 
-        let mut async_builder = self
-            .async_monitor_builder
-            .maybe_input(self.input)
-            .context_builder(context_builder)
-            .model(localised_spec);
-
-        if !dist_constraints.is_empty() {
-            let null_output = Box::new(NullOutputHandler::new(
-                executor.clone(),
-                dist_constraints.clone().into_iter().collect(),
-            ));
-            async_builder = async_builder.output(null_output);
-        }
-
-        let async_monitor = async_builder.build();
-
-        DistributedRuntime {
-            async_monitor,
-            scheduler: scheduler.take().unwrap(),
-        }
-    }
-
-    fn async_build(self: Box<Self>) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { self.build() })
+            DistributedRuntime {
+                async_monitor,
+                scheduler: scheduler.take().unwrap(),
+            }
+        })
     }
 }
 
