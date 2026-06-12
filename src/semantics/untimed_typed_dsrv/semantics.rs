@@ -82,21 +82,36 @@ where
             let e2 = eval_typed_list::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
+        TypedListExprKind::Update(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<EcoVec<Value>>>(eval_typed_list::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<EcoVec<Value>>>(eval_typed_list::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<EcoVec<Value>>(uc::update(e1, e2))
+        }
+        TypedListExprKind::Latch(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<EcoVec<Value>>>(eval_typed_list::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<EcoVec<Value>>>(eval_typed_list::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<EcoVec<Value>>(uc::latch(e1, e2))
+        }
         TypedListExprKind::Init(e1, e2) => {
             let e1 = eval_typed_list::<AC, Parser>(*e1, ctx);
             let e2 = eval_typed_list::<AC, Parser>(*e2, ctx);
             mc::init(e1, e2)
         }
-        TypedListExprKind::Defer(e, type_ctx) => {
+        TypedListExprKind::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
-            mc::defer::<AC, Parser, EcoVec<Value>>(
-                ctx,
-                e,
-                EcoVec::new(),
-                1,
-                &type_ctx,
-                list_stream_type,
-            )
+            mc::defer::<AC, Parser, EcoVec<Value>>(ctx, e, vs, 1, &type_ctx, list_stream_type)
         }
         TypedListExprKind::Dynamic(e, type_ctx) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
@@ -169,6 +184,10 @@ where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     Parser: ExprParser<SExpr> + 'static,
 {
+    let typed_struct_stream_type = typed_struct
+        .to_stream_type()
+        .expect("struct type should be concrete at runtime");
+
     match typed_struct.kind {
         TypedStructExprKind::Var(v) => ctx.var(&v).unwrap(),
         TypedStructExprKind::Literal(entries) => {
@@ -189,6 +208,16 @@ where
             let e1 = eval_typed_struct::<AC, Parser>(*e1, ctx);
             let e2 = eval_typed_struct::<AC, Parser>(*e2, ctx);
             uc::default(e1, e2)
+        }
+        TypedStructExprKind::Update(e1, e2) => {
+            let e1 = eval_typed_struct::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_struct::<AC, Parser>(*e2, ctx);
+            uc::update(e1, e2)
+        }
+        TypedStructExprKind::Latch(e1, e2) => {
+            let e1 = eval_typed_struct::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_struct::<AC, Parser>(*e2, ctx);
+            uc::latch(e1, e2)
         }
         TypedStructExprKind::If(b, e1, e2) => {
             let b = from_typed_stream::<PartialStreamValue<bool>>(
@@ -218,10 +247,56 @@ where
         TypedStructExprKind::SGet(st, key) => {
             uc::mget(eval_typed_struct::<AC, Parser>(*st, ctx), key)
         }
-        TypedStructExprKind::Defer(_, _)
-        | TypedStructExprKind::Dynamic(_, _)
-        | TypedStructExprKind::RestrictedDynamic(_, _, _) => {
-            todo!("typed dynamic/defer struct runtime semantics are not implemented yet")
+        TypedStructExprKind::MGetMap(map, key) => {
+            uc::mget(eval_typed_map::<AC, Parser>(*map, ctx), key)
+        }
+        TypedStructExprKind::LHeadList(inner_list) => {
+            let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::lhead::<Value>(inner_stream))
+        }
+        TypedStructExprKind::LIndexList(inner_list, idx) => {
+            let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::lindex::<Value>(
+                inner_stream,
+                idx_stream,
+            ))
+        }
+        TypedStructExprKind::Defer(e, type_ctx, vs) => {
+            let stream_type = typed_struct_stream_type.clone();
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::defer::<AC, Parser, Value>(
+                ctx,
+                e,
+                vs,
+                1,
+                &type_ctx,
+                stream_type,
+            ))
+        }
+        TypedStructExprKind::Dynamic(e, type_ctx) => {
+            let stream_type = typed_struct_stream_type.clone();
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::dynamic::<AC, Parser, Value>(
+                ctx,
+                e,
+                None,
+                1,
+                &type_ctx,
+                stream_type,
+            ))
+        }
+        TypedStructExprKind::RestrictedDynamic(e, vs, type_ctx) => {
+            let stream_type = typed_struct_stream_type.clone();
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::dynamic::<AC, Parser, Value>(
+                ctx,
+                e,
+                Some(vs),
+                1,
+                &type_ctx,
+                stream_type,
+            ))
         }
     }
 }
@@ -231,6 +306,11 @@ where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     Parser: ExprParser<SExpr> + 'static,
 {
+    let typed_map_stream_type = typed_map
+        .map_tc_type()
+        .to_stream_type()
+        .expect("map type should be concrete at runtime");
+
     match typed_map.kind {
         TypedMapExprKind::Var(v) => ctx.var(&v).unwrap(),
         TypedMapExprKind::Literal(entries) => {
@@ -251,6 +331,16 @@ where
             let e1 = eval_typed_map::<AC, Parser>(*e1, ctx);
             let e2 = eval_typed_map::<AC, Parser>(*e2, ctx);
             uc::default(e1, e2)
+        }
+        TypedMapExprKind::Update(e1, e2) => {
+            let e1 = eval_typed_map::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_map::<AC, Parser>(*e2, ctx);
+            uc::update(e1, e2)
+        }
+        TypedMapExprKind::Latch(e1, e2) => {
+            let e1 = eval_typed_map::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_map::<AC, Parser>(*e2, ctx);
+            uc::latch(e1, e2)
         }
         TypedMapExprKind::If(b, e1, e2) => {
             let b = from_typed_stream::<PartialStreamValue<bool>>(
@@ -287,10 +377,53 @@ where
         TypedMapExprKind::SGetStruct(st, key) => {
             uc::mget(eval_typed_struct::<AC, Parser>(*st, ctx), key)
         }
-        TypedMapExprKind::Defer(_, _)
-        | TypedMapExprKind::Dynamic(_, _)
-        | TypedMapExprKind::RestrictedDynamic(_, _, _) => {
-            todo!("typed dynamic/defer map runtime semantics are not implemented yet")
+        TypedMapExprKind::LHeadList(inner_list) => {
+            let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::lhead::<Value>(inner_stream))
+        }
+        TypedMapExprKind::LIndexList(inner_list, idx) => {
+            let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
+            let idx_stream = to_async_stream_int::<AC, Parser>(*idx, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::lindex::<Value>(
+                inner_stream,
+                idx_stream,
+            ))
+        }
+        TypedMapExprKind::Defer(e, type_ctx, vs) => {
+            let stream_type = typed_map_stream_type.clone();
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::defer::<AC, Parser, Value>(
+                ctx,
+                e,
+                vs,
+                1,
+                &type_ctx,
+                stream_type,
+            ))
+        }
+        TypedMapExprKind::Dynamic(e, type_ctx) => {
+            let stream_type = typed_map_stream_type.clone();
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::dynamic::<AC, Parser, Value>(
+                ctx,
+                e,
+                None,
+                1,
+                &type_ctx,
+                stream_type,
+            ))
+        }
+        TypedMapExprKind::RestrictedDynamic(e, vs, type_ctx) => {
+            let stream_type = typed_map_stream_type.clone();
+            let e = to_async_stream_str::<AC, Parser>(*e, ctx);
+            from_typed_stream::<PartialStreamValue<Value>>(mc::dynamic::<AC, Parser, Value>(
+                ctx,
+                e,
+                Some(vs),
+                1,
+                &type_ctx,
+                stream_type,
+            ))
         }
     }
 }
@@ -331,6 +464,24 @@ where
             let e1 = to_async_stream_int::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_int::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
+        }
+        SExprInt::Update(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<i64>>(
+                to_async_stream_int::<AC, Parser>(*e1, ctx),
+            );
+            let e2 = from_typed_stream::<PartialStreamValue<i64>>(
+                to_async_stream_int::<AC, Parser>(*e2, ctx),
+            );
+            to_typed_partial_stream::<i64>(uc::update(e1, e2))
+        }
+        SExprInt::Latch(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<i64>>(
+                to_async_stream_int::<AC, Parser>(*e1, ctx),
+            );
+            let e2 = from_typed_stream::<PartialStreamValue<i64>>(
+                to_async_stream_int::<AC, Parser>(*e2, ctx),
+            );
+            to_typed_partial_stream::<i64>(uc::latch(e1, e2))
         }
         SExprInt::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
@@ -411,6 +562,28 @@ where
             let e1 = to_async_stream_float::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_float::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
+        }
+        SExprFloat::Update(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<f64>>(to_async_stream_float::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<f64>>(to_async_stream_float::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<f64>(uc::update(e1, e2))
+        }
+        SExprFloat::Latch(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<f64>>(to_async_stream_float::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<f64>>(to_async_stream_float::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<f64>(uc::latch(e1, e2))
         }
         SExprFloat::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
@@ -503,6 +676,28 @@ where
             let e1 = to_async_stream_str::<AC, Parser>(*e1, ctx);
             let e2 = to_async_stream_str::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
+        }
+        SExprStr::Update(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<String>>(to_async_stream_str::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<String>>(to_async_stream_str::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<String>(uc::update(e1, e2))
+        }
+        SExprStr::Latch(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<String>>(to_async_stream_str::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<String>>(to_async_stream_str::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<String>(uc::latch(e1, e2))
         }
         SExprStr::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
@@ -680,6 +875,28 @@ where
             let e2 = to_async_stream_bool::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
+        SExprBool::Update(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<bool>>(to_async_stream_bool::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<bool>>(to_async_stream_bool::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<bool>(uc::update(e1, e2))
+        }
+        SExprBool::Latch(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<bool>>(to_async_stream_bool::<
+                AC,
+                Parser,
+            >(*e1, ctx));
+            let e2 = from_typed_stream::<PartialStreamValue<bool>>(to_async_stream_bool::<
+                AC,
+                Parser,
+            >(*e2, ctx));
+            to_typed_partial_stream::<bool>(uc::latch(e1, e2))
+        }
         SExprBool::Defer(e, type_ctx, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
             mc::defer::<AC, Parser, bool>(ctx, e, vs, 1, &type_ctx, StreamType::Bool)
@@ -747,6 +964,24 @@ where
             let e2 = to_async_stream_unit::<AC, Parser>(*e2, ctx);
             mc::default(e1, e2)
         }
+        SExprUnit::Update(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<()>>(
+                to_async_stream_unit::<AC, Parser>(*e1, ctx),
+            );
+            let e2 = from_typed_stream::<PartialStreamValue<()>>(
+                to_async_stream_unit::<AC, Parser>(*e2, ctx),
+            );
+            to_typed_partial_stream::<()>(uc::update(e1, e2))
+        }
+        SExprUnit::Latch(e1, e2) => {
+            let e1 = from_typed_stream::<PartialStreamValue<()>>(
+                to_async_stream_unit::<AC, Parser>(*e1, ctx),
+            );
+            let e2 = from_typed_stream::<PartialStreamValue<()>>(
+                to_async_stream_unit::<AC, Parser>(*e2, ctx),
+            );
+            to_typed_partial_stream::<()>(uc::latch(e1, e2))
+        }
         SExprUnit::Defer(e, type_info, vs) => {
             let e = to_async_stream_str::<AC, Parser>(*e, ctx);
             mc::defer::<AC, Parser, ()>(ctx, e, vs, 1, &type_info, StreamType::Unit)
@@ -801,10 +1036,6 @@ mod tests {
     fn type_info(vars: &[(&str, StreamType)]) -> TypeInfo {
         vars.iter().map(|(v, t)| ((*v).into(), t.clone())).collect()
     }
-
-    // TODO: TW - in some of these tests, particularly with defer, you provide "e" as type_info
-    // while in others you do not. Which is correct? Please update it. Also, as we discussed at
-    // some point, I think some of these tests are a bit redundant to our existing suite.
 
     #[apply(async_test)]
     async fn test_defer_int_runtime(executor: Rc<LocalExecutor<'static>>) {

@@ -5,7 +5,9 @@ use smol::LocalExecutor;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics};
+use trustworthiness_checker::core::{
+    Runtime, RuntimeSpec, Semantics, StreamType, StreamTypeAscription,
+};
 use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
@@ -13,7 +15,9 @@ use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
-use trustworthiness_checker::{Value, dsrv_specification, parse_file, runtime::RuntimeBuilder};
+use trustworthiness_checker::{
+    SExpr, Value, dsrv_specification, parse_file, runtime::RuntimeBuilder,
+};
 use trustworthiness_checker::{VarName, async_test};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -320,6 +324,109 @@ x = values.x
                 .any(|err| format!("{err:?}").contains(expected_error)),
             "Expected error containing {expected_error:?}, got {errors:?}",
         );
+    }
+}
+
+#[test]
+fn test_typed_container_and_struct_operations_type_check() {
+    let cases = [
+        r#"
+out structs: List<Struct<id: Int>>
+out first: Struct<id: Int>
+out first_id: Int
+structs = List(Struct("id": 1))
+first = List.head(structs)
+first_id = first.id
+"#,
+        r#"
+out nested: Struct<pose: Struct<x: Int>>
+out x: Int
+nested = Struct("pose": Struct("x": 1))
+x = nested.pose.x
+"#,
+        r#"
+out records: Map<Struct<id: Int>>
+out record: Struct<id: Int>
+out id: Int
+records = Map("a": Struct("id": 1))
+record = Map.get(records, "a")
+id = record.id
+"#,
+        r#"
+out s: Struct<id: Int>
+s = default(Struct("id": 1), Struct("id": 2))
+"#,
+        r#"
+out s: Struct<id: Int>
+s = if true then Struct("id": 1) else Struct("id": 2)
+"#,
+        r#"
+out s: Struct<id: Int>
+s = init(Struct("id": 1), Struct("id": 2))
+"#,
+        r#"
+out s: Struct<id: Int>
+s = update(Struct("id": 1), Struct("id": 2))
+"#,
+        r#"
+out s: Struct<id: Int>
+s = latch(Struct("id": 1), Struct("id": 2))
+"#,
+    ];
+
+    for spec_src in cases {
+        let mut spec_src = spec_src;
+        let spec = dsrv_specification(&mut spec_src).unwrap();
+        type_check(spec).unwrap_or_else(|errors| {
+            panic!("expected spec to type-check, got {errors:?}\n{spec_src}")
+        });
+    }
+
+    let mut ctx = BTreeMap::new();
+    for (expr, expected) in [
+        (
+            SExpr::Dynamic(
+                Box::new(SExpr::Val(Value::Str("Map(\"x\": 1)".into()))),
+                StreamTypeAscription::Ascribed(StreamType::Map(Box::new(StreamType::Int))),
+            ),
+            StreamType::Map(Box::new(StreamType::Int)),
+        ),
+        (
+            SExpr::Dynamic(
+                Box::new(SExpr::Val(Value::Str("Struct(\"id\": 1)".into()))),
+                StreamTypeAscription::Ascribed(StreamType::Struct(
+                    vec![("id".into(), StreamType::Int)].into(),
+                    false,
+                )),
+            ),
+            StreamType::Struct(vec![("id".into(), StreamType::Int)].into(), false),
+        ),
+        (
+            SExpr::Defer(
+                Box::new(SExpr::Val(Value::Str("Map(\"x\": 1)".into()))),
+                StreamTypeAscription::Ascribed(StreamType::Map(Box::new(StreamType::Int))),
+                vec![].into(),
+            ),
+            StreamType::Map(Box::new(StreamType::Int)),
+        ),
+        (
+            SExpr::Defer(
+                Box::new(SExpr::Val(Value::Str("Struct(\"id\": 1)".into()))),
+                StreamTypeAscription::Ascribed(StreamType::Struct(
+                    vec![("id".into(), StreamType::Int)].into(),
+                    false,
+                )),
+                vec![].into(),
+            ),
+            StreamType::Struct(vec![("id".into(), StreamType::Int)].into(), false),
+        ),
+    ] {
+        use trustworthiness_checker::lang::dsrv::type_checker::TypeCheckableHelper;
+        let mut errors = vec![];
+        expr.type_check_raw(Some(&expected), &mut ctx, &mut errors)
+            .unwrap_or_else(|_| {
+                panic!("expected dynamic/defer expression to type-check, got {errors:?}")
+            });
     }
 }
 

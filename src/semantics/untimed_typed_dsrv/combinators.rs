@@ -17,6 +17,7 @@ use futures::{
     StreamExt,
     stream::{self},
 };
+use std::fmt::Debug;
 use tracing::debug;
 
 fn stream_lift_base<T: StreamData>(
@@ -396,7 +397,8 @@ pub fn dynamic<AC, Parser, T>(
 where
     Parser: ExprParser<SExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    T: StreamData + TryFrom<Value, Error = ()>,
+    T: StreamData + TryFrom<Value>,
+    <T as TryFrom<Value>>::Error: Debug,
 {
     // Note: Slight change in dynamic's behavior after language became async and we introduced
     // NoVal. Consider the following behavior:
@@ -419,8 +421,7 @@ where
     Box::pin(stream! {
         // Store the previous value of the stream we are evaluating so we can
         // check when it changes
-        // We store Value streams to avoid generic parameter issues inside the stream macro
-        // TODO: fix this via implementing a parameterised typed semantics
+        // Store Value streams so dynamic can evaluate any typed expression shape uniformly.
         let mut prev_data: Option<(PartialStreamValue<String>, OutputStream<Value>)> = None;
         while let Some(current) = eval_stream.next().await {
             // If we have a previous value and it is the same as the current value (no need to
@@ -514,14 +515,8 @@ where
     })
 }
 
-// Defer for an UntimedDsrvExpression using the dsrv_expression parser
-// TODO: this currently has unnecessary potentially-panicing casts since the types in the untyped
-// semantics are not granular enough
-// TODO: TW: I don't think the combinators in this file are implementing NoVal/Defer semantics
-// correctly for typed streams. I did not change this when updating the defer combinator as it
-// would be a lot of work (and might conflict with yours). Would also remove the need for
-// `prev_received_deferred`. See outcommented stream_lift_base calls
-// #[instrument(skip(ctx, prop_stream))]
+// Defer for an UntimedDsrvExpression using the dsrv_expression parser.
+// Deferred inputs remain sticky until a concrete deferred expression is received.
 pub fn defer<AC, Parser, T>(
     ctx: &AC::Ctx,
     mut eval_stream: OutputStream<PartialStreamValue<String>>,
@@ -533,7 +528,8 @@ pub fn defer<AC, Parser, T>(
 where
     Parser: ExprParser<SExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
-    T: StreamData + TryFrom<Value, Error = ()>,
+    T: StreamData + TryFrom<Value>,
+    <T as TryFrom<Value>>::Error: Debug,
 {
     // Create a subcontext with a history window length
     let mut subcontext = ctx.restricted_subcontext(vs, history_length);
@@ -641,7 +637,8 @@ pub fn to_partial_value_stream(s: OutputStream<Value>) -> OutputStream<PartialSt
 /// type checker guarantees the element type matches `T`.
 pub fn lhead<T>(x: ListStream) -> OutputStream<PartialStreamValue<T>>
 where
-    T: TryFrom<Value, Error = ()> + StreamData,
+    T: TryFrom<Value> + StreamData,
+    <T as TryFrom<Value>>::Error: Debug,
 {
     stream_lift1(
         |list: EcoVec<Value>| {
@@ -677,7 +674,8 @@ pub fn lindex<T>(
     i: OutputStream<PartialStreamValue<i64>>,
 ) -> OutputStream<PartialStreamValue<T>>
 where
-    T: TryFrom<Value, Error = ()> + StreamData,
+    T: TryFrom<Value> + StreamData,
+    <T as TryFrom<Value>>::Error: Debug,
 {
     stream_lift2(
         |list: EcoVec<Value>, idx: i64| {

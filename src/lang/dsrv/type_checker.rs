@@ -237,6 +237,8 @@ impl Display for SExprInt {
             BinOp(e1, e2, Mod) => write!(f, "({} % {})", e1, e2),
             Var(v) => write!(f, "{}", v),
             Default(e, v) => write!(f, "default({}, {})", e, v),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
             Abs(v) => write!(f, "abs({})", v),
             Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
             Defer(e, _, _) => write!(f, "defer({}: Int)", e),
@@ -273,6 +275,8 @@ impl Display for SExprFloat {
             BinOp(e1, e2, Mod) => write!(f, "({} % {})", e1, e2),
             Var(v) => write!(f, "{}", v),
             Default(e, v) => write!(f, "default({}, {})", e, v),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
             Sin(v) => write!(f, "sin({})", v),
             Cos(v) => write!(f, "cos({})", v),
             Tan(v) => write!(f, "tan({})", v),
@@ -306,6 +310,8 @@ impl Display for SExprStr {
             Val(v) => write!(f, "{}", v),
             Var(v) => write!(f, "{}", v),
             Default(e, v) => write!(f, "default({}, {})", e, v),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
             Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
             Defer(e, _, _) => write!(f, "defer({}: Str)", e),
             Dynamic(e, _) => write!(f, "dynamic({}: Str)", e),
@@ -334,6 +340,8 @@ impl Display for SExprUnit {
             Val(v) => write!(f, "{:?}", v),
             Var(v) => write!(f, "{}", v),
             Default(e, v) => write!(f, "default({}, {})", e, v),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
             Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
             Defer(e, _, _) => write!(f, "defer({}: Unit)", e),
             Dynamic(e, _) => write!(f, "dynamic({}: Unit)", e),
@@ -376,6 +384,8 @@ impl Display for SExprBool {
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Var(v) => write!(f, "{}", v),
             Default(e, v) => write!(f, "default({}, {})", e, v),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
             Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
 
             IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),
@@ -413,7 +423,6 @@ impl TryFrom<Value> for PartialStreamValue<i64> {
     }
 }
 
-// TODO: should the typed semantics actually use EcoString instead of String?
 impl TryFrom<Value> for PartialStreamValue<String> {
     type Error = ();
 
@@ -536,6 +545,16 @@ impl From<PartialStreamValue<EcoVec<Value>>> for Value {
     }
 }
 
+impl From<PartialStreamValue<Value>> for Value {
+    fn from(value: PartialStreamValue<Value>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => v,
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum SExprBool {
     Val(PartialStreamValue<bool>),
@@ -560,6 +579,8 @@ pub enum SExprBool {
     Default(Box<Self>, Box<Self>),
 
     // Async operators
+    Update(Box<Self>, Box<Self>),
+    Latch(Box<Self>, Box<Self>),
     Init(Box<Self>, Box<Self>),
 
     // Boolean-producing unary operators on typed streams
@@ -602,6 +623,10 @@ pub enum SExprInt {
 
     Default(Box<Self>, Box<Self>),
 
+    // Async operators
+    Update(Box<Self>, Box<Self>),
+    Latch(Box<Self>, Box<Self>),
+
     // Math functions
     Abs(Box<Self>),
 
@@ -643,6 +668,10 @@ pub enum SExprFloat {
     Var(VarName),
 
     Default(Box<Self>, Box<Self>),
+
+    // Async operators
+    Update(Box<Self>, Box<Self>),
+    Latch(Box<Self>, Box<Self>),
 
     // Trigonometric and math functions
     Sin(Box<Self>),
@@ -688,6 +717,8 @@ pub enum SExprUnit {
     Default(Box<Self>, Box<Self>),
 
     // Async operators
+    Update(Box<Self>, Box<Self>),
+    Latch(Box<Self>, Box<Self>),
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
@@ -726,6 +757,8 @@ pub enum SExprStr {
     Default(Box<Self>, Box<Self>),
 
     // Async operators
+    Update(Box<Self>, Box<Self>),
+    Latch(Box<Self>, Box<Self>),
     Init(Box<Self>, Box<Self>),
 
     // Deferred and dynamic expressions
@@ -748,8 +781,10 @@ pub enum TypedListExprKind {
     SIndex(Box<TypedListExpr>, u64),
     Var(VarName),
     Default(Box<TypedListExpr>, Box<TypedListExpr>),
+    Update(Box<TypedListExpr>, Box<TypedListExpr>),
+    Latch(Box<TypedListExpr>, Box<TypedListExpr>),
     Init(Box<TypedListExpr>, Box<TypedListExpr>),
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
     Literal(Vec<SExprTE>),
@@ -799,6 +834,20 @@ impl TypedListExpr {
         }
     }
 
+    pub fn typed_update_stream(&self, other: &TypedListExpr) -> TypedListExpr {
+        TypedListExpr {
+            element_type: self.element_type.clone(),
+            kind: TypedListExprKind::Update(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_latch(&self, other: &TypedListExpr) -> TypedListExpr {
+        TypedListExpr {
+            element_type: self.element_type.clone(),
+            kind: TypedListExprKind::Latch(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
     pub fn typed_tail(&self) -> TypedListExpr {
         TypedListExpr {
             element_type: self.element_type.clone(),
@@ -834,15 +883,19 @@ pub enum TypedMapExprKind {
     Literal(BTreeMap<EcoString, SExprTE>),
     Default(Box<TypedMapExpr>, Box<TypedMapExpr>),
     If(Box<SExprBool>, Box<TypedMapExpr>, Box<TypedMapExpr>),
+    Update(Box<TypedMapExpr>, Box<TypedMapExpr>),
+    Latch(Box<TypedMapExpr>, Box<TypedMapExpr>),
     Init(Box<TypedMapExpr>, Box<TypedMapExpr>),
     SIndex(Box<TypedMapExpr>, u64),
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
     MInsert(Box<TypedMapExpr>, EcoString, Box<SExprTE>),
     MRemove(Box<TypedMapExpr>, EcoString),
     MGetMap(Box<TypedMapExpr>, EcoString),
     SGetStruct(Box<TypedStructExpr>, EcoString),
+    LHeadList(Box<TypedListExpr>),
+    LIndexList(Box<TypedListExpr>, Box<SExprInt>),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -879,6 +932,20 @@ impl TypedMapExpr {
         TypedMapExpr {
             value_type: self.value_type.clone(),
             kind: TypedMapExprKind::Init(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_update_stream(&self, other: &TypedMapExpr) -> TypedMapExpr {
+        TypedMapExpr {
+            value_type: self.value_type.clone(),
+            kind: TypedMapExprKind::Update(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    pub fn typed_latch(&self, other: &TypedMapExpr) -> TypedMapExpr {
+        TypedMapExpr {
+            value_type: self.value_type.clone(),
+            kind: TypedMapExprKind::Latch(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
@@ -1053,13 +1120,18 @@ pub enum TypedStructExprKind {
     Literal(Vec<(EcoString, SExprTE)>),
     Default(Box<TypedStructExpr>, Box<TypedStructExpr>),
     If(Box<SExprBool>, Box<TypedStructExpr>, Box<TypedStructExpr>),
+    Update(Box<TypedStructExpr>, Box<TypedStructExpr>),
+    Latch(Box<TypedStructExpr>, Box<TypedStructExpr>),
     Init(Box<TypedStructExpr>, Box<TypedStructExpr>),
     SIndex(Box<TypedStructExpr>, u64),
-    Defer(Box<SExprStr>, TypeInfo),
+    Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
     RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
     SUpdate(Box<TypedStructExpr>, EcoString, Box<SExprTE>),
     SGet(Box<TypedStructExpr>, EcoString),
+    MGetMap(Box<TypedMapExpr>, EcoString),
+    LHeadList(Box<TypedListExpr>),
+    LIndexList(Box<TypedListExpr>, Box<SExprInt>),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -1071,6 +1143,10 @@ pub struct TypedStructExpr {
 }
 
 impl TypedStructExpr {
+    pub fn to_stream_type(&self) -> Option<StreamType> {
+        TCType::Struct(self.typ_map.clone(), self.allow_extra_fields).to_stream_type()
+    }
+
     #[requires(self.typ_map == other.typ_map)]
     pub fn typed_default(&self, other: &TypedStructExpr) -> TypedStructExpr {
         TypedStructExpr {
@@ -1103,6 +1179,24 @@ impl TypedStructExpr {
             typ_map: self.typ_map.clone(),
             allow_extra_fields: self.allow_extra_fields,
             kind: TypedStructExprKind::Init(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    #[requires(self.typ_map == other.typ_map)]
+    pub fn typed_update_stream(&self, other: &TypedStructExpr) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::Update(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+
+    #[requires(self.typ_map == other.typ_map)]
+    pub fn typed_latch(&self, other: &TypedStructExpr) -> TypedStructExpr {
+        TypedStructExpr {
+            typ_map: self.typ_map.clone(),
+            allow_extra_fields: self.allow_extra_fields,
+            kind: TypedStructExprKind::Latch(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
 
@@ -1184,7 +1278,6 @@ impl Specification for TypedDsrvSpecification {
     }
 
     fn add_input_var(&mut self, var: VarName) {
-        // TODO: How to add type info?
         self.input_vars = self
             .input_vars
             .iter()
@@ -1316,9 +1409,28 @@ impl TypeCheckableHelper<SExprTE> for Value {
                 )));
                 Err(())
             }
-            // Not sure how the type-checking should deal with a value not provided
-            // Something like skipping type-checking for this value but not the next
-            Value::NoVal => todo!(),
+            Value::NoVal => match expected {
+                Some(StreamType::Int) => Ok(SExprTE::Int(SExprInt::Val(PartialStreamValue::NoVal))),
+                Some(StreamType::Float) => {
+                    Ok(SExprTE::Float(SExprFloat::Val(PartialStreamValue::NoVal)))
+                }
+                Some(StreamType::Str) => Ok(SExprTE::Str(SExprStr::Val(PartialStreamValue::NoVal))),
+                Some(StreamType::Bool) => {
+                    Ok(SExprTE::Bool(SExprBool::Val(PartialStreamValue::NoVal)))
+                }
+                Some(StreamType::Unit) => {
+                    Ok(SExprTE::Unit(SExprUnit::Val(PartialStreamValue::NoVal)))
+                }
+                Some(StreamType::List(_))
+                | Some(StreamType::Map(_))
+                | Some(StreamType::Struct(_, _))
+                | None => {
+                    errs.push(SemanticError::TypeError(
+                        "NoVal literals require a concrete primitive expected type in typed semantics".into(),
+                    ));
+                    Err(())
+                }
+            },
         }
     }
 }
@@ -1489,6 +1601,19 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr) {
                             }
                         }
                     }
+                    (SExprTE::Struct(st1), SExprTE::Struct(st2)) => {
+                        let t1 = TCType::Struct(st1.typ_map.clone(), st1.allow_extra_fields);
+                        let t2 = TCType::Struct(st2.typ_map.clone(), st2.allow_extra_fields);
+                        if unify_element_types(&t1, &t2).is_some() {
+                            Ok(SExprTE::Struct(st1.typed_default(&st2)))
+                        } else {
+                            errs.push(SemanticError::TypeError(format!(
+                                "Cannot create default-expression with two different struct types: {:?} and {:?}",
+                                t1, t2
+                            )));
+                            Err(())
+                        }
+                    }
                     (stenum1, stenum2) => {
                         errs.push(SemanticError::TypeError(format!(
                             "Cannot create default-expression with two different types: {:?} and {:?}",
@@ -1582,6 +1707,19 @@ impl TypeCheckableHelper<SExprTE> for (&SExpr, &SExpr, &SExpr) {
                                 )));
                                 Err(())
                             }
+                        }
+                    }
+                    (SExprTE::Struct(st1), SExprTE::Struct(st2)) => {
+                        let t1 = TCType::Struct(st1.typ_map.clone(), st1.allow_extra_fields);
+                        let t2 = TCType::Struct(st2.typ_map.clone(), st2.allow_extra_fields);
+                        if unify_element_types(&t1, &t2).is_some() {
+                            Ok(SExprTE::Struct(st1.typed_if(Box::new(b.clone()), &st2)))
+                        } else {
+                            errs.push(SemanticError::TypeError(format!(
+                                "Cannot create if-expression with two different struct types: {:?} and {:?}",
+                                t1, t2
+                            )));
+                            Err(())
                         }
                     }
                     (stenum1, stenum2) => {
@@ -1949,9 +2087,14 @@ fn typed_struct_get(
             value_type: *inner,
             kind: TypedMapExprKind::SGetStruct(Box::new(typed_struct), key),
         })),
-        TCType::Struct(..) | TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
+        TCType::Struct(fields, allow_extra_fields) => Ok(SExprTE::Struct(TypedStructExpr {
+            typ_map: fields,
+            allow_extra_fields,
+            kind: TypedStructExprKind::SGet(Box::new(typed_struct), key),
+        })),
+        TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
             errs.push(SemanticError::TypeError(format!(
-                "Struct field {:?} has unsupported field type {:?}",
+                "Struct field {:?} has unresolved field type {:?}",
                 key, field_type
             )));
             Err(())
@@ -1990,10 +2133,114 @@ fn typed_map_get(
             value_type: *t,
             kind: TypedMapExprKind::MGetMap(Box::new(typed_map), key),
         })),
-        TCType::Struct(ts, _) => {
+        TCType::Struct(fields, allow_extra_fields) => Ok(SExprTE::Struct(TypedStructExpr {
+            typ_map: fields,
+            allow_extra_fields,
+            kind: TypedStructExprKind::MGetMap(Box::new(typed_map), key),
+        })),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StreamBinaryOpKind {
+    Update,
+    Latch,
+}
+
+fn type_check_same_typed_stream_op(
+    op: StreamBinaryOpKind,
+    lhs: &SExpr,
+    rhs: &SExpr,
+    expected: Option<&StreamType>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    let lhs_te = lhs.type_check_raw(expected, ctx, errs)?;
+    let rhs_te = rhs.type_check_raw(expected, ctx, errs)?;
+
+    match (lhs_te, rhs_te) {
+        (SExprTE::Int(a), SExprTE::Int(b)) => Ok(SExprTE::Int(match op {
+            StreamBinaryOpKind::Update => SExprInt::Update(Box::new(a), Box::new(b)),
+            StreamBinaryOpKind::Latch => SExprInt::Latch(Box::new(a), Box::new(b)),
+        })),
+        (SExprTE::Float(a), SExprTE::Float(b)) => Ok(SExprTE::Float(match op {
+            StreamBinaryOpKind::Update => SExprFloat::Update(Box::new(a), Box::new(b)),
+            StreamBinaryOpKind::Latch => SExprFloat::Latch(Box::new(a), Box::new(b)),
+        })),
+        (SExprTE::Str(a), SExprTE::Str(b)) => Ok(SExprTE::Str(match op {
+            StreamBinaryOpKind::Update => SExprStr::Update(Box::new(a), Box::new(b)),
+            StreamBinaryOpKind::Latch => SExprStr::Latch(Box::new(a), Box::new(b)),
+        })),
+        (SExprTE::Bool(a), SExprTE::Bool(b)) => Ok(SExprTE::Bool(match op {
+            StreamBinaryOpKind::Update => SExprBool::Update(Box::new(a), Box::new(b)),
+            StreamBinaryOpKind::Latch => SExprBool::Latch(Box::new(a), Box::new(b)),
+        })),
+        (SExprTE::Unit(a), SExprTE::Unit(b)) => Ok(SExprTE::Unit(match op {
+            StreamBinaryOpKind::Update => SExprUnit::Update(Box::new(a), Box::new(b)),
+            StreamBinaryOpKind::Latch => SExprUnit::Latch(Box::new(a), Box::new(b)),
+        })),
+        (SExprTE::List(a), SExprTE::List(b)) => {
+            let t1 = a.element_type().clone();
+            let t2 = b.element_type().clone();
+            match unify_element_types(&t1, &t2) {
+                Some(resolved) => {
+                    let a = coerce_empty_list(a, resolved.clone());
+                    let b = coerce_empty_list(b, resolved);
+                    Ok(SExprTE::List(match op {
+                        StreamBinaryOpKind::Update => a.typed_update_stream(&b),
+                        StreamBinaryOpKind::Latch => a.typed_latch(&b),
+                    }))
+                }
+                None => {
+                    errs.push(SemanticError::TypeError(format!(
+                        "Stream operation requires matching list types, got {:?} and {:?}",
+                        t1, t2
+                    )));
+                    Err(())
+                }
+            }
+        }
+        (SExprTE::Map(a), SExprTE::Map(b)) => {
+            let t1 = a.value_type().clone();
+            let t2 = b.value_type().clone();
+            match unify_element_types(&t1, &t2) {
+                Some(resolved) => {
+                    let a = coerce_empty_map(a, resolved.clone());
+                    let b = coerce_empty_map(b, resolved);
+                    Ok(SExprTE::Map(match op {
+                        StreamBinaryOpKind::Update => a.typed_update_stream(&b),
+                        StreamBinaryOpKind::Latch => a.typed_latch(&b),
+                    }))
+                }
+                None => {
+                    errs.push(SemanticError::TypeError(format!(
+                        "Stream operation requires matching map types, got {:?} and {:?}",
+                        t1, t2
+                    )));
+                    Err(())
+                }
+            }
+        }
+        (SExprTE::Struct(a), SExprTE::Struct(b)) => {
+            let t1 = TCType::Struct(a.typ_map.clone(), a.allow_extra_fields);
+            let t2 = TCType::Struct(b.typ_map.clone(), b.allow_extra_fields);
+            if unify_element_types(&t1, &t2).is_some() {
+                Ok(SExprTE::Struct(match op {
+                    StreamBinaryOpKind::Update => a.typed_update_stream(&b),
+                    StreamBinaryOpKind::Latch => a.typed_latch(&b),
+                }))
+            } else {
+                errs.push(SemanticError::TypeError(format!(
+                    "Stream operation requires matching struct types, got {:?} and {:?}",
+                    t1, t2
+                )));
+                Err(())
+            }
+        }
+        (a, b) => {
             errs.push(SemanticError::TypeError(format!(
-                "Unsupported type constructor application for struct value type: {:?}",
-                ts
+                "Stream operation requires both arguments to have the same type, got {:?} and {:?}",
+                a, b
             )));
             Err(())
         }
@@ -2260,11 +2507,11 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     ))),
                     StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
                         element_type: TCType::from_stream_type(inner),
-                        kind: TypedListExprKind::Defer(Box::new(e_str), ctx.clone()),
+                        kind: TypedListExprKind::Defer(Box::new(e_str), ctx.clone(), vs.clone()),
                     })),
                     StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
                         value_type: TCType::from_stream_type(inner),
-                        kind: TypedMapExprKind::Defer(Box::new(e_str), ctx.clone()),
+                        kind: TypedMapExprKind::Defer(Box::new(e_str), ctx.clone(), vs.clone()),
                     })),
                     StreamType::Struct(fields, allow_extra_fields) => {
                         Ok(SExprTE::Struct(TypedStructExpr {
@@ -2273,12 +2520,23 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 .map(|(n, t)| (n.clone(), TCType::from_stream_type(t)))
                                 .collect(),
                             allow_extra_fields: *allow_extra_fields,
-                            kind: TypedStructExprKind::Defer(Box::new(e_str), ctx.clone()),
+                            kind: TypedStructExprKind::Defer(
+                                Box::new(e_str),
+                                ctx.clone(),
+                                vs.clone(),
+                            ),
                         }))
                     }
                 }
             }
-            SExpr::Update(_, _) => todo!("Implement support for Update"),
+            SExpr::Update(lhs, rhs) => type_check_same_typed_stream_op(
+                StreamBinaryOpKind::Update,
+                lhs,
+                rhs,
+                expected,
+                ctx,
+                errs,
+            ),
             SExpr::Default(se, d) => (se.deref(), d.deref()).type_check_raw(expected, ctx, errs),
             SExpr::Not(sexpr) => {
                 let sexpr_check = sexpr.type_check_raw(Some(&StreamType::Bool), ctx, errs)?;
@@ -2395,12 +2653,22 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                     Box::new(idx_int),
                                 ),
                             })),
-                            TCType::Map(_) | TCType::Struct(..) => {
-                                errs.push(SemanticError::TypeError(format!(
-                                    "Unsupported list index element type: {:?}",
-                                    elem_type
-                                )));
-                                Err(())
+                            TCType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
+                                value_type: *inner,
+                                kind: TypedMapExprKind::LIndexList(
+                                    Box::new(typed_list),
+                                    Box::new(idx_int),
+                                ),
+                            })),
+                            TCType::Struct(fields, allow_extra_fields) => {
+                                Ok(SExprTE::Struct(TypedStructExpr {
+                                    typ_map: fields,
+                                    allow_extra_fields,
+                                    kind: TypedStructExprKind::LIndexList(
+                                        Box::new(typed_list),
+                                        Box::new(idx_int),
+                                    ),
+                                }))
                             }
                         }
                     }
@@ -2511,12 +2779,16 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 element_type: *inner,
                                 kind: TypedListExprKind::LHeadList(Box::new(typed_list)),
                             })),
-                            TCType::Map(_) | TCType::Struct(..) => {
-                                errs.push(SemanticError::TypeError(format!(
-                                    "Unsupported list head element type: {:?}",
-                                    elem_type
-                                )));
-                                Err(())
+                            TCType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
+                                value_type: *inner,
+                                kind: TypedMapExprKind::LHeadList(Box::new(typed_list)),
+                            })),
+                            TCType::Struct(fields, allow_extra_fields) => {
+                                Ok(SExprTE::Struct(TypedStructExpr {
+                                    typ_map: fields,
+                                    allow_extra_fields,
+                                    kind: TypedStructExprKind::LHeadList(Box::new(typed_list)),
+                                }))
                             }
                         }
                     }
@@ -2565,7 +2837,14 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                 let sexpr_check = sexpr.type_check_raw(None, ctx, errs)?;
                 Ok(SExprTE::Bool(SExprBool::When(Box::new(sexpr_check))))
             }
-            SExpr::Latch(_, _) => todo!("Implement support for typed Latch"),
+            SExpr::Latch(lhs, rhs) => type_check_same_typed_stream_op(
+                StreamBinaryOpKind::Latch,
+                lhs,
+                rhs,
+                expected,
+                ctx,
+                errs,
+            ),
             SExpr::Init(se1, se2) => {
                 let se1_check = se1.type_check_raw(expected, ctx, errs);
                 let se2_check = se2.type_check_raw(expected, ctx, errs);
@@ -2619,6 +2898,19 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                 )));
                                 Err(())
                             }
+                        }
+                    }
+                    (Ok(SExprTE::Struct(st1)), Ok(SExprTE::Struct(st2))) => {
+                        let t1 = TCType::Struct(st1.typ_map.clone(), st1.allow_extra_fields);
+                        let t2 = TCType::Struct(st2.typ_map.clone(), st2.allow_extra_fields);
+                        if unify_element_types(&t1, &t2).is_some() {
+                            Ok(SExprTE::Struct(st1.typed_init(&st2)))
+                        } else {
+                            errs.push(SemanticError::TypeError(format!(
+                                "Init requires both arguments to have the same type, got {:?} and {:?}",
+                                t1, t2
+                            )));
+                            Err(())
                         }
                     }
                     (Ok(ste1), Ok(ste2)) => {
@@ -2684,8 +2976,18 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     }
                 }
             }
-            SExpr::MonitoredAt(_, _) => todo!("Implement support for typed MonitoredAt"),
-            SExpr::Dist(_, _) => todo!("Implement support for typed Dist"),
+            SExpr::MonitoredAt(_, _) => {
+                errs.push(SemanticError::TypeError(
+                    "monitored_at is only supported in distributed untyped semantics".into(),
+                ));
+                Err(())
+            }
+            SExpr::Dist(_, _) => {
+                errs.push(SemanticError::TypeError(
+                    "dist is only supported in distributed untyped semantics".into(),
+                ));
+                Err(())
+            }
             SExpr::Map(entries) => type_check_map_literal(
                 entries
                     .iter()
@@ -3145,7 +3447,6 @@ mod tests {
                         errs.len(),
                         errs
                     );
-                    // TODO: Check that it is actually DeferredErrors
                 }
                 Ok(_) => {
                     assert!(
@@ -3323,7 +3624,6 @@ mod tests {
         let expected: SemantResultStr = Err(vec![SemanticError::UndeclaredVariable("".into())]);
         check_correct_error_type(&result, &expected);
     }
-    // TODO: Test that any SExpr leaf is a Val. If not it should return a Type-Error
 
     #[test]
     fn test_dodgy_if() {
