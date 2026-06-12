@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::PartialStreamValue;
@@ -6,7 +8,9 @@ use crate::core::stream_casting::{from_typed_stream, to_typed_partial_stream, to
 use crate::core::values::StreamType;
 use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::SExpr;
-use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, StrBinOp};
+use crate::lang::dsrv::ast::{
+    BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp,
+};
 use crate::lang::dsrv::type_checker::{
     SExprBool, SExprDyn, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
     TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr, TypedStructExprKind,
@@ -64,9 +68,112 @@ where
     match expr {
         SExprDyn::Var(v) => ctx.var(&v).unwrap(),
         SExprDyn::Val(v) => uc::val(v),
-        SExprDyn::Expr(e) => {
-            let _ = e;
-            panic!("Gradual dynamic expression fallback reached runtime without a concrete cast")
+        SExprDyn::Expr(e) => eval_untyped_expr::<AC, Parser>(e, ctx),
+    }
+}
+
+fn eval_untyped_expr<AC, Parser>(expr: SExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    match expr {
+        SExpr::Val(v) => uc::val(v),
+        SExpr::Var(v) => uc::var::<AC>(ctx, v),
+        SExpr::BinOp(e1, e2, op) => {
+            let e1 = eval_untyped_expr::<AC, Parser>(*e1, ctx);
+            let e2 = eval_untyped_expr::<AC, Parser>(*e2, ctx);
+            match op {
+                SBinOp::NOp(NumericalBinOp::Add) => uc::plus(e1, e2),
+                SBinOp::NOp(NumericalBinOp::Sub) => uc::minus(e1, e2),
+                SBinOp::NOp(NumericalBinOp::Mul) => uc::mult(e1, e2),
+                SBinOp::NOp(NumericalBinOp::Div) => uc::div(e1, e2),
+                SBinOp::NOp(NumericalBinOp::Mod) => uc::modulo(e1, e2),
+                SBinOp::BOp(BoolBinOp::Or) => uc::or(e1, e2),
+                SBinOp::BOp(BoolBinOp::And) => uc::and(e1, e2),
+                SBinOp::BOp(BoolBinOp::Impl) => uc::implication(e1, e2),
+                SBinOp::SOp(StrBinOp::Concat) => uc::concat(e1, e2),
+                SBinOp::COp(CompBinOp::Eq) => uc::eq(e1, e2),
+                SBinOp::COp(CompBinOp::Le) => uc::le(e1, e2),
+                SBinOp::COp(CompBinOp::Lt) => uc::lt(e1, e2),
+                SBinOp::COp(CompBinOp::Ge) => uc::ge(e1, e2),
+                SBinOp::COp(CompBinOp::Gt) => uc::gt(e1, e2),
+            }
+        }
+        SExpr::Not(e) => uc::not(eval_untyped_expr::<AC, Parser>(*e, ctx)),
+        SExpr::Update(e1, e2) => uc::update(
+            eval_untyped_expr::<AC, Parser>(*e1, ctx),
+            eval_untyped_expr::<AC, Parser>(*e2, ctx),
+        ),
+        SExpr::Default(e, d) => uc::default(
+            eval_untyped_expr::<AC, Parser>(*e, ctx),
+            eval_untyped_expr::<AC, Parser>(*d, ctx),
+        ),
+        SExpr::IsDefined(e) => uc::is_defined(eval_untyped_expr::<AC, Parser>(*e, ctx)),
+        SExpr::When(e) => uc::when(eval_untyped_expr::<AC, Parser>(*e, ctx)),
+        SExpr::Latch(e1, e2) => uc::latch(
+            eval_untyped_expr::<AC, Parser>(*e1, ctx),
+            eval_untyped_expr::<AC, Parser>(*e2, ctx),
+        ),
+        SExpr::Init(e1, e2) => uc::init(
+            eval_untyped_expr::<AC, Parser>(*e1, ctx),
+            eval_untyped_expr::<AC, Parser>(*e2, ctx),
+        ),
+        SExpr::SIndex(e, i) => uc::sindex(eval_untyped_expr::<AC, Parser>(*e, ctx), i),
+        SExpr::If(b, e1, e2) => uc::if_stm(
+            eval_untyped_expr::<AC, Parser>(*b, ctx),
+            eval_untyped_expr::<AC, Parser>(*e1, ctx),
+            eval_untyped_expr::<AC, Parser>(*e2, ctx),
+        ),
+        SExpr::List(exprs) => uc::list(
+            exprs
+                .into_iter()
+                .map(|e| eval_untyped_expr::<AC, Parser>(e, ctx))
+                .collect(),
+        ),
+        SExpr::LIndex(e, i) => uc::lindex(
+            eval_untyped_expr::<AC, Parser>(*e, ctx),
+            eval_untyped_expr::<AC, Parser>(*i, ctx),
+        ),
+        SExpr::LAppend(lst, el) => uc::lappend(
+            eval_untyped_expr::<AC, Parser>(*lst, ctx),
+            eval_untyped_expr::<AC, Parser>(*el, ctx),
+        ),
+        SExpr::LConcat(lst1, lst2) => uc::lconcat(
+            eval_untyped_expr::<AC, Parser>(*lst1, ctx),
+            eval_untyped_expr::<AC, Parser>(*lst2, ctx),
+        ),
+        SExpr::LHead(lst) => uc::lhead(eval_untyped_expr::<AC, Parser>(*lst, ctx)),
+        SExpr::LTail(lst) => uc::ltail(eval_untyped_expr::<AC, Parser>(*lst, ctx)),
+        SExpr::LLen(lst) => uc::llen(eval_untyped_expr::<AC, Parser>(*lst, ctx)),
+        SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => uc::map(
+            map.into_iter()
+                .map(|(k, v)| (k, eval_untyped_expr::<AC, Parser>(v, ctx)))
+                .collect::<BTreeMap<_, _>>(),
+        ),
+        SExpr::MGet(map, k) => uc::mget(eval_untyped_expr::<AC, Parser>(*map, ctx), k),
+        SExpr::MRemove(map, k) => uc::mremove(eval_untyped_expr::<AC, Parser>(*map, ctx), k),
+        SExpr::MInsert(map, k, v) => uc::minsert(
+            eval_untyped_expr::<AC, Parser>(*map, ctx),
+            k,
+            eval_untyped_expr::<AC, Parser>(*v, ctx),
+        ),
+        SExpr::MHasKey(map, k) => uc::mhas_key(eval_untyped_expr::<AC, Parser>(*map, ctx), k),
+        SExpr::Sin(v) => uc::sin(eval_untyped_expr::<AC, Parser>(*v, ctx)),
+        SExpr::Cos(v) => uc::cos(eval_untyped_expr::<AC, Parser>(*v, ctx)),
+        SExpr::Tan(v) => uc::tan(eval_untyped_expr::<AC, Parser>(*v, ctx)),
+        SExpr::Abs(v) => uc::abs(eval_untyped_expr::<AC, Parser>(*v, ctx)),
+        SExpr::Dynamic(_, _) | SExpr::RestrictedDynamic(_, _, _) | SExpr::Defer(_, _, _) => {
+            panic!("dynamic/defer inside gradual Dyn fallback is not supported yet")
+        }
+        SExpr::SGet(_, _) => {
+            panic!("dot field access is only supported for structs in typed semantics")
+        }
+        SExpr::MonitoredAt(_, _) => {
+            unimplemented!("Function monitored_at only supported in distributed semantics")
+        }
+        SExpr::Dist(_, _) => {
+            unimplemented!("Function dist only supported in distributed semantics")
         }
     }
 }
@@ -815,10 +922,16 @@ where
             // Only Eq is valid for Unit (enforced by the type checker)
             mc::eq(a, b)
         }
-        (SExprTE::Dyn(a), SExprTE::Dyn(b)) if op == CompBinOp::Eq => {
+        (SExprTE::Dyn(a), SExprTE::Dyn(b)) => {
             let a = eval_dyn::<AC, Parser>(a, ctx);
             let b = eval_dyn::<AC, Parser>(b, ctx);
-            to_typed_partial_stream::<bool>(uc::eq(a, b))
+            to_typed_partial_stream::<bool>(match op {
+                CompBinOp::Eq => uc::eq(a, b),
+                CompBinOp::Le => uc::le(a, b),
+                CompBinOp::Lt => uc::lt(a, b),
+                CompBinOp::Ge => uc::ge(a, b),
+                CompBinOp::Gt => uc::gt(a, b),
+            })
         }
         _ => panic!("eval_cmp: type checker should have ensured operand types match"),
     }

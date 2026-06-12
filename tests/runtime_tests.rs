@@ -78,7 +78,9 @@ fn create_builder_from_config(
             let builder = builder.runtime(RuntimeSpec::Async);
             builder.semantics(Semantics::GradualTypedUntimed)
         }
-        TestConfiguration::SemiSyncUntimed => builder.runtime(RuntimeSpec::SemiSync),
+        TestConfiguration::SemiSyncUntimed => builder
+            .runtime(RuntimeSpec::SemiSync)
+            .semantics(Semantics::Untimed),
         TestConfiguration::SemiSyncTypedUntimed => builder
             .runtime(RuntimeSpec::SemiSync)
             .semantics(Semantics::TypedUntimed),
@@ -238,6 +240,41 @@ async fn test_gradual_typed_runtime_casts_untyped_input(
 }
 
 #[apply(async_test)]
+async fn test_gradual_typed_runtime_evaluates_dyn_plus_dyn(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // Both inputs and the output are unannotated, so the expression remains
+    // Dyn + Dyn after type checking. The typed runtime must therefore evaluate
+    // the operation through the dynamic runtime path and check/dispatch against
+    // the actual Value types at each tick.
+    let spec = "in x\nin y\nout z\nz = x + y";
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_gradual_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            BTreeMap::from([
+                ("x".into(), vec![Value::Int(1), Value::Int(2)]),
+                ("y".into(), vec![Value::Int(3), Value::Float(0.5)]),
+            ]),
+            "gradual typed dyn+dyn outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![
+                (0, BTreeMap::from([("z".into(), Value::Int(4))])),
+                (1, BTreeMap::from([("z".into(), Value::Float(2.5))])),
+            ],
+            "unexpected gradual Dyn + Dyn outputs for runtime {runtime:?}",
+        );
+    }
+    Ok(())
+}
+
+#[apply(async_test)]
 async fn test_gradual_typed_runtime_respects_explicit_annotations(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
@@ -307,24 +344,15 @@ async fn test_gradual_typed_runtime_inference_chain_out_of_order(
         vec![
             (
                 0,
-                BTreeMap::from([
-                    ("gza".into(), Value::Int(1)),
-                    ("gzb".into(), Value::Int(2)),
-                ])
+                BTreeMap::from([("gza".into(), Value::Int(1)), ("gzb".into(), Value::Int(2)),])
             ),
             (
                 1,
-                BTreeMap::from([
-                    ("gza".into(), Value::Int(2)),
-                    ("gzb".into(), Value::Int(3)),
-                ])
+                BTreeMap::from([("gza".into(), Value::Int(2)), ("gzb".into(), Value::Int(3)),])
             ),
             (
                 2,
-                BTreeMap::from([
-                    ("gza".into(), Value::Int(3)),
-                    ("gzb".into(), Value::Int(4)),
-                ])
+                BTreeMap::from([("gza".into(), Value::Int(3)), ("gzb".into(), Value::Int(4)),])
             ),
         ]
     );

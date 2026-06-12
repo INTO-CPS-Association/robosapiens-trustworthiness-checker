@@ -239,7 +239,7 @@ pub struct Cli {
     pub parser: ParserMode,
     #[arg(long, help = "Specification language to use", default_value_t = Language::DSRV)]
     pub language: Language,
-    #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::Untimed)]
+    #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::GradualTypedUntimed)]
     pub semantics: Semantics,
     #[arg(long, help = "Runtime system to use for execution", default_value_t = RuntimeSpec::Async)]
     pub runtime: RuntimeSpec,

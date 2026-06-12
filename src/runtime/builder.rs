@@ -713,7 +713,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
             distribution_mode: DistributionMode::CentralMonitor,
             distribution_mode_builder: None,
             runtime: RuntimeSpec::Async,
-            semantics: Semantics::Untimed,
+            semantics: Semantics::GradualTypedUntimed,
             var_msg_types: None,
             topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,

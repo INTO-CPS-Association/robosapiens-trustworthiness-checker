@@ -156,6 +156,19 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 }
             }
 
+            // Gradual numeric operations: two dynamic operands stay dynamic and
+            // are checked by the runtime untyped operation.
+            (SBinOp::NOp(_), Ok(lhs), Ok(rhs))
+                if matches!(extract_type(&lhs), TCType::Dyn)
+                    && matches!(extract_type(&rhs), TCType::Dyn) =>
+            {
+                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::BinOp(
+                    Box::new((*se1).clone()),
+                    Box::new((*se2).clone()),
+                    op.clone(),
+                ))))
+            }
+
             // Gradual numeric operations: cast dynamic operands to the concrete side.
             (SBinOp::NOp(op), Ok(lhs), Ok(rhs))
                 if matches!(extract_type(&lhs), TCType::Dyn)
@@ -218,6 +231,16 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
             (SBinOp::BOp(op), Ok(SExprTE::Bool(se1)), Ok(SExprTE::Bool(se2))) => Ok(SExprTE::Bool(
                 SExprBool::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
+            (SBinOp::BOp(_), Ok(lhs), Ok(rhs))
+                if matches!(extract_type(&lhs), TCType::Dyn)
+                    && matches!(extract_type(&rhs), TCType::Dyn) =>
+            {
+                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::BinOp(
+                    Box::new((*se1).clone()),
+                    Box::new((*se2).clone()),
+                    op.clone(),
+                ))))
+            }
             (SBinOp::BOp(op), Ok(lhs), Ok(rhs))
                 if matches!(extract_type(&lhs), TCType::Dyn)
                     && matches!(extract_type(&rhs), TCType::Bool)
@@ -242,6 +265,16 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
             (SBinOp::SOp(op), Ok(SExprTE::Str(se1)), Ok(SExprTE::Str(se2))) => Ok(SExprTE::Str(
                 SExprStr::BinOp(Box::new(se1.clone()), Box::new(se2.clone()), op.clone()),
             )),
+            (SBinOp::SOp(_), Ok(lhs), Ok(rhs))
+                if matches!(extract_type(&lhs), TCType::Dyn)
+                    && matches!(extract_type(&rhs), TCType::Dyn) =>
+            {
+                Ok(SExprTE::Dyn(SExprDyn::Expr(SExpr::BinOp(
+                    Box::new((*se1).clone()),
+                    Box::new((*se2).clone()),
+                    op.clone(),
+                ))))
+            }
             (SBinOp::SOp(op), Ok(lhs), Ok(rhs))
                 if matches!(extract_type(&lhs), TCType::Dyn)
                     && matches!(extract_type(&rhs), TCType::Str)
@@ -269,6 +302,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                 let ty1 = extract_type(&ste1);
                 let ty2 = extract_type(&ste2);
                 let (ste1, ste2, ty1) = match (&ty1, &ty2) {
+                    (TCType::Dyn, TCType::Dyn) => (ste1, ste2, TCType::Dyn),
                     (TCType::Dyn, TCType::Int) | (TCType::Int, TCType::Dyn) => (
                         cast_to_type(ste1, &StreamType::Int),
                         cast_to_type(ste2, &StreamType::Int),
@@ -299,7 +333,8 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SExpr, &SExpr) {
                     }
                 };
                 // Ordering comparisons are only valid for Int, Float, Str
-                let ordering_ok = matches!(ty1, TCType::Int | TCType::Float | TCType::Str);
+                let ordering_ok =
+                    matches!(ty1, TCType::Int | TCType::Float | TCType::Str | TCType::Dyn);
                 if *op != CompBinOp::Eq && !ordering_ok {
                     errs.push(SemanticError::TypeError(format!(
                         "Cannot apply ordering comparison {:?} to type {:?}",
