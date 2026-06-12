@@ -18,7 +18,7 @@ use crate::{
     lang::dsrv::{
         lalr_parser::LALRParser,
         parser::CombExprParser,
-        type_checker::{SExprTE, TypedDsrvSpecification, type_check},
+        type_checker::{SExprTE, TypedDsrvSpecification, type_check, type_check_gradual},
     },
     runtime::{
         reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder,
@@ -267,9 +267,13 @@ impl<
 }
 
 struct TypeCheckingBuilder<Builder>(Builder);
+struct GradualTypeCheckingBuilder<Builder>(Builder);
 
 #[derive(Clone)]
 struct TypeCheckingSpecParser<P>(std::marker::PhantomData<P>);
+
+#[derive(Clone)]
+struct GradualTypeCheckingSpecParser<P>(std::marker::PhantomData<P>);
 
 impl<P> SpecParser<TypedDsrvSpecification> for TypeCheckingSpecParser<P>
 where
@@ -279,6 +283,21 @@ where
         let spec = P::parse(input)?;
         type_check(spec).map_err(|errors| {
             anyhow::anyhow!("Reconfigured spec failed type checking: {:?}", errors)
+        })
+    }
+}
+
+impl<P> SpecParser<TypedDsrvSpecification> for GradualTypeCheckingSpecParser<P>
+where
+    P: SpecParser<DsrvSpecification>,
+{
+    fn parse(input: &mut &str) -> anyhow::Result<TypedDsrvSpecification> {
+        let spec = P::parse(input)?;
+        type_check_gradual(spec).map_err(|errors| {
+            anyhow::anyhow!(
+                "Reconfigured spec failed gradual type checking: {:?}",
+                errors
+            )
         })
     }
 }
@@ -301,6 +320,40 @@ impl<
 
     fn model(self, model: DsrvSpecification) -> Self {
         let model = type_check(model).expect("Model failed to type check");
+        Self(self.0.model(model))
+    }
+
+    fn input(self, input: Box<dyn crate::InputProvider<Val = V>>) -> Self {
+        Self(self.0.input(input))
+    }
+
+    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
+        Self(self.0.output(output))
+    }
+
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move { self.0.build().await })
+    }
+}
+
+impl<
+    V: StreamData,
+    Mon: Runtime + 'static,
+    MonBuilder: RuntimeBuilder<TypedDsrvSpecification, V, Runtime = Mon> + 'static,
+> RuntimeBuilder<DsrvSpecification, V> for GradualTypeCheckingBuilder<MonBuilder>
+{
+    type Runtime = Mon;
+
+    fn new() -> Self {
+        Self(MonBuilder::new())
+    }
+
+    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
+        Self(self.0.executor(ex))
+    }
+
+    fn model(self, model: DsrvSpecification) -> Self {
+        let model = type_check_gradual(model).expect("Model failed to gradual type check");
         Self(self.0.model(model))
     }
 
@@ -764,6 +817,18 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     TypedUntimedDsrvSemantics<CombExprParser>,
                 >::new()))
             }
+            (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
+                Box::new(GradualTypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                    TypedSemiSyncValueConfig,
+                    TypedUntimedDsrvSemantics<LALRParser>,
+                >::new()))
+            }
+            (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed, ParserMode::Combinator) => {
+                Box::new(GradualTypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                    TypedSemiSyncValueConfig,
+                    TypedUntimedDsrvSemantics<CombExprParser>,
+                >::new()))
+            }
             (RuntimeSpec::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfSemiSyncRuntimeBuilder::<
                     SemiSyncValueConfig,
@@ -799,6 +864,23 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     ));
                 Box::new(TypeCheckingBuilder(builder))
             }
+            (RuntimeSpec::ReconfSemiSync, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
+                let mut builder = ReconfSemiSyncRuntimeBuilder::<
+                    TypedSemiSyncValueConfig,
+                    TypedUntimedDsrvSemantics<LALRParser>,
+                    GradualTypeCheckingSpecParser<LALRParser>,
+                >::new();
+                builder = builder.reconf_topic(reconf_topic);
+                builder =
+                    builder.input_builder(input_provider_builder.expect(
+                        "Input provider builder required for ReconfigurableSemiSync runtime",
+                    ));
+                builder =
+                    builder.output_builder(output_handler_builder.expect(
+                        "Output handler builder required for ReconfigurableSemiSync runtime",
+                    ));
+                Box::new(GradualTypeCheckingBuilder(builder))
+            }
             (RuntimeSpec::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
                 Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
                     TypedValueConfig,
@@ -807,6 +889,18 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             }
             (RuntimeSpec::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
                 Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
+                    TypedValueConfig,
+                    TypedUntimedDsrvSemantics<CombExprParser>,
+                >::new()))
+            }
+            (RuntimeSpec::Async, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
+                Box::new(GradualTypeCheckingBuilder(AsyncRuntimeBuilder::<
+                    TypedValueConfig,
+                    TypedUntimedDsrvSemantics<LALRParser>,
+                >::new()))
+            }
+            (RuntimeSpec::Async, Semantics::GradualTypedUntimed, ParserMode::Combinator) => {
+                Box::new(GradualTypeCheckingBuilder(AsyncRuntimeBuilder::<
                     TypedValueConfig,
                     TypedUntimedDsrvSemantics<CombExprParser>,
                 >::new()))

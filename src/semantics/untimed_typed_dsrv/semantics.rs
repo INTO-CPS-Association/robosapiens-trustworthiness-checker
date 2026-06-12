@@ -7,7 +7,7 @@ use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::SExpr;
 use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dsrv::type_checker::{
-    PartialStreamValue, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
+    PartialStreamValue, SExprBool, SExprDyn, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
     TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr,
     TypedStructExprKind,
 };
@@ -51,6 +51,22 @@ where
             ),
             SExprTE::Map(tm) => eval_typed_map::<AC, Parser>(tm, ctx),
             SExprTE::Struct(st) => eval_typed_struct::<AC, Parser>(st, ctx),
+            SExprTE::Dyn(e) => eval_dyn::<AC, Parser>(e, ctx),
+        }
+    }
+}
+
+fn eval_dyn<AC, Parser>(expr: SExprDyn, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SExpr> + 'static,
+{
+    match expr {
+        SExprDyn::Var(v) => ctx.var(&v).unwrap(),
+        SExprDyn::Val(v) => uc::val(v),
+        SExprDyn::Expr(e) => {
+            let _ = e;
+            panic!("Gradual dynamic expression fallback reached runtime without a concrete cast")
         }
     }
 }
@@ -437,6 +453,11 @@ where
     Parser: ExprParser<SExpr> + 'static,
 {
     match expr {
+        SExprInt::Cast(e) => to_typed_partial_stream::<i64>(
+            <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                *e, ctx,
+            ),
+        ),
         SExprInt::Val(v) => mc::val(v),
         SExprInt::BinOp(e1, e2, op) => {
             let e1 = to_async_stream_int::<AC, Parser>(*e1, ctx);
@@ -535,6 +556,11 @@ where
     Parser: ExprParser<SExpr> + 'static,
 {
     match expr {
+        SExprFloat::Cast(e) => to_typed_partial_stream::<f64>(
+            <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                *e, ctx,
+            ),
+        ),
         SExprFloat::Val(v) => mc::val(v),
         SExprFloat::BinOp(e1, e2, op) => {
             let e1 = to_async_stream_float::<AC, Parser>(*e1, ctx);
@@ -645,6 +671,11 @@ where
     Parser: ExprParser<SExpr> + 'static,
 {
     match expr {
+        SExprStr::Cast(e) => to_typed_partial_stream::<String>(
+            <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                *e, ctx,
+            ),
+        ),
         SExprStr::Val(v) => mc::val(v),
         SExprStr::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
         SExprStr::SIndex(e, i) => {
@@ -784,6 +815,11 @@ where
             // Only Eq is valid for Unit (enforced by the type checker)
             mc::eq(a, b)
         }
+        (SExprTE::Dyn(a), SExprTE::Dyn(b)) if op == CompBinOp::Eq => {
+            let a = eval_dyn::<AC, Parser>(a, ctx);
+            let b = eval_dyn::<AC, Parser>(b, ctx);
+            to_typed_partial_stream::<bool>(uc::eq(a, b))
+        }
         _ => panic!("eval_cmp: type checker should have ensured operand types match"),
     }
 }
@@ -810,6 +846,9 @@ where
         SExprTE::Struct(e) => {
             to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_struct::<AC, Parser>(e, ctx)))
         }
+        SExprTE::Dyn(e) => {
+            to_typed_partial_stream::<bool>(uc::is_defined(eval_dyn::<AC, Parser>(e, ctx)))
+        }
     }
 }
 
@@ -832,6 +871,9 @@ where
         SExprTE::Struct(e) => {
             to_typed_partial_stream::<bool>(uc::when(eval_typed_struct::<AC, Parser>(e, ctx)))
         }
+        SExprTE::Dyn(e) => {
+            to_typed_partial_stream::<bool>(uc::when(eval_dyn::<AC, Parser>(e, ctx)))
+        }
     }
 }
 
@@ -844,6 +886,11 @@ where
     Parser: ExprParser<SExpr> + 'static,
 {
     match expr {
+        SExprBool::Cast(e) => to_typed_partial_stream::<bool>(
+            <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                *e, ctx,
+            ),
+        ),
         SExprBool::Val(b) => mc::val(b),
         SExprBool::Cmp(op, e1, e2) => eval_cmp::<AC, Parser>(op, *e1, *e2, ctx),
         SExprBool::BinOp(e1, e2, op) => {
@@ -947,6 +994,11 @@ where
     Parser: ExprParser<SExpr> + 'static,
 {
     match expr {
+        SExprUnit::Cast(e) => to_typed_partial_stream::<()>(
+            <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                *e, ctx,
+            ),
+        ),
         SExprUnit::Val(v) => mc::val(v),
         SExprUnit::Var(v) => to_typed_stream(ctx.var(&v).unwrap()),
         SExprUnit::SIndex(e, i) => {

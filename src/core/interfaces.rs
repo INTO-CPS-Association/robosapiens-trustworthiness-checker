@@ -15,6 +15,7 @@ use super::{StreamData, Value, VarName};
 pub enum Semantics {
     Untimed,
     TypedUntimed,
+    GradualTypedUntimed,
 }
 
 /* Enum specifying which runtime is to be used */

@@ -7,9 +7,9 @@ use petgraph::visit::{EdgeRef, IntoNodeReferences};
 use tracing::debug;
 
 use crate::lang::dsrv::type_checker::{
-    SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedDsrvSpecification,
-    TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr,
-    TypedStructExprKind,
+    SExprBool, SExprDyn, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
+    TypedDsrvSpecification, TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind,
+    TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::AsyncConfig;
 use crate::{DsrvSpecification, SExpr, Specification, VarName};
@@ -299,6 +299,20 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             SExprTE::List(e) => deps_list(e, steps, map, current_node, current_idx),
             SExprTE::Map(e) => deps_map(e, steps, map, current_node, current_idx),
             SExprTE::Struct(e) => deps_struct(e, steps, map, current_node, current_idx),
+            SExprTE::Dyn(e) => deps_dyn(e, steps, map, current_node, current_idx),
+        }
+    }
+
+    fn deps_dyn(
+        expr: &SExprDyn,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        _current_idx: u64,
+    ) {
+        match expr {
+            SExprDyn::Var(name) => add_var_dep(map, current_node, name, steps),
+            SExprDyn::Val(_) | SExprDyn::Expr(_) => {}
         }
     }
 
@@ -310,6 +324,7 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
         current_idx: u64,
     ) {
         match expr {
+            SExprInt::Cast(e) => deps_te(e, steps, map, current_node, current_idx),
             SExprInt::Var(name) => add_var_dep(map, current_node, name, steps),
             SExprInt::SIndex(inner, idx) => {
                 let new_idx = current_idx + *idx;
@@ -360,6 +375,7 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
         current_idx: u64,
     ) {
         match expr {
+            SExprFloat::Cast(e) => deps_te(e, steps, map, current_node, current_idx),
             SExprFloat::Var(name) => add_var_dep(map, current_node, name, steps),
             SExprFloat::SIndex(inner, idx) => {
                 let new_idx = current_idx + *idx;
@@ -410,6 +426,7 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
         current_idx: u64,
     ) {
         match expr {
+            SExprStr::Cast(e) => deps_te(e, steps, map, current_node, current_idx),
             SExprStr::Var(name) => add_var_dep(map, current_node, name, steps),
             SExprStr::SIndex(inner, idx) => {
                 let new_idx = current_idx + *idx;
@@ -457,6 +474,7 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
         current_idx: u64,
     ) {
         match expr {
+            SExprBool::Cast(e) => deps_te(e, steps, map, current_node, current_idx),
             SExprBool::Var(name) => add_var_dep(map, current_node, name, steps),
             SExprBool::SIndex(inner, idx) => {
                 let new_idx = current_idx + *idx;
@@ -512,6 +530,7 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
         current_idx: u64,
     ) {
         match expr {
+            SExprUnit::Cast(e) => deps_te(e, steps, map, current_node, current_idx),
             SExprUnit::Var(name) => add_var_dep(map, current_node, name, steps),
             SExprUnit::SIndex(inner, idx) => {
                 let new_idx = current_idx + *idx;

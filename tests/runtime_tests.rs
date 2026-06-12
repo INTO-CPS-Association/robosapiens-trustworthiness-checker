@@ -11,7 +11,7 @@ use trustworthiness_checker::core::{
 use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
-use trustworthiness_checker::lang::dsrv::type_checker::type_check;
+use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
@@ -24,8 +24,10 @@ use trustworthiness_checker::{VarName, async_test};
 enum TestConfiguration {
     AsyncUntimed,
     AsyncTypedUntimed,
+    AsyncGradualTypedUntimed,
     SemiSyncUntimed,
     SemiSyncTypedUntimed,
+    SemiSyncGradualTypedUntimed,
 }
 
 impl TestConfiguration {
@@ -33,8 +35,10 @@ impl TestConfiguration {
         vec![
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
+            TestConfiguration::AsyncGradualTypedUntimed,
             TestConfiguration::SemiSyncUntimed,
             TestConfiguration::SemiSyncTypedUntimed,
+            TestConfiguration::SemiSyncGradualTypedUntimed,
         ]
     }
 
@@ -42,8 +46,10 @@ impl TestConfiguration {
         vec![
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
+            TestConfiguration::AsyncGradualTypedUntimed,
             TestConfiguration::SemiSyncUntimed,
             TestConfiguration::SemiSyncTypedUntimed,
+            TestConfiguration::SemiSyncGradualTypedUntimed,
         ]
     }
 
@@ -68,10 +74,17 @@ fn create_builder_from_config(
             let builder = builder.runtime(RuntimeSpec::Async);
             builder.semantics(Semantics::TypedUntimed)
         }
+        TestConfiguration::AsyncGradualTypedUntimed => {
+            let builder = builder.runtime(RuntimeSpec::Async);
+            builder.semantics(Semantics::GradualTypedUntimed)
+        }
         TestConfiguration::SemiSyncUntimed => builder.runtime(RuntimeSpec::SemiSync),
         TestConfiguration::SemiSyncTypedUntimed => builder
             .runtime(RuntimeSpec::SemiSync)
             .semantics(Semantics::TypedUntimed),
+        TestConfiguration::SemiSyncGradualTypedUntimed => builder
+            .runtime(RuntimeSpec::SemiSync)
+            .semantics(Semantics::GradualTypedUntimed),
     }
 }
 
@@ -133,6 +146,312 @@ async fn run_typed_semisync_runtime(
         "typed semisync runtime outputs.collect()",
     )
     .await
+}
+
+async fn run_gradual_typed_runtime_with_spec(
+    executor: Rc<LocalExecutor<'static>>,
+    runtime: RuntimeSpec,
+    spec_str: &str,
+    input_streams: BTreeMap<VarName, Vec<Value>>,
+    timeout_label: &'static str,
+) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+    let mut spec_input = spec_str;
+    let spec = dsrv_specification(&mut spec_input).unwrap();
+    let input_streams = MapInputProvider::new(input_streams);
+    let mut output_handler = Box::new(ManualOutputHandler::new(
+        executor.clone(),
+        spec.output_vars.clone(),
+    ));
+    let outputs = output_handler.get_output();
+
+    let monitor = GeneralRuntimeBuilder::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(Box::new(input_streams))
+        .output(output_handler)
+        .runtime(runtime)
+        .semantics(Semantics::GradualTypedUntimed)
+        .build()
+        .await;
+
+    executor.spawn(monitor.run()).detach();
+    with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_infers_unannotated_output(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // The output `z` has no type annotation, so this spec is rejected by the
+    // strict typed-untimed semantics but accepted under gradual typing, where
+    // `z` is inferred as Int from its definition.
+    let spec = "in x: Int\nout z\nz = x + 1";
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_gradual_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            BTreeMap::from([("x".into(), vec![0.into(), 1.into(), 2.into()])]),
+            "gradual typed runtime outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs,
+            vec![
+                (0, BTreeMap::from([("z".into(), Value::Int(1))])),
+                (1, BTreeMap::from([("z".into(), Value::Int(2))])),
+                (2, BTreeMap::from([("z".into(), Value::Int(3))])),
+            ],
+            "unexpected gradual typed outputs for runtime {runtime:?}",
+        );
+    }
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_casts_untyped_input(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // The input `x` has no annotation, so it is treated as Dyn and cast to Int
+    // at runtime where it is used in an integer addition.
+    let spec = "in x\nout z\nz = x + 1";
+
+    let outputs = run_gradual_typed_runtime_with_spec(
+        executor.clone(),
+        RuntimeSpec::Async,
+        spec,
+        BTreeMap::from([("x".into(), vec![41.into(), 1.into()])]),
+        "gradual typed dyn input outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (0, BTreeMap::from([("z".into(), Value::Int(42))])),
+            (1, BTreeMap::from([("z".into(), Value::Int(2))])),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_respects_explicit_annotations(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // Fully annotated specs should behave identically under gradual semantics.
+    let outputs = run_gradual_typed_runtime_with_spec(
+        executor.clone(),
+        RuntimeSpec::Async,
+        spec_simple_add_monitor_typed(),
+        BTreeMap::from([
+            ("x".into(), vec![0.into(), 1.into(), 2.into()]),
+            ("y".into(), vec![3.into(), 4.into(), 5.into()]),
+        ]),
+        "gradual typed annotated outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (0, BTreeMap::from([("z".into(), Value::Int(3))])),
+            (1, BTreeMap::from([("z".into(), Value::Int(5))])),
+            (2, BTreeMap::from([("z".into(), Value::Int(7))])),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_gradual_type_check_accepts_spec_rejected_by_strict() {
+    // Missing annotations are a hard error for the strict checker, but the
+    // gradual checker infers them.
+    let mut spec_str = "in gsx\nout gsz\ngsz = gsx + 1";
+    let spec = dsrv_specification(&mut spec_str).unwrap();
+    assert!(
+        type_check(spec.clone()).is_err(),
+        "strict checker should reject missing annotations"
+    );
+    type_check_gradual(spec).expect("gradual checker should accept the spec");
+}
+
+#[test]
+fn test_gradual_type_check_rejects_annotated_mismatch() {
+    // A concrete static mismatch must remain an error under gradual typing.
+    let mut spec_str = "out gbz: Bool\ngbz = 1 + 1";
+    let spec = dsrv_specification(&mut spec_str).unwrap();
+    assert!(type_check_gradual(spec).is_err());
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_inference_chain_out_of_order(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // `gzb` is declared (and therefore visited) before `gza`, but depends on
+    // it; gradual inference must resolve the chain via its fixed-point pass.
+    let spec = "in gx: Int\nout gzb\nout gza\ngzb = gza + 1\ngza = gx + 1";
+    let outputs = run_gradual_typed_runtime_with_spec(
+        executor.clone(),
+        RuntimeSpec::Async,
+        spec,
+        BTreeMap::from([("gx".into(), vec![0.into(), 1.into(), 2.into()])]),
+        "gradual chain outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    ("gza".into(), Value::Int(1)),
+                    ("gzb".into(), Value::Int(2)),
+                ])
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    ("gza".into(), Value::Int(2)),
+                    ("gzb".into(), Value::Int(3)),
+                ])
+            ),
+            (
+                2,
+                BTreeMap::from([
+                    ("gza".into(), Value::Int(3)),
+                    ("gzb".into(), Value::Int(4)),
+                ])
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_dyn_comparisons(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // `gd` is untyped (Dyn); comparisons against an Int literal must cast it
+    // to Int at runtime and produce Bool outputs.
+    let spec = "in gd\nout geq\nout gle\ngeq = gd == 10\ngle = gd <= 10";
+    let outputs = run_gradual_typed_runtime_with_spec(
+        executor.clone(),
+        RuntimeSpec::Async,
+        spec,
+        BTreeMap::from([("gd".into(), vec![10.into(), 3.into(), 42.into()])]),
+        "gradual dyn comparison outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    ("geq".into(), Value::Bool(true)),
+                    ("gle".into(), Value::Bool(true)),
+                ])
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    ("geq".into(), Value::Bool(false)),
+                    ("gle".into(), Value::Bool(true)),
+                ])
+            ),
+            (
+                2,
+                BTreeMap::from([
+                    ("geq".into(), Value::Bool(false)),
+                    ("gle".into(), Value::Bool(false)),
+                ])
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_dyn_float_arithmetic(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // An untyped input used in float arithmetic is cast to Float at runtime
+    // and the output is inferred as Float.
+    let spec = "in gf\nout gg\ngg = gf + 1.5";
+    let outputs = run_gradual_typed_runtime_with_spec(
+        executor.clone(),
+        RuntimeSpec::Async,
+        spec,
+        BTreeMap::from([("gf".into(), vec![1.0.into(), 2.5.into()])]),
+        "gradual dyn float outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (0, BTreeMap::from([("gg".into(), Value::Float(2.5))])),
+            (1, BTreeMap::from([("gg".into(), Value::Float(4.0))])),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_dyn_string_concat(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // An untyped input used in string concatenation is cast to Str at runtime
+    // and the output is inferred as Str.
+    let spec = "in gs\nout gt\ngt = gs ++ \"!\"";
+    let outputs = run_gradual_typed_runtime_with_spec(
+        executor.clone(),
+        RuntimeSpec::Async,
+        spec,
+        BTreeMap::from([("gs".into(), vec!["a".into(), "b".into()])]),
+        "gradual dyn string outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (0, BTreeMap::from([("gt".into(), Value::Str("a!".into()))])),
+            (1, BTreeMap::from([("gt".into(), Value::Str("b!".into()))])),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_if_expression_inference(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    // The unannotated output is inferred as Int from both branches of the
+    // conditional expression.
+    let spec = "in gc: Bool\nout gz\ngz = if gc then 1 else 2";
+    let outputs = run_gradual_typed_runtime_with_spec(
+        executor.clone(),
+        RuntimeSpec::Async,
+        spec,
+        BTreeMap::from([("gc".into(), vec![true.into(), false.into()])]),
+        "gradual if inference outputs.collect()",
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (0, BTreeMap::from([("gz".into(), Value::Int(1))])),
+            (1, BTreeMap::from([("gz".into(), Value::Int(2))])),
+        ]
+    );
+    Ok(())
 }
 
 #[apply(async_test)]
@@ -960,7 +1279,9 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -1016,7 +1337,9 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -1072,7 +1395,9 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -1128,7 +1453,9 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -1184,7 +1511,9 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -1362,7 +1691,9 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
     for config in TestConfiguration::untyped_configurations() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -1420,7 +1751,9 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
     for config in TestConfiguration::untyped_configurations() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -2496,8 +2829,10 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
         match config {
             TestConfiguration::AsyncUntimed
             | TestConfiguration::AsyncTypedUntimed
+            | TestConfiguration::AsyncGradualTypedUntimed
             | TestConfiguration::SemiSyncUntimed
-            | TestConfiguration::SemiSyncTypedUntimed => {
+            | TestConfiguration::SemiSyncTypedUntimed
+            | TestConfiguration::SemiSyncGradualTypedUntimed => {
                 assert_eq!(
                     result,
                     vec![
@@ -3097,7 +3432,9 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -3171,7 +3508,9 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -3245,7 +3584,9 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
@@ -3319,7 +3660,9 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     for config in TestConfiguration::all() {
         if matches!(
             config,
-            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+            TestConfiguration::SemiSyncUntimed
+                | TestConfiguration::SemiSyncTypedUntimed
+                | TestConfiguration::SemiSyncGradualTypedUntimed
         ) {
             // Bugs in defer that this runtime does not like
             continue;
