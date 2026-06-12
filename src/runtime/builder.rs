@@ -45,6 +45,8 @@ define_config!(TypedValueConfig, Val = Value, Expr = SExprTE, Ctx = Context, Spe
 define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedContext, Spec = DsrvSpecification);
 #[rustfmt::skip]
 define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext, Spec = DsrvSpecification);
+#[rustfmt::skip]
+define_config!(TypedSemiSyncValueConfig, Val = Value, Expr = SExprTE, Ctx = SemiSyncContext, Spec = TypedDsrvSpecification);
 
 /* A trait for builders, which construct a particular runtime
  *
@@ -786,6 +788,18 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     SemiSyncValueConfig,
                     UntimedDsrvSemantics<LALRParser>,
                 >::new())
+            }
+            (RuntimeSpec::SemiSync, Semantics::TypedUntimed, ParserMode::Lalr) => {
+                Box::new(TypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                    TypedSemiSyncValueConfig,
+                    TypedUntimedDsrvSemantics<LALRParser>,
+                >::new()))
+            }
+            (RuntimeSpec::SemiSync, Semantics::TypedUntimed, ParserMode::Combinator) => {
+                Box::new(TypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                    TypedSemiSyncValueConfig,
+                    TypedUntimedDsrvSemantics<CombExprParser>,
+                >::new()))
             }
             (RuntimeSpec::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 let mut builder = ReconfSemiSyncRuntimeBuilder::<

@@ -9,7 +9,7 @@ use crate::{
         map::MapInputProvider,
         testing::ManualInputProvider,
     },
-    lang::core::parser::SpecParser,
+    lang::core::{DependencyGraphExpr, DependencyGraphSpec, parser::SpecParser},
     runtime::{
         RuntimeBuilder,
         semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncRuntime, SemiSyncRuntimeBuilder},
@@ -49,6 +49,8 @@ struct ReconfInput {
 pub struct ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
@@ -72,6 +74,8 @@ where
 impl<AC, MS, P> RuntimeBuilder<AC::Spec, AC::Val> for ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
@@ -209,6 +213,8 @@ where
 impl<AC, MS, P> ReconfSemiSyncRuntimeBuilder<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
@@ -335,6 +341,8 @@ where
 pub struct ReconfSemiSyncRuntime<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
@@ -351,6 +359,8 @@ where
 impl<AC, MS, P> ReconfSemiSyncRuntime<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
@@ -872,6 +882,8 @@ where
 impl<AC, MS, P> Runtime for ReconfSemiSyncRuntime<AC, MS, P>
 where
     AC: AsyncConfig<Expr = SExpr, Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,

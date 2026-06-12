@@ -1,7 +1,7 @@
 use crate::{
-    OutputStream, SExpr, VarName,
+    OutputStream, VarName,
     core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
-    lang::core::{DepGraph, DependencyResolver},
+    lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
     runtime::RuntimeBuilder,
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
     stream_utils::{self},
@@ -28,7 +28,10 @@ const CHANNEL_SIZE: usize = 8;
 
 pub struct SemiSyncRuntimeBuilder<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
+    AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
     executor: Option<Rc<LocalExecutor<'static>>>,
@@ -41,7 +44,9 @@ where
 
 impl<AC, MS> SemiSyncRuntimeBuilder<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
@@ -53,7 +58,9 @@ where
 
 impl<AC, MS> RuntimeBuilder<AC::Spec, AC::Val> for SemiSyncRuntimeBuilder<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
@@ -120,7 +127,9 @@ pub enum StreamState {
 
 pub struct ExprEvalutor<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
@@ -138,7 +147,9 @@ where
 
 impl<AC, MS> ExprEvalutor<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
@@ -271,7 +282,9 @@ impl<T: DeferrableStreamData> RetainedHistory<T> {
 
 struct VarManager<AC>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     // VarName this manages
@@ -288,7 +301,9 @@ where
 
 impl<AC> VarManager<AC>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     fn new(var_name: VarName, value_stream: OutputStream<AC::Val>) -> Self {
@@ -436,7 +451,10 @@ where
 
 pub struct SemiSyncRuntime<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
+    AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
     _executor: Rc<LocalExecutor<'static>>,
@@ -449,7 +467,9 @@ where
 
 impl<AC, MS> SemiSyncRuntime<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
@@ -782,7 +802,9 @@ where
 #[async_trait(?Send)]
 impl<AC, MS> Runtime for SemiSyncRuntime<AC, MS>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
@@ -811,7 +833,9 @@ where
 
 pub struct SemiSyncContextBuilder<AC>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     var_managers: Option<BTreeMap<VarName, VarManager<AC>>>,
@@ -820,7 +844,9 @@ where
 
 impl<AC> SemiSyncContextBuilder<AC>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     fn var_managers(self, var_managers: BTreeMap<VarName, VarManager<AC>>) -> Self {
@@ -839,7 +865,9 @@ where
 
 impl<AC> AbstractContextBuilder for SemiSyncContextBuilder<AC>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     type AC = AC;
@@ -892,7 +920,9 @@ static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize:
 
 pub struct SemiSyncContext<AC>
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     // Rc RefCell because of the StreamContext interface for Var...
@@ -908,7 +938,9 @@ where
 
 impl<AC> SemiSyncContext<AC>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     fn new(var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>, spec: AC::Spec) -> Self {
@@ -946,7 +978,9 @@ where
             manager: &mut VarManager<AC>,
         ) -> anyhow::Result<StreamState>
         where
-            AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+            AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+            AC::Expr: DependencyGraphExpr,
+            AC::Spec: DependencyGraphSpec,
             AC::Val: DeferrableStreamData,
         {
             match manager.forward_value().await {
@@ -1029,7 +1063,9 @@ where
 #[async_trait(?Send)]
 impl<AC> StreamContext for SemiSyncContext<AC>
 where
-    AC: AsyncConfig<Expr = SExpr, Ctx = SemiSyncContext<AC>>,
+    AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
     type AC = AC;
@@ -1108,9 +1144,10 @@ mod tests {
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dsrv::lalr_parser::LALRParser;
-    use crate::runtime::builder::SemiSyncValueConfig;
+    use crate::lang::dsrv::type_checker::type_check;
+    use crate::runtime::builder::{SemiSyncValueConfig, TypedSemiSyncValueConfig};
     use crate::runtime::semi_sync::SemiSyncRuntime;
-    use crate::semantics::UntimedDsrvSemantics;
+    use crate::semantics::{TypedUntimedDsrvSemantics, UntimedDsrvSemantics};
     use crate::{Value, dsrv_specification};
     use crate::{VarName, dsrv_fixtures::*};
     use futures::stream::StreamExt;
@@ -1122,6 +1159,8 @@ mod tests {
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
     type TestRuntime = SemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics<LALRParser>>;
+    type TestTypedRuntime =
+        SemiSyncRuntime<TypedSemiSyncValueConfig, TypedUntimedDsrvSemantics<LALRParser>>;
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
@@ -1154,6 +1193,47 @@ mod tests {
                 .unwrap();
 
         assert_eq!(outputs.len(), 3,);
+        assert_eq!(
+            outputs,
+            vec![
+                (0, BTreeMap::from([("z".into(), 3.into())])),
+                (1, BTreeMap::from([("z".into(), 5.into())])),
+                (2, BTreeMap::from([("z".into(), 7.into())])),
+            ],
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_typed_simple_add(executor: Rc<LocalExecutor<'static>>) {
+        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec = type_check(spec).expect("typed simple add spec should type check");
+
+        let x = vec![0.into(), 1.into(), 2.into()];
+        let y = vec![3.into(), 4.into(), 5.into()];
+        let input_streams =
+            MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let outputs = output_handler.get_output();
+
+        let monitor = TestTypedRuntime {
+            _executor: executor.clone(),
+            model: spec.clone(),
+            input_provider: Box::new(input_streams),
+            output_handler,
+            starting_history: BTreeMap::new(),
+            _marker: std::marker::PhantomData,
+        };
+
+        executor.spawn(monitor.run()).detach();
+
+        let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
+            with_timeout(outputs.enumerate().collect(), 1, "typed outputs")
+                .await
+                .unwrap();
+
         assert_eq!(
             outputs,
             vec![

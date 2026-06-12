@@ -25,6 +25,7 @@ enum TestConfiguration {
     AsyncUntimed,
     AsyncTypedUntimed,
     SemiSyncUntimed,
+    SemiSyncTypedUntimed,
 }
 
 impl TestConfiguration {
@@ -33,6 +34,7 @@ impl TestConfiguration {
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
             TestConfiguration::SemiSyncUntimed,
+            TestConfiguration::SemiSyncTypedUntimed,
         ]
     }
 
@@ -41,6 +43,7 @@ impl TestConfiguration {
             TestConfiguration::AsyncUntimed,
             TestConfiguration::AsyncTypedUntimed,
             TestConfiguration::SemiSyncUntimed,
+            TestConfiguration::SemiSyncTypedUntimed,
         ]
     }
 
@@ -66,13 +69,18 @@ fn create_builder_from_config(
             builder.semantics(Semantics::TypedUntimed)
         }
         TestConfiguration::SemiSyncUntimed => builder.runtime(RuntimeSpec::SemiSync),
+        TestConfiguration::SemiSyncTypedUntimed => builder
+            .runtime(RuntimeSpec::SemiSync)
+            .semantics(Semantics::TypedUntimed),
     }
 }
 
-async fn run_typed_runtime(
+async fn run_typed_runtime_with_spec(
     executor: Rc<LocalExecutor<'static>>,
+    runtime: RuntimeSpec,
     spec_str: &str,
     input_streams: BTreeMap<VarName, Vec<Value>>,
+    timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
     let mut spec_input = spec_str;
     let spec = dsrv_specification(&mut spec_input).unwrap();
@@ -88,17 +96,130 @@ async fn run_typed_runtime(
         .model(spec)
         .input(Box::new(input_streams))
         .output(output_handler)
-        .runtime(RuntimeSpec::Async)
+        .runtime(runtime)
         .semantics(Semantics::TypedUntimed)
         .build();
 
     executor.spawn(monitor.run()).detach();
-    with_timeout(
-        outputs.enumerate().collect(),
-        5,
+    with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
+}
+
+async fn run_typed_runtime(
+    executor: Rc<LocalExecutor<'static>>,
+    spec_str: &str,
+    input_streams: BTreeMap<VarName, Vec<Value>>,
+) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+    run_typed_runtime_with_spec(
+        executor,
+        RuntimeSpec::Async,
+        spec_str,
+        input_streams,
         "typed runtime outputs.collect()",
     )
     .await
+}
+
+async fn run_typed_semisync_runtime(
+    executor: Rc<LocalExecutor<'static>>,
+    spec_str: &str,
+    input_streams: BTreeMap<VarName, Vec<Value>>,
+) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+    run_typed_runtime_with_spec(
+        executor,
+        RuntimeSpec::SemiSync,
+        spec_str,
+        input_streams,
+        "typed semisync runtime outputs.collect()",
+    )
+    .await
+}
+
+#[apply(async_test)]
+async fn test_typed_semisync_runtime_simple_add(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let outputs = run_typed_semisync_runtime(
+        executor,
+        spec_simple_add_monitor_typed(),
+        BTreeMap::from([
+            ("x".into(), vec![0.into(), 1.into(), 2.into()]),
+            ("y".into(), vec![3.into(), 4.into(), 5.into()]),
+        ]),
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (0, BTreeMap::from([("z".into(), Value::Int(3))])),
+            (1, BTreeMap::from([("z".into(), Value::Int(5))])),
+            (2, BTreeMap::from([("z".into(), Value::Int(7))])),
+        ]
+    );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_typed_semisync_runtime_struct_and_list_access(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+out robot: Struct<id: Int, flags: List<Bool>>
+out id: Int
+out active: Bool
+robot = Struct("id": tick + 10, "flags": List(tick > 0, tick == 2))
+id = robot.id
+active = List.get(robot.flags, 0)
+"#;
+
+    let outputs = run_typed_semisync_runtime(
+        executor,
+        spec,
+        BTreeMap::from([("tick".into(), vec![1.into(), 2.into()])]),
+    )
+    .await?;
+
+    assert_eq!(
+        outputs,
+        vec![
+            (
+                0,
+                BTreeMap::from([
+                    ("active".into(), Value::Bool(true)),
+                    ("id".into(), Value::Int(11)),
+                    (
+                        "robot".into(),
+                        Value::Map(BTreeMap::from([
+                            (
+                                "flags".into(),
+                                Value::List(vec![Value::Bool(true), Value::Bool(false)].into()),
+                            ),
+                            ("id".into(), Value::Int(11)),
+                        ])),
+                    ),
+                ]),
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    ("active".into(), Value::Bool(true)),
+                    ("id".into(), Value::Int(12)),
+                    (
+                        "robot".into(),
+                        Value::Map(BTreeMap::from([
+                            (
+                                "flags".into(),
+                                Value::List(vec![Value::Bool(true), Value::Bool(true)].into()),
+                            ),
+                            ("id".into(), Value::Int(12)),
+                        ])),
+                    ),
+                ]),
+            ),
+        ]
+    );
+    Ok(())
 }
 
 #[apply(async_test)]
@@ -835,7 +956,10 @@ nested = Map.insert(Map(), "xs", List(tick, tick + 1))
 #[apply(async_test)]
 async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -888,7 +1012,10 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
 #[apply(async_test)]
 async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -941,7 +1068,10 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 #[apply(async_test)]
 async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -994,7 +1124,10 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 #[apply(async_test)]
 async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -1047,7 +1180,10 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 #[apply(async_test)]
 async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -1222,7 +1358,10 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
 async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only works on untyped_configurations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -1277,7 +1416,10 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on constraints due to defer/update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -1695,15 +1837,9 @@ async fn test_index_past_mult_dependencies(
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.enumerate().collect(), 5, "outputs.collect()").await?;
-        // TODO: async runtime produces more data than the constraint based runtime
-        let num_expected_outputs = match config {
-            TestConfiguration::AsyncTypedUntimed
-            | TestConfiguration::AsyncUntimed
-            | TestConfiguration::SemiSyncUntimed => 4,
-        };
         assert_eq!(
             outputs.len(),
-            num_expected_outputs,
+            4,
             "Index past mult dependencies test failed for config {:?}",
             config
         );
@@ -2358,7 +2494,8 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
         match config {
             TestConfiguration::AsyncUntimed
             | TestConfiguration::AsyncTypedUntimed
-            | TestConfiguration::SemiSyncUntimed => {
+            | TestConfiguration::SemiSyncUntimed
+            | TestConfiguration::SemiSyncTypedUntimed => {
                 assert_eq!(
                     result,
                     vec![
@@ -2956,7 +3093,10 @@ async fn test_restricted_dynamic_monitor(
 #[apply(async_test)]
 async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -3027,7 +3167,10 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 #[apply(async_test)]
 async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -3098,7 +3241,10 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 #[apply(async_test)]
 async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }
@@ -3169,7 +3315,10 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 #[apply(async_test)]
 async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        if config == TestConfiguration::SemiSyncUntimed {
+        if matches!(
+            config,
+            TestConfiguration::SemiSyncUntimed | TestConfiguration::SemiSyncTypedUntimed
+        ) {
             // Bugs in defer that this runtime does not like
             continue;
         }

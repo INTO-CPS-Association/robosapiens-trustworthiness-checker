@@ -6,8 +6,21 @@ use petgraph::prelude::EdgeIndex;
 use petgraph::visit::{EdgeRef, IntoNodeReferences};
 use tracing::debug;
 
+use crate::lang::dsrv::type_checker::{
+    SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedDsrvSpecification,
+    TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr,
+    TypedStructExprKind,
+};
 use crate::semantics::AsyncConfig;
-use crate::{SExpr, Specification, VarName};
+use crate::{DsrvSpecification, SExpr, Specification, VarName};
+
+pub trait DependencyGraphExpr {
+    fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph;
+}
+
+pub trait DependencyGraphSpec {
+    fn dependency_graph(&self) -> DepGraph;
+}
 
 // Interface for resolving dependencies.
 pub trait DependencyResolver<AC>
@@ -49,16 +62,26 @@ impl DepGraph {
         graph
     }
 
+    pub fn from_typed_sexprs(exprs: BTreeMap<VarName, SExprTE>) -> Self {
+        let mut graph = Self::empty_graph();
+        for (var, expr) in exprs {
+            let expr_deps = typed_sexpr_dependencies(&expr, &var);
+            graph.merge_graphs(&expr_deps);
+        }
+        debug!(
+            "Constructed typed dependency graph: {:?}",
+            graph.as_dot_graph()
+        );
+        graph
+    }
+
     pub fn resolver_from_spec<AC>(spec: AC::Spec) -> impl DependencyResolver<AC>
     where
-        AC: AsyncConfig<Expr = SExpr>,
+        AC: AsyncConfig,
+        AC::Expr: DependencyGraphExpr,
+        AC::Spec: DependencyGraphSpec,
     {
-        let exprs = spec
-            .output_vars()
-            .into_iter()
-            .filter_map(|var| spec.var_expr(&var).map(|expr| (var.clone(), expr.clone())))
-            .collect();
-        Self::from_sexprs(exprs)
+        spec.dependency_graph()
     }
 
     #[allow(dead_code)]
@@ -248,17 +271,506 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
     graph
 }
 
+fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
+    fn add_var_dep(map: &mut DepGraph, current_node: &NodeIndex, name: &VarName, steps: &[Weight]) {
+        let node = map.graph.add_node(name.clone());
+        if steps.is_empty() {
+            map.graph.add_edge(*current_node, node, 0);
+        } else {
+            steps.iter().for_each(|w| {
+                map.graph.add_edge(*current_node, node, *w);
+            });
+        }
+    }
+
+    fn deps_te(
+        expr: &SExprTE,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match expr {
+            SExprTE::Int(e) => deps_int(e, steps, map, current_node, current_idx),
+            SExprTE::Float(e) => deps_float(e, steps, map, current_node, current_idx),
+            SExprTE::Str(e) => deps_str(e, steps, map, current_node, current_idx),
+            SExprTE::Bool(e) => deps_bool(e, steps, map, current_node, current_idx),
+            SExprTE::Unit(e) => deps_unit(e, steps, map, current_node, current_idx),
+            SExprTE::List(e) => deps_list(e, steps, map, current_node, current_idx),
+            SExprTE::Map(e) => deps_map(e, steps, map, current_node, current_idx),
+            SExprTE::Struct(e) => deps_struct(e, steps, map, current_node, current_idx),
+        }
+    }
+
+    fn deps_int(
+        expr: &SExprInt,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match expr {
+            SExprInt::Var(name) => add_var_dep(map, current_node, name, steps),
+            SExprInt::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_int(inner, steps, map, current_node, new_idx);
+            }
+            SExprInt::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_int(t, steps, map, current_node, current_idx);
+                deps_int(e, steps, map, current_node, current_idx);
+            }
+            SExprInt::Val(_) => {}
+            SExprInt::BinOp(a, b, _)
+            | SExprInt::Default(a, b)
+            | SExprInt::Update(a, b)
+            | SExprInt::Latch(a, b)
+            | SExprInt::Init(a, b) => {
+                deps_int(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(b, steps, map, current_node, current_idx);
+            }
+            SExprInt::Abs(e) => deps_int(e, steps, map, current_node, current_idx),
+            SExprInt::Defer(e, _, _)
+            | SExprInt::Dynamic(e, _)
+            | SExprInt::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+            SExprInt::LLen(list) | SExprInt::LHeadList(list) => {
+                deps_list(list, steps, map, current_node, current_idx)
+            }
+            SExprInt::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+            SExprInt::MGetMap(map_expr, _) => {
+                deps_map(map_expr, steps, map, current_node, current_idx)
+            }
+            SExprInt::SGetStruct(struct_expr, _) => {
+                deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+        }
+    }
+
+    fn deps_float(
+        expr: &SExprFloat,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match expr {
+            SExprFloat::Var(name) => add_var_dep(map, current_node, name, steps),
+            SExprFloat::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_float(inner, steps, map, current_node, new_idx);
+            }
+            SExprFloat::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_float(t, steps, map, current_node, current_idx);
+                deps_float(e, steps, map, current_node, current_idx);
+            }
+            SExprFloat::Val(_) => {}
+            SExprFloat::BinOp(a, b, _)
+            | SExprFloat::Default(a, b)
+            | SExprFloat::Update(a, b)
+            | SExprFloat::Latch(a, b)
+            | SExprFloat::Init(a, b) => {
+                deps_float(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_float(b, steps, map, current_node, current_idx);
+            }
+            SExprFloat::Sin(e) | SExprFloat::Cos(e) | SExprFloat::Tan(e) | SExprFloat::Abs(e) => {
+                deps_float(e, steps, map, current_node, current_idx)
+            }
+            SExprFloat::Defer(e, _, _)
+            | SExprFloat::Dynamic(e, _)
+            | SExprFloat::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+            SExprFloat::LHeadList(list) => deps_list(list, steps, map, current_node, current_idx),
+            SExprFloat::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+            SExprFloat::MGetMap(map_expr, _) => {
+                deps_map(map_expr, steps, map, current_node, current_idx)
+            }
+            SExprFloat::SGetStruct(struct_expr, _) => {
+                deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+        }
+    }
+
+    fn deps_str(
+        expr: &SExprStr,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match expr {
+            SExprStr::Var(name) => add_var_dep(map, current_node, name, steps),
+            SExprStr::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_str(inner, steps, map, current_node, new_idx);
+            }
+            SExprStr::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_str(t, steps, map, current_node, current_idx);
+                deps_str(e, steps, map, current_node, current_idx);
+            }
+            SExprStr::Val(_) => {}
+            SExprStr::BinOp(a, b, _)
+            | SExprStr::Default(a, b)
+            | SExprStr::Update(a, b)
+            | SExprStr::Latch(a, b)
+            | SExprStr::Init(a, b) => {
+                deps_str(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_str(b, steps, map, current_node, current_idx);
+            }
+            SExprStr::Defer(e, _, _)
+            | SExprStr::Dynamic(e, _)
+            | SExprStr::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+            SExprStr::LHeadList(list) => deps_list(list, steps, map, current_node, current_idx),
+            SExprStr::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+            SExprStr::MGetMap(map_expr, _) => {
+                deps_map(map_expr, steps, map, current_node, current_idx)
+            }
+            SExprStr::SGetStruct(struct_expr, _) => {
+                deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+        }
+    }
+
+    fn deps_bool(
+        expr: &SExprBool,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match expr {
+            SExprBool::Var(name) => add_var_dep(map, current_node, name, steps),
+            SExprBool::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_bool(inner, steps, map, current_node, new_idx);
+            }
+            SExprBool::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_bool(t, steps, map, current_node, current_idx);
+                deps_bool(e, steps, map, current_node, current_idx);
+            }
+            SExprBool::Val(_) => {}
+            SExprBool::Cmp(_, a, b) => {
+                deps_te(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_te(b, steps, map, current_node, current_idx);
+            }
+            SExprBool::BinOp(a, b, _)
+            | SExprBool::Default(a, b)
+            | SExprBool::Update(a, b)
+            | SExprBool::Latch(a, b)
+            | SExprBool::Init(a, b) => {
+                deps_bool(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_bool(b, steps, map, current_node, current_idx);
+            }
+            SExprBool::Not(e) => deps_bool(e, steps, map, current_node, current_idx),
+            SExprBool::IsDefined(e) | SExprBool::When(e) => {
+                deps_te(e, steps, map, current_node, current_idx)
+            }
+            SExprBool::LHeadList(list) => deps_list(list, steps, map, current_node, current_idx),
+            SExprBool::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+            SExprBool::MGetMap(map_expr, _) | SExprBool::MHasKeyMap(map_expr, _) => {
+                deps_map(map_expr, steps, map, current_node, current_idx)
+            }
+            SExprBool::SGetStruct(struct_expr, _) => {
+                deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+            SExprBool::Defer(e, _, _)
+            | SExprBool::Dynamic(e, _)
+            | SExprBool::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+        }
+    }
+
+    fn deps_unit(
+        expr: &SExprUnit,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match expr {
+            SExprUnit::Var(name) => add_var_dep(map, current_node, name, steps),
+            SExprUnit::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_unit(inner, steps, map, current_node, new_idx);
+            }
+            SExprUnit::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_unit(t, steps, map, current_node, current_idx);
+                deps_unit(e, steps, map, current_node, current_idx);
+            }
+            SExprUnit::Val(_) => {}
+            SExprUnit::Default(a, b)
+            | SExprUnit::Update(a, b)
+            | SExprUnit::Latch(a, b)
+            | SExprUnit::Init(a, b) => {
+                deps_unit(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_unit(b, steps, map, current_node, current_idx);
+            }
+            SExprUnit::Defer(e, _, _)
+            | SExprUnit::Dynamic(e, _)
+            | SExprUnit::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+            SExprUnit::LHeadList(list) => deps_list(list, steps, map, current_node, current_idx),
+            SExprUnit::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+            SExprUnit::MGetMap(map_expr, _) => {
+                deps_map(map_expr, steps, map, current_node, current_idx)
+            }
+            SExprUnit::SGetStruct(struct_expr, _) => {
+                deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+        }
+    }
+
+    fn deps_list(
+        expr: &TypedListExpr,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match &expr.kind {
+            TypedListExprKind::Var(name) => add_var_dep(map, current_node, name, steps),
+            TypedListExprKind::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_list(inner, steps, map, current_node, new_idx);
+            }
+            TypedListExprKind::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_list(t, steps, map, current_node, current_idx);
+                deps_list(e, steps, map, current_node, current_idx);
+            }
+            TypedListExprKind::Default(a, b)
+            | TypedListExprKind::Update(a, b)
+            | TypedListExprKind::Latch(a, b)
+            | TypedListExprKind::Init(a, b)
+            | TypedListExprKind::LConcat(a, b) => {
+                deps_list(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_list(b, steps, map, current_node, current_idx);
+            }
+            TypedListExprKind::Defer(e, _, _)
+            | TypedListExprKind::Dynamic(e, _)
+            | TypedListExprKind::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+            TypedListExprKind::Literal(exprs) => exprs
+                .iter()
+                .for_each(|e| deps_te(e, steps, map, current_node, current_idx)),
+            TypedListExprKind::LTail(e) | TypedListExprKind::LHeadList(e) => {
+                deps_list(e, steps, map, current_node, current_idx)
+            }
+            TypedListExprKind::LAppend(list, elem) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_te(elem, steps, map, current_node, current_idx);
+            }
+            TypedListExprKind::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+            TypedListExprKind::MGetMap(map_expr, _) => {
+                deps_map(map_expr, steps, map, current_node, current_idx)
+            }
+            TypedListExprKind::SGetStruct(struct_expr, _) => {
+                deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+        }
+    }
+
+    fn deps_map(
+        expr: &TypedMapExpr,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match &expr.kind {
+            TypedMapExprKind::Var(name) => add_var_dep(map, current_node, name, steps),
+            TypedMapExprKind::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_map(inner, steps, map, current_node, new_idx);
+            }
+            TypedMapExprKind::Literal(entries) => entries
+                .values()
+                .for_each(|e| deps_te(e, steps, map, current_node, current_idx)),
+            TypedMapExprKind::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_map(t, steps, map, current_node, current_idx);
+                deps_map(e, steps, map, current_node, current_idx);
+            }
+            TypedMapExprKind::Default(a, b)
+            | TypedMapExprKind::Update(a, b)
+            | TypedMapExprKind::Latch(a, b)
+            | TypedMapExprKind::Init(a, b) => {
+                deps_map(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_map(b, steps, map, current_node, current_idx);
+            }
+            TypedMapExprKind::Defer(e, _, _)
+            | TypedMapExprKind::Dynamic(e, _)
+            | TypedMapExprKind::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+            TypedMapExprKind::MInsert(map_expr, _, value) => {
+                deps_map(map_expr, &mut steps.clone(), map, current_node, current_idx);
+                deps_te(value, steps, map, current_node, current_idx);
+            }
+            TypedMapExprKind::MRemove(e, _) | TypedMapExprKind::MGetMap(e, _) => {
+                deps_map(e, steps, map, current_node, current_idx)
+            }
+            TypedMapExprKind::SGetStruct(e, _) => {
+                deps_struct(e, steps, map, current_node, current_idx)
+            }
+            TypedMapExprKind::LHeadList(e) => deps_list(e, steps, map, current_node, current_idx),
+            TypedMapExprKind::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+        }
+    }
+
+    fn deps_struct(
+        expr: &TypedStructExpr,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match &expr.kind {
+            TypedStructExprKind::Var(name) => add_var_dep(map, current_node, name, steps),
+            TypedStructExprKind::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_struct(inner, steps, map, current_node, new_idx);
+            }
+            TypedStructExprKind::Literal(entries) => entries
+                .iter()
+                .for_each(|(_, e)| deps_te(e, steps, map, current_node, current_idx)),
+            TypedStructExprKind::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_struct(t, steps, map, current_node, current_idx);
+                deps_struct(e, steps, map, current_node, current_idx);
+            }
+            TypedStructExprKind::Default(a, b)
+            | TypedStructExprKind::Update(a, b)
+            | TypedStructExprKind::Latch(a, b)
+            | TypedStructExprKind::Init(a, b) => {
+                deps_struct(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_struct(b, steps, map, current_node, current_idx);
+            }
+            TypedStructExprKind::Defer(e, _, _)
+            | TypedStructExprKind::Dynamic(e, _)
+            | TypedStructExprKind::RestrictedDynamic(e, _, _) => {
+                deps_str(e, steps, map, current_node, current_idx)
+            }
+            TypedStructExprKind::SUpdate(struct_expr, _, value) => {
+                deps_struct(
+                    struct_expr,
+                    &mut steps.clone(),
+                    map,
+                    current_node,
+                    current_idx,
+                );
+                deps_te(value, steps, map, current_node, current_idx);
+            }
+            TypedStructExprKind::SGet(e, _) => {
+                deps_struct(e, steps, map, current_node, current_idx)
+            }
+            TypedStructExprKind::MGetMap(e, _) => {
+                deps_map(e, steps, map, current_node, current_idx)
+            }
+            TypedStructExprKind::LHeadList(e) => {
+                deps_list(e, steps, map, current_node, current_idx)
+            }
+            TypedStructExprKind::LIndexList(list, idx) => {
+                deps_list(list, &mut steps.clone(), map, current_node, current_idx);
+                deps_int(idx, steps, map, current_node, current_idx);
+            }
+        }
+    }
+
+    debug!("typed_sexpr_dependencies for {}: {:?}", root_name, expr);
+    let mut graph = DepGraph::empty_graph();
+    let root_node = graph.graph.add_node(root_name.clone());
+    deps_te(expr, &mut vec![], &mut graph, &root_node, 0);
+    graph
+}
+
+impl DependencyGraphExpr for SExpr {
+    fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph {
+        sexpr_dependencies(self, root)
+    }
+}
+
+impl DependencyGraphExpr for SExprTE {
+    fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph {
+        typed_sexpr_dependencies(self, root)
+    }
+}
+
+impl DependencyGraphSpec for DsrvSpecification {
+    fn dependency_graph(&self) -> DepGraph {
+        let exprs = self
+            .output_vars()
+            .into_iter()
+            .filter_map(|var| self.var_expr(&var).map(|expr| (var.clone(), expr.clone())))
+            .collect();
+        DepGraph::from_sexprs(exprs)
+    }
+}
+
+impl DependencyGraphSpec for TypedDsrvSpecification {
+    fn dependency_graph(&self) -> DepGraph {
+        let exprs = self
+            .output_vars()
+            .into_iter()
+            .filter_map(|var| self.var_expr(&var).map(|expr| (var.clone(), expr.clone())))
+            .collect();
+        DepGraph::from_typed_sexprs(exprs)
+    }
+}
+
 impl<AC> DependencyResolver<AC> for DepGraph
 where
-    AC: AsyncConfig<Expr = SExpr>,
+    AC: AsyncConfig,
+    AC::Expr: DependencyGraphExpr,
+    AC::Spec: DependencyGraphSpec,
 {
     fn add_dependency(&mut self, var: &VarName, expr: &AC::Expr) {
-        let expr_deps = sexpr_dependencies(expr, var);
+        let expr_deps = expr.dependency_graph_for_root(var);
         self.merge_graphs(&expr_deps);
     }
 
     fn remove_dependency(&mut self, name: &VarName, expr: &AC::Expr) {
-        let expr_deps = sexpr_dependencies(expr, name);
+        let expr_deps = expr.dependency_graph_for_root(name);
         self.diff_graphs(&expr_deps);
     }
 
