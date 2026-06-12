@@ -11,9 +11,7 @@ pub use async_interface::*;
 mod tests {
     use std::pin::Pin;
 
-    use crate::{
-        Value, core::stream_casting::to_typed_stream, lang::dsrv::type_checker::PartialStreamValue,
-    };
+    use crate::{Value, core::PartialStreamValue, core::stream_casting::to_typed_stream};
 
     use super::*;
     use approx::relative_eq;

@@ -1,9 +1,9 @@
 use crate::OutputStream;
+use crate::core::PartialStreamValue;
 use crate::core::StreamData;
 use crate::core::to_typed_partial_stream;
 use crate::core::values::{StreamType, StreamTypeAscription};
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dsrv::type_checker::PartialStreamValue;
 use crate::lang::dsrv::type_checker::{SExprTE, TypeCheckable, TypeInfo, check_value_stream_type};
 use crate::semantics::untimed_untyped_dsrv::combinators::{CloneFn1, CloneFn2};
 use crate::semantics::{

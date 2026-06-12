@@ -1,5 +1,6 @@
 use super::combinators as mc;
 use crate::core::OutputStream;
+use crate::core::PartialStreamValue;
 use crate::core::Value;
 use crate::core::stream_casting::{from_typed_stream, to_typed_partial_stream, to_typed_stream};
 use crate::core::values::StreamType;
@@ -7,9 +8,8 @@ use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::SExpr;
 use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, StrBinOp};
 use crate::lang::dsrv::type_checker::{
-    PartialStreamValue, SExprBool, SExprDyn, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
-    TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr,
-    TypedStructExprKind,
+    SExprBool, SExprDyn, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
+    TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::untimed_untyped_dsrv::combinators as uc;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};

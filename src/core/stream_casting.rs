@@ -1,4 +1,4 @@
-use crate::{OutputStream, Value, core::StreamData, lang::dsrv::type_checker::PartialStreamValue};
+use crate::{OutputStream, Value, core::StreamData, core::values::PartialStreamValue};
 use futures::StreamExt;
 
 use std::fmt::Debug;

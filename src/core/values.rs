@@ -848,3 +848,173 @@ mod tests {
         assert_eq!(typ.to_string(), "Struct<name: Str, ...>");
     }
 }
+
+#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
+pub enum PartialStreamValue<T> {
+    Known(T),
+    NoVal,
+    Deferred,
+}
+
+impl<T: Display> Display for PartialStreamValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PartialStreamValue::Known(val) => write!(f, "{}", val),
+            PartialStreamValue::NoVal => write!(f, "no_val"),
+            PartialStreamValue::Deferred => write!(f, "⊥"),
+        }
+    }
+}
+
+impl StreamData for PartialStreamValue<bool> {}
+impl StreamData for PartialStreamValue<i64> {}
+impl StreamData for PartialStreamValue<f64> {}
+impl StreamData for PartialStreamValue<String> {}
+impl StreamData for PartialStreamValue<()> {}
+impl StreamData for PartialStreamValue<EcoVec<Value>> {}
+impl StreamData for PartialStreamValue<Value> {}
+
+impl TryFrom<Value> for PartialStreamValue<i64> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Int(x) => Ok(PartialStreamValue::Known(x)),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Value> for PartialStreamValue<String> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Str(x) => Ok(PartialStreamValue::Known(x.into())),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Value> for PartialStreamValue<f64> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Float(x) => Ok(PartialStreamValue::Known(x)),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Value> for PartialStreamValue<bool> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Bool(x) => Ok(PartialStreamValue::Known(x)),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Value> for PartialStreamValue<()> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Unit => Ok(PartialStreamValue::Known(())),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Value> for PartialStreamValue<EcoVec<Value>> {
+    type Error = ();
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::List(x) => Ok(PartialStreamValue::Known(x)),
+            Value::NoVal => Ok(PartialStreamValue::NoVal),
+            Value::Deferred => Ok(PartialStreamValue::Deferred),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<PartialStreamValue<i64>> for Value {
+    fn from(value: PartialStreamValue<i64>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => Value::Int(v),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+
+impl From<PartialStreamValue<f64>> for Value {
+    fn from(value: PartialStreamValue<f64>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => Value::Float(v),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+impl From<PartialStreamValue<String>> for Value {
+    fn from(value: PartialStreamValue<String>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => Value::Str(v.into()),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+impl From<PartialStreamValue<bool>> for Value {
+    fn from(value: PartialStreamValue<bool>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => Value::Bool(v),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+impl From<PartialStreamValue<()>> for Value {
+    fn from(value: PartialStreamValue<()>) -> Self {
+        match value {
+            PartialStreamValue::Known(()) => Value::Unit,
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+
+impl From<PartialStreamValue<EcoVec<Value>>> for Value {
+    fn from(value: PartialStreamValue<EcoVec<Value>>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => Value::List(v),
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
+
+impl From<PartialStreamValue<Value>> for Value {
+    fn from(value: PartialStreamValue<Value>) -> Self {
+        match value {
+            PartialStreamValue::Known(v) => v,
+            PartialStreamValue::NoVal => Value::NoVal,
+            PartialStreamValue::Deferred => Value::Deferred,
+        }
+    }
+}
