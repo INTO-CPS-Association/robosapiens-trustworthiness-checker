@@ -5,22 +5,23 @@ use std::rc::Rc;
 // #![deny(warnings)]
 use anyhow::{self, Context};
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind, parser::ValueSource};
+use mstlo::Variables;
 use smol::LocalExecutor;
 use tracing::{debug, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::VarName;
 use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
-use trustworthiness_checker::core::Runtime;
+use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::builders::OutputHandlerBuilder;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
-use trustworthiness_checker::runtime::builder::DistributionMode;
+use trustworthiness_checker::runtime::builder::{DistributionMode, RuntimeModel};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
-use trustworthiness_checker::{self as tc, io::file::parse_file};
+use trustworthiness_checker::{self as tc, Specification, io::file::parse_file};
+use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
@@ -40,7 +41,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let _log_guard = init_tracing(cli.log_file.as_deref())?;
     debug!("CLI arguments: {:?}", cli);
 
-    let builder = GeneralRuntimeBuilder::new();
+    let builder =
+        <GeneralRuntimeBuilder<RuntimeModel, Value> as RuntimeBuilder<RuntimeModel, Value>>::new();
 
     let mqtt_port = cli.mqtt_port;
     let redis_port = cli.redis_port;
@@ -55,10 +57,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .value_source("parser")
         .is_some_and(|source| source == ValueSource::CommandLine);
 
-    let effective_parser = if matches!(
-        cli.runtime,
-        trustworthiness_checker::core::RuntimeSpec::Distributed
-    ) {
+    let effective_parser = if matches!(cli.language, Language::DSRV)
+        && matches!(cli.runtime, RuntimeSpec::Distributed)
+    {
         if parser_was_explicit && !matches!(cli.parser, ParserMode::Combinator) {
             cmd.error(
                 ErrorKind::ArgumentConflict,
@@ -77,76 +78,85 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.use_context_transfer(!cli.no_context_transfer);
 
-    let model_parser = match cli.language {
-        Language::DSRV => tc::lang::dsrv::parser::dsrv_specification,
-    };
+    let builder = builder
+        .mstlo_algorithm(cli.mstlo_algorithm)
+        .mstlo_synchronization_strategy(cli.mstlo_synchronization)
+        .mstlo_variables(parse_mstlo_variables(cli.mstlo_vars.as_deref())?);
 
     let builder = builder.scheduler_mode(cli.scheduler_communication());
 
     debug!("Choosing distribution mode");
-    let dist_constraints = cli.distribution_constraints;
-    let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode)
-        .maybe_mqtt_port(mqtt_port)
-        .maybe_local_node(cli.local_node)
-        .runtime(cli.runtime)
-        .maybe_dist_constraints(dist_constraints.clone())
-        .dist_constraint_solver(cli.dist_constraint_solver)
-        .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
-    debug!("Building distribution mode");
-    let distribution_mode = distribution_mode_builder.build().await?;
+    let dist_constraints = cli.distribution_constraints.clone();
+    let distribution_mode = if matches!(cli.language, Language::DSRV) {
+        let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode.clone())
+            .maybe_mqtt_port(mqtt_port)
+            .maybe_local_node(cli.local_node.clone())
+            .runtime(cli.runtime)
+            .maybe_dist_constraints(dist_constraints.clone())
+            .dist_constraint_solver(cli.dist_constraint_solver)
+            .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
+        debug!("Building distribution mode");
+        distribution_mode_builder.build().await?
+    } else {
+        DistributionMode::CentralMonitor
+    };
     debug!(?distribution_mode, "Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
-    let model = match effective_parser {
-        ParserMode::Combinator => parse_file(model_parser, cli.model.as_str())
+    let model: RuntimeModel = match cli.language {
+        Language::DSRV => match effective_parser {
+            ParserMode::Combinator => parse_file(
+                tc::lang::dsrv::parser::dsrv_specification,
+                cli.model.as_str(),
+            )
             .await
+            .map(RuntimeModel::from)
             .context("Model file could not be parsed")?,
-        ParserMode::Lalr => lalr_parse_file(cli.model.as_str())
+            ParserMode::Lalr => lalr_parse_file(cli.model.as_str())
+                .await
+                .map(RuntimeModel::from)
+                .context("Model file could not be parsed")?,
+        },
+        Language::MSTLO => tc::lang::mstlo::parse_file(cli.model.as_str())
             .await
-            .context("Model file could not be parsed")?,
+            .map(RuntimeModel::from)
+            .context("MSTLO model file could not be parsed")?,
     };
-    info!(
-        "Parsed model: {}",
-        serde_json::to_string_pretty(&model).expect("Failed to pretty-print model")
-    );
+    info!(%model, "Parsed model");
 
     // Localise the model to contain only the local variables (if needed)
-    let model = match &builder.distribution_mode {
-        DistributionMode::LocalMonitor(locality_mode) => {
+    let model = match (&builder.distribution_mode, model) {
+        (DistributionMode::LocalMonitor(locality_mode), RuntimeModel::Dsrv(model)) => {
             debug!(?locality_mode, "Localising model");
             let model = model.localise(locality_mode);
             info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Localised model");
-            model
+            RuntimeModel::Dsrv(model)
         }
-        _ => model,
+        (_, model) => model,
     };
 
     // Filtered output variable names excluding distribution constraints
     let output_var_names = model
-        .output_vars
-        .iter()
-        .filter(|&var_name| {
+        .output_vars()
+        .into_iter()
+        .filter(|var_name| {
             !dist_constraints
                 .clone()
                 .map_or(false, |c| c.contains(&var_name.into()))
         })
-        .cloned()
         .collect();
-    let aux_info = model.aux_vars.iter().cloned().collect();
+    let aux_info = model.aux_vars().into_iter().collect();
     let builder = builder.model(model.clone());
 
     // For distributed runtime with distribution constraints, create a localised model
     // to restrict input subscriptions the constraint variables only (and their true input
     // dependencies).
-    let localized_model = if matches!(
-        cli.runtime,
-        trustworthiness_checker::core::RuntimeSpec::Distributed
-    ) {
-        match &dist_constraints {
-            Some(constraints) if !constraints.is_empty() => {
+    let localized_model = if matches!(cli.runtime, RuntimeSpec::Distributed) {
+        match (&dist_constraints, &model) {
+            (Some(constraints), RuntimeModel::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
                     constraints.iter().cloned().map(VarName::from).collect();
-                model.localise(&localized_constraint_vars)
+                RuntimeModel::Dsrv(model.localise(&localized_constraint_vars))
             }
             _ => model.clone(),
         }
@@ -155,7 +165,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     };
 
     info!(
-        input_vars = ?localized_model.input_vars,
+        input_vars = ?localized_model.input_vars(),
         "Localized model selected for input provider"
     );
 
@@ -233,6 +243,29 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let monitor = builder.build().await;
 
     monitor.run().await
+}
+
+fn parse_mstlo_variables(bindings: Option<&[String]>) -> anyhow::Result<Variables> {
+    let variables = Variables::new();
+    for binding in bindings.unwrap_or(&[]) {
+        let (name, value) = binding.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("MSTLO variable binding `{binding}` must have format name=value")
+        })?;
+        anyhow::ensure!(
+            !name.trim().is_empty(),
+            "MSTLO variable name cannot be empty"
+        );
+        let value = value.trim().parse::<f64>().with_context(|| {
+            format!(
+                "MSTLO variable `{}` value `{}` is not a valid float",
+                name.trim(),
+                value.trim()
+            )
+        })?;
+        let name = Box::leak(name.trim().to_string().into_boxed_str()) as &'static str;
+        variables.set(name, value);
+    }
+    Ok(variables)
 }
 
 fn init_tracing(log_file: Option<&str>) -> anyhow::Result<WorkerGuard> {

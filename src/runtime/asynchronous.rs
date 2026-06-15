@@ -1036,6 +1036,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
             debug!("AsyncRuntimeBuilder: Context builder initialized");
 
             let input_vars = model.input_vars().clone();
+            let output_vars = model.output_vars();
             let computed_vars: Vec<VarName> = model.stream_vars().into_iter().collect();
             let var_names: Vec<VarName> = input_vars
                 .iter()
@@ -1056,7 +1057,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
                 .collect();
             let (computed_txs, computed_rxs): (Vec<_>, Vec<_>) =
                 computed_oneshots.into_iter().unzip();
-            let output_txs: BTreeMap<_, _> =
+            let computed_txs: BTreeMap<_, _> =
                 computed_vars.iter().cloned().zip(computed_txs).collect();
             let computed_streams = computed_rxs.into_iter().map(oneshot_to_stream);
 
@@ -1077,8 +1078,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
 
             // Create a map of the output variables to their streams
             // based on using the context
-            let output_streams: BTreeMap<VarName, OutputStream<AC::Val>> = model
-                .output_vars()
+            let output_streams: BTreeMap<VarName, OutputStream<AC::Val>> = output_vars
                 .iter()
                 .map(|var| {
                     let stream = context.var(var).unwrap_or_else(|| {
@@ -1095,9 +1095,9 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
                 })
                 .collect();
 
-            // Send outputs computed based on the context to the
-            // output handler
-            for (var, tx) in output_txs {
+            // Send computed variable streams based on the context. Outputs are later exposed to the
+            // output handler; aux variables remain internal but can be referenced by outputs.
+            for (var, tx) in computed_txs {
                 let expr = model.var_expr(&var).unwrap_or_else(|| {
                     panic!("Failed to find expression for var {}", var.name().as_str())
                 });

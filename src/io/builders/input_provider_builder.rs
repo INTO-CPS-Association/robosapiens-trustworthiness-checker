@@ -176,7 +176,7 @@ impl InputProviderBuilder {
         match self.spec {
             InputProviderSpec::File(path) => {
                 let input_file_parser = match self.lang.unwrap_or(Language::DSRV) {
-                    Language::DSRV => tc::lang::untimed_input::untimed_input_file,
+                    Language::DSRV | Language::MSTLO => tc::lang::untimed_input::untimed_input_file,
                 };
                 let data = tc::parse_file(input_file_parser, &path)
                     .await

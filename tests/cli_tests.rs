@@ -713,6 +713,98 @@ mod integration_tests {
         );
     }
 
+    /// Test MSTLO CLI with shared semantics and MSTLO synchronization options
+    #[apply(async_test)]
+    async fn test_mstlo_language_with_delayed_qualitative_semantics() {
+        let output = run_cli(&[
+            &fixture_path("simple_stl.mstlo"),
+            "--input-file",
+            &fixture_path("simple_stl.input"),
+            "--output-stdout",
+            "--language",
+            "mstlo",
+            "--semantics",
+            "delayed-qualitative",
+            "--mstlo-synchronization",
+            "none",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("always_x[0]") && stdout.contains("Bool(true)"),
+            "Expected delayed qualitative MSTLO output not found in: {}",
+            stdout
+        );
+        assert!(
+            stdout.contains("combo[3]") && stdout.contains("Bool(true)"),
+            "Expected combo MSTLO output not found in: {}",
+            stdout
+        );
+    }
+
+    /// Test MSTLO CLI variable bindings and algorithm option
+    #[apply(async_test)]
+    async fn test_mstlo_language_with_vars_and_algorithm() {
+        let unique = format!(
+            "{}_{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("mstlo")
+        );
+        let spec_path = format!("/tmp/tc_{unique}.mstlo");
+        let input_path = format!("/tmp/tc_{unique}.input");
+        std::fs::write(&spec_path, "thresholded: x > $threshold\n")
+            .expect("failed to write MSTLO test spec");
+        std::fs::write(
+            &input_path,
+            "0: x = {\"time\": 0, \"value\": 7.0}\n1: x = {\"time\": 1000, \"value\": 4.0}\n",
+        )
+        .expect("failed to write MSTLO test input");
+
+        let output = run_cli(&[
+            &spec_path,
+            "--input-file",
+            &input_path,
+            "--output-stdout",
+            "--language",
+            "mstlo",
+            "--mstlo-vars",
+            "threshold=5.0",
+            "--mstlo-algorithm",
+            "incremental",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        let _ = std::fs::remove_file(&spec_path);
+        let _ = std::fs::remove_file(&input_path);
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("thresholded[0]") && stdout.contains("Float(2.0)"),
+            "Expected positive threshold robustness not found in: {}",
+            stdout
+        );
+        assert!(
+            stdout.contains("thresholded[1]") && stdout.contains("Float(-1.0)"),
+            "Expected negative threshold robustness not found in: {}",
+            stdout
+        );
+    }
+
     /// Test CLI with centralised distribution mode (default)
     #[apply(async_test)]
     async fn test_centralised_mode() {

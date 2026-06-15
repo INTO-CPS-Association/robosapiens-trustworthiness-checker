@@ -1,16 +1,23 @@
 use std::rc::Rc;
-use std::{collections::BTreeMap, fmt::Debug};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::{Debug, Display},
+};
 
 use futures::future::LocalBoxFuture;
+use mstlo::{Algorithm, SynchronizationStrategy, Variables};
 use smol::LocalExecutor;
 use tracing::{debug, warn};
 
 use crate::InputProvider;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
-    DsrvSpecification, Runtime, SExpr, Value, VarName,
-    cli::{adapters::DistributionModeBuilder, args::ParserMode},
-    core::{OutputHandler, RuntimeSpec, Semantics, StreamData},
+    DsrvSpecification, Runtime, SExpr, Specification, Value, VarName,
+    cli::{
+        adapters::DistributionModeBuilder,
+        args::{MstloAlgorithm, MstloSynchronizationStrategy, ParserMode},
+    },
+    core::{OutputHandler, RuntimeSpec, Semantics, StreamData, StreamType},
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputProviderBuilder, builders::OutputHandlerBuilder},
@@ -20,7 +27,9 @@ use crate::{
         parser::CombExprParser,
         type_checker::{SExprTE, TypedDsrvSpecification, type_check, type_check_gradual},
     },
+    lang::mstlo::MstloFormula,
     runtime::{
+        mstlo::MstloRuntimeBuilder,
         reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder,
         semi_sync::{SemiSyncContext, SemiSyncRuntimeBuilder},
     },
@@ -48,6 +57,76 @@ define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedCont
 define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext, Spec = DsrvSpecification);
 #[rustfmt::skip]
 define_config!(TypedSemiSyncValueConfig, Val = Value, Expr = SExprTE, Ctx = SemiSyncContext, Spec = TypedDsrvSpecification);
+
+#[derive(Clone, Debug)]
+pub enum RuntimeModel {
+    Dsrv(DsrvSpecification),
+    Mstlo(MstloFormula),
+}
+
+impl From<DsrvSpecification> for RuntimeModel {
+    fn from(spec: DsrvSpecification) -> Self {
+        Self::Dsrv(spec)
+    }
+}
+
+impl From<MstloFormula> for RuntimeModel {
+    fn from(formula: MstloFormula) -> Self {
+        Self::Mstlo(formula)
+    }
+}
+
+impl Display for RuntimeModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RuntimeModel::Dsrv(spec) => Display::fmt(spec, f),
+            RuntimeModel::Mstlo(formula) => Display::fmt(formula, f),
+        }
+    }
+}
+
+impl Specification for RuntimeModel {
+    type Expr = ();
+
+    fn input_vars(&self) -> BTreeSet<VarName> {
+        match self {
+            RuntimeModel::Dsrv(spec) => spec.input_vars(),
+            RuntimeModel::Mstlo(formula) => formula.input_vars(),
+        }
+    }
+
+    fn output_vars(&self) -> BTreeSet<VarName> {
+        match self {
+            RuntimeModel::Dsrv(spec) => spec.output_vars(),
+            RuntimeModel::Mstlo(formula) => formula.output_vars(),
+        }
+    }
+
+    fn aux_vars(&self) -> BTreeSet<VarName> {
+        match self {
+            RuntimeModel::Dsrv(spec) => spec.aux_vars(),
+            RuntimeModel::Mstlo(formula) => formula.aux_vars(),
+        }
+    }
+
+    fn var_expr(&self, _var: &VarName) -> Option<Self::Expr> {
+        None
+    }
+
+    fn add_input_var(&mut self, var: VarName) {
+        match self {
+            RuntimeModel::Dsrv(spec) => spec.add_input_var(var),
+            RuntimeModel::Mstlo(formula) => formula.add_input_var(var),
+        }
+    }
+
+    fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
+        match self {
+            RuntimeModel::Dsrv(spec) => spec.type_annotations(),
+            RuntimeModel::Mstlo(formula) => formula.type_annotations(),
+        }
+    }
+}
 
 /* A trait for builders, which construct a particular runtime
  *
@@ -594,6 +673,9 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub use_context_transfer: bool,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
     pub topic_mapping: Option<TopicMapping>,
+    pub mstlo_algorithm: Algorithm,
+    pub mstlo_synchronization_strategy: SynchronizationStrategy,
+    pub mstlo_variables: Variables,
 }
 
 impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
@@ -695,6 +777,173 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             ..self
         }
     }
+
+    pub fn mstlo_algorithm(self, algorithm: MstloAlgorithm) -> Self {
+        Self {
+            mstlo_algorithm: algorithm.into(),
+            ..self
+        }
+    }
+
+    pub fn mstlo_synchronization_strategy(
+        self,
+        synchronization_strategy: MstloSynchronizationStrategy,
+    ) -> Self {
+        Self {
+            mstlo_synchronization_strategy: synchronization_strategy.into(),
+            ..self
+        }
+    }
+
+    pub fn mstlo_variables(self, variables: Variables) -> Self {
+        Self {
+            mstlo_variables: variables,
+            ..self
+        }
+    }
+}
+
+impl From<MstloAlgorithm> for Algorithm {
+    fn from(algorithm: MstloAlgorithm) -> Self {
+        match algorithm {
+            MstloAlgorithm::Naive => Algorithm::Naive,
+            MstloAlgorithm::Incremental => Algorithm::Incremental,
+        }
+    }
+}
+
+impl From<MstloSynchronizationStrategy> for SynchronizationStrategy {
+    fn from(strategy: MstloSynchronizationStrategy) -> Self {
+        match strategy {
+            MstloSynchronizationStrategy::None => SynchronizationStrategy::None,
+            MstloSynchronizationStrategy::ZeroOrderHold => SynchronizationStrategy::ZeroOrderHold,
+            MstloSynchronizationStrategy::Linear => SynchronizationStrategy::Linear,
+        }
+    }
+}
+
+impl RuntimeBuilder<RuntimeModel, Value> for GeneralRuntimeBuilder<RuntimeModel, Value> {
+    type Runtime = Box<dyn Runtime>;
+
+    fn new() -> Self {
+        Self {
+            executor: None,
+            model: None,
+            input: None,
+            input_provider_builder: None,
+            output: None,
+            output_handler_builder: None,
+            distribution_mode: DistributionMode::CentralMonitor,
+            distribution_mode_builder: None,
+            runtime: RuntimeSpec::Async,
+            semantics: Semantics::GradualTypedUntimed,
+            var_msg_types: None,
+            topic_mapping: None,
+            scheduler_mode: SchedulerCommunication::Null,
+            parser: ParserMode::Lalr,
+            reconf_topic: "reconf".to_string(),
+            use_context_transfer: true,
+            mstlo_algorithm: Algorithm::default(),
+            mstlo_synchronization_strategy: SynchronizationStrategy::default(),
+            mstlo_variables: Variables::new(),
+        }
+    }
+
+    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
+        Self {
+            executor: Some(ex),
+            ..self
+        }
+    }
+
+    fn model(self, model: RuntimeModel) -> Self {
+        Self {
+            model: Some(model),
+            ..self
+        }
+    }
+
+    fn input(self, input: Box<dyn crate::InputProvider<Val = Value>>) -> Self {
+        Self {
+            input: Some(input),
+            ..self
+        }
+    }
+
+    fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
+        Self {
+            input_provider_builder: Some(input_builder),
+            ..self
+        }
+    }
+
+    fn output(self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
+        Self {
+            output: Some(output),
+            ..self
+        }
+    }
+
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move { GeneralRuntimeBuilder::<RuntimeModel, Value>::build(self).await })
+    }
+}
+
+impl GeneralRuntimeBuilder<RuntimeModel, Value> {
+    pub async fn build(self) -> Box<dyn Runtime> {
+        match self.model.expect("Model/spec must be set") {
+            RuntimeModel::Dsrv(spec) => {
+                GeneralRuntimeBuilder::<DsrvSpecification, Value> {
+                    executor: self.executor,
+                    model: Some(spec),
+                    input: self.input,
+                    input_provider_builder: self.input_provider_builder,
+                    output: self.output,
+                    output_handler_builder: self.output_handler_builder,
+                    runtime: self.runtime,
+                    semantics: self.semantics,
+                    distribution_mode: self.distribution_mode,
+                    distribution_mode_builder: self.distribution_mode_builder,
+                    scheduler_mode: self.scheduler_mode,
+                    parser: self.parser,
+                    reconf_topic: self.reconf_topic,
+                    use_context_transfer: self.use_context_transfer,
+                    var_msg_types: self.var_msg_types,
+                    topic_mapping: self.topic_mapping,
+                    mstlo_algorithm: self.mstlo_algorithm,
+                    mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
+                    mstlo_variables: self.mstlo_variables,
+                }
+                .build()
+                .await
+            }
+            RuntimeModel::Mstlo(formula) => {
+                GeneralRuntimeBuilder::<MstloFormula, Value> {
+                    executor: self.executor,
+                    model: Some(formula),
+                    input: self.input,
+                    input_provider_builder: self.input_provider_builder,
+                    output: self.output,
+                    output_handler_builder: self.output_handler_builder,
+                    runtime: RuntimeSpec::Async,
+                    semantics: self.semantics,
+                    distribution_mode: DistributionMode::CentralMonitor,
+                    distribution_mode_builder: None,
+                    scheduler_mode: self.scheduler_mode,
+                    parser: self.parser,
+                    reconf_topic: self.reconf_topic,
+                    use_context_transfer: self.use_context_transfer,
+                    var_msg_types: self.var_msg_types,
+                    topic_mapping: self.topic_mapping,
+                    mstlo_algorithm: self.mstlo_algorithm,
+                    mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
+                    mstlo_variables: self.mstlo_variables,
+                }
+                .build()
+                .await
+            }
+        }
+    }
 }
 
 impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpecification, Value> {
@@ -720,6 +969,9 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
             parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
             use_context_transfer: true,
+            mstlo_algorithm: Algorithm::default(),
+            mstlo_synchronization_strategy: SynchronizationStrategy::default(),
+            mstlo_variables: Variables::new(),
         }
     }
 
@@ -759,7 +1011,123 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { GeneralRuntimeBuilder::build(self).await })
+        Box::pin(
+            async move { GeneralRuntimeBuilder::<DsrvSpecification, Value>::build(self).await },
+        )
+    }
+}
+
+impl RuntimeBuilder<MstloFormula, Value> for GeneralRuntimeBuilder<MstloFormula, Value> {
+    type Runtime = Box<dyn Runtime>;
+
+    fn new() -> Self {
+        Self {
+            executor: None,
+            model: None,
+            input: None,
+            input_provider_builder: None,
+            output: None,
+            output_handler_builder: None,
+            distribution_mode: DistributionMode::CentralMonitor,
+            distribution_mode_builder: None,
+            runtime: RuntimeSpec::Async,
+            semantics: Semantics::GradualTypedUntimed,
+            var_msg_types: None,
+            topic_mapping: None,
+            scheduler_mode: SchedulerCommunication::Null,
+            parser: ParserMode::Lalr,
+            reconf_topic: "reconf".to_string(),
+            use_context_transfer: true,
+            mstlo_algorithm: Algorithm::default(),
+            mstlo_synchronization_strategy: SynchronizationStrategy::default(),
+            mstlo_variables: Variables::new(),
+        }
+    }
+
+    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
+        Self {
+            executor: Some(ex),
+            ..self
+        }
+    }
+
+    fn model(self, model: MstloFormula) -> Self {
+        Self {
+            model: Some(model),
+            ..self
+        }
+    }
+
+    fn input(self, input: Box<dyn crate::InputProvider<Val = Value>>) -> Self {
+        Self {
+            input: Some(input),
+            ..self
+        }
+    }
+
+    fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
+        Self {
+            input_provider_builder: Some(input_builder),
+            ..self
+        }
+    }
+
+    fn output(self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
+        Self {
+            output: Some(output),
+            ..self
+        }
+    }
+
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move { GeneralRuntimeBuilder::<MstloFormula, Value>::build(self).await })
+    }
+}
+
+impl GeneralRuntimeBuilder<MstloFormula, Value> {
+    fn mstlo_semantics(semantics: Semantics) -> mstlo::Semantics {
+        match semantics {
+            Semantics::DelayedQuantitative | Semantics::GradualTypedUntimed => {
+                mstlo::Semantics::DelayedQuantitative
+            }
+            Semantics::DelayedQualitative => mstlo::Semantics::DelayedQualitative,
+            Semantics::EagerQualitative => mstlo::Semantics::EagerQualitative,
+            Semantics::RobustnessInterval => mstlo::Semantics::RobustnessInterval,
+            Semantics::Untimed | Semantics::TypedUntimed => mstlo::Semantics::default(),
+        }
+    }
+
+    pub async fn build(self) -> Box<dyn Runtime> {
+        let mut builder = MstloRuntimeBuilder::new()
+            .maybe_executor(self.executor)
+            .maybe_model(self.model)
+            .algorithm(self.mstlo_algorithm)
+            .semantics(Self::mstlo_semantics(self.semantics))
+            .synchronization_strategy(self.mstlo_synchronization_strategy)
+            .variables(self.mstlo_variables);
+
+        builder = if let Some(input_provider_builder) = self.input_provider_builder {
+            let input = input_provider_builder
+                .runtime(RuntimeSpec::Async)
+                .build()
+                .await;
+            builder.input(input)
+        } else if let Some(input) = self.input {
+            builder.input(input)
+        } else {
+            builder
+        };
+
+        builder = if let Some(output_handler_builder) = self.output_handler_builder {
+            let output = output_handler_builder.build().await;
+            builder.output(output)
+        } else if let Some(output) = self.output {
+            builder.output(output)
+        } else {
+            builder
+        };
+
+        builder.build().await
     }
 }
 

@@ -1930,6 +1930,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mstlo"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a72e2e3dfbdd97571513ba336056f52d8f9eb65fd9b14308ef8fc65ab1f505f7"
+dependencies = [
+ "dyn-clone",
+ "mstlo-macros",
+]
+
+[[package]]
+name = "mstlo-macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddeaa2ce6814001ed4dd1c669208beb868527a5accdfad324b42b5b37a0f371"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3861,6 +3882,7 @@ dependencies = [
  "lalrpop",
  "lalrpop-util",
  "macro_rules_attribute",
+ "mstlo",
  "ordered-float",
  "paho-mqtt",
  "petgraph",

@@ -180,6 +180,109 @@ async fn run_gradual_typed_runtime_with_spec(
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
 }
 
+fn expected_dsrv_future_window_outputs(size: usize) -> Vec<(usize, BTreeMap<VarName, Value>)> {
+    (0..size)
+        .map(|idx| {
+            let value = if idx < 2 {
+                Value::Deferred
+            } else {
+                let current_window_is_above_threshold =
+                    (idx - 2..=idx).all(|window_idx| window_idx % 8 != 3);
+                Value::Bool(current_window_is_above_threshold)
+            };
+            (idx, BTreeMap::from([(VarName::new("always_x"), value)]))
+        })
+        .collect()
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_output_can_reference_aux_variable(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in x: Float
+out always_x: Bool
+aux above: Bool
+above = x > 3.0
+always_x = above && default(above[1], true) && default(above[2], true)
+"#;
+    let size = 16usize;
+    let input = || {
+        BTreeMap::from([(
+            VarName::new("x"),
+            (0..size)
+                .map(|idx| Value::Float(if idx % 8 == 3 { 2.0 } else { 5.0 }))
+                .collect::<Vec<_>>(),
+        )])
+    };
+    let expected = (0..size)
+        .map(|idx| {
+            let value = (idx.saturating_sub(2)..=idx).all(|window_idx| window_idx % 8 != 3);
+            (
+                idx,
+                BTreeMap::from([(VarName::new("always_x"), Value::Bool(value))]),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_gradual_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            input(),
+            "gradual typed aux output runtime outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs, expected,
+            "unexpected aux-referencing output values for runtime {runtime:?}",
+        );
+    }
+
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_gradual_typed_runtime_future_window_matches_benchmark(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in x: Float
+out always_x: Bool
+always_x = (x > 3.0) && (x[1] > 3.0) && (x[2] > 3.0)
+"#;
+    let size = 16;
+    let input = || {
+        BTreeMap::from([(
+            VarName::new("x"),
+            (0..size)
+                .map(|idx| Value::Float(if idx % 8 == 3 { 2.0 } else { 5.0 }))
+                .collect::<Vec<_>>(),
+        )])
+    };
+    let expected = expected_dsrv_future_window_outputs(size);
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_gradual_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            input(),
+            "gradual typed future window benchmark outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs, expected,
+            "unexpected future-window benchmark outputs for runtime {runtime:?}",
+        );
+    }
+
+    Ok(())
+}
+
 #[apply(async_test)]
 async fn test_gradual_typed_runtime_infers_unannotated_output(
     executor: Rc<LocalExecutor<'static>>,

@@ -2,6 +2,7 @@
 #[cfg(feature = "testcontainers")]
 mod integration_tests {
     use async_compat::Compat as TokioCompat;
+
     use futures::StreamExt;
     use futures::stream;
     use macro_rules_attribute::apply;
@@ -19,7 +20,10 @@ mod integration_tests {
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use trustworthiness_checker::io::mqtt::MqttFactory;
     use trustworthiness_checker::io::testing::ManualOutputHandler;
+    use trustworthiness_checker::lang::mstlo::MstloFormula;
     use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
+    use trustworthiness_checker::runtime::mstlo::MstloRuntimeBuilder;
+
     use winnow::Parser;
 
     use approx::assert_abs_diff_eq;
@@ -54,6 +58,31 @@ mod integration_tests {
     const X_TOPIC: &str = "x";
     const Y_TOPIC: &str = "y";
     const Z_TOPIC: &str = "z";
+
+    fn mstlo_mqtt_input(time_ms: i64, value: f64) -> Value {
+        Value::Map(BTreeMap::from([(
+            "value".into(),
+            Value::Map(BTreeMap::from([
+                ("time".into(), Value::Int(time_ms)),
+                ("value".into(), Value::Float(value)),
+            ])),
+        )]))
+    }
+
+    fn mstlo_output_tuple(value: &Value) -> (i64, f64) {
+        let Value::Map(map) = value else {
+            panic!("MSTLO MQTT output should be a map");
+        };
+        let Value::Int(time) = map.get("time").expect("output has time") else {
+            panic!("MSTLO MQTT output time should be int");
+        };
+        let value = match map.get("value").expect("output has value") {
+            Value::Float(value) => *value,
+            Value::Int(value) => *value as f64,
+            other => panic!("MSTLO MQTT output value should be numeric, got {other:?}"),
+        };
+        (*time, value)
+    }
 
     fn generate_test_publisher_tasks(
         executor: Rc<LocalExecutor<'static>>,
@@ -276,6 +305,218 @@ mod integration_tests {
         x_publisher_task.await?;
         y_publisher_task.await?;
         info!("All publishers completed, shutting down MQTT server");
+
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_mstlo_runtime_mqtt_input_output(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        const MSTLO_IN_TOPIC: &str = "mstlo/x";
+        const MSTLO_OUT_TOPIC: &str = "mstlo/out";
+
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
+
+        let mut input_provider = MqttInputProvider::new(
+            executor.clone(),
+            MQTT_FACTORY,
+            "localhost",
+            Some(mqtt_port),
+            BTreeMap::from([(VarName::new("x"), MSTLO_IN_TOPIC.to_string())]),
+            0,
+        );
+        with_timeout_res(input_provider.connect(), 5, "mstlo_input_connect").await?;
+
+        let mut output_handler = MqttOutputHandler::new(
+            executor.clone(),
+            MQTT_FACTORY,
+            vec![VarName::new("robustness")],
+            "localhost",
+            Some(mqtt_port),
+            BTreeMap::from([(VarName::new("robustness"), MSTLO_OUT_TOPIC.to_string())]),
+            vec![],
+        )?;
+        output_handler.connect().await?;
+
+        let outputs = with_timeout(
+            get_mqtt_outputs(
+                MSTLO_OUT_TOPIC.to_string(),
+                "mstlo_output_subscriber".to_string(),
+                mqtt_port,
+            ),
+            5,
+            "mstlo output subscription",
+        )
+        .await?;
+
+        let formula = MstloFormula::single(
+            VarName::new("robustness"),
+            mstlo::FormulaDefinition::GreaterThan("x", 5.0),
+        );
+        let runtime = MstloRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(formula)
+            .input(Box::new(input_provider))
+            .output(Box::new(output_handler))
+            .build()
+            .await;
+        let runtime_task = executor.spawn(runtime.run());
+
+        let values = vec![mstlo_mqtt_input(0, 7.0), mstlo_mqtt_input(10, 4.0)];
+        let (mut tick, publish_stream) = tick_stream(stream::iter(values.clone()).boxed());
+        let publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "mstlo_x_publisher".to_string(),
+                MSTLO_IN_TOPIC.to_string(),
+                publish_stream,
+                values.len(),
+                mqtt_port,
+            ),
+            5,
+            "mstlo publisher task",
+        ));
+
+        let mut outputs = outputs;
+
+        tick.send(()).await?;
+        let first = with_timeout(outputs.next(), 5, "first mstlo mqtt output")
+            .await?
+            .expect("first MSTLO MQTT output");
+        assert_eq!(mstlo_output_tuple(&first), (0, 2.0));
+
+        smol::Timer::after(std::time::Duration::from_millis(100)).await;
+        tick.send(()).await?;
+        let second = with_timeout(outputs.next(), 5, "second mstlo mqtt output")
+            .await?
+            .expect("second MSTLO MQTT output");
+        assert_eq!(mstlo_output_tuple(&second), (10, -1.0));
+
+        tick.send(()).await?;
+        publisher_task.await?;
+        runtime_task.detach();
+
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_mstlo_runtime_mqtt_multiple_input_streams(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        const MSTLO_X_TOPIC: &str = "mstlo/multi/x";
+        const MSTLO_Y_TOPIC: &str = "mstlo/multi/y";
+        const MSTLO_GT_TOPIC: &str = "mstlo/multi/gt";
+        const MSTLO_LT_TOPIC: &str = "mstlo/multi/lt";
+
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
+
+        let mut input_provider = MqttInputProvider::new(
+            executor.clone(),
+            MQTT_FACTORY,
+            "localhost",
+            Some(mqtt_port),
+            BTreeMap::from([
+                (VarName::new("x"), MSTLO_X_TOPIC.to_string()),
+                (VarName::new("y"), MSTLO_Y_TOPIC.to_string()),
+            ]),
+            0,
+        );
+        with_timeout_res(input_provider.connect(), 5, "mstlo_multi_input_connect").await?;
+
+        let mut output_handler = MqttOutputHandler::new(
+            executor.clone(),
+            MQTT_FACTORY,
+            vec![VarName::new("gt"), VarName::new("lt")],
+            "localhost",
+            Some(mqtt_port),
+            BTreeMap::from([
+                (VarName::new("gt"), MSTLO_GT_TOPIC.to_string()),
+                (VarName::new("lt"), MSTLO_LT_TOPIC.to_string()),
+            ]),
+            vec![],
+        )?;
+        output_handler.connect().await?;
+
+        let mut gt_outputs = with_timeout(
+            get_mqtt_outputs(
+                MSTLO_GT_TOPIC.to_string(),
+                "mstlo_multi_gt_subscriber".to_string(),
+                mqtt_port,
+            ),
+            5,
+            "mstlo multi gt output subscription",
+        )
+        .await?;
+        let _lt_outputs = with_timeout(
+            get_mqtt_outputs(
+                MSTLO_LT_TOPIC.to_string(),
+                "mstlo_multi_lt_subscriber".to_string(),
+                mqtt_port,
+            ),
+            5,
+            "mstlo multi lt output subscription",
+        )
+        .await?;
+
+        let formula = MstloFormula::new(BTreeMap::from([
+            (
+                VarName::new("gt"),
+                mstlo::FormulaDefinition::GreaterThan("x", 5.0),
+            ),
+            (
+                VarName::new("lt"),
+                mstlo::FormulaDefinition::LessThan("y", 3.0),
+            ),
+        ]));
+        let runtime = MstloRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(formula)
+            .input(Box::new(input_provider))
+            .output(Box::new(output_handler))
+            .build()
+            .await;
+        let runtime_task = executor.spawn(runtime.run());
+
+        let x_values = vec![mstlo_mqtt_input(0, 7.0)];
+        let y_values = vec![mstlo_mqtt_input(0, 2.0)];
+        let (mut x_tick, x_stream) = tick_stream(stream::iter(x_values.clone()).boxed());
+        let (mut y_tick, y_stream) = tick_stream(stream::iter(y_values.clone()).boxed());
+        let x_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "mstlo_multi_x_publisher".to_string(),
+                MSTLO_X_TOPIC.to_string(),
+                x_stream,
+                x_values.len(),
+                mqtt_port,
+            ),
+            5,
+            "mstlo multi x publisher task",
+        ));
+        let y_publisher_task = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_publisher(
+                "mstlo_multi_y_publisher".to_string(),
+                MSTLO_Y_TOPIC.to_string(),
+                y_stream,
+                y_values.len(),
+                mqtt_port,
+            ),
+            5,
+            "mstlo multi y publisher task",
+        ));
+
+        x_tick.send(()).await?;
+        let gt = with_timeout(gt_outputs.next(), 5, "mstlo multi gt output")
+            .await?
+            .expect("MSTLO gt MQTT output");
+        assert_eq!(mstlo_output_tuple(&gt), (0, 2.0));
+
+        y_tick.send(()).await?;
+
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
+        x_publisher_task.await?;
+        y_publisher_task.await?;
+        runtime_task.detach();
 
         Ok(())
     }

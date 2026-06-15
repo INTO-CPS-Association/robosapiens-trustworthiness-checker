@@ -24,6 +24,8 @@ pub enum Language {
     /// A stream-based specification language for runtime verification that supports
     /// temporal logic properties and dynamic spawning of new monitors
     DSRV,
+    /// Signal Temporal Logic properties monitored by the MSTLO runtime
+    MSTLO,
 }
 
 /// Parser implementation strategies for specification parsing
@@ -42,6 +44,21 @@ pub enum ParserMode {
     /// Generates efficient parsers from grammar definitions.
     /// Recommended for most use cases.
     Lalr,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum MstloAlgorithm {
+    Naive,
+    Incremental,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum MstloSynchronizationStrategy {
+    None,
+    ZeroOrderHold,
+    Linear,
 }
 
 /// Input source configuration for monitoring data
@@ -243,6 +260,15 @@ pub struct Cli {
     pub semantics: Semantics,
     #[arg(long, help = "Runtime system to use for execution", default_value_t = RuntimeSpec::Async)]
     pub runtime: RuntimeSpec,
+
+    #[arg(long, help = "MSTLO monitor algorithm", default_value_t = MstloAlgorithm::Incremental)]
+    pub mstlo_algorithm: MstloAlgorithm,
+
+    #[arg(long, help = "MSTLO multi-signal synchronization strategy", default_value_t = MstloSynchronizationStrategy::ZeroOrderHold)]
+    pub mstlo_synchronization: MstloSynchronizationStrategy,
+
+    #[arg(long, value_delimiter = ' ', num_args = 1.., help = "MSTLO variable bindings as name=value pairs")]
+    pub mstlo_vars: Option<Vec<String>>,
 
     #[command(flatten)]
     pub distribution_mode: DistributionMode,

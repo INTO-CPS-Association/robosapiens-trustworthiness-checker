@@ -75,6 +75,7 @@ redis = { version = "1.2.1", default-features = false, features = ["smol-comp"] 
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 fs2 = "0.4.3"
 event-listener = "5.4.1"
+mstlo = "0.1.1"
 
 [profile.dev-fast]
 # Optimize build times for debug builds
@@ -126,6 +127,14 @@ harness = false
 
 [[bench]]
 name = "parsing"
+harness = false
+
+[[bench]]
+name = "time_dependent_property"
+harness = false
+
+[[bench]]
+name = "threshold_property"
 harness = false
 
 # [dev-dependencies.tc-testutils]

@@ -524,7 +524,10 @@ impl Specification for DsrvSpecification {
     }
 
     fn output_vars(&self) -> BTreeSet<VarName> {
-        self.output_vars.clone()
+        self.output_vars
+            .difference(&self.aux_vars())
+            .cloned()
+            .collect()
     }
 
     fn aux_vars(&self) -> BTreeSet<VarName> {

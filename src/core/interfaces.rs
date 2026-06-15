@@ -16,6 +16,10 @@ pub enum Semantics {
     Untimed,
     TypedUntimed,
     GradualTypedUntimed,
+    DelayedQuantitative,
+    DelayedQualitative,
+    EagerQualitative,
+    RobustnessInterval,
 }
 
 /* Enum specifying which runtime is to be used */

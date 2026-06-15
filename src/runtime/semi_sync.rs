@@ -506,7 +506,7 @@ where
             .collect()
     }
 
-    fn setup_output_var_managers(
+    fn setup_computed_var_managers(
         model: &AC::Spec,
     ) -> anyhow::Result<(
         Vec<(VarName, AC::Expr, spsc::Sender<AC::Val>)>,
@@ -521,7 +521,7 @@ where
                 let var_manager = VarManager::<AC>::new_from_receiver(var_name.clone(), receiver);
                 let expr = model.var_expr(var_name).ok_or_else(|| {
                     anyhow!(
-                        "No expression found for output variable {} when setting up Monitor",
+                        "No expression found for computed variable {} when setting up Monitor",
                         var_name
                     )
                 })?;
@@ -580,9 +580,9 @@ where
     }
 
     fn log_task_errors(
-        output_res: anyhow::Result<()>,
-        work_res: anyhow::Result<()>,
-        input_res: anyhow::Result<()>,
+        output_res: &anyhow::Result<()>,
+        work_res: &anyhow::Result<()>,
+        input_res: &anyhow::Result<()>,
     ) {
         if let Err(e) = output_res {
             error!(?e, "Output handler had an error");
@@ -763,15 +763,16 @@ where
             input_streams.insert(var.clone(), prefixed);
         }
 
-        let (expr_eval_components, mut var_managers) = Self::setup_output_var_managers(&model)?;
         let output_vars = model.output_vars();
+        let (expr_eval_components, mut var_managers) = Self::setup_computed_var_managers(&model)?;
         let mut subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = var_managers
             .iter_mut()
             .filter_map(|vm| {
-                let var_name = vm.var_name.clone();
-                output_vars
-                    .contains(&var_name)
-                    .then(|| (var_name, vm.subscribe(0)))
+                output_vars.contains(&vm.var_name).then(|| {
+                    let var_name = vm.var_name.clone();
+                    let stream = vm.subscribe(0);
+                    (var_name, stream)
+                })
             })
             .collect();
         let mut context = Self::build_context(var_managers, input_streams, model.clone());
@@ -826,9 +827,14 @@ where
         );
 
         let (output_res, work_res, input_res) = futures::join!(output_fut, work_fut, input_fut);
-        Self::log_task_errors(output_res, work_res, input_res);
+        Self::log_task_errors(&output_res, &work_res, &input_res);
 
-        Ok(())
+        match (output_res, work_res, input_res) {
+            (Ok(_), Ok(_), Ok(_)) => Ok(()),
+            (Err(e), _, _) => Err(anyhow!("OutputHandler failed with error: {}", e)),
+            (_, Err(e), _) => Err(anyhow!("SemiSync work task failed with error: {}", e)),
+            (_, _, Err(e)) => Err(anyhow!("InputProvider failed with error: {}", e)),
+        }
     }
 }
 
