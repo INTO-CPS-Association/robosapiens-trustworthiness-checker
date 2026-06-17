@@ -132,7 +132,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         })
         .cloned()
         .collect();
-    let aux_info = model.aux_info.clone();
+    let aux_info = model.aux_vars.iter().cloned().collect();
     let builder = builder.model(model.clone());
 
     // For distributed runtime with distribution constraints, create a localised model

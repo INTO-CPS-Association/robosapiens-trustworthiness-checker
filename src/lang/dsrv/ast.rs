@@ -315,9 +315,10 @@ impl SExpr {
 pub struct DsrvSpecification {
     pub input_vars: BTreeSet<VarName>,
     pub output_vars: BTreeSet<VarName>,
+    pub aux_vars: BTreeSet<VarName>,
+    pub stream_vars: BTreeSet<VarName>,
     pub exprs: BTreeMap<VarName, SExpr>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
-    pub aux_info: Vec<VarName>,
 }
 
 impl DsrvSpecification {
@@ -495,15 +496,22 @@ impl DsrvSpecification {
         output_vars: BTreeSet<VarName>,
         exprs: BTreeMap<VarName, SExpr>,
         type_annotations: BTreeMap<VarName, StreamType>,
-        aux_info: Vec<VarName>,
+        aux_vars: impl IntoIterator<Item = VarName>,
     ) -> Self {
-        let exprs = Self::fix_dynamic(&input_vars, &output_vars, &exprs);
+        let aux_vars = aux_vars.into_iter().collect::<BTreeSet<_>>();
+        let stream_vars = output_vars
+            .iter()
+            .cloned()
+            .chain(aux_vars.iter().cloned())
+            .collect();
+        let exprs = Self::fix_dynamic(&input_vars, &stream_vars, &exprs);
         DsrvSpecification {
             input_vars,
             output_vars,
+            aux_vars,
+            stream_vars,
             exprs,
             type_annotations,
-            aux_info,
         }
     }
 }
@@ -520,7 +528,11 @@ impl Specification for DsrvSpecification {
     }
 
     fn aux_vars(&self) -> BTreeSet<VarName> {
-        self.aux_info.iter().cloned().collect()
+        self.aux_vars.clone()
+    }
+
+    fn stream_vars(&self) -> BTreeSet<VarName> {
+        self.stream_vars.clone()
     }
 
     fn var_expr(&self, var: &VarName) -> Option<SExpr> {
@@ -540,7 +552,7 @@ impl Specification for DsrvSpecification {
             self.output_vars.clone(),
             self.exprs.clone(),
             self.type_annotations.clone(),
-            self.aux_info.clone(),
+            self.aux_vars.clone(),
         );
     }
 
@@ -647,11 +659,7 @@ impl Display for SExpr {
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let aux_vars = self.aux_vars();
-        let out_vars = self
-            .output_vars()
-            .into_iter()
-            .filter(|v| !aux_vars.contains(v))
-            .collect::<Vec<VarName>>();
+        let out_vars = self.output_vars().into_iter().collect::<Vec<VarName>>();
         if self.type_annotations.is_empty() {
             for v in self.input_vars.iter() {
                 writeln!(f, "in {}", v)?;
@@ -966,12 +974,14 @@ pub mod generation {
                     arb_boolean_sexpr(all_vars.clone()),
                     0..=all_vars.len(),
                 )
-                .prop_map(move |exprs| DsrvSpecification {
-                    input_vars: input_vars.clone(),
-                    output_vars: output_vars.clone(),
-                    aux_info: vec![],
-                    exprs,
-                    type_annotations: BTreeMap::new(),
+                .prop_map(move |exprs| {
+                    DsrvSpecification::new(
+                        input_vars.clone(),
+                        output_vars.clone(),
+                        exprs,
+                        BTreeMap::new(),
+                        Vec::new(),
+                    )
                 })
             })
     }

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::core::{
-    Runtime, RuntimeSpec, Semantics, StreamType, StreamTypeAscription,
+    Runtime, RuntimeSpec, Semantics, Specification, StreamType, StreamTypeAscription,
 };
 use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;
@@ -102,7 +102,7 @@ async fn run_typed_runtime_with_spec(
     let input_streams = MapInputProvider::new(input_streams);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
-        spec.output_vars.clone(),
+        spec.output_vars(),
     ));
     let outputs = output_handler.get_output();
 
@@ -162,7 +162,7 @@ async fn run_gradual_typed_runtime_with_spec(
     let input_streams = MapInputProvider::new(input_streams);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
-        spec.output_vars.clone(),
+        spec.output_vars(),
     ));
     let outputs = output_handler.get_output();
 
@@ -731,7 +731,7 @@ echoed = payload
     let input_provider = FileInputProvider::new(input_data);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
-        spec.output_vars.clone(),
+        spec.output_vars(),
     ));
     let outputs = output_handler.get_output();
 
@@ -1101,7 +1101,7 @@ id = Map.get(robot, "id")
             MapInputProvider::new(BTreeMap::from([("tick".into(), vec![0.into()])]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1174,7 +1174,7 @@ renamed = Map.insert(robot, "name", "bb8")
         )]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1394,7 +1394,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1452,7 +1452,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1510,7 +1510,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1568,7 +1568,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1635,7 +1635,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         ]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1697,7 +1697,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1746,7 +1746,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1806,7 +1806,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1871,7 +1871,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1919,7 +1919,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 //             let input_streams = BTreeMap::from([("x".into(), x)]);
 //             let mut output_handler = Box::new(ManualOutputHandler::new(
 //                 executor.clone(),
-//                 spec_untyped.output_vars.clone(),
+//                 spec_untyped.output_vars(),
 //             ));
 //             let outputs = output_handler.get_output();
 //
@@ -1970,7 +1970,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 //             let input_streams = BTreeMap::from([("x".into(), x)]);
 //             let mut output_handler = Box::new(ManualOutputHandler::new(
 //                 executor.clone(),
-//                 spec_untyped.output_vars.clone(),
+//                 spec_untyped.output_vars(),
 //             ));
 //             let outputs = output_handler.get_output();
 //
@@ -2028,7 +2028,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
         let input_streams = input_empty();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2064,7 +2064,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2110,7 +2110,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2160,7 +2160,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2206,7 +2206,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2254,7 +2254,7 @@ async fn test_index_past_mult_dependencies(
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2312,7 +2312,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let input_streams = input_streams5();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2358,7 +2358,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         let input_streams = input_streams4();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2403,7 +2403,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
         let input_streams = input_streams_constraint();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2452,7 +2452,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         )]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2501,7 +2501,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
         )]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2547,7 +2547,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
         let input_streams = input_empty();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2605,7 +2605,7 @@ async fn test_simple_add_monitor_does_not_go_away(
             // Create output handler based on configuration
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
-                spec_untyped.output_vars.clone(),
+                spec_untyped.output_vars(),
             ));
             let outputs = output_handler.get_output();
 
@@ -2658,7 +2658,7 @@ async fn test_simple_add_monitor_large_input(
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2726,7 +2726,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2769,7 +2769,7 @@ async fn test_simple_add_monitor_untyped_spec(
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2818,7 +2818,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
             MapInputProvider::new(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2860,7 +2860,7 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
         let input_streams = input_streams2();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2906,7 +2906,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2954,7 +2954,7 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2999,7 +2999,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
 
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
-                spec_untyped.output_vars.clone(),
+                spec_untyped.output_vars(),
             ));
             let outputs = output_handler.get_output();
 
@@ -3037,7 +3037,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
 
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
-                spec_untyped.output_vars.clone(),
+                spec_untyped.output_vars(),
             ));
             let outputs = output_handler.get_output();
 
@@ -3153,7 +3153,7 @@ async fn test_drop_guard_cancellation_behavior(
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3201,7 +3201,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3248,7 +3248,7 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3292,7 +3292,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
         let spec = dsrv_specification(&mut spec_str).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3337,7 +3337,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3376,7 +3376,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3418,7 +3418,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3482,7 +3482,7 @@ async fn test_restricted_dynamic_monitor(
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3547,7 +3547,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3623,7 +3623,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3699,7 +3699,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3775,7 +3775,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3847,7 +3847,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec_untyped.output_vars.clone(),
+            spec_untyped.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3918,7 +3918,7 @@ async fn test_benchmark_regression_long_add_defer(
         // Create output handler based on configuration
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -3973,7 +3973,7 @@ async fn test_map_get_deferred_propagates(
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 

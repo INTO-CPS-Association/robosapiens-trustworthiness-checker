@@ -690,7 +690,8 @@ pub enum SExprTE {
 pub struct TypedDsrvSpecification {
     pub input_vars: BTreeSet<VarName>,
     pub output_vars: BTreeSet<VarName>,
-    pub aux_info: BTreeSet<VarName>,
+    pub aux_vars: BTreeSet<VarName>,
+    pub stream_vars: BTreeSet<VarName>,
     pub exprs: BTreeMap<VarName, SExprTE>,
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
@@ -724,7 +725,11 @@ impl Specification for TypedDsrvSpecification {
     }
 
     fn aux_vars(&self) -> BTreeSet<VarName> {
-        self.aux_info.clone()
+        self.aux_vars.clone()
+    }
+
+    fn stream_vars(&self) -> BTreeSet<VarName> {
+        self.stream_vars.clone()
     }
 
     fn var_expr(&self, var: &VarName) -> Option<SExprTE> {

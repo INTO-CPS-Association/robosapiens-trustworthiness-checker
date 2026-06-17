@@ -68,10 +68,17 @@ pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
 
     fn aux_vars(&self) -> BTreeSet<VarName>;
 
+    fn stream_vars(&self) -> BTreeSet<VarName> {
+        self.output_vars()
+            .into_iter()
+            .chain(self.aux_vars())
+            .collect()
+    }
+
     fn var_names(&self) -> BTreeSet<VarName> {
         self.input_vars()
             .into_iter()
-            .chain(self.output_vars().into_iter())
+            .chain(self.stream_vars())
             .collect()
     }
 

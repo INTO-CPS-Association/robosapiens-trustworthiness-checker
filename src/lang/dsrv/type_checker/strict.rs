@@ -38,7 +38,8 @@ pub fn type_check(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSpecificat
         Ok(TypedDsrvSpecification {
             input_vars: spec.input_vars.clone(),
             output_vars: spec.output_vars.clone(),
-            aux_info: spec.aux_info.clone().into_iter().collect(),
+            aux_vars: spec.aux_vars.clone(),
+            stream_vars: spec.stream_vars.clone(),
             exprs: typed_exprs
                 .into_iter()
                 .map(|(k, v)| (k.clone(), v.unwrap()))
@@ -72,9 +73,10 @@ mod tests {
         let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([var.clone()]),
+            stream_vars: BTreeSet::from([var.clone()]),
             exprs,
             type_annotations,
-            aux_info: vec![],
+            aux_vars: BTreeSet::new(),
         };
         let result = type_check(spec);
         assert!(

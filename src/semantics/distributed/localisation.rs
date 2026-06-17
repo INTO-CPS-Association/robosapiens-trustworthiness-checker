@@ -281,7 +281,7 @@ impl Localisable for DsrvSpecification {
         let local_vars = locality_spec.local_vars();
         let mut exprs = spec.exprs.clone();
         let mut output_vars = spec.output_vars.clone();
-        let mut aux_info = spec.aux_info.clone();
+        let mut aux_vars = spec.aux_vars.clone();
         let input_vars = spec.input_vars.clone();
 
         let mut to_remove = vec![];
@@ -291,7 +291,7 @@ impl Localisable for DsrvSpecification {
             }
         }
         output_vars.retain(|v| local_vars.contains(v));
-        aux_info.retain(|v| local_vars.contains(v));
+        aux_vars.retain(|v| local_vars.contains(v));
         exprs.retain(|v, _| local_vars.contains(v));
         let expr_input_vars: HashSet<_> = exprs.values().flat_map(|e| e.inputs()).collect();
         debug!("Expr input vars: {:?}", expr_input_vars);
@@ -311,7 +311,7 @@ impl Localisable for DsrvSpecification {
             output_vars,
             exprs,
             spec.type_annotations.clone(),
-            aux_info,
+            aux_vars,
         )
     }
 }

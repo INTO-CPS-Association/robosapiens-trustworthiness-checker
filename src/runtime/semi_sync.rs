@@ -512,8 +512,8 @@ where
         Vec<(VarName, AC::Expr, spsc::Sender<AC::Val>)>,
         Vec<VarManager<AC>>,
     )> {
-        model
-            .output_vars()
+        let stream_vars = model.stream_vars();
+        stream_vars
             .iter()
             .map(|var_name| {
                 let (sender, receiver): (spsc::Sender<AC::Val>, spsc::Receiver<AC::Val>) =
@@ -764,12 +764,14 @@ where
         }
 
         let (expr_eval_components, mut var_managers) = Self::setup_output_var_managers(&model)?;
+        let output_vars = model.output_vars();
         let mut subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = var_managers
             .iter_mut()
-            .map(|vm| {
+            .filter_map(|vm| {
                 let var_name = vm.var_name.clone();
-                let stream = vm.subscribe(0);
-                (var_name, stream)
+                output_vars
+                    .contains(&var_name)
+                    .then(|| (var_name, vm.subscribe(0)))
             })
             .collect();
         let mut context = Self::build_context(var_managers, input_streams, model.clone());
@@ -1139,7 +1141,7 @@ where
 mod tests {
 
     use crate::async_test;
-    use crate::core::Runtime;
+    use crate::core::{Runtime, Specification};
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dsrv::lalr_parser::LALRParser;
@@ -1283,7 +1285,7 @@ mod tests {
         let input_streams = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1551,7 +1553,7 @@ mod tests {
         let input_streams = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1575,18 +1577,9 @@ mod tests {
         assert_eq!(
             outputs,
             vec![
-                (
-                    0,
-                    BTreeMap::from([("a".into(), 0.into()), ("b".into(), 0.into())])
-                ),
-                (
-                    1,
-                    BTreeMap::from([("a".into(), 1.into()), ("b".into(), 1.into())])
-                ),
-                (
-                    2,
-                    BTreeMap::from([("a".into(), 2.into()), ("b".into(), 2.into())])
-                ),
+                (0, BTreeMap::from([("a".into(), 0.into())])),
+                (1, BTreeMap::from([("a".into(), 1.into())])),
+                (2, BTreeMap::from([("a".into(), 2.into())])),
             ],
         );
         Ok(())

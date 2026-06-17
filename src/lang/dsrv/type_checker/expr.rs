@@ -2858,8 +2858,9 @@ mod tests {
 
         let spec = TypedDsrvSpecification {
             input_vars,
+            stream_vars: output_vars.clone(),
             output_vars,
-            aux_info: BTreeSet::new(),
+            aux_vars: BTreeSet::new(),
             exprs,
             type_annotations,
         };
@@ -2918,7 +2919,8 @@ mod tests {
                     Some(TypedDsrvSpecification {
                         input_vars: fixed_inputs.clone(),
                         output_vars: BTreeSet::from(["x".into(), "y".into(), "d".into()]),
-                        aux_info: BTreeSet::new(),
+                        aux_vars: BTreeSet::new(),
+                        stream_vars: BTreeSet::from(["x".into(), "y".into(), "d".into()]),
                         exprs: BTreeMap::from([
                             ("x".into(), typed_x),
                             ("y".into(), typed_y),

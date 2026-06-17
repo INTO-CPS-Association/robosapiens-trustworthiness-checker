@@ -293,12 +293,14 @@ pub mod generation {
                     arb_boolean_sexpr(all_vars.clone()),
                     0..=all_vars.len(),
                 )
-                .prop_map(move |exprs| DsrvSpecification {
-                    input_vars: input_vars.clone(),
-                    output_vars: output_vars.clone(),
-                    aux_info: vec![],
-                    exprs,
-                    type_annotations: BTreeMap::new(),
+                .prop_map(move |exprs| {
+                    DsrvSpecification::new(
+                        input_vars.clone(),
+                        output_vars.clone(),
+                        exprs,
+                        BTreeMap::new(),
+                        Vec::new(),
+                    )
                 })
             })
     }

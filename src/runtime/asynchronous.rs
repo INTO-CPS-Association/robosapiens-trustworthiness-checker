@@ -1036,11 +1036,11 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
             debug!("AsyncRuntimeBuilder: Context builder initialized");
 
             let input_vars = model.input_vars().clone();
-            let output_vars = model.output_vars().clone();
+            let computed_vars: Vec<VarName> = model.stream_vars().into_iter().collect();
             let var_names: Vec<VarName> = input_vars
                 .iter()
-                .chain(output_vars.iter())
                 .cloned()
+                .chain(computed_vars.iter().cloned())
                 .collect();
 
             let input_streams = input_vars.iter().map(|var| {
@@ -1049,18 +1049,20 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
                     .expect(format!("Input stream not found for {}", var).as_str())
             });
 
-            // Create deferred streams based on each of the output variables
-            let output_oneshots: Vec<_> = output_vars
+            // Create deferred streams based on each computed variable (outputs and aux vars).
+            let computed_oneshots: Vec<_> = computed_vars
                 .iter()
-                .cloned()
                 .map(|_| oneshot::channel::<OutputStream<AC::Val>>().into_split())
                 .collect();
-            let (output_txs, output_rxs): (Vec<_>, Vec<_>) = output_oneshots.into_iter().unzip();
-            let output_txs: BTreeMap<_, _> = output_vars.iter().cloned().zip(output_txs).collect();
-            let output_streams = output_rxs.into_iter().map(oneshot_to_stream);
+            let (computed_txs, computed_rxs): (Vec<_>, Vec<_>) =
+                computed_oneshots.into_iter().unzip();
+            let output_txs: BTreeMap<_, _> =
+                computed_vars.iter().cloned().zip(computed_txs).collect();
+            let computed_streams = computed_rxs.into_iter().map(oneshot_to_stream);
 
-            // Combine the input and output streams into a single map
-            let streams: Vec<OutputStream<AC::Val>> = input_streams.chain(output_streams).collect();
+            // Combine the input and computed streams into a single map
+            let streams: Vec<OutputStream<AC::Val>> =
+                input_streams.chain(computed_streams).collect();
 
             let mut context = context_builder
                 .executor(executor.clone())
