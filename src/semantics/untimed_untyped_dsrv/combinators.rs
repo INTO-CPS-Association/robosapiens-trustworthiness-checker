@@ -593,8 +593,20 @@ pub fn update(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
                 }
             }
         }
-        while let Some(y_val) = y.next().await {
-            yield y_val;
+        let mut x_active = true;
+        loop {
+            let y_next = if x_active {
+                let (x_next, y_next) = join!(x.next(), y.next());
+                x_active = x_next.is_some();
+                y_next
+            } else {
+                y.next().await
+            };
+
+            match y_next {
+                Some(y_val) => yield y_val,
+                None => break,
+            }
         }
     })
 }
