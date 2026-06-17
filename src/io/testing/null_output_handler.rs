@@ -3,7 +3,10 @@ use std::{
     rc::Rc,
 };
 
-use futures::{StreamExt, future::LocalBoxFuture};
+use futures::{
+    StreamExt,
+    future::{LocalBoxFuture, join_all},
+};
 use smol::LocalExecutor;
 
 use super::ManualOutputHandler;
@@ -14,8 +17,8 @@ use crate::core::{OutputHandler, OutputStream, StreamData, VarName};
  * cannot be used again; this allows us to manage the lifetimes of our data
  * without mutexes or arcs. */
 pub struct NullOutputHandler<V: StreamData> {
-    executor: Rc<LocalExecutor<'static>>,
-    manual_output_handler: ManualOutputHandler<V>,
+    var_names: BTreeSet<VarName>,
+    streams: Option<BTreeMap<VarName, OutputStream<V>>>,
 }
 
 pub struct LimitedNullOutputHandler<V: StreamData> {
@@ -57,12 +60,10 @@ impl<V: StreamData> OutputHandler for LimitedNullOutputHandler<V> {
 }
 
 impl<V: StreamData> NullOutputHandler<V> {
-    pub fn new(executor: Rc<LocalExecutor<'static>>, var_names: BTreeSet<VarName>) -> Self {
-        let combined_output_handler = ManualOutputHandler::new(executor.clone(), var_names);
-
+    pub fn new(_executor: Rc<LocalExecutor<'static>>, var_names: BTreeSet<VarName>) -> Self {
         Self {
-            executor,
-            manual_output_handler: combined_output_handler,
+            var_names,
+            streams: None,
         }
     }
 }
@@ -71,15 +72,27 @@ impl<V: StreamData> OutputHandler for NullOutputHandler<V> {
     type Val = V;
 
     fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
-        self.manual_output_handler.provide_streams(streams);
+        assert!(
+            self.var_names == streams.keys().cloned().collect(),
+            "Variable names provided do not match variable names provided in constructor."
+        );
+        self.streams = Some(streams);
     }
 
     fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let output_stream = self.manual_output_handler.get_output();
-        self.executor
-            .spawn(output_stream.collect::<Vec<_>>())
-            .detach();
-        self.manual_output_handler.run()
+        let streams = self
+            .streams
+            .take()
+            .expect("Output streams not provided to NullOutputHandler");
+        Box::pin(async move {
+            join_all(
+                streams
+                    .into_values()
+                    .map(|stream| stream.collect::<Vec<_>>()),
+            )
+            .await;
+            Ok(())
+        })
     }
 }
 

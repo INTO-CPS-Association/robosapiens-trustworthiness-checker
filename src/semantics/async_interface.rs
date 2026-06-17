@@ -20,6 +20,13 @@ pub trait AbstractContextBuilder {
 
     fn input_streams(self, streams: Vec<OutputStream<<Self::AC as AsyncConfig>::Val>>) -> Self;
 
+    fn drain_when_unsubscribed(self, _vars: impl IntoIterator<Item = VarName>) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
+
     fn partial_clone(&self) -> Self;
 
     fn build(self) -> <Self::AC as AsyncConfig>::Ctx;

@@ -104,6 +104,11 @@ pub struct VarManager<V: StreamData> {
     id: usize,
     /// Cancellation token to stop the VarManager when output streams are dropped
     cancellation_token: CancellationToken,
+    /// Whether this variable's input stream should still be consumed when there are no subscribers.
+    /// This is needed for source input streams from live providers whose control path expects each
+    /// claimed stream to be drained, but should not be used for computed streams because it would
+    /// force otherwise-unused monitor expressions to be evaluated.
+    drain_when_unsubscribed: bool,
 }
 
 static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -114,6 +119,16 @@ impl<V: StreamData> VarManager<V> {
         var: VarName,
         input_stream: OutputStream<V>,
         cancellation_token: CancellationToken,
+    ) -> Self {
+        Self::new_with_drain_policy(executor, var, input_stream, cancellation_token, false)
+    }
+
+    pub fn new_with_drain_policy(
+        executor: Rc<LocalExecutor<'static>>,
+        var: VarName,
+        input_stream: OutputStream<V>,
+        cancellation_token: CancellationToken,
+        drain_when_unsubscribed: bool,
     ) -> Self {
         let var_stage = AsyncCell::new_with(VarStage::Gathering).into_shared();
         let var_semaphore = Rc::new(semaphore::Semaphore::new(1));
@@ -132,6 +147,7 @@ impl<V: StreamData> VarManager<V> {
             clock,
             id,
             cancellation_token,
+            drain_when_unsubscribed,
         }
     }
 
@@ -246,6 +262,7 @@ impl<V: StreamData> VarManager<V> {
         let var = self.var.clone();
         let var_stage = self.var_stage.clone();
         let cancellation_token = self.cancellation_token.clone();
+        let drain_when_unsubscribed = self.drain_when_unsubscribed;
         let id = self.id;
 
         debug!("VarManager {}: Starting tick for variable '{}'", id, var);
@@ -286,7 +303,10 @@ impl<V: StreamData> VarManager<V> {
                 }
             };
 
-            if var_stage.get().await == VarStage::Closed && subscribers_ref.borrow().is_empty() {
+            if var_stage.get().await == VarStage::Closed
+                && subscribers_ref.borrow().is_empty()
+                && !drain_when_unsubscribed
+            {
                 debug!("VarManager {id}: No subscribers; stopping distribution");
                 return false;
             }
@@ -496,6 +516,7 @@ pub struct ContextBuilder<AC: AsyncConfig> {
     var_names: Option<Vec<VarName>>,
     input_streams: Option<Vec<OutputStream<AC::Val>>>,
     history_length: Option<usize>,
+    drain_when_unsubscribed: BTreeMap<VarName, bool>,
     nested: Option<Box<Context<AC>>>,
     id: Option<ContextId>,
 }
@@ -512,6 +533,7 @@ where
             var_names: None,
             input_streams: None,
             history_length: None,
+            drain_when_unsubscribed: BTreeMap::new(),
             nested: None,
             id: None,
         }
@@ -537,6 +559,13 @@ where
         self
     }
 
+    fn drain_when_unsubscribed(mut self, vars: impl IntoIterator<Item = VarName>) -> Self {
+        for var in vars {
+            self.drain_when_unsubscribed.insert(var, true);
+        }
+        self
+    }
+
     fn partial_clone(&self) -> Self {
         let mut res = ContextBuilder::new();
 
@@ -551,6 +580,8 @@ where
         if let Some(history_length) = self.history_length {
             res = res.history_length(history_length)
         }
+
+        res.drain_when_unsubscribed = self.drain_when_unsubscribed.clone();
 
         res
     }
@@ -574,11 +605,12 @@ where
                 store_history(executor.clone(), var.clone(), history_length, input_stream);
             var_managers.borrow_mut().insert(
                 var.clone(),
-                VarManager::new(
+                VarManager::new_with_drain_policy(
                     executor.clone(),
                     var.clone(),
                     input_stream,
                     cancellation_token.clone(),
+                    *self.drain_when_unsubscribed.get(var).unwrap_or(&false),
                 ),
             );
         }
@@ -841,35 +873,7 @@ where
             );
 
             let mut var_managers = self.var_managers.borrow_mut();
-            for (var_name, mut var_manager) in mem::take(&mut *var_managers).into_iter() {
-                // TODO: TW - I added this as a temporary fix because it was blocking my work.
-                // The issue is that the Async RT does not support specifications where an input
-                // variable is unused. The InputProvider expects the RT to consume the streams it
-                // sends, but the Async RT only does so if the VarManager has at least one
-                // subscriber. This causes the InputProvider to crash.
-                // It is one of those bugs that have always been lurking but the recent changes for
-                // the reconfiguration paper made it crash correctly instead of just hanging.
-                // ...
-                // PS. the bug is not visible with files. It has been seen with ROS2 and I believe
-                // it should replicate with MQTT and Redis.
-
-                // Spawn noop task for every var to avoid bug:
-                let stream = var_manager.subscribe();
-                let name = var_name.clone();
-                self.executor
-                    .spawn(async move {
-                        debug!(
-                            "Context[id={}]: Starting noop task for '{}'",
-                            var_manager.id, name
-                        );
-                        stream.for_each(|_| async {}).await;
-                        debug!(
-                            "Context[id={}]: Noop task for '{}' completed",
-                            var_manager.id, name
-                        );
-                    })
-                    .detach();
-                // Actually make it run:
+            for (var_name, var_manager) in mem::take(&mut *var_managers).into_iter() {
                 debug!(
                     "Context[id={}]: Spawning run for var_manager '{}'",
                     self.id, var_name
@@ -1069,6 +1073,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
                 .executor(executor.clone())
                 .var_names(var_names)
                 .input_streams(streams)
+                .drain_when_unsubscribed(input_vars.iter().cloned())
                 .build();
 
             // Get cancellation token from context and create drop guard
@@ -1220,6 +1225,7 @@ mod tests {
     use crate::async_test;
     use futures::stream;
     use macro_rules_attribute::apply;
+    use std::cell::RefCell;
 
     #[apply(async_test)]
     async fn test_manage_var_gathering(executor: Rc<LocalExecutor<'static>>) {
@@ -1250,6 +1256,33 @@ mod tests {
 
         assert_eq!(output1, vec![1, 2, 3]);
         assert_eq!(output2, vec![1, 2, 3]);
+    }
+
+    #[apply(async_test)]
+    async fn test_manage_var_drains_unsubscribed_when_requested(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let observed_stream = observed.clone();
+        let input_stream = Box::pin(stream! {
+            for value in [1, 2, 3] {
+                observed_stream.borrow_mut().push(value);
+                yield value;
+            }
+        });
+
+        let cancellation_token = CancellationToken::new();
+        let manager = VarManager::new_with_drain_policy(
+            executor,
+            "unused_input".into(),
+            input_stream,
+            cancellation_token,
+            true,
+        );
+
+        manager.run().await;
+
+        assert_eq!(*observed.borrow(), vec![1, 2, 3]);
     }
 
     #[apply(async_test)]
