@@ -1035,7 +1035,8 @@ pub(crate) fn aux_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>
     separated(0.., aux_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-pub(crate) fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
+#[cfg(test)]
+fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     seq!((
         _: whitespace,
         ident,
@@ -1049,11 +1050,54 @@ pub(crate) fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
     .parse_next(s)
 }
 
-pub(crate) fn assignment_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
-    separated(0.., assignment_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
+fn sexpr_with_source(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+    let start = source.len().saturating_sub(s.len());
+    let node = dsrv_expression(s)?;
+    let end = source.len().saturating_sub(s.len());
+    Ok(SpannedExpr {
+        node,
+        span: Span::new(start as u32, end as u32),
+    })
+}
+
+pub(crate) fn assignment_decl_with_source(
+    source: &str,
+    s: &mut &str,
+) -> Result<(VarName, SpannedExpr)> {
+    seq!((
+        _: whitespace,
+        ident,
+        _: loop_ms_or_lb_or_lc,
+        _: literal("="),
+        _: loop_ms_or_lb_or_lc,
+        |i: &mut &str| sexpr_with_source(source, i),
+        _: whitespace,
+    ))
+    .map(|(name, expr)| (name.into(), expr))
+    .parse_next(s)
+}
+
+pub(crate) fn assignment_decls_with_source(
+    source: &str,
+    s: &mut &str,
+) -> Result<Vec<(VarName, SpannedExpr)>> {
+    separated(
+        0..,
+        |i: &mut &str| assignment_decl_with_source(source, i),
+        seq!(lb_or_lc, loop_ms_or_lb_or_lc),
+    )
+    .parse_next(s)
 }
 
 pub fn dsrv_specification(s: &mut &str) -> Result<UntypedDsrvSpecification> {
+    let source = *s;
+    dsrv_specification_with_source(source, s)
+}
+
+pub fn dsrv_specification_with_source(
+    source: &str,
+    s: &mut &str,
+) -> Result<UntypedDsrvSpecification> {
     seq!((
         _: loop_ms_or_lb_or_lc,
         input_decls,
@@ -1062,14 +1106,17 @@ pub fn dsrv_specification(s: &mut &str) -> Result<UntypedDsrvSpecification> {
         _: loop_ms_or_lb_or_lc,
         aux_decls,
         _: loop_ms_or_lb_or_lc,
-        assignment_decls,
+        |i: &mut &str| assignment_decls_with_source(source, i),
         _: loop_ms_or_lb_or_lc,
     ))
     .map(|(input_vars, output_vars, aux_vars, exprs)| {
         UntypedDsrvSpecification::new(
             input_vars.iter().map(|(name, _)| name.clone()).collect(),
             output_vars.iter().map(|(name, _)| name.clone()).collect(),
-            exprs.into_iter().collect(),
+            exprs
+                .into_iter()
+                .map(|(name, expr)| (name, expr.node))
+                .collect(),
             input_vars
                 .iter()
                 .chain(output_vars.iter())

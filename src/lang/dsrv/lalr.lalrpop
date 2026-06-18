@@ -477,7 +477,7 @@ pub TopDecl: STopDecl = {
     InputDecl,
     OutputDecl,
     AuxDecl,
-    Assignment
+    Assignment,
 }
 
 pub TopDecls: EcoVec<STopDecl> = {
