@@ -236,7 +236,7 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        DsrvSpecification, SExpr, VarName,
+        UntypedDsrvSpecification, SExpr, VarName,
         lang::dsrv::ast::{BoolBinOp, SBinOp},
     };
 
@@ -266,7 +266,7 @@ pub mod generation {
         })
     }
 
-    pub fn arb_boolean_dsrv_spec() -> impl Strategy<Value = DsrvSpecification> {
+    pub fn arb_boolean_dsrv_spec() -> impl Strategy<Value = UntypedDsrvSpecification> {
         (
             // Generate a hash set of inputs from 'a' to 'h' with at least one element.
             prop::collection::hash_set("[a-h]", 1..5),
@@ -294,7 +294,7 @@ pub mod generation {
                     0..=all_vars.len(),
                 )
                 .prop_map(move |exprs| {
-                    DsrvSpecification::new(
+                    UntypedDsrvSpecification::new(
                         input_vars.clone(),
                         output_vars.clone(),
                         exprs,

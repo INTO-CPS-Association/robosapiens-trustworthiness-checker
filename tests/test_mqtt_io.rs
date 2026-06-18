@@ -20,7 +20,7 @@ mod integration_tests {
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use trustworthiness_checker::io::mqtt::MqttFactory;
     use trustworthiness_checker::io::testing::ManualOutputHandler;
-    use trustworthiness_checker::lang::mstlo::MstloFormula;
+    use trustworthiness_checker::lang::mstlo::MstloSpecification;
     use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
     use trustworthiness_checker::runtime::mstlo::MstloRuntimeBuilder;
 
@@ -32,7 +32,7 @@ mod integration_tests {
 
     use trustworthiness_checker::dsrv_fixtures::{TestRuntime, input_streams1};
     use trustworthiness_checker::{
-        DsrvSpecification, Value, VarName,
+        UntypedDsrvSpecification, Value, VarName,
         core::Runtime,
         dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
         dsrv_specification,
@@ -350,7 +350,7 @@ mod integration_tests {
         )
         .await?;
 
-        let formula = MstloFormula::single(
+        let formula = MstloSpecification::single(
             VarName::new("robustness"),
             mstlo::FormulaDefinition::GreaterThan("x", 5.0),
         );
@@ -458,7 +458,7 @@ mod integration_tests {
         )
         .await?;
 
-        let formula = MstloFormula::new(BTreeMap::from([
+        let formula = MstloSpecification::new(BTreeMap::from([
             (
                 VarName::new("gt"),
                 mstlo::FormulaDefinition::GreaterThan("x", 5.0),
@@ -528,7 +528,7 @@ mod integration_tests {
         client_suffix: &str,
     ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
         let mut spec_src = spec_src;
-        let spec: DsrvSpecification = dsrv_specification(&mut spec_src).unwrap();
+        let spec: UntypedDsrvSpecification = dsrv_specification(&mut spec_src).unwrap();
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let var_topics = BTreeMap::from_iter([("payload".into(), "payload".to_string())]);

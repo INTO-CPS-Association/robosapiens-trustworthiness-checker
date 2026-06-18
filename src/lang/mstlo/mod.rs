@@ -6,15 +6,15 @@ use std::{
 use anyhow::{Context, anyhow};
 use mstlo::{FormulaDefinition, SignalIdentifier, parse_stl};
 
-use crate::{Specification, VarName, core::StreamType};
+use crate::{DsrvSpecification, VarName, core::StreamType};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct MstloFormula {
+pub struct MstloSpecification {
     formulae: BTreeMap<VarName, FormulaDefinition>,
     var_names: Vec<VarName>,
 }
 
-impl MstloFormula {
+impl MstloSpecification {
     pub fn new(formulae: BTreeMap<VarName, FormulaDefinition>) -> Self {
         let var_names = Self::extract_var_names(formulae.values());
         Self {
@@ -53,13 +53,13 @@ impl MstloFormula {
     }
 }
 
-impl From<FormulaDefinition> for MstloFormula {
+impl From<FormulaDefinition> for MstloSpecification {
     fn from(formula: FormulaDefinition) -> Self {
         Self::single(VarName::new("out"), formula)
     }
 }
 
-impl Specification for MstloFormula {
+impl DsrvSpecification for MstloSpecification {
     type Expr = FormulaDefinition;
 
     fn input_vars(&self) -> BTreeSet<VarName> {
@@ -94,7 +94,7 @@ impl Specification for MstloFormula {
     }
 }
 
-impl Display for MstloFormula {
+impl Display for MstloSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (idx, (name, formula)) in self.formulae.iter().enumerate() {
             if idx > 0 {
@@ -117,7 +117,7 @@ impl Display for MstloFormula {
 /// Lines may contain `#` comments. The STL formula part is parsed by
 /// [`mstlo::parse_stl`], so it accepts the same runtime syntax as MSTLO itself,
 /// e.g. `x > 5`, `G[0, 10](x > $threshold)`, and `x > 5 && y < 3`.
-pub fn parse_named_properties(input: &str) -> anyhow::Result<MstloFormula> {
+pub fn parse_named_properties(input: &str) -> anyhow::Result<MstloSpecification> {
     let mut formulae = BTreeMap::new();
     for (idx, raw_line) in input.lines().enumerate() {
         let line_no = idx + 1;
@@ -156,10 +156,10 @@ pub fn parse_named_properties(input: &str) -> anyhow::Result<MstloFormula> {
             "MSTLO property file did not contain any properties"
         ));
     }
-    Ok(MstloFormula::new(formulae))
+    Ok(MstloSpecification::new(formulae))
 }
 
-pub async fn parse_file(path: &str) -> anyhow::Result<MstloFormula> {
+pub async fn parse_file(path: &str) -> anyhow::Result<MstloSpecification> {
     let input = smol::fs::read_to_string(path)
         .await
         .with_context(|| format!("MSTLO property file `{path}` could not be read"))?;

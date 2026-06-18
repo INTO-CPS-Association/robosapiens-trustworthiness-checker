@@ -8,7 +8,7 @@ use smol::{
 use tracing::{debug, info};
 
 use crate::{
-    DsrvSpecification, InputProvider, OutputStream, Value, VarName,
+    UntypedDsrvSpecification, InputProvider, OutputStream, Value, VarName,
     core::Runtime,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
@@ -29,7 +29,7 @@ use crate::{
 pub struct BruteForceDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub executor: Rc<LocalExecutor<'static>>,
@@ -44,7 +44,7 @@ where
 impl<S, AC> BruteForceDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     fn output_stream_for_graph(

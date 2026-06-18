@@ -8,7 +8,7 @@ use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
-    DsrvSpecification, InputProvider, Specification, Value, VarName,
+    DsrvSpecification, InputProvider, UntypedDsrvSpecification, Value, VarName,
     core::{OutputHandler, Runtime},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -147,7 +147,7 @@ pub enum DistGraphMode {
 }
 
 impl<
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     S: MonitoringSemantics<AC>,
 > AbstractAsyncRuntimeBuilder<AC> for DistAsyncRuntimeBuilder<AC, S>
 where
@@ -366,7 +366,7 @@ pub enum SchedulerCommunication {
 impl<S, AC> DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     fn extract_replay_history(&self) -> Option<crate::io::replay_history::ReplayHistory> {
@@ -423,7 +423,7 @@ where
 impl<S, AC> RuntimeBuilder<AC::Spec, AC::Val> for DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     type Runtime = DistributedRuntime<AC, S>;
@@ -1151,7 +1151,7 @@ impl<S, AC> Runtime for DistributedRuntime<AC, S>
 where
     AC::Spec: Localisable,
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     S: MonitoringSemantics<AC>,
 {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {

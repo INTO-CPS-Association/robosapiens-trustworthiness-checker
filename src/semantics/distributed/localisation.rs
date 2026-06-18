@@ -4,10 +4,10 @@ use std::fmt::Debug;
 
 use tracing::debug;
 
-use crate::lang::dsrv::ast::DsrvSpecification;
+use crate::lang::dsrv::ast::UntypedDsrvSpecification;
 
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
-use crate::{SExpr, Specification, VarName};
+use crate::{DsrvSpecification, SExpr, VarName};
 
 pub trait LocalitySpec: Debug {
     fn local_vars(&self) -> Vec<VarName>;
@@ -179,7 +179,7 @@ fn replace_var(var: &VarName, var_expr: &SExpr, repl_expr: &SExpr) -> SExpr {
     }
 }
 
-fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
+fn inline_aux(spec: UntypedDsrvSpecification) -> UntypedDsrvSpecification {
     // Inline auxiliary variables transitively, while rejecting recursive/cyclic definitions.
     let aux_vars: BTreeSet<VarName> = spec.aux_vars();
 
@@ -266,7 +266,7 @@ fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
 
-    DsrvSpecification::new(
+    UntypedDsrvSpecification::new(
         spec.input_vars,
         filtered_output_vars,
         filtered_exprs,
@@ -275,7 +275,7 @@ fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
     )
 }
 
-impl Localisable for DsrvSpecification {
+impl Localisable for UntypedDsrvSpecification {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self {
         let spec = inline_aux(self.clone());
         let local_vars = locality_spec.local_vars();
@@ -306,7 +306,7 @@ impl Localisable for DsrvSpecification {
         debug!("Old input vars: {:?}", input_vars);
         debug!("New input vars: {:?}", new_input_vars);
 
-        DsrvSpecification::new(
+        UntypedDsrvSpecification::new(
             new_input_vars,
             output_vars,
             exprs,
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_localise_specification_1() {
-        let spec = DsrvSpecification::new(
+        let spec = UntypedDsrvSpecification::new(
             BTreeSet::from(["a".into(), "b".into()]),
             BTreeSet::from(["c".into(), "d".into(), "e".into()]),
             vec![
@@ -351,7 +351,7 @@ mod tests {
         let localised_spec = spec.localise(&restricted_vars);
         assert_eq!(
             localised_spec,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::from(["a".into(), "d".into()]),
                 BTreeSet::from(["c".into(), "e".into()]),
                 vec![
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_localise_specification_2() {
-        let spec = DsrvSpecification::new(
+        let spec = UntypedDsrvSpecification::new(
             BTreeSet::from(["a".into()]),
             BTreeSet::from(["i".into()]),
             vec![].into_iter().collect(),
@@ -379,7 +379,7 @@ mod tests {
         let localised_spec = spec.localise(&restricted_vars);
         assert_eq!(
             localised_spec,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::new(),
                 BTreeSet::new(),
                 vec![].into_iter().collect(),
@@ -400,7 +400,7 @@ mod tests {
 
         assert_eq!(
             local_spec1,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
                 vec![(
@@ -420,7 +420,7 @@ mod tests {
 
         assert_eq!(
             local_spec2,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
                 vec![(
@@ -462,7 +462,7 @@ mod tests {
 
         assert_eq!(
             local_spec1,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
                 vec![(
@@ -482,7 +482,7 @@ mod tests {
 
         assert_eq!(
             local_spec2,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
                 vec![(
@@ -551,7 +551,7 @@ mod tests {
         let tmp: VarName = "tmp".into();
         let z: VarName = "z".into();
 
-        let spec = DsrvSpecification::new(
+        let spec = UntypedDsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into()]),
             BTreeSet::from([tmp.clone(), z.clone()]),
             vec![
@@ -597,7 +597,7 @@ mod tests {
 
         assert_eq!(
             result,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::from([x, y]),
                 BTreeSet::from([z]),
                 expected_exprs,
@@ -615,7 +615,7 @@ mod tests {
         let h3: VarName = "h3".into();
         let out: VarName = "out".into();
 
-        let spec = DsrvSpecification::new(
+        let spec = UntypedDsrvSpecification::new(
             BTreeSet::from([i.clone()]),
             BTreeSet::from([h1.clone(), h2.clone(), h3.clone(), out.clone()]),
             vec![
@@ -664,7 +664,7 @@ mod tests {
 
         assert_eq!(
             result,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::from([i]),
                 BTreeSet::from([out]),
                 expected_exprs,
@@ -681,7 +681,7 @@ mod tests {
         let h2: VarName = "h2".into();
         let out: VarName = "out".into();
 
-        let spec = DsrvSpecification::new(
+        let spec = UntypedDsrvSpecification::new(
             BTreeSet::new(),
             BTreeSet::from([h1.clone(), h2.clone(), out.clone()]),
             vec![

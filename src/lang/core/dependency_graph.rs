@@ -12,7 +12,7 @@ use crate::lang::dsrv::type_checker::{
     TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::AsyncConfig;
-use crate::{DsrvSpecification, SExpr, Specification, VarName};
+use crate::{DsrvSpecification, SExpr, UntypedDsrvSpecification, VarName};
 
 pub trait DependencyGraphExpr {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph;
@@ -755,7 +755,7 @@ impl DependencyGraphExpr for SExprTE {
     }
 }
 
-impl DependencyGraphSpec for DsrvSpecification {
+impl DependencyGraphSpec for UntypedDsrvSpecification {
     fn dependency_graph(&self) -> DepGraph {
         let exprs = self
             .output_vars()
@@ -826,13 +826,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DsrvSpecification;
+    use crate::UntypedDsrvSpecification;
     use crate::dsrv_fixtures::*;
     use crate::lang::core::parser::SpecParser;
     use crate::lang::dsrv::lalr_parser::LALRParser;
 
-    fn test_parser(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
-        <LALRParser as SpecParser<DsrvSpecification>>::parse(input)
+    fn test_parser(input: &mut &str) -> anyhow::Result<UntypedDsrvSpecification> {
+        <LALRParser as SpecParser<UntypedDsrvSpecification>>::parse(input)
     }
 
     fn specs() -> BTreeMap<&'static str, &'static str> {

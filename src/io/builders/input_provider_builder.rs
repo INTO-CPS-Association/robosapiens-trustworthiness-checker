@@ -15,7 +15,7 @@ use crate::runtime::builder::ValueConfig;
 
 use crate::stream_utils::Fanout;
 use crate::{self as tc, OutputStream, Value};
-use crate::{InputProvider, Specification, VarName, cli::args::Language};
+use crate::{DsrvSpecification, InputProvider, VarName, cli::args::Language};
 
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
@@ -90,7 +90,7 @@ impl InputProviderBuilder {
         self
     }
 
-    pub fn model<Expr>(mut self, model: impl Specification<Expr = Expr>) -> Self {
+    pub fn model<Expr>(mut self, model: impl DsrvSpecification<Expr = Expr>) -> Self {
         self.input_vars = Some(model.input_vars());
         self
     }

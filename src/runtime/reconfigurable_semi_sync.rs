@@ -1,6 +1,6 @@
 use crate::{
     OutputStream, Value, VarName,
-    core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
+    core::{DeferrableStreamData, DsrvSpecification, InputProvider, OutputHandler, Runtime},
     io::{
         InputProviderBuilder, MsgTypeMapping, TopicMapping,
         builders::{

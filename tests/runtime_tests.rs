@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::core::{
-    Runtime, RuntimeSpec, Semantics, Specification, StreamType, StreamTypeAscription,
+    DsrvSpecification, Runtime, RuntimeSpec, Semantics, StreamType, StreamTypeAscription,
 };
 use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;
@@ -14,10 +14,10 @@ use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
-use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{
     SExpr, Value, dsrv_specification, parse_file, runtime::RuntimeBuilder,
 };
+use trustworthiness_checker::{UntypedDsrvSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{VarName, async_test};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,9 +62,9 @@ impl TestConfiguration {
 }
 
 fn create_builder_from_config(
-    builder: GeneralRuntimeBuilder<DsrvSpecification, Value>,
+    builder: GeneralRuntimeBuilder<UntypedDsrvSpecification, Value>,
     config: TestConfiguration,
-) -> GeneralRuntimeBuilder<DsrvSpecification, Value> {
+) -> GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
     match config {
         TestConfiguration::AsyncUntimed => {
             let builder = builder.runtime(RuntimeSpec::Async);

@@ -7,7 +7,7 @@ use tracing::debug;
 
 use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
 use crate::lang::core::parser::{ExprParser as EParserTrait, SpecParser as SParserTrait};
-use crate::{DsrvSpecification, SExpr, lang::dsrv::ast::STopDecl};
+use crate::{UntypedDsrvSpecification, SExpr, lang::dsrv::ast::STopDecl};
 
 #[derive(Clone)]
 pub struct LALRParser;
@@ -18,8 +18,8 @@ impl EParserTrait<SExpr> for LALRParser {
         parse_sexpr(input)
     }
 }
-impl SParserTrait<DsrvSpecification> for LALRParser {
-    fn parse(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
+impl SParserTrait<UntypedDsrvSpecification> for LALRParser {
+    fn parse(input: &mut &str) -> anyhow::Result<UntypedDsrvSpecification> {
         debug!("Parsing expr: {}", input);
         parse_str(input)
     }
@@ -43,7 +43,7 @@ pub fn parse_stopdecls<'input>(input: &'input str) -> Result<EcoVec<STopDecl>, E
         .map_err(|e| anyhow!("Parse error: {:?}", e))
 }
 
-pub fn create_dsrv_spec(stmts: &EcoVec<STopDecl>) -> DsrvSpecification {
+pub fn create_dsrv_spec(stmts: &EcoVec<STopDecl>) -> UntypedDsrvSpecification {
     let mut inputs = BTreeSet::new();
     let mut outputs = BTreeSet::new();
     let mut aux_vars = Vec::new();
@@ -76,7 +76,7 @@ pub fn create_dsrv_spec(stmts: &EcoVec<STopDecl>) -> DsrvSpecification {
         }
     }
 
-    DsrvSpecification::new(inputs, outputs, assignments, type_annotations, aux_vars)
+    UntypedDsrvSpecification::new(inputs, outputs, assignments, type_annotations, aux_vars)
 }
 
 struct LineCol {
@@ -107,7 +107,7 @@ fn line_col(input: &str, byte: usize) -> LineCol {
     LineCol { line, col }
 }
 
-pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<DsrvSpecification> {
+pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<UntypedDsrvSpecification> {
     let stmts = TopDeclsParser::new().parse(&input).map_err(|e| {
         let err_fixed = e.map_location(|byte| line_col(&input, byte));
         anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse input {}", input))
@@ -115,7 +115,7 @@ pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<DsrvSpecification
     Ok(create_dsrv_spec(&stmts))
 }
 
-pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<DsrvSpecification> {
+pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<UntypedDsrvSpecification> {
     let contents = smol::fs::read_to_string(file).await?;
     let stmts = TopDeclsParser::new().parse(&contents).map_err(|e| {
         let err_fixed = e.map_location(|byte| line_col(&contents, byte));
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::new(),
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::new(),
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_float_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::new(),
@@ -371,7 +371,7 @@ mod tests {
         let input = "\
             out x\n\
             x = 1 + (x)[1]";
-        let count_spec = DsrvSpecification {
+        let count_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from([]),
             output_vars: BTreeSet::from(["x".into()]),
             aux_vars: BTreeSet::new(),
@@ -402,7 +402,7 @@ mod tests {
             out w\n\
             z = x + y\n\
             w = dynamic(s)";
-        let dynamic_spec = DsrvSpecification::new(
+        let dynamic_spec = UntypedDsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into(), "s".into()]),
             BTreeSet::from(["z".into(), "w".into()]),
             BTreeMap::from([
@@ -772,7 +772,7 @@ mod tests {
         let res = res.unwrap();
         assert_eq!(
             res,
-            DsrvSpecification::new(
+            UntypedDsrvSpecification::new(
                 BTreeSet::new(),
                 BTreeSet::new(),
                 BTreeMap::new(),

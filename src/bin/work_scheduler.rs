@@ -11,7 +11,7 @@ use trustworthiness_checker::distributed::scheduling::planners::core::StaticFixe
 use trustworthiness_checker::distributed::scheduling::{ReplanningCondition, Scheduler};
 use trustworthiness_checker::io::mqtt::dist_graph_provider::StaticDistGraphProvider;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
-use trustworthiness_checker::{DsrvSpecification, Specification};
+use trustworthiness_checker::{DsrvSpecification, UntypedDsrvSpecification};
 
 /// Worker scheduler application for distributed monitoring
 ///
@@ -28,7 +28,7 @@ struct Args {
 }
 
 #[instrument]
-async fn load_spec(path: PathBuf) -> anyhow::Result<DsrvSpecification> {
+async fn load_spec(path: PathBuf) -> anyhow::Result<UntypedDsrvSpecification> {
     // info!("Loading spec from {:?}", path);
     // TODO: we should be using PathBufs for parse_file
     let path_str = path
@@ -36,7 +36,7 @@ async fn load_spec(path: PathBuf) -> anyhow::Result<DsrvSpecification> {
         .into_string()
         .map_err(|_| anyhow::anyhow!("Failed to convert path to string"))?;
     info!("Loading spec from {:?}", path_str);
-    let spec: DsrvSpecification = lalr_parse_file(path_str.as_str()).await?;
+    let spec: UntypedDsrvSpecification = lalr_parse_file(path_str.as_str()).await?;
     info!("Successfully loaded spec");
     Ok(spec)
 }
@@ -103,7 +103,7 @@ async fn async_main() -> anyhow::Result<()> {
         })
         .collect::<BTreeMap<_, _>>();
 
-    let scheduler: Scheduler<DsrvSpecification> = Scheduler::new(
+    let scheduler: Scheduler<UntypedDsrvSpecification> = Scheduler::new(
         spec,
         var_msg_types,
         topic_mapping,

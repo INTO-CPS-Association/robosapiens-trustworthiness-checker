@@ -17,10 +17,10 @@ use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::builders::OutputHandlerBuilder;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
-use trustworthiness_checker::runtime::builder::{DistributionMode, RuntimeModel};
+use trustworthiness_checker::runtime::builder::{DistributionMode, Specification};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
-use trustworthiness_checker::{self as tc, Specification, io::file::parse_file};
+use trustworthiness_checker::{self as tc, DsrvSpecification, io::file::parse_file};
 use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
@@ -42,7 +42,8 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     debug!("CLI arguments: {:?}", cli);
 
     let builder =
-        <GeneralRuntimeBuilder<RuntimeModel, Value> as RuntimeBuilder<RuntimeModel, Value>>::new();
+        <GeneralRuntimeBuilder<Specification, Value> as RuntimeBuilder<Specification, Value>>::new(
+        );
 
     let mqtt_port = cli.mqtt_port;
     let redis_port = cli.redis_port;
@@ -103,34 +104,34 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     debug!(?distribution_mode, "Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
-    let model: RuntimeModel = match cli.language {
+    let model: Specification = match cli.language {
         Language::DSRV => match effective_parser {
             ParserMode::Combinator => parse_file(
                 tc::lang::dsrv::parser::dsrv_specification,
                 cli.model.as_str(),
             )
             .await
-            .map(RuntimeModel::from)
+            .map(Specification::from)
             .context("Model file could not be parsed")?,
             ParserMode::Lalr => lalr_parse_file(cli.model.as_str())
                 .await
-                .map(RuntimeModel::from)
+                .map(Specification::from)
                 .context("Model file could not be parsed")?,
         },
         Language::MSTLO => tc::lang::mstlo::parse_file(cli.model.as_str())
             .await
-            .map(RuntimeModel::from)
+            .map(Specification::from)
             .context("MSTLO model file could not be parsed")?,
     };
     info!(%model, "Parsed model");
 
     // Localise the model to contain only the local variables (if needed)
     let model = match (&builder.distribution_mode, model) {
-        (DistributionMode::LocalMonitor(locality_mode), RuntimeModel::Dsrv(model)) => {
+        (DistributionMode::LocalMonitor(locality_mode), Specification::Dsrv(model)) => {
             debug!(?locality_mode, "Localising model");
             let model = model.localise(locality_mode);
             info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Localised model");
-            RuntimeModel::Dsrv(model)
+            Specification::Dsrv(model)
         }
         (_, model) => model,
     };
@@ -153,10 +154,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // dependencies).
     let localized_model = if matches!(cli.runtime, RuntimeSpec::Distributed) {
         match (&dist_constraints, &model) {
-            (Some(constraints), RuntimeModel::Dsrv(model)) if !constraints.is_empty() => {
+            (Some(constraints), Specification::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
                     constraints.iter().cloned().map(VarName::from).collect();
-                RuntimeModel::Dsrv(model.localise(&localized_constraint_vars))
+                Specification::Dsrv(model.localise(&localized_constraint_vars))
             }
             _ => model.clone(),
         }

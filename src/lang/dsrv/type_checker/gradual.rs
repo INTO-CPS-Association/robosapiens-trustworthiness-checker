@@ -6,7 +6,7 @@ use super::expr::{cast_to_type, coerce_empty_list, coerce_empty_map};
 use super::*;
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::SExpr;
-use crate::{DsrvSpecification, VarName};
+use crate::{UntypedDsrvSpecification, VarName};
 use std::collections::BTreeMap;
 
 fn gradual_fallback_type(typ: TCType) -> StreamType {
@@ -70,7 +70,9 @@ fn coerce_gradual_placeholders(te: SExprTE) -> SExprTE {
     }
 }
 
-pub fn type_check_gradual(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSpecification> {
+pub fn type_check_gradual(
+    spec: UntypedDsrvSpecification,
+) -> SemanticResult<TypedDsrvSpecification> {
     let mut type_context = spec.type_annotations.clone();
     for var in spec.input_vars.iter() {
         type_context.entry(var.clone()).or_insert(StreamType::Any);
@@ -183,7 +185,7 @@ mod tests {
     use crate::lang::dsrv::ast::{
         BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp,
     };
-    use crate::{Specification, Value};
+    use crate::{DsrvSpecification, Value};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;
@@ -203,7 +205,7 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(x.clone(), StreamType::Int);
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -230,7 +232,7 @@ mod tests {
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -253,7 +255,7 @@ mod tests {
         let y: VarName = "y_strict_missing".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(y.clone(), SExpr::Val(Value::Int(1)));
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y]),
@@ -294,7 +296,7 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(x.clone(), StreamType::Int);
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([y.clone(), z.clone()]),
             stream_vars: BTreeSet::from([y.clone(), z.clone()]),
@@ -317,7 +319,7 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(xs.clone(), SExpr::List(EcoVec::new()));
         exprs.insert(m.clone(), SExpr::Map(BTreeMap::new()));
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone(), m.clone()]),
             stream_vars: BTreeSet::from([xs.clone(), m.clone()]),
@@ -356,7 +358,7 @@ mod tests {
         exprs.insert(y.clone(), SExpr::Val(Value::Int(1)));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Bool);
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y]),
@@ -378,7 +380,7 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
             stream_vars: BTreeSet::from([xs]),
@@ -397,7 +399,7 @@ mod tests {
         exprs.insert(y.clone(), SExpr::Val(Value::Str("hello".into())));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Any);
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -427,7 +429,7 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(z.clone(), StreamType::Int);
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z]),
@@ -455,7 +457,7 @@ mod tests {
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
@@ -478,7 +480,7 @@ mod tests {
         let y: VarName = "gradual_pass_y".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(y.clone(), SExpr::Var(x.clone()));
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -510,7 +512,7 @@ mod tests {
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from([a.clone(), b.clone()]),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
@@ -648,7 +650,7 @@ mod tests {
         exprs.insert(y.clone(), SExpr::Var(x.clone()));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(x.clone(), StreamType::Str);
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),

@@ -1,6 +1,6 @@
 use ecow::{EcoString, EcoVec};
 
-use crate::core::{Specification, StreamTypeAscription, VarName};
+use crate::core::{DsrvSpecification, StreamTypeAscription, VarName};
 use crate::core::{StreamType, Value};
 use crate::distributed::distribution_graphs::NodeName;
 use std::collections::BTreeSet;
@@ -311,8 +311,12 @@ impl SExpr {
     }
 }
 
+/// An untypechecked/untyped DSRV specification
+///
+/// Note that this may contain unchecked type annotations, which later by used by the gradual
+/// or strict type system, which the specification is type-checked
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct DsrvSpecification {
+pub struct UntypedDsrvSpecification {
     pub input_vars: BTreeSet<VarName>,
     pub output_vars: BTreeSet<VarName>,
     pub aux_vars: BTreeSet<VarName>,
@@ -321,7 +325,7 @@ pub struct DsrvSpecification {
     pub type_annotations: BTreeMap<VarName, StreamType>,
 }
 
-impl DsrvSpecification {
+impl UntypedDsrvSpecification {
     // NOTE: This is a hack that ensures that when we create subcontexts for usage in DUPs,
     // the subcontexts do not refer to the lhs of assignments.
     // I.e., if we have an assignment `z = dynamic(s)` then the subcontext provided for
@@ -505,7 +509,7 @@ impl DsrvSpecification {
             .chain(aux_vars.iter().cloned())
             .collect();
         let exprs = Self::fix_dynamic(&input_vars, &stream_vars, &exprs);
-        DsrvSpecification {
+        UntypedDsrvSpecification {
             input_vars,
             output_vars,
             aux_vars,
@@ -516,7 +520,7 @@ impl DsrvSpecification {
     }
 }
 
-impl Specification for DsrvSpecification {
+impl DsrvSpecification for UntypedDsrvSpecification {
     type Expr = SExpr;
 
     fn input_vars(&self) -> BTreeSet<VarName> {
@@ -550,7 +554,7 @@ impl Specification for DsrvSpecification {
             .chain(std::iter::once(var))
             .collect();
         // Call new so we make sure that fix_dynamic is also called
-        *self = DsrvSpecification::new(
+        *self = UntypedDsrvSpecification::new(
             input_vars,
             self.output_vars.clone(),
             self.exprs.clone(),
@@ -659,7 +663,7 @@ impl Display for SExpr {
     }
 }
 
-impl Display for DsrvSpecification {
+impl Display for UntypedDsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let aux_vars = self.aux_vars();
         let out_vars = self.output_vars().into_iter().collect::<Vec<VarName>>();
@@ -704,7 +708,7 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        DsrvSpecification, SExpr, VarName,
+        SExpr, UntypedDsrvSpecification, VarName,
         lang::dsrv::ast::{BoolBinOp, NumericalBinOp, SBinOp, StrBinOp},
     };
 
@@ -950,7 +954,7 @@ pub mod generation {
         })
     }
 
-    pub fn arb_boolean_dsrv_spec() -> impl Strategy<Value = DsrvSpecification> {
+    pub fn arb_boolean_dsrv_spec() -> impl Strategy<Value = UntypedDsrvSpecification> {
         (
             // Generate a hash set of inputs from 'a' to 'h' with at least one element.
             prop::collection::hash_set("[a-h]", 1..5),
@@ -978,7 +982,7 @@ pub mod generation {
                     0..=all_vars.len(),
                 )
                 .prop_map(move |exprs| {
-                    DsrvSpecification::new(
+                    UntypedDsrvSpecification::new(
                         input_vars.clone(),
                         output_vars.clone(),
                         exprs,

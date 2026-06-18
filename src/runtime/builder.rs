@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use crate::InputProvider;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
-    DsrvSpecification, Runtime, SExpr, Specification, Value, VarName,
+    DsrvSpecification, Runtime, SExpr, UntypedDsrvSpecification, Value, VarName,
     cli::{
         adapters::DistributionModeBuilder,
         args::{MstloAlgorithm, MstloSynchronizationStrategy, ParserMode},
@@ -27,7 +27,7 @@ use crate::{
         parser::CombExprParser,
         type_checker::{SExprTE, TypedDsrvSpecification, type_check, type_check_gradual},
     },
-    lang::mstlo::MstloFormula,
+    lang::mstlo::MstloSpecification,
     runtime::{
         mstlo::MstloRuntimeBuilder,
         reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder,
@@ -48,64 +48,64 @@ use static_assertions::assert_obj_safe;
 
 // Various AsyncConfigs to use
 #[rustfmt::skip]
-define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context, Spec = DsrvSpecification);
+define_config!(ValueConfig, Val = Value, Expr = SExpr, Ctx = Context, Spec = UntypedDsrvSpecification);
 #[rustfmt::skip]
 define_config!(TypedValueConfig, Val = Value, Expr = SExprTE, Ctx = Context, Spec = TypedDsrvSpecification);
 #[rustfmt::skip]
-define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedContext, Spec = DsrvSpecification);
+define_config!(DistValueConfig, Val = Value, Expr = SExpr, Ctx = DistributedContext, Spec = UntypedDsrvSpecification);
 #[rustfmt::skip]
-define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext, Spec = DsrvSpecification);
+define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncContext, Spec = UntypedDsrvSpecification);
 #[rustfmt::skip]
 define_config!(TypedSemiSyncValueConfig, Val = Value, Expr = SExprTE, Ctx = SemiSyncContext, Spec = TypedDsrvSpecification);
 
 #[derive(Clone, Debug)]
-pub enum RuntimeModel {
-    Dsrv(DsrvSpecification),
-    Mstlo(MstloFormula),
+pub enum Specification {
+    Dsrv(UntypedDsrvSpecification),
+    Mstlo(MstloSpecification),
 }
 
-impl From<DsrvSpecification> for RuntimeModel {
-    fn from(spec: DsrvSpecification) -> Self {
+impl From<UntypedDsrvSpecification> for Specification {
+    fn from(spec: UntypedDsrvSpecification) -> Self {
         Self::Dsrv(spec)
     }
 }
 
-impl From<MstloFormula> for RuntimeModel {
-    fn from(formula: MstloFormula) -> Self {
+impl From<MstloSpecification> for Specification {
+    fn from(formula: MstloSpecification) -> Self {
         Self::Mstlo(formula)
     }
 }
 
-impl Display for RuntimeModel {
+impl Display for Specification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RuntimeModel::Dsrv(spec) => Display::fmt(spec, f),
-            RuntimeModel::Mstlo(formula) => Display::fmt(formula, f),
+            Specification::Dsrv(spec) => Display::fmt(spec, f),
+            Specification::Mstlo(spec) => Display::fmt(spec, f),
         }
     }
 }
 
-impl Specification for RuntimeModel {
+impl DsrvSpecification for Specification {
     type Expr = ();
 
     fn input_vars(&self) -> BTreeSet<VarName> {
         match self {
-            RuntimeModel::Dsrv(spec) => spec.input_vars(),
-            RuntimeModel::Mstlo(formula) => formula.input_vars(),
+            Specification::Dsrv(spec) => spec.input_vars(),
+            Specification::Mstlo(spec) => spec.input_vars(),
         }
     }
 
     fn output_vars(&self) -> BTreeSet<VarName> {
         match self {
-            RuntimeModel::Dsrv(spec) => spec.output_vars(),
-            RuntimeModel::Mstlo(formula) => formula.output_vars(),
+            Specification::Dsrv(spec) => spec.output_vars(),
+            Specification::Mstlo(spec) => spec.output_vars(),
         }
     }
 
     fn aux_vars(&self) -> BTreeSet<VarName> {
         match self {
-            RuntimeModel::Dsrv(spec) => spec.aux_vars(),
-            RuntimeModel::Mstlo(formula) => formula.aux_vars(),
+            Specification::Dsrv(spec) => spec.aux_vars(),
+            Specification::Mstlo(formula) => formula.aux_vars(),
         }
     }
 
@@ -115,15 +115,15 @@ impl Specification for RuntimeModel {
 
     fn add_input_var(&mut self, var: VarName) {
         match self {
-            RuntimeModel::Dsrv(spec) => spec.add_input_var(var),
-            RuntimeModel::Mstlo(formula) => formula.add_input_var(var),
+            Specification::Dsrv(spec) => spec.add_input_var(var),
+            Specification::Mstlo(formula) => formula.add_input_var(var),
         }
     }
 
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
         match self {
-            RuntimeModel::Dsrv(spec) => spec.type_annotations(),
-            RuntimeModel::Mstlo(formula) => formula.type_annotations(),
+            Specification::Dsrv(spec) => spec.type_annotations(),
+            Specification::Mstlo(spec) => spec.type_annotations(),
         }
     }
 }
@@ -356,7 +356,7 @@ struct GradualTypeCheckingSpecParser<P>(std::marker::PhantomData<P>);
 
 impl<P> SpecParser<TypedDsrvSpecification> for TypeCheckingSpecParser<P>
 where
-    P: SpecParser<DsrvSpecification>,
+    P: SpecParser<UntypedDsrvSpecification>,
 {
     fn parse(input: &mut &str) -> anyhow::Result<TypedDsrvSpecification> {
         let spec = P::parse(input)?;
@@ -368,7 +368,7 @@ where
 
 impl<P> SpecParser<TypedDsrvSpecification> for GradualTypeCheckingSpecParser<P>
 where
-    P: SpecParser<DsrvSpecification>,
+    P: SpecParser<UntypedDsrvSpecification>,
 {
     fn parse(input: &mut &str) -> anyhow::Result<TypedDsrvSpecification> {
         let spec = P::parse(input)?;
@@ -385,7 +385,7 @@ impl<
     V: StreamData,
     Mon: Runtime + 'static,
     MonBuilder: RuntimeBuilder<TypedDsrvSpecification, V, Runtime = Mon> + 'static,
-> RuntimeBuilder<DsrvSpecification, V> for TypeCheckingBuilder<MonBuilder>
+> RuntimeBuilder<UntypedDsrvSpecification, V> for TypeCheckingBuilder<MonBuilder>
 {
     type Runtime = Mon;
 
@@ -397,7 +397,7 @@ impl<
         Self(self.0.executor(ex))
     }
 
-    fn model(self, model: DsrvSpecification) -> Self {
+    fn model(self, model: UntypedDsrvSpecification) -> Self {
         let model = type_check(model).expect("Model failed to type check");
         Self(self.0.model(model))
     }
@@ -419,7 +419,7 @@ impl<
     V: StreamData,
     Mon: Runtime + 'static,
     MonBuilder: RuntimeBuilder<TypedDsrvSpecification, V, Runtime = Mon> + 'static,
-> RuntimeBuilder<DsrvSpecification, V> for GradualTypeCheckingBuilder<MonBuilder>
+> RuntimeBuilder<UntypedDsrvSpecification, V> for GradualTypeCheckingBuilder<MonBuilder>
 {
     type Runtime = Mon;
 
@@ -431,7 +431,7 @@ impl<
         Self(self.0.executor(ex))
     }
 
-    fn model(self, model: DsrvSpecification) -> Self {
+    fn model(self, model: UntypedDsrvSpecification) -> Self {
         let model = type_check_gradual(model).expect("Model failed to gradual type check");
         Self(self.0.model(model))
     }
@@ -822,7 +822,7 @@ impl From<MstloSynchronizationStrategy> for SynchronizationStrategy {
     }
 }
 
-impl RuntimeBuilder<RuntimeModel, Value> for GeneralRuntimeBuilder<RuntimeModel, Value> {
+impl RuntimeBuilder<Specification, Value> for GeneralRuntimeBuilder<Specification, Value> {
     type Runtime = Box<dyn Runtime>;
 
     fn new() -> Self {
@@ -856,7 +856,7 @@ impl RuntimeBuilder<RuntimeModel, Value> for GeneralRuntimeBuilder<RuntimeModel,
         }
     }
 
-    fn model(self, model: RuntimeModel) -> Self {
+    fn model(self, model: Specification) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -885,15 +885,15 @@ impl RuntimeBuilder<RuntimeModel, Value> for GeneralRuntimeBuilder<RuntimeModel,
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { GeneralRuntimeBuilder::<RuntimeModel, Value>::build(self).await })
+        Box::pin(async move { GeneralRuntimeBuilder::<Specification, Value>::build(self).await })
     }
 }
 
-impl GeneralRuntimeBuilder<RuntimeModel, Value> {
+impl GeneralRuntimeBuilder<Specification, Value> {
     pub async fn build(self) -> Box<dyn Runtime> {
         match self.model.expect("Model/spec must be set") {
-            RuntimeModel::Dsrv(spec) => {
-                GeneralRuntimeBuilder::<DsrvSpecification, Value> {
+            Specification::Dsrv(spec) => {
+                GeneralRuntimeBuilder::<UntypedDsrvSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),
                     input: self.input,
@@ -917,10 +917,10 @@ impl GeneralRuntimeBuilder<RuntimeModel, Value> {
                 .build()
                 .await
             }
-            RuntimeModel::Mstlo(formula) => {
-                GeneralRuntimeBuilder::<MstloFormula, Value> {
+            Specification::Mstlo(spec) => {
+                GeneralRuntimeBuilder::<MstloSpecification, Value> {
                     executor: self.executor,
-                    model: Some(formula),
+                    model: Some(spec),
                     input: self.input,
                     input_provider_builder: self.input_provider_builder,
                     output: self.output,
@@ -946,7 +946,9 @@ impl GeneralRuntimeBuilder<RuntimeModel, Value> {
     }
 }
 
-impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpecification, Value> {
+impl RuntimeBuilder<UntypedDsrvSpecification, Value>
+    for GeneralRuntimeBuilder<UntypedDsrvSpecification, Value>
+{
     type Runtime = Box<dyn Runtime>;
 
     // TODO: Refactor. This needs to either reuse defaults used within the CLI parser, or not allow
@@ -982,7 +984,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
         }
     }
 
-    fn model(self, model: DsrvSpecification) -> Self {
+    fn model(self, model: UntypedDsrvSpecification) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -1011,13 +1013,15 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(
-            async move { GeneralRuntimeBuilder::<DsrvSpecification, Value>::build(self).await },
-        )
+        Box::pin(async move {
+            GeneralRuntimeBuilder::<UntypedDsrvSpecification, Value>::build(self).await
+        })
     }
 }
 
-impl RuntimeBuilder<MstloFormula, Value> for GeneralRuntimeBuilder<MstloFormula, Value> {
+impl RuntimeBuilder<MstloSpecification, Value>
+    for GeneralRuntimeBuilder<MstloSpecification, Value>
+{
     type Runtime = Box<dyn Runtime>;
 
     fn new() -> Self {
@@ -1051,7 +1055,7 @@ impl RuntimeBuilder<MstloFormula, Value> for GeneralRuntimeBuilder<MstloFormula,
         }
     }
 
-    fn model(self, model: MstloFormula) -> Self {
+    fn model(self, model: MstloSpecification) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -1080,11 +1084,13 @@ impl RuntimeBuilder<MstloFormula, Value> for GeneralRuntimeBuilder<MstloFormula,
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { GeneralRuntimeBuilder::<MstloFormula, Value>::build(self).await })
+        Box::pin(
+            async move { GeneralRuntimeBuilder::<MstloSpecification, Value>::build(self).await },
+        )
     }
 }
 
-impl GeneralRuntimeBuilder<MstloFormula, Value> {
+impl GeneralRuntimeBuilder<MstloSpecification, Value> {
     fn mstlo_semantics(semantics: Semantics) -> mstlo::Semantics {
         match semantics {
             Semantics::DelayedQuantitative | Semantics::GradualTypedUntimed => {
@@ -1131,14 +1137,14 @@ impl GeneralRuntimeBuilder<MstloFormula, Value> {
     }
 }
 
-impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
+impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
     // Creates the common parts of the builder
     fn create_common_builder(
         runtime: RuntimeSpec,
         semantics: Semantics,
         parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
-        model: Option<DsrvSpecification>,
+        model: Option<UntypedDsrvSpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_provider_builder: Option<InputProviderBuilder>,
@@ -1147,12 +1153,12 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         use_context_transfer: bool,
         topic_mapping: Option<TopicMapping>,
         var_msg_types: Option<MsgTypeMapping>,
-    ) -> Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> {
+    ) -> Box<dyn RuntimeBuilderDyn<UntypedDsrvSpecification, Value>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
         );
-        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> = match (
+        let builder: Box<dyn RuntimeBuilderDyn<UntypedDsrvSpecification, Value>> = match (
             runtime, semantics, parser,
         ) {
             (RuntimeSpec::Async, Semantics::Untimed, ParserMode::Lalr) => {
@@ -1464,7 +1470,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             }
         };
 
-        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
+        let builder: Box<dyn RuntimeBuilderDyn<UntypedDsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,

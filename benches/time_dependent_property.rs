@@ -14,9 +14,9 @@ use smol::LocalExecutor;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics};
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::{ManualOutputHandler, NullOutputHandler};
-use trustworthiness_checker::lang::mstlo::{MstloFormula, parse_named_properties};
+use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
-use trustworthiness_checker::{DsrvSpecification, Value, VarName, dsrv_specification};
+use trustworthiness_checker::{UntypedDsrvSpecification, Value, VarName, dsrv_specification};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -40,7 +40,7 @@ impl AsyncExecutor for LocalSmolExecutor {
     }
 }
 
-fn dsrv_time_dependent_spec() -> DsrvSpecification {
+fn dsrv_time_dependent_spec() -> UntypedDsrvSpecification {
     dsrv_specification(
         &mut r#"
 in x: Float
@@ -53,7 +53,7 @@ always_x = above && default(above[1], true) && default(above[2], true)
     .expect("DSRV time-dependent benchmark spec should parse")
 }
 
-fn mstlo_time_dependent_spec() -> MstloFormula {
+fn mstlo_time_dependent_spec() -> MstloSpecification {
     parse_named_properties("always_x: G[0,2](x > 3)")
         .expect("MSTLO time-dependent benchmark spec should parse")
 }
@@ -94,7 +94,7 @@ fn mstlo_direct_input(size: usize) -> Vec<Step<f64>> {
 
 async fn run_dsrv(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input: MapInputProvider,
     runtime_spec: RuntimeSpec,
 ) {
@@ -118,7 +118,7 @@ async fn run_dsrv(
 
 async fn run_dsrv_counted(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input: MapInputProvider,
     runtime_spec: RuntimeSpec,
     expected_outputs: usize,
@@ -151,7 +151,7 @@ async fn run_dsrv_counted(
 
 async fn run_mstlo(
     executor: Rc<LocalExecutor<'static>>,
-    spec: MstloFormula,
+    spec: MstloSpecification,
     input: MapInputProvider,
     semantics: Semantics,
 ) {

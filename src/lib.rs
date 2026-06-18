@@ -2,13 +2,13 @@
 
 pub mod benches_common;
 pub mod core;
-pub use core::{InputProvider, OutputStream, Runtime, Specification, Value, VarName};
+pub use core::{DsrvSpecification, InputProvider, OutputStream, Runtime, Value, VarName};
 pub mod cli;
 pub mod io;
 pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
-    ast::{DsrvSpecification, SExpr},
+    ast::{SExpr, UntypedDsrvSpecification},
     parser::dsrv_specification,
 };
 pub mod distributed;

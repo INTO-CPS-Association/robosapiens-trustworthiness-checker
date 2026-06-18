@@ -10,12 +10,12 @@ use mstlo::{
     SynchronizationStrategy, Variables, parse_stl,
 };
 use smol::LocalExecutor;
-use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
+use trustworthiness_checker::core::{DsrvSpecification, Runtime, RuntimeSpec, Semantics};
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::NullOutputHandler;
-use trustworthiness_checker::lang::mstlo::{MstloFormula, parse_named_properties};
+use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
-use trustworthiness_checker::{DsrvSpecification, Value, VarName, dsrv_specification};
+use trustworthiness_checker::{UntypedDsrvSpecification, Value, VarName, dsrv_specification};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -39,7 +39,7 @@ impl AsyncExecutor for LocalSmolExecutor {
     }
 }
 
-fn dsrv_threshold_spec() -> DsrvSpecification {
+fn dsrv_threshold_spec() -> UntypedDsrvSpecification {
     dsrv_specification(
         &mut r#"
 in x: Float
@@ -50,11 +50,11 @@ always_x = x > 3.0
     .expect("DSRV threshold benchmark spec should parse")
 }
 
-fn mstlo_threshold_spec() -> MstloFormula {
+fn mstlo_threshold_spec() -> MstloSpecification {
     parse_named_properties("always_x: x > 3").expect("MSTLO threshold benchmark spec should parse")
 }
 
-fn mstlo_threshold_multi_output_spec(outputs: usize) -> MstloFormula {
+fn mstlo_threshold_multi_output_spec(outputs: usize) -> MstloSpecification {
     let spec = (0..outputs)
         .map(|idx| format!("out_{idx}: x > 3"))
         .collect::<Vec<_>>()
@@ -124,7 +124,7 @@ fn mstlo_value_input(size: usize) -> Vec<Value> {
 
 async fn run_dsrv_with_semantics(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input: MapInputProvider,
     runtime_spec: RuntimeSpec,
     semantics: Semantics,
@@ -152,7 +152,7 @@ async fn run_dsrv_with_semantics(
 
 async fn run_dsrv(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input: MapInputProvider,
     runtime_spec: RuntimeSpec,
 ) {
@@ -168,7 +168,7 @@ async fn run_dsrv(
 
 async fn run_mstlo(
     executor: Rc<LocalExecutor<'static>>,
-    spec: MstloFormula,
+    spec: MstloSpecification,
     input: MapInputProvider,
     semantics: Semantics,
 ) {

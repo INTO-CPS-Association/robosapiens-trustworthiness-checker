@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use crate::DsrvSpecification;
+use crate::UntypedDsrvSpecification;
 use crate::Value;
 use crate::VarName;
 use crate::core::OutputHandler;
@@ -38,7 +38,7 @@ pub async fn monitor_runtime_outputs(
     runtime: RuntimeSpec,
     semantics: Semantics,
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input_provider: MapInputProvider,
     output_limit: Option<usize>,
 ) {
@@ -68,7 +68,7 @@ pub async fn monitor_runtime_outputs(
 
 pub async fn monitor_outputs_untyped_async_limited(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input_provider: MapInputProvider,
     limit: usize,
 ) {
@@ -85,7 +85,7 @@ pub async fn monitor_outputs_untyped_async_limited(
 
 pub async fn monitor_outputs_untyped_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input_provider_builder: InputProviderBuilder,
     output_handler_builder: OutputHandlerBuilder,
     use_context_transfer: bool,
@@ -107,7 +107,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
 
 pub async fn monitor_outputs_untyped_async(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input_values: MapInputProvider,
 ) {
     monitor_runtime_outputs(
@@ -123,7 +123,7 @@ pub async fn monitor_outputs_untyped_async(
 
 pub async fn monitor_outputs_untyped_little(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     input_provider: MapInputProvider,
 ) {
     monitor_runtime_outputs(
@@ -162,7 +162,7 @@ pub async fn monitor_outputs_typed_async(
 }
 
 pub fn input_builder_dsrv_paper_bench(
-    spec: DsrvSpecification,
+    spec: UntypedDsrvSpecification,
     var_names: BTreeSet<VarName>,
     ex: Rc<LocalExecutor<'static>>,
 ) -> (InputProviderBuilder, BTreeMap<VarName, FanoutSender<Value>>) {

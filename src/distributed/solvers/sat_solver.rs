@@ -8,7 +8,7 @@ use sat_solver::sat::solver::{Solver, SolverImpls};
 use tracing::info;
 
 use crate::{
-    DsrvSpecification, Specification, Value, VarName,
+    DsrvSpecification, UntypedDsrvSpecification, Value, VarName,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
     },
@@ -27,7 +27,7 @@ use crate::{
 pub struct SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Spec = UntypedDsrvSpecification>,
 {
     pub dist_constraints: Vec<VarName>,
     pub output_vars: Vec<VarName>,
@@ -41,13 +41,13 @@ where
 impl<S, AC> SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Spec = UntypedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(
         dist_constraints: Vec<VarName>,
         output_vars: Vec<VarName>,
-        spec: DsrvSpecification,
+        spec: UntypedDsrvSpecification,
         replay_history: Option<crate::io::replay_history::ReplayHistory>,
     ) -> Self {
         let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();
@@ -351,7 +351,7 @@ impl std::error::Error for SatCompileError {}
 
 fn eval_const_expr(
     expr: SExpr,
-    spec: &crate::DsrvSpecification,
+    spec: &crate::UntypedDsrvSpecification,
     st: &CnfCompilerState,
 ) -> Option<Value> {
     match expr {
@@ -774,7 +774,7 @@ fn eval_const_expr(
 
 fn compile_expr_to_lit(
     expr: SExpr,
-    spec: &crate::DsrvSpecification,
+    spec: &crate::UntypedDsrvSpecification,
     st: &mut CnfCompilerState,
 ) -> Result<Lit, SatCompileError> {
     match expr {

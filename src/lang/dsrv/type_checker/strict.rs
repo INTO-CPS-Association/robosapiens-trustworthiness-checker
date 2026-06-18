@@ -2,10 +2,10 @@
 //! annotation for every variable in the specification.
 
 use super::*;
-use crate::DsrvSpecification;
+use crate::UntypedDsrvSpecification;
 use std::collections::BTreeMap;
 
-pub fn type_check(spec: DsrvSpecification) -> SemanticResult<TypedDsrvSpecification> {
+pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpecification> {
     let type_context = spec.type_annotations.clone();
     let mut typed_exprs = BTreeMap::new();
     let mut errors = vec![];
@@ -56,7 +56,7 @@ mod tests {
     use super::*;
     use crate::core::StreamType;
     use crate::lang::dsrv::ast::SExpr;
-    use crate::{Specification, VarName};
+    use crate::{DsrvSpecification, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;
@@ -70,7 +70,7 @@ mod tests {
         exprs.insert(var.clone(), SExpr::List(EcoVec::new()));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(var.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = DsrvSpecification {
+        let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([var.clone()]),
             stream_vars: BTreeSet::from([var.clone()]),

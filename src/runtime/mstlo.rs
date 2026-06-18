@@ -14,7 +14,7 @@ use smol::LocalExecutor;
 
 use crate::{
     InputProvider, OutputStream, Runtime, Value, VarName, core::OutputHandler,
-    lang::mstlo::MstloFormula, runtime::builder::RuntimeBuilder, stream_utils,
+    lang::mstlo::MstloSpecification, runtime::builder::RuntimeBuilder, stream_utils,
 };
 
 const MSTLO_OUTPUT_CHANNEL_SIZE: usize = 1024;
@@ -54,7 +54,7 @@ struct MstloRuntime<RS> {
 
 pub struct MstloRuntimeBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
-    formula: Option<MstloFormula>,
+    formula: Option<MstloSpecification>,
     algorithm: Algorithm,
     semantics: Semantics,
     synchronization_strategy: SynchronizationStrategy,
@@ -117,7 +117,7 @@ impl MstloRuntimeBuilder {
     }
 }
 
-impl RuntimeBuilder<MstloFormula, Value> for MstloRuntimeBuilder {
+impl RuntimeBuilder<MstloSpecification, Value> for MstloRuntimeBuilder {
     type Runtime = Box<dyn Runtime>;
 
     fn new() -> Self {
@@ -138,7 +138,7 @@ impl RuntimeBuilder<MstloFormula, Value> for MstloRuntimeBuilder {
         self
     }
 
-    fn model(mut self, model: MstloFormula) -> Self {
+    fn model(mut self, model: MstloSpecification) -> Self {
         self.formula = Some(model);
         self
     }
@@ -554,7 +554,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn builder_runs_quantitative_atomic_formula(executor: Rc<LocalExecutor<'static>>) {
-        let formula = MstloFormula::single(
+        let formula = MstloSpecification::single(
             VarName::new("out"),
             FormulaDefinition::GreaterThan("x", 5.0),
         );
@@ -596,7 +596,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn builder_runs_multiple_named_formulae(executor: Rc<LocalExecutor<'static>>) {
-        let formula = MstloFormula::new(BTreeMap::from([
+        let formula = MstloSpecification::new(BTreeMap::from([
             (VarName::new("gt"), FormulaDefinition::GreaterThan("x", 5.0)),
             (VarName::new("lt"), FormulaDefinition::LessThan("y", 3.0)),
         ]));
@@ -649,7 +649,7 @@ mod tests {
     async fn builder_uses_variables_as_parameters_not_input_streams(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let formula = MstloFormula::single(
+        let formula = MstloSpecification::single(
             VarName::new("out"),
             FormulaDefinition::GreaterThanVar("x", "threshold"),
         );

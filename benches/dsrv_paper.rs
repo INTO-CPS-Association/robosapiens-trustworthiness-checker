@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::DsrvSpecification;
-use trustworthiness_checker::Specification;
+use trustworthiness_checker::UntypedDsrvSpecification;
 use trustworthiness_checker::Value;
 use trustworthiness_checker::VarName;
 use trustworthiness_checker::benches_common::RECONF_TOPIC;
@@ -65,8 +65,8 @@ async fn wait_for_input_provider_subscription<T: Clone + 'static>(
 /// variables present in the union of both specs.
 async fn run_reconf_bench(
     executor: Rc<LocalExecutor<'static>>,
-    spec_1: &DsrvSpecification,
-    spec_2: &DsrvSpecification,
+    spec_1: &UntypedDsrvSpecification,
+    spec_2: &UntypedDsrvSpecification,
     size: usize,
     ct: bool,
     percent: usize,
@@ -200,9 +200,9 @@ struct BenchConfig<'a> {
     /// Name of the Criterion benchmark group.
     group_name: &'a str,
     /// The "old" specification.
-    spec1: DsrvSpecification,
+    spec1: UntypedDsrvSpecification,
     /// The "new" specification (reconfigured to at runtime).
-    spec2: DsrvSpecification,
+    spec2: UntypedDsrvSpecification,
     /// Input values produced per iteration. Must cover all input vars in spec1 ∪ spec2.
     input_fn: Box<dyn Fn(usize) -> BTreeMap<VarName, Value> + 'a>,
 }

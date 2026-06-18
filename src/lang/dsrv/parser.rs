@@ -1022,7 +1022,7 @@ pub(crate) fn assignment_decls(s: &mut &str) -> Result<Vec<(VarName, SExpr)>> {
     separated(0.., assignment_decl, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-pub fn dsrv_specification(s: &mut &str) -> Result<DsrvSpecification> {
+pub fn dsrv_specification(s: &mut &str) -> Result<UntypedDsrvSpecification> {
     seq!((
         _: loop_ms_or_lb_or_lc,
         input_decls,
@@ -1035,7 +1035,7 @@ pub fn dsrv_specification(s: &mut &str) -> Result<DsrvSpecification> {
         _: loop_ms_or_lb_or_lc,
     ))
     .map(|(input_vars, output_vars, aux_vars, exprs)| {
-        DsrvSpecification::new(
+        UntypedDsrvSpecification::new(
             input_vars.iter().map(|(name, _)| name.clone()).collect(),
             output_vars.iter().map(|(name, _)| name.clone()).collect(),
             exprs.into_iter().collect(),
@@ -1294,7 +1294,7 @@ mod tests {
     fn test_parse_aux() -> Result<(), ContextError> {
         // Tests that aux streams are in aux_vars and stream_vars.
         let input = crate::dsrv_fixtures::spec_simple_add_aux_monitor();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::from(["u".into(), "w".into()]),
@@ -1321,7 +1321,7 @@ mod tests {
     fn test_parse_aux_typed() -> Result<(), ContextError> {
         // Tests that aux streams are in aux_vars and stream_vars.
         let input = crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::from(["u".into(), "w".into()]),
@@ -1353,7 +1353,7 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add() -> Result<(), ContextError> {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::new(),
@@ -1375,7 +1375,7 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_typed() -> Result<(), ContextError> {
         let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::new(),
@@ -1401,7 +1401,7 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_float_typed() -> Result<(), ContextError> {
         let mut input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
-        let simple_add_spec = DsrvSpecification {
+        let simple_add_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::from(["x".into(), "y".into()]),
             output_vars: BTreeSet::from(["z".into()]),
             aux_vars: BTreeSet::new(),
@@ -1429,7 +1429,7 @@ mod tests {
         let input = "\
             out x\n\
             x = 1 + (x)[1]";
-        let count_spec = DsrvSpecification {
+        let count_spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from(["x".into()]),
             aux_vars: BTreeSet::new(),
@@ -1458,7 +1458,7 @@ mod tests {
             out w\n\
             z = x + y\n\
             w = dynamic(s)";
-        let eval_spec = DsrvSpecification::new(
+        let eval_spec = UntypedDsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into(), "s".into()]),
             BTreeSet::from(["z".into(), "w".into()]),
             BTreeMap::from([

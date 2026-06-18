@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::Specification;
+use crate::DsrvSpecification;
 use async_trait::async_trait;
 use serde::Serialize;
 use serde::ser::{SerializeStruct, Serializer};
@@ -15,13 +15,13 @@ use crate::{VarName, distributed::distribution_graphs::NodeName};
 pub type WorkTypeInfo = BTreeMap<VarName, String>;
 
 #[derive(Clone, Debug)]
-pub struct MonitorWork<M: Specification> {
+pub struct MonitorWork<M: DsrvSpecification> {
     pub spec: M,
     pub type_info: WorkTypeInfo,
     pub topic_mapping: BTreeMap<VarName, String>,
 }
 
-impl<M: Specification> Serialize for MonitorWork<M> {
+impl<M: DsrvSpecification> Serialize for MonitorWork<M> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -36,7 +36,7 @@ impl<M: Specification> Serialize for MonitorWork<M> {
 }
 
 #[async_trait(?Send)]
-pub trait SchedulerCommunicator<M: Specification> {
+pub trait SchedulerCommunicator<M: DsrvSpecification> {
     async fn schedule_work(
         &mut self,
         node: NodeName,
@@ -47,7 +47,7 @@ pub trait SchedulerCommunicator<M: Specification> {
 pub struct NullSchedulerCommunicator;
 
 #[async_trait(?Send)]
-impl<M: Specification> SchedulerCommunicator<M> for NullSchedulerCommunicator {
+impl<M: DsrvSpecification> SchedulerCommunicator<M> for NullSchedulerCommunicator {
     async fn schedule_work(
         &mut self,
         node_name: NodeName,
@@ -58,12 +58,12 @@ impl<M: Specification> SchedulerCommunicator<M> for NullSchedulerCommunicator {
     }
 }
 
-pub struct MockSchedulerCommunicator<M: Specification> {
+pub struct MockSchedulerCommunicator<M: DsrvSpecification> {
     pub log: Vec<(NodeName, MonitorWork<M>)>,
 }
 
 #[async_trait(?Send)]
-impl<M: Specification> SchedulerCommunicator<M> for MockSchedulerCommunicator<M> {
+impl<M: DsrvSpecification> SchedulerCommunicator<M> for MockSchedulerCommunicator<M> {
     async fn schedule_work(
         &mut self,
         node: NodeName,
@@ -75,7 +75,7 @@ impl<M: Specification> SchedulerCommunicator<M> for MockSchedulerCommunicator<M>
 }
 
 #[async_trait(?Send)]
-impl<M: Specification> SchedulerCommunicator<M> for Arc<Mutex<MockSchedulerCommunicator<M>>> {
+impl<M: DsrvSpecification> SchedulerCommunicator<M> for Arc<Mutex<MockSchedulerCommunicator<M>>> {
     async fn schedule_work(
         &mut self,
         node: NodeName,
