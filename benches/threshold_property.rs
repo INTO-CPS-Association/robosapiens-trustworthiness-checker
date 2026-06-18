@@ -10,7 +10,7 @@ use mstlo::{
     SynchronizationStrategy, Variables, parse_stl,
 };
 use smol::LocalExecutor;
-use trustworthiness_checker::core::{DsrvSpecification, Runtime, RuntimeSpec, Semantics};
+use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::NullOutputHandler;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};

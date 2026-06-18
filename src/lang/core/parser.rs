@@ -8,7 +8,7 @@ use winnow::{
     token::{literal, take_until, take_while},
 };
 
-use crate::{DsrvSpecification, Value};
+use crate::{Specification, Value};
 use std::{collections::BTreeMap, fmt::Debug};
 use winnow::Parser;
 pub use winnow::ascii::dec_int as integer;
@@ -28,7 +28,7 @@ pub fn ident<'a>(input: &mut &'a str) -> Result<<&'a str as Stream>::Slice, Cont
 pub trait ExprParser<Expr>: Clone {
     fn parse(input: &mut &str) -> anyhow::Result<Expr>;
 }
-pub trait SpecParser<Spec: DsrvSpecification>: Clone + 'static {
+pub trait SpecParser<Spec: Specification>: Clone + 'static {
     fn parse(input: &mut &str) -> anyhow::Result<Spec>;
 }
 

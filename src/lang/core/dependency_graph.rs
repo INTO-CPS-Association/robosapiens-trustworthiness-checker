@@ -12,7 +12,7 @@ use crate::lang::dsrv::type_checker::{
     TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::AsyncConfig;
-use crate::{DsrvSpecification, SExpr, UntypedDsrvSpecification, VarName};
+use crate::{SExpr, Specification, UntypedDsrvSpecification, VarName};
 
 pub trait DependencyGraphExpr {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph;

@@ -2945,7 +2945,7 @@ mod tests {
             let rendered = format!("{}", spec);
             let mut input = rendered.as_str();
             let parsed = crate::lang::dsrv::parser::dsrv_specification(&mut input)
-                .expect("Typed Display output should parse as a DsrvSpecification");
+                .expect("Typed Display output should parse as a Specification");
 
             prop_assert_eq!(parsed.input_vars, spec.input_vars);
             prop_assert_eq!(parsed.output_vars, spec.output_vars);

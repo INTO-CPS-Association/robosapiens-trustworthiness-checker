@@ -7,7 +7,7 @@ use tracing::debug;
 use crate::lang::dsrv::ast::UntypedDsrvSpecification;
 
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
-use crate::{DsrvSpecification, SExpr, VarName};
+use crate::{SExpr, Specification, VarName};
 
 pub trait LocalitySpec: Debug {
     fn local_vars(&self) -> Vec<VarName>;

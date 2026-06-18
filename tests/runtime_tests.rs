@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::core::{
-    DsrvSpecification, Runtime, RuntimeSpec, Semantics, StreamType, StreamTypeAscription,
+    Runtime, RuntimeSpec, Semantics, Specification, StreamType, StreamTypeAscription,
 };
 use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;

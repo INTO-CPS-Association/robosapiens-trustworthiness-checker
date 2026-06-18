@@ -11,7 +11,7 @@ use trustworthiness_checker::distributed::scheduling::planners::core::StaticFixe
 use trustworthiness_checker::distributed::scheduling::{ReplanningCondition, Scheduler};
 use trustworthiness_checker::io::mqtt::dist_graph_provider::StaticDistGraphProvider;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
-use trustworthiness_checker::{DsrvSpecification, UntypedDsrvSpecification};
+use trustworthiness_checker::{Specification, UntypedDsrvSpecification};
 
 /// Worker scheduler application for distributed monitoring
 ///

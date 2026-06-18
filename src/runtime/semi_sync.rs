@@ -1,6 +1,6 @@
 use crate::{
     OutputStream, VarName,
-    core::{DeferrableStreamData, DsrvSpecification, InputProvider, OutputHandler, Runtime},
+    core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
     lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
     runtime::RuntimeBuilder,
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
@@ -1147,7 +1147,7 @@ where
 mod tests {
 
     use crate::async_test;
-    use crate::core::{DsrvSpecification, Runtime};
+    use crate::core::{Runtime, Specification};
     use crate::io::map::MapInputProvider;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::lang::dsrv::lalr_parser::LALRParser;

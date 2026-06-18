@@ -63,7 +63,7 @@ pub trait InputProvider {
     }
 }
 
-pub trait DsrvSpecification: Debug + std::fmt::Display + Clone + 'static {
+pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     type Expr;
 
     fn input_vars(&self) -> BTreeSet<VarName>;

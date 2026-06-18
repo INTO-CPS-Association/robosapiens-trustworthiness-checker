@@ -12,7 +12,7 @@ use crate::lang::dsrv::ast::{
     BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp,
 };
 use crate::lang::dsrv::type_checker::{
-    SExprBool, SExprAny, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
+    SExprAny, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
     TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::untimed_untyped_dsrv::combinators as uc;

@@ -5,7 +5,7 @@ use std::{
 
 use mstlo::{FormulaDefinition, SignalIdentifier};
 
-use crate::{DsrvSpecification, VarName, core::StreamType};
+use crate::{Specification, VarName, core::StreamType};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MstloSpecification {
@@ -58,7 +58,7 @@ impl From<FormulaDefinition> for MstloSpecification {
     }
 }
 
-impl DsrvSpecification for MstloSpecification {
+impl Specification for MstloSpecification {
     type Expr = FormulaDefinition;
 
     fn input_vars(&self) -> BTreeSet<VarName> {

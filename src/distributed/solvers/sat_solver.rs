@@ -8,7 +8,7 @@ use sat_solver::sat::solver::{Solver, SolverImpls};
 use tracing::info;
 
 use crate::{
-    DsrvSpecification, UntypedDsrvSpecification, Value, VarName,
+    Specification, UntypedDsrvSpecification, Value, VarName,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
     },

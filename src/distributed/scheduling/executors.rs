@@ -7,7 +7,7 @@ use contracts::{ensures, requires};
 use tracing::info;
 
 use crate::{
-    DsrvSpecification, VarName, distributed::distribution_graphs::LabelledDistributionGraph,
+    Specification, VarName, distributed::distribution_graphs::LabelledDistributionGraph,
     semantics::distributed::localisation::Localisable,
 };
 
@@ -15,7 +15,7 @@ use super::communication::SchedulerCommunicator;
 
 // TODO: it is somewhat odd that spec is placed here; we need a Knowledge component in the MAPE-K
 // loop
-pub struct SchedulerExecutor<M: DsrvSpecification + Localisable> {
+pub struct SchedulerExecutor<M: Specification + Localisable> {
     spec: M,
     var_msg_types: BTreeMap<VarName, String>,
     topic_mapping: BTreeMap<VarName, String>,
@@ -30,7 +30,7 @@ pub struct SchedulerExecutor<M: DsrvSpecification + Localisable> {
         .chain(spec.output_vars().into_iter())
         .collect();
         ret.as_ref().is_ok_and(move |work| work.type_info.keys().all(|v| io_vars.contains(v)))})]
-fn monitor_work_for_specification<M: DsrvSpecification + Localisable>(
+fn monitor_work_for_specification<M: Specification + Localisable>(
     spec: M,
     var_msg_types: BTreeMap<VarName, String>,
     topic_mapping: BTreeMap<VarName, String>,
@@ -63,7 +63,7 @@ fn monitor_work_for_specification<M: DsrvSpecification + Localisable>(
 #[ensures(ret.as_ref().is_ok() -> {
     ret.as_ref().is_ok_and(|work| work.spec.output_vars().iter().all(|v| local_topics.contains(v)
        && (spec.aux_vars().contains(v) || var_msg_types.contains_key(v))))})]
-fn local_monitor_work<M: DsrvSpecification + Localisable>(
+fn local_monitor_work<M: Specification + Localisable>(
     spec: M,
     var_msg_types: BTreeMap<VarName, String>,
     topic_mapping: BTreeMap<VarName, String>,
@@ -74,7 +74,7 @@ fn local_monitor_work<M: DsrvSpecification + Localisable>(
     monitor_work_for_specification(local_spec, var_msg_types.clone(), topic_mapping.clone())
 }
 
-impl<M: DsrvSpecification + Localisable> SchedulerExecutor<M> {
+impl<M: Specification + Localisable> SchedulerExecutor<M> {
     pub fn new(
         spec: M,
         var_msg_types: BTreeMap<VarName, String>,

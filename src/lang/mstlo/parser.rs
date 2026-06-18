@@ -155,7 +155,7 @@ pub async fn parse_file(path: &str) -> anyhow::Result<MstloSpecification> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use crate::DsrvSpecification;
+    use crate::Specification;
 
     use super::*;
 

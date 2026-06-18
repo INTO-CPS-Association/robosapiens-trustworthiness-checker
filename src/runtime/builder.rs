@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use crate::InputProvider;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
-    DsrvSpecification, Runtime, SExpr, UntypedDsrvSpecification, Value, VarName,
+    Runtime, SExpr, Specification, UntypedDsrvSpecification, Value, VarName,
     cli::{
         adapters::DistributionModeBuilder,
         args::{MstloAlgorithm, MstloSynchronizationStrategy, ParserMode},
@@ -59,53 +59,53 @@ define_config!(SemiSyncValueConfig, Val = Value, Expr = SExpr, Ctx = SemiSyncCon
 define_config!(TypedSemiSyncValueConfig, Val = Value, Expr = SExprTE, Ctx = SemiSyncContext, Spec = TypedDsrvSpecification);
 
 #[derive(Clone, Debug)]
-pub enum Specification {
+pub enum LangSpecification {
     Dsrv(UntypedDsrvSpecification),
     Mstlo(MstloSpecification),
 }
 
-impl From<UntypedDsrvSpecification> for Specification {
+impl From<UntypedDsrvSpecification> for LangSpecification {
     fn from(spec: UntypedDsrvSpecification) -> Self {
         Self::Dsrv(spec)
     }
 }
 
-impl From<MstloSpecification> for Specification {
+impl From<MstloSpecification> for LangSpecification {
     fn from(formula: MstloSpecification) -> Self {
         Self::Mstlo(formula)
     }
 }
 
-impl Display for Specification {
+impl Display for LangSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Specification::Dsrv(spec) => Display::fmt(spec, f),
-            Specification::Mstlo(spec) => Display::fmt(spec, f),
+            LangSpecification::Dsrv(spec) => Display::fmt(spec, f),
+            LangSpecification::Mstlo(spec) => Display::fmt(spec, f),
         }
     }
 }
 
-impl DsrvSpecification for Specification {
+impl Specification for LangSpecification {
     type Expr = ();
 
     fn input_vars(&self) -> BTreeSet<VarName> {
         match self {
-            Specification::Dsrv(spec) => spec.input_vars(),
-            Specification::Mstlo(spec) => spec.input_vars(),
+            LangSpecification::Dsrv(spec) => spec.input_vars(),
+            LangSpecification::Mstlo(spec) => spec.input_vars(),
         }
     }
 
     fn output_vars(&self) -> BTreeSet<VarName> {
         match self {
-            Specification::Dsrv(spec) => spec.output_vars(),
-            Specification::Mstlo(spec) => spec.output_vars(),
+            LangSpecification::Dsrv(spec) => spec.output_vars(),
+            LangSpecification::Mstlo(spec) => spec.output_vars(),
         }
     }
 
     fn aux_vars(&self) -> BTreeSet<VarName> {
         match self {
-            Specification::Dsrv(spec) => spec.aux_vars(),
-            Specification::Mstlo(formula) => formula.aux_vars(),
+            LangSpecification::Dsrv(spec) => spec.aux_vars(),
+            LangSpecification::Mstlo(formula) => formula.aux_vars(),
         }
     }
 
@@ -115,15 +115,15 @@ impl DsrvSpecification for Specification {
 
     fn add_input_var(&mut self, var: VarName) {
         match self {
-            Specification::Dsrv(spec) => spec.add_input_var(var),
-            Specification::Mstlo(formula) => formula.add_input_var(var),
+            LangSpecification::Dsrv(spec) => spec.add_input_var(var),
+            LangSpecification::Mstlo(formula) => formula.add_input_var(var),
         }
     }
 
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
         match self {
-            Specification::Dsrv(spec) => spec.type_annotations(),
-            Specification::Mstlo(spec) => spec.type_annotations(),
+            LangSpecification::Dsrv(spec) => spec.type_annotations(),
+            LangSpecification::Mstlo(spec) => spec.type_annotations(),
         }
     }
 }
@@ -822,7 +822,7 @@ impl From<MstloSynchronizationStrategy> for SynchronizationStrategy {
     }
 }
 
-impl RuntimeBuilder<Specification, Value> for GeneralRuntimeBuilder<Specification, Value> {
+impl RuntimeBuilder<LangSpecification, Value> for GeneralRuntimeBuilder<LangSpecification, Value> {
     type Runtime = Box<dyn Runtime>;
 
     fn new() -> Self {
@@ -856,7 +856,7 @@ impl RuntimeBuilder<Specification, Value> for GeneralRuntimeBuilder<Specificatio
         }
     }
 
-    fn model(self, model: Specification) -> Self {
+    fn model(self, model: LangSpecification) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -885,14 +885,16 @@ impl RuntimeBuilder<Specification, Value> for GeneralRuntimeBuilder<Specificatio
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { GeneralRuntimeBuilder::<Specification, Value>::build(self).await })
+        Box::pin(
+            async move { GeneralRuntimeBuilder::<LangSpecification, Value>::build(self).await },
+        )
     }
 }
 
-impl GeneralRuntimeBuilder<Specification, Value> {
+impl GeneralRuntimeBuilder<LangSpecification, Value> {
     pub async fn build(self) -> Box<dyn Runtime> {
         match self.model.expect("Model/spec must be set") {
-            Specification::Dsrv(spec) => {
+            LangSpecification::Dsrv(spec) => {
                 GeneralRuntimeBuilder::<UntypedDsrvSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),
@@ -917,7 +919,7 @@ impl GeneralRuntimeBuilder<Specification, Value> {
                 .build()
                 .await
             }
-            Specification::Mstlo(spec) => {
+            LangSpecification::Mstlo(spec) => {
                 GeneralRuntimeBuilder::<MstloSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),

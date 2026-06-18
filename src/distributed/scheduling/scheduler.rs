@@ -6,7 +6,7 @@ use tracing::{error, info};
 use unsync::broadcast;
 
 use crate::{
-    DsrvSpecification, OutputStream, VarName,
+    OutputStream, Specification, VarName,
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, graph_to_png,
     },
@@ -26,7 +26,7 @@ pub enum ReplanningCondition {
     Never,
 }
 
-pub struct Scheduler<M: DsrvSpecification + Localisable> {
+pub struct Scheduler<M: Specification + Localisable> {
     replanning_condition: ReplanningCondition,
     dist_graph_output_stream: Option<LabelledDistGraphStream>,
     planner: Box<dyn SchedulerPlanner>,
@@ -37,7 +37,7 @@ pub struct Scheduler<M: DsrvSpecification + Localisable> {
     suppress_output: bool,
 }
 
-impl<M: DsrvSpecification + Localisable> Scheduler<M> {
+impl<M: Specification + Localisable> Scheduler<M> {
     pub fn new(
         spec: M,
         var_msg_types: BTreeMap<VarName, String>,

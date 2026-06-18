@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::DsrvSpecification;
+use trustworthiness_checker::Specification;
 use trustworthiness_checker::UntypedDsrvSpecification;
 use trustworthiness_checker::Value;
 use trustworthiness_checker::VarName;

@@ -185,7 +185,7 @@ mod tests {
     use crate::lang::dsrv::ast::{
         BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp,
     };
-    use crate::{DsrvSpecification, Value};
+    use crate::{Specification, Value};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;

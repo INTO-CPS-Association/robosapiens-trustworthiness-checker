@@ -236,7 +236,7 @@ pub mod generation {
     use proptest::prelude::*;
 
     use crate::{
-        UntypedDsrvSpecification, SExpr, VarName,
+        SExpr, UntypedDsrvSpecification, VarName,
         lang::dsrv::ast::{BoolBinOp, SBinOp},
     };
 

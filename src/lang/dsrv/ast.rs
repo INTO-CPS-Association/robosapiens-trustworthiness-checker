@@ -1,6 +1,6 @@
 use ecow::{EcoString, EcoVec};
 
-use crate::core::{DsrvSpecification, StreamTypeAscription, VarName};
+use crate::core::{Specification, StreamTypeAscription, VarName};
 use crate::core::{StreamType, Value};
 use crate::distributed::distribution_graphs::NodeName;
 use std::collections::BTreeSet;
@@ -520,7 +520,7 @@ impl UntypedDsrvSpecification {
     }
 }
 
-impl DsrvSpecification for UntypedDsrvSpecification {
+impl Specification for UntypedDsrvSpecification {
     type Expr = SExpr;
 
     fn input_vars(&self) -> BTreeSet<VarName> {

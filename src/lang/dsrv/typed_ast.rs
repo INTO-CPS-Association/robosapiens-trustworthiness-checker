@@ -8,7 +8,7 @@ use itertools::Itertools;
 
 use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SExpr, StrBinOp};
 use crate::core::{PartialStreamValue, StreamType};
-use crate::{DsrvSpecification, Value, VarName};
+use crate::{Specification, Value, VarName};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 
@@ -713,7 +713,7 @@ impl std::fmt::Display for TypedDsrvSpecification {
     }
 }
 
-impl DsrvSpecification for TypedDsrvSpecification {
+impl Specification for TypedDsrvSpecification {
     type Expr = SExprTE;
 
     fn input_vars(&self) -> BTreeSet<VarName> {

@@ -56,7 +56,7 @@ mod tests {
     use super::*;
     use crate::core::StreamType;
     use crate::lang::dsrv::ast::SExpr;
-    use crate::{DsrvSpecification, VarName};
+    use crate::{Specification, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;

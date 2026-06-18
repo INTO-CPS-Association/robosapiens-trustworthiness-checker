@@ -8,7 +8,7 @@ use smol::{
 use tracing::{debug, info};
 
 use crate::{
-    UntypedDsrvSpecification, InputProvider, OutputStream, Value, VarName,
+    InputProvider, OutputStream, UntypedDsrvSpecification, Value, VarName,
     core::Runtime,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,

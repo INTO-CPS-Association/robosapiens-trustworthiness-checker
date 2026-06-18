@@ -8,7 +8,7 @@ use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::{
-    DsrvSpecification, InputProvider, UntypedDsrvSpecification, Value, VarName,
+    InputProvider, Specification, UntypedDsrvSpecification, Value, VarName,
     core::{OutputHandler, Runtime},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
