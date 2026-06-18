@@ -2286,69 +2286,69 @@ mod spec_tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[1], 0) + 1",
-            "Ok(Specification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[1], 0) + x",
-            "Ok(Specification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-            "Ok(Specification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
 
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(Specification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(Specification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(Specification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor(),
-            "Ok(Specification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(Specification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn if_statement() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if x == 0 then y else 42",
-            "Ok(Specification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 
     fn if_statement_newlines() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
-            "Ok(Specification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 
@@ -2411,6 +2411,7 @@ mod spec_tests {
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
             );
+
             let mod_spec = spec.replace("\n", "//This is a comment\n"); // Beginning \n
             let parsed = presult_to_string(&dsrv_specification(&mut mod_spec.as_str()));
             assert_eq!(
