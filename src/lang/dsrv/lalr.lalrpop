@@ -68,6 +68,7 @@ LiteralVal: Value = {
     Float => Value::Float(<>),
     Bool => Value::Bool(<>),
     String => Value::Str(<>),
+    "(" ")" => Value::Unit,
 }
 
 // Literal expression wrapper

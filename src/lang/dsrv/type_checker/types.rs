@@ -6,11 +6,105 @@ use crate::Value;
 use crate::core::StreamType;
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum TypeErrorKind {
+    AnnotationTypeMismatch,
+    DefaultTypeMismatch,
+    IfBranchTypeMismatch,
+    ListElementTypeMismatch,
+    ListOperationTypeMismatch,
+    ListIndexTypeMismatch,
+    MapValueTypeMismatch,
+    MapOperationTypeMismatch,
+    OperatorTypeMismatch,
+    NumericArgumentTypeMismatch,
+    ExpectedBooleanCondition,
+    ExpectedDynamicString,
+    StructMissingField,
+    StructUnknownField,
+    StructFieldTypeMismatch,
+    StructExpected,
+    StructFieldAccess,
+    StructUnresolvedFieldType,
+    StructOperationTypeMismatch,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypeError {
+    kind: TypeErrorKind,
+    message: String,
+}
+
+impl TypeError {
+    pub fn new(kind: TypeErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn kind(&self) -> &TypeErrorKind {
+        &self.kind
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum UnresolvedTypeKind {
+    EmptyMapValueType,
+    MapGetValueType,
+    EmptyListIndexElementType,
+    ListIndexElementType,
+    EmptyListHeadElementType,
+    ListHeadElementType,
+    VariableType,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnresolvedTypeError {
+    kind: UnresolvedTypeKind,
+    message: String,
+}
+
+impl UnresolvedTypeError {
+    pub fn new(kind: UnresolvedTypeKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn kind(&self) -> &UnresolvedTypeKind {
+        &self.kind
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum SemanticError {
-    TypeError(String),
+    TypeError(TypeError),
     DeferredError(String),
     UndeclaredVariable(String),
     MissingTypeAnnotation(String),
+    MissingTypeAscription(String),
+    UnsupportedLiteral(String),
+    UnsupportedExpression(String),
+    UnresolvedType(UnresolvedTypeError),
+}
+
+impl SemanticError {
+    pub fn type_error(kind: TypeErrorKind, message: String) -> Self {
+        Self::TypeError(TypeError::new(kind, message))
+    }
+
+    pub fn unresolved_type(kind: UnresolvedTypeKind, message: String) -> Self {
+        Self::UnresolvedType(UnresolvedTypeError::new(kind, message))
+    }
 }
 
 pub type SemanticErrors = Vec<SemanticError>;

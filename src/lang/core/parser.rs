@@ -97,6 +97,7 @@ pub fn val(s: &mut &str) -> Result<Value> {
             string.map(|s: &str| Value::Str(s.into())),
             literal("true").map(|_| Value::Bool(true)),
             literal("false").map(|_| Value::Bool(false)),
+            literal("()").map(|_| Value::Unit),
         )),
         whitespace,
     )

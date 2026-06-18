@@ -9,6 +9,12 @@ use crate::lang::dsrv::ast::SExpr;
 use crate::{UntypedDsrvSpecification, VarName};
 use std::collections::BTreeMap;
 
+struct PendingAssignment {
+    var: VarName,
+    expr: SExpr,
+    errors: SemanticErrors,
+}
+
 fn gradual_fallback_type(typ: TCType) -> StreamType {
     match typ {
         TCType::EmptyList => StreamType::List(Box::new(StreamType::Any)),
@@ -70,6 +76,24 @@ fn coerce_gradual_placeholders(te: SExprTE) -> SExprTE {
     }
 }
 
+fn can_widen_gradual_error(error: &SemanticError) -> bool {
+    match error {
+        SemanticError::UndeclaredVariable(_) => true,
+        SemanticError::TypeError(type_error) => matches!(
+            type_error.kind(),
+            TypeErrorKind::IfBranchTypeMismatch
+                | TypeErrorKind::DefaultTypeMismatch
+                | TypeErrorKind::ListElementTypeMismatch
+                | TypeErrorKind::MapValueTypeMismatch
+        ),
+        _ => false,
+    }
+}
+
+fn can_widen_gradual_errors(errors: &[SemanticError]) -> bool {
+    !errors.is_empty() && errors.iter().all(can_widen_gradual_error)
+}
+
 pub fn type_check_gradual(
     spec: UntypedDsrvSpecification,
 ) -> SemanticResult<TypedDsrvSpecification> {
@@ -80,10 +104,14 @@ pub fn type_check_gradual(
 
     let mut typed_exprs: BTreeMap<VarName, SExprTE> = BTreeMap::new();
     let mut errors = vec![];
-    let mut pending: Vec<(VarName, SExpr)> = spec
+    let mut pending: Vec<PendingAssignment> = spec
         .exprs
         .iter()
-        .map(|(var, expr)| (var.clone(), expr.clone()))
+        .map(|(var, expr)| PendingAssignment {
+            var: var.clone(),
+            expr: expr.clone(),
+            errors: vec![],
+        })
         .collect();
 
     'outer: while !pending.is_empty() {
@@ -92,7 +120,8 @@ pub fn type_check_gradual(
         loop {
             let mut progressed = false;
             let mut next_pending = Vec::new();
-            for (var, expr) in std::mem::take(&mut pending) {
+            for pending_assignment in std::mem::take(&mut pending) {
+                let PendingAssignment { var, expr, .. } = pending_assignment;
                 let expected = type_context.get(&var).cloned();
                 let mut ctx = type_context.clone();
                 let mut local_errors = vec![];
@@ -105,7 +134,7 @@ pub fn type_check_gradual(
                                     typed_exprs.insert(var, cast_to_type(te, &expected_ty));
                                     progressed = true;
                                 } else {
-                                    errors.push(SemanticError::TypeError(format!(
+                                    errors.push(SemanticError::type_error(TypeErrorKind::AnnotationTypeMismatch, format!(
                                         "Variable {:?} has declared type {:?}, but expression has inconsistent type {:?}",
                                         var, expected_ty, actual
                                     )));
@@ -120,7 +149,11 @@ pub fn type_check_gradual(
                             }
                         }
                     }
-                    Err(()) => next_pending.push((var, expr)),
+                    Err(()) => next_pending.push(PendingAssignment {
+                        var,
+                        expr,
+                        errors: local_errors,
+                    }),
                 }
             }
             pending = next_pending;
@@ -136,16 +169,24 @@ pub fn type_check_gradual(
         // unresolved assignment to Any, which may unblock the others.
         if let Some(pos) = pending
             .iter()
-            .position(|(var, _)| !type_context.contains_key(var))
+            .position(|pending_assignment| !type_context.contains_key(&pending_assignment.var))
         {
-            let (var, expr) = pending.remove(pos);
-            typed_exprs.insert(var.clone(), SExprTE::Any(SExprAny::Expr(expr)));
-            type_context.insert(var, StreamType::Any);
-            continue 'outer;
+            let PendingAssignment {
+                var,
+                expr,
+                errors: local_errors,
+            } = pending.remove(pos);
+            if can_widen_gradual_errors(&local_errors) {
+                typed_exprs.insert(var.clone(), SExprTE::Any(SExprAny::Expr(expr)));
+                type_context.insert(var, StreamType::Any);
+                continue 'outer;
+            }
+            errors.extend(local_errors);
+            break 'outer;
         }
 
         // All remaining unresolved assignments are annotated: hard errors.
-        for (var, expr) in std::mem::take(&mut pending) {
+        for PendingAssignment { var, expr, .. } in std::mem::take(&mut pending) {
             let expected = type_context
                 .get(&var)
                 .cloned()
@@ -156,10 +197,10 @@ pub fn type_check_gradual(
                 .type_check_raw(Some(&expected), &mut ctx, &mut errors)
                 .is_ok()
             {
-                errors.push(SemanticError::TypeError(format!(
-                    "Could not resolve a type for variable {:?}",
-                    var
-                )));
+                errors.push(SemanticError::unresolved_type(
+                    UnresolvedTypeKind::VariableType,
+                    format!("Could not resolve a type for variable {:?}", var),
+                ));
             }
         }
         break 'outer;
@@ -350,6 +391,27 @@ mod tests {
     }
 
     #[test]
+    fn test_gradual_rejects_noval_literal_ast() {
+        let x: VarName = "gradual_noval_x".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(x.clone(), SExpr::Val(Value::NoVal));
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([x.clone()]),
+            stream_vars: BTreeSet::from([x.clone()]),
+            exprs,
+            type_annotations: BTreeMap::new(),
+            aux_vars: BTreeSet::new(),
+        };
+
+        let errors = type_check_gradual(spec).expect_err("NoVal literal AST should be rejected");
+        assert!(matches!(
+            errors.as_slice(),
+            [SemanticError::UnsupportedLiteral(_)]
+        ));
+    }
+
+    #[test]
     fn test_gradual_rejects_concrete_annotation_mismatch() {
         // A concrete static mismatch must remain an error rather than being
         // deferred to a runtime cast that can never succeed.
@@ -383,7 +445,7 @@ mod tests {
         let spec = UntypedDsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
-            stream_vars: BTreeSet::from([xs]),
+            stream_vars: BTreeSet::from([xs.clone()]),
             exprs,
             type_annotations,
             aux_vars: BTreeSet::new(),
@@ -443,10 +505,9 @@ mod tests {
     }
 
     #[test]
-    fn test_gradual_unannotated_contradiction_falls_back_to_any() {
-        // Without an annotation the same contradiction widens to Any. This
-        // documents the widening policy of the gradual checker (annotate the
-        // variable to get a static error instead).
+    fn test_gradual_unannotated_contradiction_is_error() {
+        // Even without an annotation, a concrete contradiction such as
+        // `1 + "a"` can never succeed at runtime and must not be widened.
         let z: VarName = "gradual_contradiction_any_z".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(
@@ -466,7 +527,258 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("unannotated contradiction widens to Any");
+        let errors = type_check_gradual(spec).expect_err("contradiction should fail");
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn test_gradual_heterogeneous_list_falls_back_to_any() {
+        // Without a homogeneous type annotation, a concrete mixed list is a
+        // valid untyped value and may be handled by the gradual Any path.
+        let xs: VarName = "gradual_heterogeneous_list_xs".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            xs.clone(),
+            SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(1)),
+                SExpr::Val(Value::Str("a".into())),
+            ])),
+        );
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([xs.clone()]),
+            stream_vars: BTreeSet::from([xs.clone()]),
+            exprs,
+            type_annotations: BTreeMap::new(),
+            aux_vars: BTreeSet::new(),
+        };
+
+        let typed = type_check_gradual(spec).expect("heterogeneous list should widen to Any");
+        assert_eq!(typed.type_annotations.get(&xs), Some(&StreamType::Any));
+        assert!(matches!(
+            typed.var_expr(&xs),
+            Some(SExprTE::Any(SExprAny::Expr(_)))
+        ));
+    }
+
+    #[test]
+    fn test_gradual_heterogeneous_list_rejects_homogeneous_annotation() {
+        let xs: VarName = "gradual_heterogeneous_list_annotated_xs".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            xs.clone(),
+            SExpr::List(EcoVec::from(vec![
+                SExpr::Val(Value::Int(1)),
+                SExpr::Val(Value::Str("a".into())),
+            ])),
+        );
+        let mut type_annotations = BTreeMap::new();
+        type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([xs.clone()]),
+            stream_vars: BTreeSet::from([xs]),
+            exprs,
+            type_annotations,
+            aux_vars: BTreeSet::new(),
+        };
+
+        let errors = type_check_gradual(spec).expect_err("homogeneous annotation should fail");
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn test_gradual_heterogeneous_map_falls_back_to_any() {
+        // Without a homogeneous type annotation, a concrete mixed map is a
+        // valid untyped value and may be handled by the gradual Any path.
+        let m: VarName = "gradual_heterogeneous_map_m".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            m.clone(),
+            SExpr::Map(BTreeMap::from([
+                ("x".into(), SExpr::Val(Value::Int(1))),
+                ("y".into(), SExpr::Val(Value::Str("a".into()))),
+            ])),
+        );
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([m.clone()]),
+            stream_vars: BTreeSet::from([m.clone()]),
+            exprs,
+            type_annotations: BTreeMap::new(),
+            aux_vars: BTreeSet::new(),
+        };
+
+        let typed = type_check_gradual(spec).expect("heterogeneous map should widen to Any");
+        assert_eq!(typed.type_annotations.get(&m), Some(&StreamType::Any));
+        assert!(matches!(
+            typed.var_expr(&m),
+            Some(SExprTE::Any(SExprAny::Expr(_)))
+        ));
+    }
+
+    #[test]
+    fn test_gradual_heterogeneous_map_rejects_homogeneous_annotation() {
+        let m: VarName = "gradual_heterogeneous_map_annotated_m".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            m.clone(),
+            SExpr::Map(BTreeMap::from([
+                ("x".into(), SExpr::Val(Value::Int(1))),
+                ("y".into(), SExpr::Val(Value::Str("a".into()))),
+            ])),
+        );
+        let mut type_annotations = BTreeMap::new();
+        type_annotations.insert(m.clone(), StreamType::Map(Box::new(StreamType::Int)));
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([m.clone()]),
+            stream_vars: BTreeSet::from([m]),
+            exprs,
+            type_annotations,
+            aux_vars: BTreeSet::new(),
+        };
+
+        let errors = type_check_gradual(spec).expect_err("homogeneous annotation should fail");
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn test_gradual_infers_unannotated_struct_fields() {
+        let robot: VarName = "gradual_struct_robot".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            robot.clone(),
+            SExpr::Struct(BTreeMap::from([
+                ("id".into(), SExpr::Val(Value::Int(1))),
+                ("name".into(), SExpr::Val(Value::Str("r2d2".into()))),
+            ])),
+        );
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([robot.clone()]),
+            stream_vars: BTreeSet::from([robot.clone()]),
+            exprs,
+            type_annotations: BTreeMap::new(),
+            aux_vars: BTreeSet::new(),
+        };
+
+        let typed = type_check_gradual(spec).expect("struct fields should be inferred");
+        assert_eq!(
+            typed.type_annotations.get(&robot),
+            Some(&StreamType::Struct(
+                EcoVec::from(vec![
+                    ("id".into(), StreamType::Int),
+                    ("name".into(), StreamType::Str),
+                ]),
+                false,
+            ))
+        );
+        let Some(SExprTE::Struct(st)) = typed.var_expr(&robot) else {
+            panic!("expected inferred struct expression");
+        };
+        assert_eq!(
+            st.typ_map,
+            EcoVec::from(vec![
+                ("id".into(), TCType::Int),
+                ("name".into(), TCType::Str)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_gradual_inferred_struct_can_feed_field_access() {
+        let robot: VarName = "gradual_struct_a_robot".into();
+        let name: VarName = "gradual_struct_z_name".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            robot.clone(),
+            SExpr::Struct(BTreeMap::from([
+                ("id".into(), SExpr::Val(Value::Int(1))),
+                ("name".into(), SExpr::Val(Value::Str("r2d2".into()))),
+            ])),
+        );
+        exprs.insert(
+            name.clone(),
+            SExpr::SGet(Box::new(SExpr::Var(robot.clone())), "name".into()),
+        );
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([name.clone()]),
+            stream_vars: BTreeSet::from([robot.clone(), name.clone()]),
+            exprs,
+            type_annotations: BTreeMap::new(),
+            aux_vars: BTreeSet::from([robot]),
+        };
+
+        let typed = type_check_gradual(spec).expect("field access should use inferred struct type");
+        assert_eq!(typed.type_annotations.get(&name), Some(&StreamType::Str));
+        assert!(matches!(typed.var_expr(&name), Some(SExprTE::Str(_))));
+    }
+
+    #[test]
+    fn test_gradual_struct_annotation_rejects_field_mismatch() {
+        let robot: VarName = "gradual_struct_bad_robot".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            robot.clone(),
+            SExpr::Struct(BTreeMap::from([
+                ("id".into(), SExpr::Val(Value::Str("not an int".into()))),
+                ("name".into(), SExpr::Val(Value::Str("r2d2".into()))),
+            ])),
+        );
+        let mut type_annotations = BTreeMap::new();
+        type_annotations.insert(
+            robot.clone(),
+            StreamType::Struct(
+                EcoVec::from(vec![
+                    ("id".into(), StreamType::Int),
+                    ("name".into(), StreamType::Str),
+                ]),
+                false,
+            ),
+        );
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([robot.clone()]),
+            stream_vars: BTreeSet::from([robot]),
+            exprs,
+            type_annotations,
+            aux_vars: BTreeSet::new(),
+        };
+
+        let errors = type_check_gradual(spec).expect_err("field annotation mismatch should fail");
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn test_gradual_heterogeneous_if_falls_back_to_any() {
+        // A heterogeneous conditional is not a guaranteed runtime crash: only
+        // one branch is selected at each timestamp, so gradual mode may defer
+        // the result type to the untyped runtime.
+        let z: VarName = "gradual_heterogeneous_if_z".into();
+        let c: VarName = "gradual_heterogeneous_if_c".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            z.clone(),
+            SExpr::If(
+                Box::new(SExpr::Var(c.clone())),
+                Box::new(SExpr::Val(Value::Int(1))),
+                Box::new(SExpr::Val(Value::Str("a".into()))),
+            ),
+        );
+        let mut type_annotations = BTreeMap::new();
+        type_annotations.insert(c, StreamType::Bool);
+        let spec = UntypedDsrvSpecification {
+            input_vars: BTreeSet::new(),
+            output_vars: BTreeSet::from([z.clone()]),
+            stream_vars: BTreeSet::from([z.clone()]),
+            exprs,
+            type_annotations,
+            aux_vars: BTreeSet::new(),
+        };
+
+        let typed = type_check_gradual(spec).expect("heterogeneous if should widen to Any");
         assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Any));
         assert!(matches!(
             typed.var_expr(&z),

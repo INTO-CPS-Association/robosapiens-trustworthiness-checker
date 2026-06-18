@@ -165,6 +165,10 @@ mod tests {
         let exp = "Ok(Val(Bool(false)))";
         assert_eq!(presult_to_string(&parsed), exp);
 
+        let parsed = parse_sexpr("()");
+        let exp = "Ok(Val(Unit))";
+        assert_eq!(presult_to_string(&parsed), exp);
+
         let parsed = parse_sexpr("\"x+y\"");
         let exp = "Ok(Val(Str(\"x+y\")))";
         assert_eq!(presult_to_string(&parsed), exp);

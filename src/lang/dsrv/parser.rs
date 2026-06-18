@@ -1086,6 +1086,7 @@ mod tests {
             val(&mut (*"false".to_string()).into()),
             Ok(Value::Bool(false)),
         );
+        assert_eq!(val(&mut (*"()".to_string()).into()), Ok(Value::Unit));
         assert_eq!(
             val(&mut (*"\"x+y\"".to_string()).into()),
             Ok(Value::Str("x+y".into())),

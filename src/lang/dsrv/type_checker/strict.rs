@@ -26,10 +26,13 @@ pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpe
         if let Ok(ref te) = typed_expr {
             let actual = extract_type(te);
             if actual != TCType::from_stream_type(&expected) {
-                errors.push(SemanticError::TypeError(format!(
-                    "Variable {:?} has declared type {:?}, but expression has type {:?}",
-                    var, expected, actual
-                )));
+                errors.push(SemanticError::type_error(
+                    TypeErrorKind::AnnotationTypeMismatch,
+                    format!(
+                        "Variable {:?} has declared type {:?}, but expression has type {:?}",
+                        var, expected, actual
+                    ),
+                ));
             }
         }
         typed_exprs.insert(var, typed_expr);
