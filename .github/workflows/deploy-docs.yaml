@@ -39,10 +39,38 @@ jobs:
           cd docs
           mdbook build
 
+      - name: Restore existing GitHub Pages site
+        uses: actions/cache/restore@v4
+        with:
+          path: .pages-site
+          key: pages-site-${{ github.run_id }}
+          restore-keys: |
+            pages-site-
+
+      - name: Prepare GitHub Pages site
+        run: |
+          if [ -d .pages-site/benchmarks ]; then
+            mv .pages-site/benchmarks /tmp/benchmark-pages
+          fi
+
+          rm -rf .pages-site
+          mkdir -p .pages-site
+          cp -a docs/book/. .pages-site/
+
+          if [ -d /tmp/benchmark-pages ]; then
+            mv /tmp/benchmark-pages .pages-site/benchmarks
+          fi
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./docs/book
+          path: .pages-site
+
+      - name: Save GitHub Pages site
+        uses: actions/cache/save@v4
+        with:
+          path: .pages-site
+          key: pages-site-${{ github.run_id }}
 
   deploy:
     environment:

@@ -9,6 +9,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'pages' || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   workflow-default-settings:
     name: workflow default settings
@@ -29,13 +38,89 @@ jobs:
       - name: Build project for benching
         run: cargo bench --no-run
 
+      - name: Restore Criterion history
+        uses: actions/cache/restore@v4
+        with:
+          path: target/criterion
+          key: criterion-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            criterion-${{ runner.os }}-${{ github.ref_name }}-
+            criterion-${{ runner.os }}-main-
+            criterion-${{ runner.os }}-
+
         # Then run the tests and benches
       - name: Test project
         run: cargo test
       - name: Bench project
         run: cargo bench
+      - name: Save Criterion history
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: target/criterion
+          key: criterion-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
       - name: upload benchmark report
         uses: actions/upload-artifact@v4
         with:
           name: Benchmark report
           path: target/criterion/
+
+      - name: Restore GitHub Pages site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/restore@v4
+        with:
+          path: .pages-site
+          key: pages-site-${{ github.run_id }}
+          restore-keys: |
+            pages-site-
+
+      - name: Prepare benchmark pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          commit_dir=".pages-site/benchmarks/commits/${GITHUB_SHA}"
+
+          mkdir -p "${commit_dir}" ".pages-site/benchmarks/latest"
+          rm -rf "${commit_dir:?}/"* ".pages-site/benchmarks/latest/"*
+
+          cp -a target/criterion/. "${commit_dir}/"
+          cp -a target/criterion/. ".pages-site/benchmarks/latest/"
+
+          {
+            echo '<!doctype html>'
+            echo '<html lang="en">'
+            echo '<head>'
+            echo '  <meta charset="utf-8">'
+            echo '  <meta name="viewport" content="width=device-width, initial-scale=1">'
+            echo '  <title>Benchmark Reports</title>'
+            echo '</head>'
+            echo '<body>'
+            echo '  <h1>Benchmark Reports</h1>'
+            echo '  <p><a href="latest/report/index.html">Latest benchmark report</a></p>'
+            echo '  <h2>Commits</h2>'
+            echo '  <ul>'
+            find .pages-site/benchmarks/commits -mindepth 1 -maxdepth 1 -type d | sort -r | while read -r dir; do
+              sha="$(basename "$dir")"
+              printf '    <li><a href="commits/%s/report/index.html">%s</a></li>\n' "$sha" "$sha"
+            done
+            echo '  </ul>'
+            echo '</body>'
+            echo '</html>'
+          } > .pages-site/benchmarks/index.html
+
+      - name: Upload GitHub Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .pages-site
+
+      - name: Deploy benchmark pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Save GitHub Pages site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: .pages-site
+          key: pages-site-${{ github.run_id }}
