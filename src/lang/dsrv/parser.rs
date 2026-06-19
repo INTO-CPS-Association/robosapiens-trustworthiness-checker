@@ -1226,9 +1226,9 @@ pub fn sexpr_old(s: &mut &str) -> Result<SpannedExpr> {
     sexpr_with_source(source, s)
 }
 
-pub fn sexpr(s: &mut &str) -> SpannedExpr {
+pub fn sexpr(s: &mut &str) -> Result<SpannedExpr> {
     let source = *s;
-    sexpr_with_source(source, s).expect("parser failed in test")
+    sexpr_with_source(source, s)
 }
 
 pub fn sexpr_with_source(source: &str, s: &mut &str) -> Result<SpannedExpr> {
@@ -1521,6 +1521,29 @@ mod tests {
         )
     }
 
+    fn assert_specs_eq_ignoring_spans(
+        actual: &UntypedDsrvSpecification,
+        expected: &UntypedDsrvSpecification,
+    ) {
+        assert_eq!(actual.input_vars, expected.input_vars);
+        assert_eq!(actual.output_vars, expected.output_vars);
+        assert_eq!(actual.aux_vars, expected.aux_vars);
+        assert_eq!(actual.stream_vars, expected.stream_vars);
+        assert_eq!(actual.type_annotations, expected.type_annotations);
+
+        let actual_exprs = actual
+            .exprs
+            .iter()
+            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .collect::<BTreeMap<_, _>>();
+        let expected_exprs = expected
+            .exprs
+            .iter()
+            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual_exprs, expected_exprs);
+    }
+
     #[test]
     fn test_streamdata() {
         assert_eq!(val(&mut (*"42".to_string()).into()), Ok(Value::Int(42)));
@@ -1553,79 +1576,40 @@ mod tests {
     #[test]
     fn test_sexpr() -> Result<(), ContextError> {
         assert_eq!(
-            sexpr(&mut (*"1 + 2".to_string()).into()),
-            SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::Val(Value::Int(2))),
-                SBinOp::NOp(NumericalBinOp::Add),
-            ),
+            presult_strip_span(&sexpr(&mut (*"1 + 2".to_string()).into())),
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)))",
         );
         assert_eq!(
-            sexpr(&mut (*"1 + 2 * 3".to_string()).into()),
-            SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::BinOp(
-                    Box::new(SExpr::Val(Value::Int(2))),
-                    Box::new(SExpr::Val(Value::Int(3))),
-                    SBinOp::NOp(NumericalBinOp::Mul),
-                )),
-                SBinOp::NOp(NumericalBinOp::Add),
-            ),
+            presult_strip_span(&sexpr(&mut (*"1 + 2 * 3".to_string()).into())),
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)))",
         );
         assert_eq!(
-            sexpr(&mut (*"x + (y + 2)".to_string()).into()),
-            SExpr::BinOp(
-                Box::new(SExpr::Var("x".into())),
-                Box::new(SExpr::BinOp(
-                    Box::new(SExpr::Var("y".into())),
-                    Box::new(SExpr::Val(Value::Int(2))),
-                    SBinOp::NOp(NumericalBinOp::Add),
-                )),
-                SBinOp::NOp(NumericalBinOp::Add),
-            ),
+            presult_strip_span(&sexpr(&mut (*"x + (y + 2)".to_string()).into())),
+            r#"Ok(BinOp(Var(VarName::new("x")), BinOp(Var(VarName::new("y")), Val(Int(2)), NOp(Add)), NOp(Add)))"#,
         );
         assert_eq!(
-            sexpr(&mut (*"if true then 1 else 2".to_string()).into()),
-            SExpr::If(
-                Box::new(SExpr::Val(true)),
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::Val(Value::Int(2))),
-            ),
+            presult_strip_span(&sexpr(&mut (*"if true then 1 else 2".to_string()).into())),
+            "Ok(If(Val(Bool(true)), Val(Int(1)), Val(Int(2))))",
         );
         assert_eq!(
-            sexpr(&mut (*"(x)[1]".to_string()).into()),
-            SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1),
+            presult_strip_span(&sexpr(&mut (*"(x)[1]".to_string()).into())),
+            r#"Ok(SIndex(Var(VarName::new("x")), 1))"#,
         );
         assert_eq!(
-            sexpr(&mut (*"(x + y)[3]".to_string()).into()),
-            SExpr::SIndex(
-                Box::new(SExpr::BinOp(
-                    Box::new(SExpr::Var("x".into())),
-                    Box::new(SExpr::Var("y".into()),),
-                    SBinOp::NOp(NumericalBinOp::Add),
-                )),
-                3
-            ),
+            presult_strip_span(&sexpr(&mut (*"(x + y)[3]".to_string()).into())),
+            r#"Ok(SIndex(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), NOp(Add)), 3))"#,
         );
         assert_eq!(
-            sexpr(&mut (*"1 + (x)[1]".to_string()).into()),
-            SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1))),
-                Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1),),
-                SBinOp::NOp(NumericalBinOp::Add),
-            )
+            presult_strip_span(&sexpr(&mut (*"1 + (x)[1]".to_string()).into())),
+            r#"Ok(BinOp(Val(Int(1)), SIndex(Var(VarName::new("x")), 1), NOp(Add)))"#
         );
         assert_eq!(
-            sexpr(&mut (*"\"test\"".to_string()).into()),
-            SExpr::Val(Value::Str("test".into())),
+            presult_strip_span(&sexpr(&mut (*"\"test\"".to_string()).into())),
+            r#"Ok(Val(Str("test")))"#,
         );
         assert_eq!(
-            sexpr(&mut (*"(stage == \"m\")").into()),
-            SExpr::BinOp(
-                Box::new(SExpr::Var("stage".into())),
-                Box::new(SExpr::Val("m")),
-                SBinOp::COp(CompBinOp::Eq),
-            )
+            presult_strip_span(&sexpr(&mut (*"(stage == \"m\")").into())),
+            r#"Ok(BinOp(Var(VarName::new("stage")), Val(Str("m")), COp(Eq)))"#
         );
         Ok(())
     }
@@ -1694,7 +1678,10 @@ mod tests {
             BTreeMap::new(),
             vec!["u".into(), "w".into()],
         );
-        assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
+        assert_specs_eq_ignoring_spans(
+            &dsrv_specification(&mut (*input).into())?,
+            &simple_add_spec,
+        );
         Ok(())
     }
 
@@ -1726,7 +1713,10 @@ mod tests {
             ]),
             vec!["u".into(), "w".into()],
         );
-        assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
+        assert_specs_eq_ignoring_spans(
+            &dsrv_specification(&mut (*input).into())?,
+            &simple_add_spec,
+        );
         Ok(())
     }
 
@@ -1747,7 +1737,10 @@ mod tests {
             BTreeMap::new(),
             vec![],
         );
-        assert_eq!(dsrv_specification(&mut (*input).into())?, simple_add_spec);
+        assert_specs_eq_ignoring_spans(
+            &dsrv_specification(&mut (*input).into())?,
+            &simple_add_spec,
+        );
         Ok(())
     }
 
@@ -1772,7 +1765,7 @@ mod tests {
             ]),
             vec![],
         );
-        assert_eq!(dsrv_specification(&mut input)?, simple_add_spec);
+        assert_specs_eq_ignoring_spans(&dsrv_specification(&mut input)?, &simple_add_spec);
         Ok(())
     }
 
@@ -1797,7 +1790,7 @@ mod tests {
             ]),
             vec![],
         );
-        assert_eq!(dsrv_specification(&mut input)?, simple_add_spec);
+        assert_specs_eq_ignoring_spans(&dsrv_specification(&mut input)?, &simple_add_spec);
         Ok(())
     }
 
@@ -1820,7 +1813,7 @@ mod tests {
             BTreeMap::new(),
             vec![],
         );
-        assert_eq!(dsrv_specification(&mut (*input).into())?, count_spec);
+        assert_specs_eq_ignoring_spans(&dsrv_specification(&mut (*input).into())?, &count_spec);
         Ok(())
     }
 
@@ -1858,7 +1851,7 @@ mod tests {
             BTreeMap::new(),
             vec![],
         );
-        assert_eq!(dsrv_specification(&mut (*input).into())?, eval_spec);
+        assert_specs_eq_ignoring_spans(&dsrv_specification(&mut (*input).into())?, &eval_spec);
         Ok(())
     }
 
@@ -2272,7 +2265,6 @@ mod tests {
 
     #[test]
     fn test_parse_list() {
-        assert_eq!(sexpr(&mut r#"List()"#), (SExpr::List(eco_vec![])));
         // Same as above
         assert_eq!(
             presult_strip_span(&sexpr(&mut r#"List()"#)),
@@ -2399,7 +2391,6 @@ mod tests {
 
     #[test]
     fn test_parse_map() {
-        assert_eq!(sexpr(&mut r#"Map()"#), (SExpr::Map(BTreeMap::new())),);
         assert_eq!(
             presult_strip_span(&sexpr(&mut r#"Map()"#)),
             r#"Ok(Map({}))"#

@@ -66,7 +66,7 @@ impl From<&Span> for Range<usize> {
 }
 
 // Generic Spanned struct that can be used to wrap any node with a span, used for the SExpr nodes in the AST to keep track of their location in the source code.
-#[derive(Clone, Copy, Eq, Hash, PartialOrd, Ord, Default, serde::Serialize)]
+#[derive(Clone, Copy, Default, Eq, Hash, PartialEq, PartialOrd, Ord, serde::Serialize)]
 pub struct Spanned<T> {
     pub node: T,
     pub span: Span,
@@ -93,12 +93,6 @@ impl From<SExpr> for SpannedExpr {
             node,
             span: Span::default(),
         }
-    }
-}
-
-impl<T: PartialEq> PartialEq for Spanned<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.node == other.node
     }
 }
 
@@ -458,6 +452,55 @@ pub fn strip_span(e: &Spanned<SExpr>) -> String {
     }
 }
 
-pub fn presult_strip_span(e: &Spanned<SExpr>) -> String {
-    format!("Ok({})", strip_span(e))
+pub trait SpanStrippedDisplay {
+    fn span_stripped_str(&self) -> String;
+}
+
+impl SpanStrippedDisplay for Spanned<SExpr> {
+    fn span_stripped_str(&self) -> String {
+        format!("Ok({})", strip_span(self))
+    }
+}
+
+impl<E: fmt::Debug> SpanStrippedDisplay for Result<Spanned<SExpr>, E> {
+    fn span_stripped_str(&self) -> String {
+        match self {
+            Ok(expr) => format!("Ok({})", strip_span(expr)),
+            Err(err) => format!("Err({err:?})"),
+        }
+    }
+}
+
+pub fn presult_strip_span<T: SpanStrippedDisplay + ?Sized>(e: &T) -> String {
+    e.span_stripped_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Span, Spanned};
+    use std::collections::{BTreeSet, HashSet};
+
+    #[test]
+    fn spanned_equality_hash_and_order_include_span() {
+        let a = Spanned {
+            node: 7,
+            span: Span::new(0, 1),
+        };
+        let b = Spanned {
+            node: 7,
+            span: Span::new(10, 20),
+        };
+
+        assert_ne!(a, b);
+
+        let mut hash_set = HashSet::new();
+        hash_set.insert(a);
+        hash_set.insert(b);
+        assert_eq!(hash_set.len(), 2);
+
+        let mut btree_set = BTreeSet::new();
+        btree_set.insert(a);
+        btree_set.insert(b);
+        assert_eq!(btree_set.len(), 2);
+    }
 }

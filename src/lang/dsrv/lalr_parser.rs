@@ -191,12 +191,35 @@ mod tests {
     use crate::lang::dsrv::span::Span;
 
     use crate::core::StreamTypeAscription;
-    use crate::lang::dsrv::span::presult_strip_span;
+    use crate::lang::dsrv::span::{presult_strip_span, strip_span};
 
     use super::*;
     use test_log::test;
 
     type SExpr = SpannedExpr;
+
+    fn assert_specs_eq_ignoring_spans(
+        actual: &UntypedDsrvSpecification,
+        expected: &UntypedDsrvSpecification,
+    ) {
+        assert_eq!(actual.input_vars, expected.input_vars);
+        assert_eq!(actual.output_vars, expected.output_vars);
+        assert_eq!(actual.aux_vars, expected.aux_vars);
+        assert_eq!(actual.stream_vars, expected.stream_vars);
+        assert_eq!(actual.type_annotations, expected.type_annotations);
+
+        let actual_exprs = actual
+            .exprs
+            .iter()
+            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .collect::<BTreeMap<_, _>>();
+        let expected_exprs = expected
+            .exprs
+            .iter()
+            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual_exprs, expected_exprs);
+    }
 
     #[test]
     fn test_streamdata() {
@@ -378,7 +401,7 @@ mod tests {
         let spec = parse_str(input);
         assert!(spec.is_ok());
         let spec = spec.unwrap();
-        assert_eq!(spec, simple_add_spec);
+        assert_specs_eq_ignoring_spans(&spec, &simple_add_spec);
     }
 
     #[test]
@@ -405,7 +428,7 @@ mod tests {
         let spec = parse_str(input);
         assert!(spec.is_ok());
         let spec = spec.unwrap();
-        assert_eq!(spec, simple_add_spec);
+        assert_specs_eq_ignoring_spans(&spec, &simple_add_spec);
     }
 
     #[test]
@@ -432,7 +455,7 @@ mod tests {
         let spec = parse_str(input);
         assert!(spec.is_ok());
         let spec = spec.unwrap();
-        assert_eq!(spec, simple_add_spec);
+        assert_specs_eq_ignoring_spans(&spec, &simple_add_spec);
     }
 
     #[test]
@@ -457,7 +480,7 @@ mod tests {
         let spec = parse_str(input);
         assert!(spec.is_ok());
         let spec = spec.unwrap();
-        assert_eq!(spec, count_spec);
+        assert_specs_eq_ignoring_spans(&spec, &count_spec);
     }
 
     #[test]
@@ -496,7 +519,7 @@ mod tests {
         let spec = parse_str(input);
         assert!(spec.is_ok());
         let spec = spec.unwrap();
-        assert_eq!(spec, dynamic_spec);
+        assert_specs_eq_ignoring_spans(&spec, &dynamic_spec);
     }
 
     #[test]

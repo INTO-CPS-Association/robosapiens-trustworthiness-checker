@@ -334,6 +334,7 @@ mod tests {
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
     use crate::dsrv_specification;
     use crate::lang::dsrv::ast::SpannedExpr;
+    use crate::lang::dsrv::span::strip_span;
     use proptest::prelude::*;
     use test_log::test;
     use winnow::Parser;
@@ -341,6 +342,29 @@ mod tests {
     use crate::lang::dsrv::ast::generation::arb_boolean_dsrv_spec;
     type SExpr = SpannedExpr;
     use super::*;
+
+    fn assert_specs_eq_ignoring_spans(
+        actual: &UntypedDsrvSpecification,
+        expected: &UntypedDsrvSpecification,
+    ) {
+        assert_eq!(actual.input_vars, expected.input_vars);
+        assert_eq!(actual.output_vars, expected.output_vars);
+        assert_eq!(actual.aux_vars, expected.aux_vars);
+        assert_eq!(actual.stream_vars, expected.stream_vars);
+        assert_eq!(actual.type_annotations, expected.type_annotations);
+
+        let actual_exprs = actual
+            .exprs
+            .iter()
+            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .collect::<BTreeMap<_, _>>();
+        let expected_exprs = expected
+            .exprs
+            .iter()
+            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual_exprs, expected_exprs);
+    }
 
     #[test]
     fn test_localise_specification_1() {
@@ -408,9 +432,9 @@ mod tests {
         let local_spec1 = spec.localise(&vec!["w".into()]);
         let local_spec2 = spec.localise(&vec!["v".into()]);
 
-        assert_eq!(
-            local_spec1,
-            UntypedDsrvSpecification::new(
+        assert_specs_eq_ignoring_spans(
+            &local_spec1,
+            &UntypedDsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
                 vec![(
@@ -418,19 +442,19 @@ mod tests {
                     SExpr::BinOp(
                         Box::new(SExpr::Var("x".into())),
                         Box::new(SExpr::Var("y".into())),
-                        "+".into()
-                    )
+                        "+".into(),
+                    ),
                 )]
                 .into_iter()
                 .collect(),
                 BTreeMap::new(),
                 vec![],
-            )
+            ),
         );
 
-        assert_eq!(
-            local_spec2,
-            UntypedDsrvSpecification::new(
+        assert_specs_eq_ignoring_spans(
+            &local_spec2,
+            &UntypedDsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
                 vec![(
@@ -438,14 +462,14 @@ mod tests {
                     SExpr::BinOp(
                         Box::new(SExpr::Var("z".into())),
                         Box::new(SExpr::Var("w".into())),
-                        "+".into()
-                    )
+                        "+".into(),
+                    ),
                 )]
                 .into_iter()
                 .collect(),
                 BTreeMap::new(),
                 vec![],
-            )
+            ),
         );
     }
 
@@ -470,9 +494,9 @@ mod tests {
         let local_spec1 = spec.localise(&vec!["w".into()]);
         let local_spec2 = spec.localise(&vec!["v".into()]);
 
-        assert_eq!(
-            local_spec1,
-            UntypedDsrvSpecification::new(
+        assert_specs_eq_ignoring_spans(
+            &local_spec1,
+            &UntypedDsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
                 vec![(
@@ -480,19 +504,19 @@ mod tests {
                     SExpr::BinOp(
                         Box::new(SExpr::Var("x".into())),
                         Box::new(SExpr::Var("y".into())),
-                        "+".into()
-                    )
+                        "+".into(),
+                    ),
                 )]
                 .into_iter()
                 .collect(),
                 BTreeMap::new(),
                 vec![],
-            )
+            ),
         );
 
-        assert_eq!(
-            local_spec2,
-            UntypedDsrvSpecification::new(
+        assert_specs_eq_ignoring_spans(
+            &local_spec2,
+            &UntypedDsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
                 vec![(
@@ -500,14 +524,14 @@ mod tests {
                     SExpr::BinOp(
                         Box::new(SExpr::Var("z".into())),
                         Box::new(SExpr::Var("w".into())),
-                        "+".into()
-                    )
+                        "+".into(),
+                    ),
                 )]
                 .into_iter()
                 .collect(),
                 BTreeMap::new(),
                 vec![],
-            )
+            ),
         );
     }
 

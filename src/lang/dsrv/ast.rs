@@ -1056,6 +1056,7 @@ mod tests {
     use crate::lang::dsrv::ast::SpannedExpr as SExpr;
     use crate::lang::dsrv::lalr_parser::parse_sexpr;
     use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
+    use crate::lang::dsrv::span::strip_span;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
@@ -1069,21 +1070,21 @@ mod tests {
         fn test_prop_display_parse_roundtrip(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
             let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
-            prop_assert_eq!(parsed, e);
+            prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
         #[test]
         fn test_prop_display_parse_roundtrip_int(e in arb_int_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
             let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
-            prop_assert_eq!(parsed, e);
+            prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
         #[test]
         fn test_prop_display_parse_roundtrip_float(e in arb_float_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
             let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
-            prop_assert_eq!(parsed, e);
+            prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
         #[test]
@@ -1091,7 +1092,7 @@ mod tests {
             let formatted = format!("{}", e);
             info!("Testing roundtrip on {formatted} ({e:?})");
             let parsed = parse_sexpr(&formatted).expect(format!("Display output {formatted} should be parsable").as_str());
-            prop_assert_eq!(parsed, e);
+            prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
         #[test]
@@ -1107,7 +1108,7 @@ mod tests {
         fn test_prop_display_parse_roundtrip_mixed(e in arb_mixed_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
             let parsed = parse_sexpr(&formatted).expect("Mixed display output should be parsable");
-            prop_assert_eq!(parsed, e);
+            prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
         #[test]
@@ -1165,11 +1166,12 @@ mod tests {
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
-        assert_eq!(parsed_lalr, expr);
+        assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
 
         let mut input = formatted.as_str();
-        let parsed_comb = parse_sexpr_comb(&mut input);
-        assert_eq!(parsed_comb, expr);
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
@@ -1182,11 +1184,12 @@ mod tests {
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
-        assert_eq!(parsed_lalr, expr);
+        assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
 
         let mut input = formatted.as_str();
-        let parsed_comb = parse_sexpr_comb(&mut input);
-        assert_eq!(parsed_comb, expr);
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
@@ -1195,11 +1198,12 @@ mod tests {
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
-        assert_eq!(parsed_lalr, expr);
+        assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
 
         let mut input = formatted.as_str();
-        let parsed_comb = parse_sexpr_comb(&mut input);
-        assert_eq!(parsed_comb, expr);
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
@@ -1208,11 +1212,12 @@ mod tests {
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
-        assert_eq!(parsed_lalr, expr);
+        assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
 
         let mut input = formatted.as_str();
-        let parsed_comb = parse_sexpr_comb(&mut input);
-        assert_eq!(parsed_comb, expr);
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
@@ -1221,10 +1226,11 @@ mod tests {
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
-        assert_eq!(parsed_lalr, expr);
+        assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
 
         let mut input = formatted.as_str();
-        let parsed_comb = parse_sexpr_comb(&mut input);
-        assert_eq!(parsed_comb, expr);
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 }
