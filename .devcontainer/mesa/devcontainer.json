@@ -1,49 +1,59 @@
 {
-	"name": "RoboSapiens Adaptive Platform (MESA)",
-	"dockerComposeFile": "../../docker/docker-compose.yaml",
-	"service": "devtcmesa",
-	"runServices": [
-		"devtcmesa"
-	],
-	"workspaceFolder": "/ws",
-	"shutdownAction": "stopCompose",
-	"mounts": [
-		"source=${localWorkspaceFolder}/,target=/ws,type=bind,consistency=cached"
-	],
-	// "postCreateCommand": "pip install -r requirements.txt",
-	"customizations": {
-		"vscode": {
-			"settings": {
-				"terminal.integrated.defaultProfile.linux": "bash",
-				"terminal.integrated.profiles.linux": {
-					"bash": {
-						"path": "/bin/bash"
-					}
-				},
-				"rust-analyzer.cargo.features": [
-					"ros"
-				],
-				"rust-analyzer.runnables.extraEnv": {
-					"ROS_VERSION": 2,
-					"ROS_PYTHON_VERSION": 3,
-					"ROS_DISTRO": "humble",
-					"LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
-					"AMENT_PREFIX_PATH": "/opt/ros/humble",
-					"PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-				},
-				"rust-analyzer.server.extraEnv": {
-					"ROS_VERSION": 2,
-					"ROS_PYTHON_VERSION": 3,
-					"ROS_DISTRO": "humble",
-					"LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
-					"AMENT_PREFIX_PATH": "/opt/ros/humble",
-					"PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-				}
-			},
-			"extensions": [
-				"1YiB.rust-bundle",
-				"fill-labs.dependi"
-			]
-		}
-	}
+  "name": "RoboSapiens Adaptive Platform (MESA)",
+  "dockerComposeFile": "../../docker/docker-compose.yaml",
+  "service": "devtcmesa",
+  "runServices": [
+    "devtcmesa"
+  ],
+  "workspaceFolder": "/ws",
+  "shutdownAction": "stopCompose",
+  "mounts": [
+    "source=${localWorkspaceFolder}/,target=/ws,type=bind,consistency=cached"
+  ],
+  "remoteEnv": {
+    "ROS_VERSION": "2",
+    "ROS_PYTHON_VERSION": "3",
+    "ROS_DISTRO": "humble",
+    "AMENT_PREFIX_PATH": "/opt/ros_interfaces/install/robo_sapiens_interfaces:/opt/ros_interfaces/install/id_pose_msgs:/opt/ros/humble",
+    "PYTHONPATH": "/opt/ros_interfaces/install/robo_sapiens_interfaces/local/lib/python3.10/dist-packages:/opt/ros_interfaces/install/id_pose_msgs/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages",
+    "COLCON_PREFIX_PATH": "/opt/ros_interfaces/install",
+    "LD_LIBRARY_PATH": "/opt/ros_interfaces/install/robo_sapiens_interfaces/lib:/opt/ros_interfaces/install/id_pose_msgs/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+    "PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  },
+  // "postCreateCommand": "pip install -r requirements.txt",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "/bin/bash"
+          }
+        },
+        "rust-analyzer.cargo.features": [
+          "ros"
+        ],
+        "rust-analyzer.runnables.extraEnv": {
+          "ROS_VERSION": 2,
+          "ROS_PYTHON_VERSION": 3,
+          "ROS_DISTRO": "humble",
+          "LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+          "AMENT_PREFIX_PATH": "/opt/ros/humble",
+          "PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        },
+        "rust-analyzer.server.extraEnv": {
+          "ROS_VERSION": 2,
+          "ROS_PYTHON_VERSION": 3,
+          "ROS_DISTRO": "humble",
+          "LD_LIBRARY_PATH": "/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
+          "AMENT_PREFIX_PATH": "/opt/ros/humble",
+          "PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        }
+      },
+      "extensions": [
+        "1YiB.rust-bundle",
+        "fill-labs.dependi"
+      ]
+    }
+  }
 }
