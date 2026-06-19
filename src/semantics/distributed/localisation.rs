@@ -93,9 +93,7 @@ fn replace_var(var: &VarName, var_expr: &SpannedExpr, repl_expr: &SpannedExpr) -
             Box::new(replace_var(var, var_expr, sexpr)),
             Box::new(replace_var(var, var_expr, sexpr1)),
         ),
-        SExpr::IsDefined(sexpr) => {
-            SExpr::IsDefined(Box::new(replace_var(var, var_expr, sexpr)))
-        }
+        SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(replace_var(var, var_expr, sexpr))),
         SExpr::When(sexpr) => SExpr::When(Box::new(replace_var(var, var_expr, sexpr))),
         SExpr::Latch(sexpr, sexpr1) => SExpr::Latch(
             Box::new(replace_var(var, var_expr, sexpr)),

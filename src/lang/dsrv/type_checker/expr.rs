@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::core::{StreamType, StreamTypeAscription};
-use crate::lang::dsrv::ast::{CompBinOp, SBinOp, SExpr, SpannedExpr};
+use crate::lang::dsrv::ast::{
+    BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, SpannedExpr, StrBinOp,
+};
 use crate::{Value, VarName};
 use ecow::{EcoString, EcoVec};
 use std::collections::BTreeMap;
@@ -97,6 +99,35 @@ impl TypeCheckableHelper<SExprTE> for Value {
                 Err(())
             }
         }
+    }
+}
+
+fn binary_operator_symbol(op: &SBinOp) -> &'static str {
+    match op {
+        SBinOp::NOp(NumericalBinOp::Add) => "`+`",
+        SBinOp::NOp(NumericalBinOp::Sub) => "`-`",
+        SBinOp::NOp(NumericalBinOp::Mul) => "`*`",
+        SBinOp::NOp(NumericalBinOp::Div) => "`/`",
+        SBinOp::NOp(NumericalBinOp::Mod) => "`%`",
+        SBinOp::BOp(BoolBinOp::Or) => "`||`",
+        SBinOp::BOp(BoolBinOp::And) => "`&&`",
+        SBinOp::BOp(BoolBinOp::Impl) => "`=>`",
+        SBinOp::SOp(StrBinOp::Concat) => "`++`",
+        SBinOp::COp(CompBinOp::Eq) => "`==`",
+        SBinOp::COp(CompBinOp::Le) => "`<=`",
+        SBinOp::COp(CompBinOp::Ge) => "`>=`",
+        SBinOp::COp(CompBinOp::Lt) => "`<`",
+        SBinOp::COp(CompBinOp::Gt) => "`>`",
+    }
+}
+
+fn binary_operator_expected_operands(op: &SBinOp) -> &'static str {
+    match op {
+        SBinOp::NOp(_) => "Int and Int, or Float and Float",
+        SBinOp::BOp(_) => "Bool and Bool",
+        SBinOp::SOp(StrBinOp::Concat) => "Str and Str",
+        SBinOp::COp(CompBinOp::Eq) => "two operands of the same type",
+        SBinOp::COp(_) => "two Int, Float, or Str operands of the same type",
     }
 }
 
@@ -348,8 +379,9 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
                 errs.push(SemanticError::type_error(
                     TypeErrorKind::OperatorTypeMismatch,
                     format!(
-                        "Cannot apply binary function {} to expressions of types: {} and {}",
-                        op,
+                        "Cannot apply operator {}: expected {}, got left operand {} and right operand {}",
+                        binary_operator_symbol(op),
+                        binary_operator_expected_operands(op),
                         ste1.display_with_type(),
                         ste2.display_with_type()
                     ),
@@ -3068,6 +3100,43 @@ mod tests {
         assert!(lines.contains(&"out d: Int"));
         assert!(lines.contains(&"z = (x + y)"));
         assert!(lines.contains(&"d = dynamic(s: Int)"));
+    }
+
+    #[test]
+    fn test_string_concat_type_error_uses_readable_operands() {
+        let lhs = SExprV::BinOp(
+            Box::new(SExprV::SGet(
+                Box::new(SExprV::Var("test_struct".into())),
+                "b".into(),
+            )),
+            Box::new(SExprV::Val(Value::Int(4))),
+            SBinOp::NOp(NumericalBinOp::Mul),
+        );
+        let expr = SExprV::BinOp(
+            Box::new(lhs),
+            Box::new(SExprV::Val(Value::Str("d".into()))),
+            SBinOp::SOp(StrBinOp::Concat),
+        );
+        let mut ctx = TypeInfo::new();
+        ctx.insert(
+            "test_struct".into(),
+            StreamType::Struct(
+                eco_vec![("a".into(), StreamType::Str), ("b".into(), StreamType::Int),],
+                false,
+            ),
+        );
+
+        let errors = expr.type_check(&mut ctx).unwrap_err();
+        let message = match &errors[0] {
+            SemanticError::TypeError(error) => error.message(),
+            other => panic!("expected type error, got {other:?}"),
+        };
+
+        assert_eq!(
+            message,
+            "Cannot apply operator `++`: expected Str and Str, got left operand (Struct.get(test_struct, \"b\") * 4): Int and right operand d: Str"
+        );
+        assert!(!message.contains("TypedStructExpr"));
     }
 
     #[test]

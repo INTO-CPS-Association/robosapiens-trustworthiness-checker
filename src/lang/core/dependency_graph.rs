@@ -6,13 +6,13 @@ use petgraph::prelude::EdgeIndex;
 use petgraph::visit::{EdgeRef, IntoNodeReferences};
 use tracing::debug;
 
+use crate::lang::dsrv::ast::{SExpr, UntypedDsrvSpecification};
 use crate::lang::dsrv::type_checker::{
     SExprAny, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
     TypedDsrvSpecification, TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind,
     TypedStructExpr, TypedStructExprKind,
 };
 use crate::semantics::AsyncConfig;
-use crate::lang::dsrv::ast::{SExpr, UntypedDsrvSpecification};
 use crate::{Specification, VarName};
 
 pub trait DependencyGraphExpr {

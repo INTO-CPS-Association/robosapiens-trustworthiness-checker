@@ -129,7 +129,11 @@ pub fn linebreak(s: &mut &str) -> Result<()> {
 pub fn line_comment(s: &mut &str) -> Result<()> {
     delimited(
         whitespace,
-        seq!("//", take_while(0.., |c| c != '\n' && c != '\r'), opt(line_ending)),
+        seq!(
+            "//",
+            take_while(0.., |c| c != '\n' && c != '\r'),
+            opt(line_ending)
+        ),
         whitespace,
     )
     .map(|_| ())

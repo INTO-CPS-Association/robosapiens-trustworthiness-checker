@@ -1470,10 +1470,7 @@ pub fn dsrv_specification_with_source(
         UntypedDsrvSpecification::new(
             input_vars.iter().map(|(name, _)| name.clone()).collect(),
             output_vars.iter().map(|(name, _)| name.clone()).collect(),
-            exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr))
-                .collect(),
+            exprs.into_iter().map(|(name, expr)| (name, expr)).collect(),
             input_vars
                 .iter()
                 .chain(output_vars.iter())

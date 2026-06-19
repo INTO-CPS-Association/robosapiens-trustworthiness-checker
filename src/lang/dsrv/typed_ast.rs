@@ -937,11 +937,11 @@ impl Display for SExprInt {
                     .join(", ");
                 write!(f, "dynamic({}: Int, {{{}}})", e, env)
             }
-            LLen(list) => write!(f, "len({:?})", list),
-            LHeadList(list) => write!(f, "head({:?})", list),
-            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
-            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
+            LLen(list) => write!(f, "len({})", list),
+            LHeadList(list) => write!(f, "List.head({})", list),
+            LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
         }
     }
 }
@@ -979,10 +979,10 @@ impl Display for SExprFloat {
                     .join(", ");
                 write!(f, "dynamic({}: Float, {{{}}})", e, env)
             }
-            LHeadList(list) => write!(f, "head({:?})", list),
-            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
-            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
+            LHeadList(list) => write!(f, "List.head({})", list),
+            LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
         }
     }
 }
@@ -1011,10 +1011,10 @@ impl Display for SExprStr {
                     .join(", ");
                 write!(f, "dynamic({}: Str, {{{}}})", e, env)
             }
-            LHeadList(list) => write!(f, "head({:?})", list),
-            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
-            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
+            LHeadList(list) => write!(f, "List.head({})", list),
+            LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
         }
     }
 }
@@ -1042,10 +1042,10 @@ impl Display for SExprUnit {
                     .join(", ");
                 write!(f, "dynamic({}: Unit, {{{}}})", e, env)
             }
-            LHeadList(list) => write!(f, "head({:?})", list),
-            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
-            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
+            LHeadList(list) => write!(f, "List.head({})", list),
+            LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
         }
     }
 }
@@ -1080,11 +1080,11 @@ impl Display for SExprBool {
 
             IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),
             When(sexpr) => write!(f, "when({})", sexpr),
-            LHeadList(list) => write!(f, "head({:?})", list),
-            LIndexList(list, idx) => write!(f, "index({:?}, {})", list, idx),
-            MGetMap(map, key) => write!(f, "Map.get({:?}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({:?}, {:?})", st, key),
-            MHasKeyMap(map, key) => write!(f, "Map.has_key({:?}, {:?})", map, key),
+            LHeadList(list) => write!(f, "List.head({})", list),
+            LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
+            MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
+            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
+            MHasKeyMap(map, key) => write!(f, "Map.has_key({}, {:?})", map, key),
 
             Defer(e, _, _) => write!(f, "defer({}: Bool)", e),
             Dynamic(e, _) => write!(f, "dynamic({}: Bool)", e),
