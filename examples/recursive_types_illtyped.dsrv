@@ -11,5 +11,5 @@ out s: Str
 nested_list = List(List(x, x + 1))
 nested_map = Map("flags": List(flag, !flag))
 value = x + 1
-s = test_struct.a ++ "abc"
-y = test_struct.b * 4
+y = test_struct.a ++ "abc"
+s = test_struct.b * 4
