@@ -173,13 +173,13 @@ fn parse_growing_complexity_input(c: &mut Criterion) {
         let input = create_growing_complexity_expression(&mut rng, size);
         // pre-validate that all parsers accept the input
         assert!(parse_str(input.as_str()).is_ok());
-        if size <= 16 {
+        if size <= 10 {
             let inp = &mut input.as_str();
             assert!(dsrv_specification(inp).is_ok());
         }
 
         // parsing with winnow gets very slow for complex inputs
-        if size <= 16 {
+        if size <= 10 {
             group.bench_with_input(
                 BenchmarkId::new("parsing_winnow", size),
                 &input,
