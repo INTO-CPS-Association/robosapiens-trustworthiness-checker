@@ -3,6 +3,7 @@ in flag: Bool
 in test_struct: Struct<a: Str, b: Int>
 
 out nested_list: List<List<Int>>
+out test_struct2: Struct<a: Str, b: Int>
 out nested_map: Map<List<Bool>>
 out value: Int
 out y: Int
@@ -13,3 +14,4 @@ nested_map = Map("flags": List(flag, !flag))
 value = x + 1
 y = test_struct.a ++ "abc"
 s = test_struct.b * 4
+test_struct2 = {"a": test_struct.a, "b": test_struct.a}
