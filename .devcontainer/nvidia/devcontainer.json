@@ -21,7 +21,6 @@
     "LD_LIBRARY_PATH": "/opt/ros_interfaces/install/robo_sapiens_interfaces/lib:/opt/ros_interfaces/install/id_pose_msgs/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib",
     "PATH": "/opt/ros/humble/bin:/home/${USER}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   },
-  // "postCreateCommand": "pip install -r requirements.txt",
   "customizations": {
     "vscode": {
       "settings": {

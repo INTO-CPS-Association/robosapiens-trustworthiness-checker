@@ -1,7 +1,11 @@
 # ROS distribution to use
 ARG ROS_DISTRO=humble
+ARG DSRV_LSP_URL=https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/releases/download/dsrv-lsp-2026-06-19/dsrv-lsp
+ARG DSRV_LSP_SHA256=5465d45283c3ef585b6d24496a7692f5bcf05ec151ee2ebc12f53547bb83ad8d
 
-FROM osrf/ros:${ROS_DISTRO}-desktop as base
+FROM osrf/ros:${ROS_DISTRO}-desktop AS base
+ARG DSRV_LSP_URL
+ARG DSRV_LSP_SHA256
 ENV ROS_DISTRO=${ROS_DISTRO}
 SHELL ["/bin/bash", "-c"]
 
@@ -16,6 +20,11 @@ COPY docker/entrypoint.sh /opt/entrypoint.sh
 RUN chmod a+rx /opt/entrypoint.sh\
     && chmod a+rx /opt/setup.bash
 
+RUN curl -fsSL "${DSRV_LSP_URL}" -o /usr/local/bin/dsrv-lsp \
+    && echo "${DSRV_LSP_SHA256}  /usr/local/bin/dsrv-lsp" | sha256sum -c - \
+    && chmod a+rx /usr/local/bin/dsrv-lsp \
+    && command -v dsrv-lsp
+
 COPY ros_interfaces /opt/ros_interfaces
 RUN source /opt/ros/humble/setup.bash && \
     cd /opt/ros_interfaces && \
@@ -24,7 +33,7 @@ RUN source /opt/ros/humble/setup.bash && \
 
 ENTRYPOINT ["/opt/entrypoint.sh"]
 
-FROM base as dev
+FROM base AS dev
 
 # Dev container arguments
 ARG USERNAME=devuser

@@ -5,6 +5,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       target: base
+      args:
+        - DSRV_LSP_URL=${DSRV_LSP_URL:-https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/releases/download/dsrv-lsp-2026-06-19/dsrv-lsp}
+        - DSRV_LSP_SHA256=${DSRV_LSP_SHA256:-5465d45283c3ef585b6d24496a7692f5bcf05ec151ee2ebc12f53547bb83ad8d}
     # command: tmux
     stdin_open: true
     ipc: host
@@ -29,7 +32,7 @@ services:
     network_mode: host
   dev:
     extends: base
-    depends_on: [ emqx ]
+    depends_on: [emqx]
     network_mode: host
     image: trustworthiness-checker:dev
     build:
@@ -40,6 +43,8 @@ services:
         - UID=${UID:-1000}
         - GID=${UID:-1000}
         - USERNAME=${USERNAME:-devuser}
+        - DSRV_LSP_URL=${DSRV_LSP_URL:-https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/releases/download/dsrv-lsp-2026-06-19/dsrv-lsp}
+        - DSRV_LSP_SHA256=${DSRV_LSP_SHA256:-5465d45283c3ef585b6d24496a7692f5bcf05ec151ee2ebc12f53547bb83ad8d}
     user: ${USERNAME:-devuser}
     command: sleep infinity
     volumes:
@@ -61,7 +66,7 @@ services:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [ gpu ]
+              capabilities: [gpu]
     environment:
       - NVIDIA_DRIVER_CAPABILITIES=all
 volumes:
