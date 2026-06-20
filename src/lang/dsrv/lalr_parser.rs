@@ -984,6 +984,14 @@ mod tests {
     #[test]
     fn test_parse_list() {
         assert_eq!(
+            presult_strip_span(&parse_sexpr(r#"[]"#).unwrap()),
+            r#"Ok(List([]))"#,
+        );
+        assert_eq!(
+            presult_strip_span(&parse_sexpr(r#"[1, 2]"#).unwrap()),
+            r#"Ok(List([Val(Int(1)), Val(Int(2))]))"#
+        );
+        assert_eq!(
             presult_strip_span(&parse_sexpr(r#"List()"#).unwrap()),
             r#"Ok(List([]))"#,
         );
@@ -1107,6 +1115,22 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_dynamic_type_ascription() {
+        assert_eq!(
+            presult_strip_span(&parse_sexpr(r#"dynamic(x: Int)"#).unwrap()),
+            r#"Ok(Dynamic(Var(VarName::new("x")), Ascribed(Int)))"#
+        );
+        assert_eq!(
+            presult_strip_span(&parse_sexpr(r#"dynamic(x: Int, {x, y})"#).unwrap()),
+            r#"Ok(RestrictedDynamic(Var(VarName::new("x")), Ascribed(Int), [VarName::new("x"), VarName::new("y")]))"#
+        );
+        assert_eq!(
+            presult_strip_span(&parse_sexpr(r#"defer(x: Int)"#).unwrap()),
+            r#"Ok(Defer(Var(VarName::new("x")), Ascribed(Int), []))"#
+        );
+    }
+
+    #[test]
     fn test_parse_map() {
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"Map()"#).unwrap()),
@@ -1114,8 +1138,13 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"{"x": 1, "y": 2}"#).unwrap()),
-            r#"Ok(ObjectLiteral({x: Val(Int(1)), y: Val(Int(2))}))"#
+            r#"Ok(ObjectLiteral({"x": Val(Int(1)), "y": Val(Int(2))}))"#
         );
+        assert_eq!(
+            presult_strip_span(&parse_sexpr(r#"{x: 1, y: 2}"#).unwrap()),
+            r#"Ok(ObjectLiteral({"x": Val(Int(1)), "y": Val(Int(2))}))"#
+        );
+        assert!(parse_sexpr(r#"Map(x: 1)"#).is_err());
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"Map("x": 1, "y": 2)"#).unwrap()),
             r#"Ok(Map({"x": Val(Int(1)), "y": Val(Int(2))}))"#
@@ -1175,7 +1204,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"Struct("id": 1).id"#).unwrap()),
-            r#"Ok(SGet(Struct({id: Val(Int(1))}), id))"#
+            r#"Ok(SGet(Struct({"id": Val(Int(1))}), id))"#
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"robot.sensor_value"#).unwrap()),

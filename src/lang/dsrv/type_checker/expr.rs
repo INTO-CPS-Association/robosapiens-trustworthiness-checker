@@ -4,9 +4,7 @@
 
 use super::*;
 use crate::core::{StreamType, StreamTypeAscription};
-use crate::lang::dsrv::ast::{
-    BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, SpannedExpr, StrBinOp,
-};
+use crate::lang::dsrv::ast::{CompBinOp, SBinOp, SExpr, SpannedExpr, StrBinOp};
 use crate::{Value, VarName};
 use ecow::{EcoString, EcoVec};
 use std::collections::BTreeMap;
@@ -99,25 +97,6 @@ impl TypeCheckableHelper<SExprTE> for Value {
                 Err(())
             }
         }
-    }
-}
-
-fn binary_operator_symbol(op: &SBinOp) -> &'static str {
-    match op {
-        SBinOp::NOp(NumericalBinOp::Add) => "`+`",
-        SBinOp::NOp(NumericalBinOp::Sub) => "`-`",
-        SBinOp::NOp(NumericalBinOp::Mul) => "`*`",
-        SBinOp::NOp(NumericalBinOp::Div) => "`/`",
-        SBinOp::NOp(NumericalBinOp::Mod) => "`%`",
-        SBinOp::BOp(BoolBinOp::Or) => "`||`",
-        SBinOp::BOp(BoolBinOp::And) => "`&&`",
-        SBinOp::BOp(BoolBinOp::Impl) => "`=>`",
-        SBinOp::SOp(StrBinOp::Concat) => "`++`",
-        SBinOp::COp(CompBinOp::Eq) => "`==`",
-        SBinOp::COp(CompBinOp::Le) => "`<=`",
-        SBinOp::COp(CompBinOp::Ge) => "`>=`",
-        SBinOp::COp(CompBinOp::Lt) => "`<`",
-        SBinOp::COp(CompBinOp::Gt) => "`>`",
     }
 }
 
@@ -379,8 +358,7 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
                 errs.push(SemanticError::type_error(
                     TypeErrorKind::OperatorTypeMismatch,
                     format!(
-                        "Cannot apply operator {}: expected {}, got left operand {} and right operand {}",
-                        binary_operator_symbol(op),
+                        "Cannot apply operator `{op}`: expected {}, got left operand {} and right operand {}",
                         binary_operator_expected_operands(op),
                         ste1.display_with_type(),
                         ste2.display_with_type()
@@ -3103,7 +3081,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string_concat_type_error_uses_readable_operands() {
+    fn test_binop_type_error_display() {
         let lhs = SExprV::BinOp(
             Box::new(SExprV::SGet(
                 Box::new(SExprV::Var("test_struct".into())),
@@ -3134,7 +3112,7 @@ mod tests {
 
         assert_eq!(
             message,
-            "Cannot apply operator `++`: expected Str and Str, got left operand (Struct.get(test_struct, \"b\") * 4): Int and right operand d: Str"
+            "Cannot apply operator `++`: expected Str and Str, got left operand (test_struct.b * 4): Int and right operand d: Str"
         );
         assert!(!message.contains("TypedStructExpr"));
     }
@@ -3179,17 +3157,14 @@ mod tests {
             ]),
         });
 
-        assert_eq!(
-            format!("{}", list.display_with_type()),
-            "List(1, 2): List<Int>"
-        );
+        assert_eq!(format!("{}", list.display_with_type()), "[1, 2]: List<Int>");
         assert_eq!(
             format!("{}", map.display_with_type()),
             "Map(\"ok\": true): Map<Bool>"
         );
         assert_eq!(
             format!("{}", structure.display_with_type()),
-            "Struct(\"id\": 7, \"flags\": List(true, false)): Struct<id: Int, flags: List<Bool>>"
+            "Struct(\"id\": 7, \"flags\": [true, false]): Struct<id: Int, flags: List<Bool>>"
         );
     }
 

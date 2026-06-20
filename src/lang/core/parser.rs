@@ -40,11 +40,18 @@ pub fn presult_to_string<T: Debug, E: Debug>(e: &Result<T, E>) -> String {
 
 // Used for Lists in input streams (can only be Values)
 fn value_list(s: &mut &str) -> Result<EcoVec<Value>> {
-    delimited(
-        seq!("List", whitespace, '('),
-        separated(0.., val_or_container, seq!(whitespace, ',', whitespace)),
-        ')',
-    )
+    alt((
+        delimited(
+            seq!("List", whitespace, '('),
+            separated(0.., val_or_container, seq!(whitespace, ',', whitespace)),
+            ')',
+        ),
+        delimited(
+            '[',
+            separated(0.., val_or_container, seq!(whitespace, ',', whitespace)),
+            ']',
+        ),
+    ))
     .map(|v: Vec<_>| EcoVec::from(v))
     .parse_next(s)
 }

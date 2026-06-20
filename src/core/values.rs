@@ -244,18 +244,20 @@ impl Display for Value {
             Value::Str(s) => write!(f, "{:?}", s),
             Value::Bool(b) => write!(f, "{}", b),
             Value::List(vals) => {
-                write!(f, "[")?;
-                for val in vals.iter() {
-                    write!(f, "{}, ", val)?;
-                }
-                write!(f, "]")
+                let vals = vals
+                    .iter()
+                    .map(|val| format!("{}", val))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "[{}]", vals)
             }
             Value::Map(map) => {
-                write!(f, "{{")?;
-                for (key, val) in map.iter() {
-                    write!(f, "{}: {}, ", key, val)?;
-                }
-                write!(f, "}}")
+                let entries = map
+                    .iter()
+                    .map(|(key, val)| format!("{:?}: {}", key, val))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Map({})", entries)
             }
             Value::Deferred => write!(f, "⊥"),
             Value::NoVal => write!(f, "no_val"),

@@ -421,7 +421,7 @@ pub fn strip_span(e: &Spanned<SExpr>) -> String {
         SExpr::Struct(map) => {
             let items = map
                 .iter()
-                .map(|(k, v)| format!("{}: {}", k, strip_span(v)))
+                .map(|(k, v)| format!("{:?}: {}", k, strip_span(v)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("Struct({{{}}})", items)
@@ -429,7 +429,7 @@ pub fn strip_span(e: &Spanned<SExpr>) -> String {
         SExpr::ObjectLiteral(map) => {
             let items = map
                 .iter()
-                .map(|(k, v)| format!("{}: {}", k, strip_span(v)))
+                .map(|(k, v)| format!("{:?}: {}", k, strip_span(v)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("ObjectLiteral({{{}}})", items)

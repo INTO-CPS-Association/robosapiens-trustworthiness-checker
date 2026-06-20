@@ -826,7 +826,7 @@ impl Display for TypedListExpr {
             }
             Literal(items) => {
                 let items = items.iter().map(|e| format!("{}", e)).join(", ");
-                write!(f, "List({})", items)
+                write!(f, "[{}]", items)
             }
             LTail(e) => write!(f, "List.tail({})", e),
             LConcat(e1, e2) => write!(f, "List.concat({}, {})", e1, e2),
@@ -834,7 +834,7 @@ impl Display for TypedListExpr {
             LHeadList(e) => write!(f, "List.head({})", e),
             LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
             MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
-            SGetStruct(e, key) => write!(f, "Struct.get({}, {:?})", e, key),
+            SGetStruct(e, key) => write!(f, "{}.{}", e, key),
         }
     }
 }
@@ -866,7 +866,7 @@ impl Display for TypedMapExpr {
             MInsert(e, key, v) => write!(f, "Map.insert({}, {:?}, {})", e, key, v),
             MRemove(e, key) => write!(f, "Map.remove({}, {:?})", e, key),
             MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
-            SGetStruct(e, key) => write!(f, "Struct.get({}, {:?})", e, key),
+            SGetStruct(e, key) => write!(f, "{}.{}", e, key),
             LHeadList(e) => write!(f, "List.head({})", e),
             LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
         }
@@ -898,8 +898,8 @@ impl Display for TypedStructExpr {
                 let env = env.iter().map(|v| format!("{}", v)).join(", ");
                 write!(f, "dynamic({}: {}, {{{}}})", e, typ, env)
             }
-            SUpdate(e, key, v) => write!(f, "Struct.update({}, {:?}, {})", e, key, v),
-            SGet(e, key) => write!(f, "Struct.get({}, {:?})", e, key),
+            SUpdate(e, key, v) => write!(f, "Map.insert({}, {:?}, {})", e, key, v),
+            SGet(e, key) => write!(f, "{}.{}", e, key),
             MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
             LHeadList(e) => write!(f, "List.head({})", e),
             LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
@@ -912,7 +912,7 @@ impl Display for SExprInt {
         use IntBinOp::*;
         use SExprInt::*;
         match self {
-            Cast(e) => write!(f, "cast<Int>({})", e),
+            Cast(e) => write!(f, "{}", e),
             If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Val(v) => write!(f, "{}", v),
@@ -937,11 +937,11 @@ impl Display for SExprInt {
                     .join(", ");
                 write!(f, "dynamic({}: Int, {{{}}})", e, env)
             }
-            LLen(list) => write!(f, "len({})", list),
+            LLen(list) => write!(f, "List.len({})", list),
             LHeadList(list) => write!(f, "List.head({})", list),
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
+            SGetStruct(st, key) => write!(f, "{}.{}", st, key),
         }
     }
 }
@@ -951,7 +951,7 @@ impl Display for SExprFloat {
         use FloatBinOp::*;
         use SExprFloat::*;
         match self {
-            Cast(e) => write!(f, "cast<Float>({})", e),
+            Cast(e) => write!(f, "{}", e),
             If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Val(v) => write!(f, "{}", v),
@@ -982,7 +982,7 @@ impl Display for SExprFloat {
             LHeadList(list) => write!(f, "List.head({})", list),
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
+            SGetStruct(st, key) => write!(f, "{}.{}", st, key),
         }
     }
 }
@@ -991,7 +991,7 @@ impl Display for SExprStr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use SExprStr::*;
         match self {
-            Cast(e) => write!(f, "cast<Str>({})", e),
+            Cast(e) => write!(f, "{}", e),
             If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
             BinOp(e1, e2, StrBinOp::Concat) => write!(f, "({} ++ {})", e1, e2),
@@ -1014,7 +1014,7 @@ impl Display for SExprStr {
             LHeadList(list) => write!(f, "List.head({})", list),
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
+            SGetStruct(st, key) => write!(f, "{}.{}", st, key),
         }
     }
 }
@@ -1023,7 +1023,7 @@ impl Display for SExprUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use SExprUnit::*;
         match self {
-            Cast(e) => write!(f, "cast<Unit>({})", e),
+            Cast(e) => write!(f, "{}", e),
             If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
             SIndex(s, i) => write!(f, "{}[{}]", s, i),
             Val(v) => write!(f, "{:?}", v),
@@ -1045,7 +1045,7 @@ impl Display for SExprUnit {
             LHeadList(list) => write!(f, "List.head({})", list),
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
+            SGetStruct(st, key) => write!(f, "{}.{}", st, key),
         }
     }
 }
@@ -1057,7 +1057,7 @@ impl Display for SExprBool {
         use SExprBool::*;
         match self {
             Val(v) => write!(f, "{}", v),
-            Cast(e) => write!(f, "cast<Bool>({})", e),
+            Cast(e) => write!(f, "{}", e),
 
             Cmp(Eq, e1, e2) => write!(f, "({} == {})", e1, e2),
             Cmp(Le, e1, e2) => write!(f, "({} <= {})", e1, e2),
@@ -1083,7 +1083,7 @@ impl Display for SExprBool {
             LHeadList(list) => write!(f, "List.head({})", list),
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
-            SGetStruct(st, key) => write!(f, "Struct.get({}, {:?})", st, key),
+            SGetStruct(st, key) => write!(f, "{}.{}", st, key),
             MHasKeyMap(map, key) => write!(f, "Map.has_key({}, {:?})", map, key),
 
             Defer(e, _, _) => write!(f, "defer({}: Bool)", e),

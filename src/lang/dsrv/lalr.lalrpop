@@ -11,7 +11,7 @@ grammar;
 // Macro to automatically wrap parsed nodes with their span information
 MakeSpanned<T>: Spanned<T> = {
     <l:@L> <node:T> <r:@R> => Spanned {
-        node, 
+        node,
         span: Span::new(l as u32, r as u32),
     }
 };
@@ -80,6 +80,19 @@ ExprKVPair: (EcoString, SpannedExpr) = {
     <k: String> ":" <v: Expr> => (k, v)
 };
 
+ObjectLiteralKey: EcoString = {
+    <id: Ident> => EcoString::from(id.name()),
+    String => <>,
+};
+
+ObjectLiteralKVPair: (EcoString, SpannedExpr) = {
+    <k: ObjectLiteralKey> ":" <v: Expr> => (k, v)
+};
+
+VarSet: EcoVec<VarName> = {
+    "{" <vars: SepListOpt<Ident, ",">> "}" => vars,
+};
+
 ExprList: EcoVec<SpannedExpr> = {
     <items: SepListOpt<Expr, ",">> => items
 };
@@ -134,6 +147,12 @@ SIndex: SpannedExpr = {
 
 // Container constructors
 ContainerExpr: SpannedExpr = {
+  <l:@L> "[" <v:ExprList> "]" <r:@R> => {
+        Spanned {
+            node: SExpr::List(v),
+            span: Span::new(l as u32, r as u32),
+        }
+    },
   <l:@L> "List" "(" <v:ExprList> ")" <r:@R> => {
         Spanned {
             node: SExpr::List(v),
@@ -152,7 +171,7 @@ ContainerExpr: SpannedExpr = {
             span: Span::new(l as u32, r as u32),
         }
     },
-  <l:@L> "{" <kv_pairs: SepListOpt<ExprKVPair, ",">> "}" <r:@R> => {
+  <l:@L> "{" <kv_pairs: SepListOpt<ObjectLiteralKVPair, ",">> "}" <r:@R> => {
         Spanned {
             node: SExpr::ObjectLiteral(BTreeMap::from_iter(kv_pairs.into_iter())),
             span: Span::new(l as u32, r as u32),
@@ -165,61 +184,69 @@ ContainerExpr: SpannedExpr = {
 // -----------------------------------------------------------------------------
 
 SpecialKeywords: SpannedExpr = {
-  <l:@L> "dynamic" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "dynamic" "(" <e: BoxNode<Expr>> "," <vs: VarSet> ")" <r:@R> =>
+       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Unascribed, vs), span: Span::new(l as u32, r as u32)},
+  <l:@L> "dynamic" "(" <e: BoxNode<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Ascribed(t), vs), span: Span::new(l as u32, r as u32)},
+  <l:@L> "dynamic" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Unascribed), span: Span::new(l as u32, r as u32)},
-  <l:@L> "dynamic" "(" <e: BoxNode<Expr>> "," <t: StreamTyp> ")" <r:@R> => 
+  <l:@L> "dynamic" "(" <e: BoxNode<Expr>> <t: TypeAnno> ")" <r:@R> =>
        Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)), span: Span::new(l as u32, r as u32)},
-  <l:@L> "eval" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "eval" "(" <e: BoxNode<Expr>> "," <vs: VarSet> ")" <r:@R> =>
+       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Unascribed, vs), span: Span::new(l as u32, r as u32)},
+  <l:@L> "eval" "(" <e: BoxNode<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Ascribed(t), vs), span: Span::new(l as u32, r as u32)},
+  <l:@L> "eval" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Unascribed), span: Span::new(l as u32, r as u32)},
-  <l:@L> "eval" "(" <e: BoxNode<Expr>> "," <t: StreamTyp> ")" <r:@R> => 
+  <l:@L> "eval" "(" <e: BoxNode<Expr>> <t: TypeAnno> ")" <r:@R> =>
        Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)), span: Span::new(l as u32, r as u32)},
-  <l:@L> "defer" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "defer" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Defer(e, StreamTypeAscription::Unascribed, EcoVec::new()), span: Span::new(l as u32, r as u32)},
-  <l:@L> "defer" "(" <e: BoxNode<Expr>> "," <t: StreamTyp> ")" <r:@R> => 
+  <l:@L> "defer" "(" <e: BoxNode<Expr>> <t: TypeAnno> ")" <r:@R> =>
        Spanned { node: SExpr::Defer(e, StreamTypeAscription::Ascribed(t), EcoVec::new()), span: Span::new(l as u32, r as u32)},
-  <l:@L> "update" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "update" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Update(e1, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "default" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "default" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Default(e1, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "is_defined" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "is_defined" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::IsDefined(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "when" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "when" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::When(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "latch" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "latch" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Latch(e1, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "init" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "init" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Init(e1, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "List.get" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "List.get" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::LIndex(e1, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "List.concat" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "List.concat" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::LConcat(e1, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "List.append" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "List.append" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::LAppend(e1, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "List.head" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "List.head" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::LHead(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "List.tail" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "List.tail" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::LTail(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "List.len" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "List.len" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::LLen(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "Map.get" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> => 
+  <l:@L> "Map.get" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> =>
        Spanned { node: SExpr::MGet(e, k), span: Span::new(l as u32, r as u32)},
-  <l:@L> "Map.remove" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> => 
+  <l:@L> "Map.remove" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> =>
        Spanned { node: SExpr::MRemove(e, k), span: Span::new(l as u32, r as u32)},
-  <l:@L> "Map.has_key" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> => 
+  <l:@L> "Map.has_key" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> =>
        Spanned { node: SExpr::MHasKey(e, k), span: Span::new(l as u32, r as u32)},
-  <l:@L> "Map.insert" "(" <e1: BoxNode<Expr>> "," <k: String> "," <e2: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "Map.insert" "(" <e1: BoxNode<Expr>> "," <k: String> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::MInsert(e1, k, e2), span: Span::new(l as u32, r as u32)},
-  <l:@L> "sin" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "sin" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Sin(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "cos" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "cos" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Cos(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "tan" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "tan" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Tan(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "abs" "(" <e: BoxNode<Expr>> ")" <r:@R> => 
+  <l:@L> "abs" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Abs(e), span: Span::new(l as u32, r as u32)},
-  <l:@L> "monitored_at" "(" <v: Ident> "," <n: String> ")" <r:@R> =>        
+  <l:@L> "monitored_at" "(" <v: Ident> "," <n: String> ")" <r:@R> =>
        Spanned { node: SExpr::MonitoredAt(v, n.to_string().into()), span: Span::new(l as u32, r as u32)},
-  <l:@L> "dist" "(" <v1: VarOrNodeName> "," <v2: VarOrNodeName> ")" <r:@R> =>       
+  <l:@L> "dist" "(" <v1: VarOrNodeName> "," <v2: VarOrNodeName> ")" <r:@R> =>
        Spanned { node: SExpr::Dist(v1, v2), span: Span::new(l as u32, r as u32)},
 }
 
@@ -481,7 +508,7 @@ pub Expr: SpannedExpr = {
 // -----------------------------------------------------------------------------
 
 InputDecl: STopDecl = {
-   <l:@L> "in" <id: Ident> <typ: TypeAnno?> <r:@R>=> 
+   <l:@L> "in" <id: Ident> <typ: TypeAnno?> <r:@R>=>
    STopDecl::Input(id, typ, Span::new(l as u32, r as u32))
 };
 

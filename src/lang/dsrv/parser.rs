@@ -62,28 +62,35 @@ fn paren(source: &str, s: &mut &str) -> Result<SpannedExpr> {
 fn sexpr_list(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     let start_rest = *s;
 
-    let res: Result<Vec<SpannedExpr>, _> = delimited(
-        seq!("List", loop_ms_or_lb_or_lc, '('),
-        separated(
-            0..,
-            |i: &mut &str| sexpr_with_source(source, i),
-            seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+    let exprs: Vec<SpannedExpr> = alt((
+        delimited(
+            seq!("List", loop_ms_or_lb_or_lc, '('),
+            separated(
+                0..,
+                |i: &mut &str| sexpr_with_source(source, i),
+                seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+            ),
+            ')',
         ),
-        ')',
-    )
-    .parse_next(s);
-    match res {
-        Ok(exprs) => {
-            let end_rest = *s;
-            Ok(span_wrapper_winnow(
-                source,
-                start_rest,
-                end_rest,
-                SExpr::List(exprs.into()),
-            ))
-        }
-        Err(e) => Err(e),
-    }
+        delimited(
+            '[',
+            separated(
+                0..,
+                |i: &mut &str| sexpr_with_source(source, i),
+                seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+            ),
+            ']',
+        ),
+    ))
+    .parse_next(s)?;
+
+    let end_rest = *s;
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        SExpr::List(exprs.into()),
+    ))
 }
 
 pub fn key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, SpannedExpr)> {
@@ -94,6 +101,20 @@ pub fn key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, SpannedExpr)>
         |i: &mut &str| sexpr_with_source(source, i),
     )
     .map(|(key, value)| (key.into(), value))
+    .parse_next(s)
+}
+
+fn object_literal_key(s: &mut &str) -> Result<EcoString> {
+    alt((string.map(EcoString::from), ident.map(EcoString::from))).parse_next(s)
+}
+
+pub fn object_literal_key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, SpannedExpr)> {
+    seq!(
+        _: loop_ms_or_lb_or_lc, object_literal_key,
+        _: ':',
+        _: loop_ms_or_lb_or_lc,
+        |i: &mut &str| sexpr_with_source(source, i),
+    )
     .parse_next(s)
 }
 
@@ -148,7 +169,7 @@ fn object_literal(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         '{',
         separated(
             0..,
-            |i: &mut &str| key_sexpr(source, i),
+            |i: &mut &str| object_literal_key_sexpr(source, i),
             seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
         ),
         '}',
@@ -1568,6 +1589,14 @@ mod tests {
             val(&mut (*"\"x+y\"".to_string()).into()),
             Ok(Value::Str("x+y".into())),
         );
+        assert_eq!(
+            val_or_container(&mut (*"[1, 2]".to_string()).into()),
+            Ok(Value::List(vec![Value::Int(1), Value::Int(2)].into()))
+        );
+        assert_eq!(
+            val_or_container(&mut (*"List(1, 2)".to_string()).into()),
+            Ok(Value::List(vec![Value::Int(1), Value::Int(2)].into()))
+        );
     }
 
     #[test]
@@ -2217,6 +2246,22 @@ mod tests {
         assert_eq!(
             presult_strip_span(&sexpr(&mut r#"defer(x)"#)),
             r#"Ok(Defer(Var(VarName::new("x")), Unascribed, []))"#
+        );
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut r#"defer(x: Int)"#)),
+            r#"Ok(Defer(Var(VarName::new("x")), Ascribed(Int), []))"#
+        )
+    }
+
+    #[test]
+    fn test_parse_dynamic_type_ascription() {
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut r#"dynamic(x: Int)"#)),
+            r#"Ok(Dynamic(Var(VarName::new("x")), Ascribed(Int)))"#
+        );
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut r#"dynamic(x: Int, {x, y})"#)),
+            r#"Ok(RestrictedDynamic(Var(VarName::new("x")), Ascribed(Int), [VarName::new("x"), VarName::new("y")]))"#
         )
     }
 
@@ -2263,6 +2308,11 @@ mod tests {
     #[test]
     fn test_parse_list() {
         // Same as above
+        assert_eq!(presult_strip_span(&sexpr(&mut r#"[]"#)), r#"Ok(List([]))"#);
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut r#"[1, 2]"#)),
+            r#"Ok(List([Val(Int(1)), Val(Int(2))]))"#
+        );
         assert_eq!(
             presult_strip_span(&sexpr(&mut r#"List()"#)),
             r#"Ok(List([]))"#
@@ -2392,6 +2442,17 @@ mod tests {
             presult_strip_span(&sexpr(&mut r#"Map()"#)),
             r#"Ok(Map({}))"#
         );
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut r#"{"x": 1, "y": 2}"#)),
+            r#"Ok(ObjectLiteral({"x": Val(Int(1)), "y": Val(Int(2))}))"#
+        );
+        assert_eq!(
+            presult_strip_span(&sexpr(&mut r#"{x: 1, y: 2}"#)),
+            r#"Ok(ObjectLiteral({"x": Val(Int(1)), "y": Val(Int(2))}))"#
+        );
+        let source = r#"Map(x: 1)"#;
+        let mut input = source;
+        assert!(sexpr_map(source, &mut input).is_err());
         assert_eq!(
             presult_strip_span(&sexpr(&mut r#"Map("x": 1, "y": 2)"#)),
             r#"Ok(Map({"x": Val(Int(1)), "y": Val(Int(2))}))"#

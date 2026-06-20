@@ -22,6 +22,19 @@ pub enum NumericalBinOp {
     Mod,
 }
 
+impl Display for NumericalBinOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use NumericalBinOp::*;
+        match self {
+            Add => write!(f, "+"),
+            Sub => write!(f, "-"),
+            Mul => write!(f, "*"),
+            Div => write!(f, "/"),
+            Mod => write!(f, "%"),
+        }
+    }
+}
+
 // Integer Binary Operations
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum IntBinOp {
@@ -78,10 +91,29 @@ pub enum BoolBinOp {
     Impl, // Implication
 }
 
+impl Display for BoolBinOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use BoolBinOp::*;
+        match self {
+            Or => write!(f, "||"),
+            And => write!(f, "&&"),
+            Impl => write!(f, "=>"),
+        }
+    }
+}
+
 // Str Binary Operations
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum StrBinOp {
     Concat,
+}
+
+impl Display for StrBinOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StrBinOp::Concat => write!(f, "++"),
+        }
+    }
 }
 
 // Comparison Binary Operations
@@ -119,10 +151,10 @@ pub enum SBinOp {
 impl Display for SBinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SBinOp::NOp(op) => write!(f, "Numerical {:?}", op),
-            SBinOp::BOp(op) => write!(f, "Boolean {:?}", op),
-            SBinOp::SOp(op) => write!(f, "String {:?}", op),
-            SBinOp::COp(op) => write!(f, "Comparison {}", op),
+            SBinOp::NOp(op) => write!(f, "{op}"),
+            SBinOp::BOp(op) => write!(f, "{op}"),
+            SBinOp::SOp(op) => write!(f, "{op}"),
+            SBinOp::COp(op) => write!(f, "{op}"),
         }
     }
 }
@@ -643,7 +675,7 @@ impl Display for SpannedExpr {
             }
             Dynamic(e, sta) => match sta {
                 StreamTypeAscription::Unascribed => write!(f, "dynamic({})", e),
-                StreamTypeAscription::Ascribed(st) => write!(f, "dynamic({}, {})", e, st),
+                StreamTypeAscription::Ascribed(st) => write!(f, "dynamic({}: {})", e, st),
             },
             RestrictedDynamic(e, sta, vs) => {
                 let env = vs
@@ -654,13 +686,13 @@ impl Display for SpannedExpr {
                 match sta {
                     StreamTypeAscription::Unascribed => write!(f, "dynamic({}, {{{}}})", e, env,),
                     StreamTypeAscription::Ascribed(sta) => {
-                        write!(f, "dynamic({}, {}, {{{}}})", e, sta, env)
+                        write!(f, "dynamic({}: {}, {{{}}})", e, sta, env)
                     }
                 }
             }
             Defer(e, sta, _) => match sta {
                 StreamTypeAscription::Unascribed => write!(f, "defer({})", e),
-                StreamTypeAscription::Ascribed(sta) => write!(f, "defer({}, {})", e, sta),
+                StreamTypeAscription::Ascribed(sta) => write!(f, "defer({}: {})", e, sta),
             },
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
             Default(e, v) => write!(f, "default({}, {})", e, v),
@@ -1048,6 +1080,7 @@ mod tests {
     use super::generation::{
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
+    use crate::core::{StreamType, StreamTypeAscription};
     use crate::dsrv_fixtures::{
         spec_simple_add_aux_monitor, spec_simple_add_aux_typed_monitor, spec_simple_add_monitor,
         spec_simple_add_monitor_typed,
@@ -1057,6 +1090,7 @@ mod tests {
     use crate::lang::dsrv::lalr_parser::parse_sexpr;
     use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
     use crate::lang::dsrv::span::strip_span;
+    use ecow::{EcoVec, eco_vec};
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
@@ -1158,6 +1192,43 @@ mod tests {
             res.lines().collect::<BTreeSet<_>>(),
             expected.lines().collect::<BTreeSet<_>>()
         );
+    }
+
+    fn assert_display_roundtrips_both_parsers(expr: &SExpr) {
+        let formatted = format!("{}", expr);
+
+        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        assert_eq!(strip_span(&parsed_lalr), strip_span(expr));
+
+        let mut input = formatted.as_str();
+        let parsed_comb =
+            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
+        assert_eq!(strip_span(&parsed_comb), strip_span(expr));
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip_dynamic_type_ascriptions_both_parsers() {
+        assert_display_roundtrips_both_parsers(&SExpr::Dynamic(
+            Box::new(SExpr::Var("x".into())),
+            StreamTypeAscription::Ascribed(StreamType::Int),
+        ));
+        assert_display_roundtrips_both_parsers(&SExpr::RestrictedDynamic(
+            Box::new(SExpr::Var("x".into())),
+            StreamTypeAscription::Ascribed(StreamType::Int),
+            eco_vec!["x".into(), "y".into()],
+        ));
+        assert_display_roundtrips_both_parsers(&SExpr::Defer(
+            Box::new(SExpr::Var("x".into())),
+            StreamTypeAscription::Ascribed(StreamType::Int),
+            EcoVec::new(),
+        ));
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip_list_literal_both_parsers() {
+        let expr = SExpr::List(eco_vec![SExpr::Val(1), SExpr::Val(2)]);
+        assert_eq!(format!("{}", expr), "[1, 2]");
+        assert_display_roundtrips_both_parsers(&expr);
     }
 
     #[test]
