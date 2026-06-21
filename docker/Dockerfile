@@ -1,7 +1,7 @@
 # ROS distribution to use
 ARG ROS_DISTRO=humble
-ARG DSRV_LSP_URL=https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/releases/download/dsrv-lsp-2026-06-19/dsrv-lsp
-ARG DSRV_LSP_SHA256=5465d45283c3ef585b6d24496a7692f5bcf05ec151ee2ebc12f53547bb83ad8d
+ARG DSRV_LSP_URL=https://github.com/INTO-CPS-Association/dsrv-lsp/releases/download/dsrv-lsp-2026-06-20/dsrv-lsp
+ARG DSRV_LSP_SHA256=0c60159103c5dc33cbb1a41740d6e791e03c8028fb5061a04d5458af5eb6908c
 
 FROM osrf/ros:${ROS_DISTRO}-desktop AS base
 ARG DSRV_LSP_URL
