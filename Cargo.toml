@@ -2,6 +2,7 @@
 name = "trustworthiness_checker"
 version = "0.1.0"
 edition = "2024"
+license-file = "LICENSE.md"
 default-run = "trustworthiness_checker"
 exclude = ["examples/*", "scripts/*", "log/*", "benches/*"]
 
