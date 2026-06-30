@@ -1,0 +1,40 @@
+// Run with:
+// cargo run --profile dev-fast --features ros -- examples/pal_human_waypoint_safety.dsrv --input-file <trace-file>
+
+in new_data: Struct<event: Str, uid: Str, ...>
+in robot_1_waypoints: Struct<robot_id: Int, poses: List<Struct<x: Float, y: Float>>, ...>
+
+out human_count: Int
+
+out humans: Struct<uid: Str>
+out the_data: Struct<event: Str, uid: Str, ...>
+out human_limit: Bool
+out first_waypoint_in_limits: Bool
+out all_waypoints_in_limits: Bool
+// out robot_1_waypoints_out: Struct<robot_id: Int, poses: List<Struct<x: Float, y: Float>>, ...>
+
+humans = if new_data.event == "human" && !default(new_data.uid == humans[1].uid, false)
+         then {uid: new_data.uid}
+         else default(humans[1], {uid: "N/A"})
+
+human_count = if default(humans.uid, "N/A") == "N/A" then 0 else default(human_count[1], 0) + 1
+
+human_limit = human_count < 5
+
+the_data = new_data
+
+all_waypoints_in_limits = List.fold(\acc: Bool, pose: Struct<x: Float, y: Float> ->
+                             acc
+                             && pose.x <= 10.0
+                             && pose.y <= 10.0
+                             && pose.x >= 0.0
+                             && pose.y >= 0.0,
+                             true,
+                             robot_1_waypoints.poses)
+
+// robot_1_waypoints_out = robot_1_waypoints
+
+first_waypoint_in_limits = List.head(robot_1_waypoints.poses).x <= 10.0
+                        && List.head(robot_1_waypoints.poses).y <= 10.0
+                        && List.head(robot_1_waypoints.poses).x >= 0.0
+                        && List.head(robot_1_waypoints.poses).y >= 0.0
