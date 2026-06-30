@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, mem, rc::Rc};
 
 use async_stream::stream;
 use async_unsync::bounded;
-use futures::{future::join_all, select_biased};
+use futures::{FutureExt, future::join_all, select_biased};
 use smol::{LocalExecutor, stream::StreamExt};
 use tracing::{debug, info, warn};
 
@@ -14,6 +14,8 @@ use crate::{
     io::mqtt::dist_graph_provider::DistGraphProvider,
     utils::cancellation_token::CancellationToken,
 };
+
+use super::{ROS_SPIN_INTERVAL, ROS_SPIN_TIMEOUT};
 
 /// ROS-backed provider for live distribution graphs.
 ///
@@ -99,11 +101,13 @@ impl RosDistGraphProvider {
         // ROS node spinner
         executor
             .spawn(async move {
+                let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
                 loop {
                     select_biased! {
                         _ = cancelled => break,
-                        _ = futures::FutureExt::fuse(smol::future::yield_now()) =>
-                        node.spin_once(std::time::Duration::from_millis(0))
+                        _ = spin_ticks.next().fuse() => {
+                            node.spin_once(ROS_SPIN_TIMEOUT);
+                        }
                     }
                 }
             })

@@ -25,6 +25,8 @@ pub enum RosMsgType {
     HumanModelList,
     RVData,
     RVDataArray,
+    /// ROS2 `geometry_msgs/msg/Pose2D`
+    Pose2D,
     /// ROS2 `nav_msgs/msg/Odometry`
     Odom,
 }
@@ -53,6 +55,7 @@ pub fn string_to_ros_msg_type(typ: &str) -> Result<RosMsgType, anyhow::Error> {
         "HumanModelList" => Ok(RosMsgType::HumanModelList),
         "RVData" => Ok(RosMsgType::RVData),
         "RVDataArray" => Ok(RosMsgType::RVDataArray),
+        "Pose2D" => Ok(RosMsgType::Pose2D),
         "Odom" => Ok(RosMsgType::Odom),
         typ => Err(anyhow!("Unsupported type {}", typ)),
     }
@@ -74,6 +77,7 @@ pub fn ros_msg_type_to_string(typ: RosMsgType) -> Result<String, anyhow::Error> 
         RosMsgType::HumanModelList => Ok("HumanModelList".to_string()),
         RosMsgType::RVData => Ok("RVData".to_string()),
         RosMsgType::RVDataArray => Ok("RVDataArray".to_string()),
+        RosMsgType::Pose2D => Ok("Pose2D".to_string()),
         RosMsgType::Odom => Ok("Odom".to_string()),
     }
 }

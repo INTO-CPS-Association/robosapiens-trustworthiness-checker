@@ -4,10 +4,9 @@ use futures::FutureExt;
 use futures::StreamExt;
 use futures::future;
 use futures::select;
-use futures::stream;
 use r2r;
 use smol::LocalExecutor;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use tracing::debug;
 use tracing::info;
@@ -16,9 +15,11 @@ use tracing::{Level, instrument};
 use unsync::spsc;
 use uuid::Uuid;
 
-use super::ros_topic_stream_mapping::{RosMsgType, RosStreamMapping, VariableMappingData};
+use super::{
+    ROS_SPIN_INTERVAL, ROS_SPIN_TIMEOUT,
+    ros_topic_stream_mapping::{RosMsgType, RosStreamMapping, VariableMappingData},
+};
 
-use crate::io::replay_history::{ReplayHistory, ReplaySnapshot};
 use crate::stream_utils::channel_to_output_stream;
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
@@ -32,19 +33,7 @@ pub type InverseVarTopicMap = BTreeMap<Topic, VarName>;
 pub const QOS: i32 = 1;
 pub const CHANNEL_SIZE: usize = 10;
 
-/// Replay-history-aware ROS input provider.
-///
-/// This provider fowards ros input for consumption by the runtime but,
-/// when the replay history is enabled,
-/// additionally records a deterministic, time-indexed replay snapshot:
-/// `clock -> { var -> Value }`.
-///
-/// Semantics:
-/// - Each successful receive on one variable advances the global clock by 1.
-/// - At each clock tick:
-///   - the received variable gets the concrete incoming value
-///   - all other variables are recorded as `Value::NoVal`
-/// - `replay_history()` returns a clone of the recorded snapshot.
+/// ROS input provider.
 pub struct RosInputProvider {
     pub var_map: BTreeMap<VarName, VariableMappingData>,
 
@@ -54,9 +43,6 @@ pub struct RosInputProvider {
     senders: Option<BTreeMap<VarName, spsc::Sender<Value>>>,
     ros_streams: BTreeMap<VarName, OutputStream<Value>>,
     cancellation_token: CancellationToken,
-
-    // Configurable replay history implementation (store all, or disabled).
-    replay_history: ReplayHistory,
 }
 
 impl RosMsgType {
@@ -154,6 +140,16 @@ impl RosMsgType {
                             .expect("Failed to serialize ROS2 RVDataArray msg to internal representation")
                     }),
             ),
+            RosMsgType::Pose2D => Box::pin(
+                node.subscribe::<r2r::geometry_msgs::msg::Pose2D>(topic, qos)?
+                    .map(|val| {
+                        Value::Map(BTreeMap::from([
+                            ("x".into(), Value::Float(val.x)),
+                            ("y".into(), Value::Float(val.y)),
+                            ("theta".into(), Value::Float(val.theta)),
+                        ]))
+                    }),
+            ),
             RosMsgType::Odom => Box::pin(
                 node.subscribe::<r2r::nav_msgs::msg::Odometry>(topic, qos)?
                     .map(|val| {
@@ -174,15 +170,6 @@ impl RosInputProvider {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_topics: RosStreamMapping,
-    ) -> Result<Self, r2r::Error> {
-        Self::new_with_replay_history(executor, var_topics, ReplayHistory::disabled())
-    }
-
-    #[instrument(level = Level::INFO, skip(var_topics, replay_history))]
-    pub fn new_with_replay_history(
-        executor: Rc<LocalExecutor<'static>>,
-        var_topics: RosStreamMapping,
-        replay_history: ReplayHistory,
     ) -> Result<Self, r2r::Error> {
         // Create a ROS node to subscribe to all of the input topics
         let ctx = r2r::Context::create()?;
@@ -229,13 +216,14 @@ impl RosInputProvider {
         // Launch the ROS subscriber node in background async task
         executor
             .spawn(async move {
+                let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
                 loop {
                     select! {
                         _ = cancellation_token_task.cancelled().fuse() => {
                             return;
                         },
-                        _ = smol::future::yield_now().fuse() => {
-                            node.spin_once(std::time::Duration::from_millis(0));
+                        _ = spin_ticks.next().fuse() => {
+                            node.spin_once(ROS_SPIN_TIMEOUT);
                         },
                     }
                 }
@@ -248,7 +236,6 @@ impl RosInputProvider {
             available_streams,
             senders,
             cancellation_token,
-            replay_history,
         })
     }
 
@@ -275,21 +262,15 @@ impl RosInputProvider {
         (senders, receivers)
     }
 
-    async fn receive_from_any_stream(
-        ros_streams: &mut BTreeMap<VarName, OutputStream<Value>>,
-    ) -> (VarName, Option<Value>) {
-        let vals = ros_streams
-            .iter_mut()
-            .map(|(var_name, stream)| stream.next().map(|val| (var_name.clone(), val)))
-            .collect::<stream::FuturesUnordered<_>>()
-            .next()
-            .await
-            .expect("No streams available");
-        info!(
-            "ROSInputProvider: Received value from stream for variable {:?}: {:?}",
-            vals.0, vals.1
-        );
-        vals
+    fn merge_ros_streams(
+        ros_streams: BTreeMap<VarName, OutputStream<Value>>,
+    ) -> OutputStream<(VarName, Value)> {
+        Box::pin(futures::stream::select_all(ros_streams.into_iter().map(
+            |(var_name, stream)| {
+                Box::pin(stream.map(move |value| (var_name.clone(), value)))
+                    as OutputStream<(VarName, Value)>
+            },
+        )))
     }
 
     async fn handle_received_value(
@@ -336,27 +317,23 @@ impl RosInputProvider {
     }
 
     async fn create_run_stream(
-        mut ros_streams: BTreeMap<VarName, OutputStream<Value>>,
+        ros_streams: BTreeMap<VarName, OutputStream<Value>>,
         mut senders: BTreeMap<VarName, spsc::Sender<Value>>,
         cancellation_token: CancellationToken,
-        replay_history: ReplayHistory,
     ) -> OutputStream<anyhow::Result<()>> {
         Box::pin(stream! {
             let ros_input_span = info_span!("ROSInputProvider run_logic");
             let _enter = ros_input_span.enter();
+            let mut ros_events = Self::merge_ros_streams(ros_streams);
 
             loop {
                 futures::select! {
-                    (var, val) = Self::receive_from_any_stream(&mut ros_streams).fuse() => {
-                        match val {
-                            Some(value) => {
-                                debug!("ROSInputProvider: Received value for variable {}", var);
-
-                                // Persist replay state via configured implementation.
-                                replay_history.record_sparse_event(
-                                    senders.keys().cloned(),
-                                    &var,
-                                    value.clone(),
+                    event = ros_events.next().fuse() => {
+                        match event {
+                            Some((var, value)) => {
+                                info!(
+                                    "ROSInputProvider: Received value from stream for variable {:?}: {:?}",
+                                    var, value
                                 );
 
                                 if let Err(e) = Self::handle_received_value(var, value, &mut senders).await {
@@ -368,14 +345,8 @@ impl RosInputProvider {
                                 }
                             }
                             None => {
-                                debug!("ROSInputProvider: Stream for variable {} ended", var);
-                                // Remove the stream from the map
-                                ros_streams.remove(&var);
-                                // If all streams have ended, exit the loop
-                                if ros_streams.is_empty() {
-                                    debug!("ROSInputProvider: All streams ended, exiting");
-                                    return;
-                                }
+                                debug!("ROSInputProvider: All streams ended, exiting");
+                                return;
                             }
                         }
                     }
@@ -398,20 +369,24 @@ impl InputProvider for RosInputProvider {
         Some(stream)
     }
 
+    fn event_stream(&mut self, vars: &BTreeSet<VarName>) -> Option<OutputStream<(VarName, Value)>> {
+        let selected = vars
+            .iter()
+            .filter_map(|var| self.ros_streams.remove_entry(var))
+            .collect::<BTreeMap<_, _>>();
+
+        (!selected.is_empty()).then(|| Self::merge_ros_streams(selected))
+    }
+
+    fn event_stream_needs_control(&self) -> bool {
+        false
+    }
+
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>> {
         let senders = std::mem::take(&mut self.senders).expect("Senders already taken");
         let cancellation_token = self.cancellation_token.clone();
         let ros_streams = std::mem::take(&mut self.ros_streams);
-        let replay_history = self.replay_history.clone();
 
-        Self::create_run_stream(ros_streams, senders, cancellation_token, replay_history).await
-    }
-
-    fn replay_history(&self) -> Option<ReplaySnapshot> {
-        self.replay_history.snapshot()
-    }
-
-    fn replay_history_handle(&self) -> Option<ReplayHistory> {
-        Some(self.replay_history.clone())
+        Self::create_run_stream(ros_streams, senders, cancellation_token).await
     }
 }

@@ -1,3 +1,6 @@
+pub(crate) const ROS_SPIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+pub(crate) const ROS_SPIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1);
+
 pub mod dist_graph_provider;
 pub use dist_graph_provider::RosDistGraphProvider;
 pub mod input_provider;

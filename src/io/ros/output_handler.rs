@@ -8,7 +8,10 @@ use smol::LocalExecutor;
 use tracing::{Level, debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use super::ros_topic_stream_mapping::{RosMsgType, RosStreamMapping};
+use super::{
+    ROS_SPIN_INTERVAL, ROS_SPIN_TIMEOUT,
+    ros_topic_stream_mapping::{RosMsgType, RosStreamMapping},
+};
 use crate::core::OutputHandler;
 use crate::utils::cancellation_token::CancellationToken;
 use crate::{OutputStream, Value, core::VarName};
@@ -358,13 +361,14 @@ impl RosOutputHandler {
         executor
             .spawn(async move {
                 let mut cancelled = child_cancellation_token.cancelled().fuse();
+                let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
                 loop {
                     futures::select_biased! {
                         _ = cancelled => {
                             break;
                         }
-                        _ = smol::future::yield_now().fuse() => {
-                            node.spin_once(std::time::Duration::from_millis(0));
+                        _ = spin_ticks.next().fuse() => {
+                            node.spin_once(ROS_SPIN_TIMEOUT);
                         }
                     }
                 }

@@ -153,8 +153,9 @@ where
                 let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);
                 mc::mget(map, k)
             }
-            SExpr::SGet(_, _) => {
-                panic!("dot field access is only supported for structs in typed semantics")
+            SExpr::SGet(struct_expr, key) => {
+                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*struct_expr, ctx);
+                mc::mget(map, key)
             }
             SExpr::MRemove(map, k) => {
                 let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);

@@ -207,6 +207,10 @@ fn node_name(s: &mut &str) -> Result<NodeName> {
     ident.map(|name: &str| name.into()).parse_next(s)
 }
 
+fn node_name_or_string(s: &mut &str) -> Result<NodeName> {
+    alt((node_name, string.map(|name: &str| name.to_string().into()))).parse_next(s)
+}
+
 // Same as `val` but returns SExpr::Val
 fn sval(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     let start = *s;
@@ -908,7 +912,7 @@ fn monitored_at(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         _: loop_ms_or_lb_or_lc,
         _: ",",
         _: loop_ms_or_lb_or_lc,
-        node_name,
+        node_name_or_string,
         _: loop_ms_or_lb_or_lc,
         _: ")",
         _: whitespace,
