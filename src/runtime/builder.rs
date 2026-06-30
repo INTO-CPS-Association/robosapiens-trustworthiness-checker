@@ -1472,7 +1472,6 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                 self.distribution_mode
             }
         };
-
         let builder: Box<dyn RuntimeBuilderDyn<UntypedDsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,

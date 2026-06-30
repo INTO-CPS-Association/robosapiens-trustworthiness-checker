@@ -10,11 +10,14 @@ use tracing::{debug, info};
 use crate::{
     InputProvider, OutputStream, UntypedDsrvSpecification, Value, VarName,
     core::Runtime,
-    distributed::distribution_graphs::{
-        DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
-        possible_labelled_dist_graphs,
+    distributed::{
+        distribution_graphs::{
+            DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
+            possible_labelled_dist_graphs,
+        },
+        scheduling::planning_context::PlanningContext,
     },
-    io::{replay_history::ReplayHistory, testing::ManualOutputHandler},
+    io::testing::ManualOutputHandler,
     runtime::RuntimeBuilder,
     runtime::{asynchronous::AbstractAsyncRuntimeBuilder, distributed::DistAsyncRuntimeBuilder},
     semantics::{
@@ -38,7 +41,7 @@ where
     pub dist_constraints: Vec<VarName>,
     pub input_vars: Vec<VarName>,
     pub output_vars: Vec<VarName>,
-    pub replay_history: Option<ReplayHistory>,
+    pub planning_context: Option<PlanningContext>,
 }
 
 impl<S, AC> BruteForceDistConstraintSolver<S, AC>
@@ -57,13 +60,13 @@ where
             self.input_vars, self.output_vars
         );
 
-        let replay_input_data = self
-            .replay_history
+        let context_input_data = self
+            .planning_context
             .as_ref()
-            .and_then(|history| history.snapshot())
+            .map(|context| context.snapshot().history)
             .unwrap_or_default();
 
-        let input_provider: Box<dyn InputProvider<Val = Value>> = Box::new(replay_input_data);
+        let input_provider: Box<dyn InputProvider<Val = Value>> = Box::new(context_input_data);
         let mut output_handler = ManualOutputHandler::new(
             self.executor.clone(),
             self.dist_constraints.iter().cloned().collect(),
@@ -146,17 +149,16 @@ where
         graph: Rc<DistributionGraph>,
     ) -> LabelledDistGraphStream {
         let latest_step: Option<usize> = self
-            .replay_history
+            .planning_context
             .as_ref()
-            .and_then(|history| history.snapshot())
-            .and_then(|snap| snap.keys().max().copied());
+            .and_then(|context| context.snapshot().history.keys().max().copied());
 
         self.possible_labelled_dist_graph_stream_with_target_step(graph, latest_step)
     }
 
-    /// Finds possible labelled distribution graphs and evaluates constraints at a specific replay step.
+    /// Finds possible labelled distribution graphs and evaluates constraints at a specific context history step.
     ///
-    /// - `target_step = Some(k)`: evaluate constraints at replay step `k`.
+    /// - `target_step = Some(k)`: evaluate constraints at context history step `k`.
     /// - `target_step = None`: evaluate constraints at the first available output row.
     pub fn possible_labelled_dist_graph_stream_with_target_step(
         self: Rc<Self>,

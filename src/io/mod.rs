@@ -3,7 +3,6 @@ pub mod cli;
 pub mod file;
 pub mod map;
 pub mod mqtt;
-pub mod replay_history;
 #[cfg(feature = "ros")]
 pub mod ros;
 pub mod testing;

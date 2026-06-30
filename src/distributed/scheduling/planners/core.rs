@@ -8,6 +8,7 @@ use crate::{
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistributionGraph, NodeName, graph_to_png,
     },
+    distributed::scheduling::planning_context::PlanningContext,
 };
 
 #[async_trait(?Send)]
@@ -16,6 +17,7 @@ pub trait SchedulerPlanner {
         &self,
         graph: Rc<DistributionGraph>,
         scheduler_tick: usize,
+        planning_context: Option<PlanningContext>,
     ) -> Option<Rc<LabelledDistributionGraph>>;
 }
 
@@ -29,6 +31,7 @@ impl SchedulerPlanner for StaticFixedSchedulerPlanner {
         &self,
         _graph: Rc<DistributionGraph>,
         _scheduler_tick: usize,
+        _planning_context: Option<PlanningContext>,
     ) -> Option<Rc<LabelledDistributionGraph>> {
         Some(self.fixed_graph.clone())
     }
@@ -45,6 +48,7 @@ impl SchedulerPlanner for CentralisedSchedulerPlanner {
         &self,
         graph: Rc<DistributionGraph>,
         _scheduler_tick: usize,
+        _planning_context: Option<PlanningContext>,
     ) -> Option<Rc<LabelledDistributionGraph>> {
         let labels = graph
             .graph

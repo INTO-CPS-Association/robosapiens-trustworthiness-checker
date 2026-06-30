@@ -103,9 +103,6 @@ test-log = { version = "0.2.21", features = ["trace"] }
 proptest = "1.11.0"
 tc-testutils = { path = "libs/tc-testutils" }
 
-[[bin]]
-name = "work_scheduler"
-
 [[bench]]
 name = "simple_add"
 harness = false

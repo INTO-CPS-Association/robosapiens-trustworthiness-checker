@@ -9,7 +9,6 @@ use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME, RuntimeSpec};
 use crate::io::config::{MsgTypeMapping, TopicMapping};
 use crate::io::file::FileInputProvider;
 use crate::io::mqtt::MqttFactory;
-use crate::io::replay_history::ReplayHistory;
 use crate::io::testing::ManualInputProvider;
 use crate::runtime::builder::ValueConfig;
 
@@ -53,7 +52,6 @@ pub struct InputProviderBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
     redis_port: Option<u16>,
     mqtt_port: Option<u16>,
-    replay_history: ReplayHistory,
 }
 
 impl InputProviderBuilder {
@@ -65,7 +63,6 @@ impl InputProviderBuilder {
             executor: None,
             redis_port: None,
             mqtt_port: None,
-            replay_history: ReplayHistory::disabled(),
         }
     }
 
@@ -115,17 +112,7 @@ impl InputProviderBuilder {
         self
     }
 
-    pub fn replay_history(mut self, replay_history: ReplayHistory) -> Self {
-        self.replay_history = replay_history;
-        self
-    }
-
-    pub fn runtime(mut self, runtime: RuntimeSpec) -> Self {
-        self.replay_history = if matches!(runtime, RuntimeSpec::Distributed) {
-            ReplayHistory::store_all()
-        } else {
-            ReplayHistory::disabled()
-        };
+    pub fn runtime(self, _runtime: RuntimeSpec) -> Self {
         self
     }
 
@@ -181,10 +168,7 @@ impl InputProviderBuilder {
                 let data = tc::parse_file(input_file_parser, &path)
                     .await
                     .expect("Input file could not be parsed");
-                Box::new(FileInputProvider::with_replay_history(
-                    data,
-                    self.replay_history.clone(),
-                )) as Box<dyn InputProvider<Val = Value>>
+                Box::new(FileInputProvider::new(data)) as Box<dyn InputProvider<Val = Value>>
             }
             InputProviderSpec::Ros(_topic_mapping, _msg_type_mapping) => {
                 #[cfg(feature = "ros")]
@@ -243,12 +227,8 @@ impl InputProviderBuilder {
                         );
 
                     Box::new(
-                        RosInputProvider::new_with_replay_history(
-                            self.executor.clone().expect(""),
-                            input_mapping,
-                            self.replay_history.clone(),
-                        )
-                        .expect("ROS input provider could not be created"),
+                        RosInputProvider::new(self.executor.clone().expect(""), input_mapping)
+                            .expect("ROS input provider could not be created"),
                     )
                 }
                 #[cfg(not(feature = "ros"))]

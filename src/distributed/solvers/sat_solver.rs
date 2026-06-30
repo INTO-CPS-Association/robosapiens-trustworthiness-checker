@@ -1,17 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Instant;
 
 use async_stream::stream;
 use sat_solver::sat::cnf::Cnf;
 use sat_solver::sat::literal::PackedLiteral;
 use sat_solver::sat::solver::{Solver, SolverImpls};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     Specification, UntypedDsrvSpecification, Value, VarName,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
     },
+    distributed::scheduling::planning_context::PlanningContextSnapshot,
     lang::dsrv::ast::{SExpr, SpannedExpr},
     semantics::{AsyncConfig, MonitoringSemantics, distributed::localisation::Localisable},
 };
@@ -32,8 +34,11 @@ where
     pub dist_constraints: Vec<VarName>,
     pub output_vars: Vec<VarName>,
     pub spec: AC::Spec,
+    pub localised_dist_spec: AC::Spec,
+    pub required_planning_inputs: Vec<VarName>,
+    pub planning_binding_candidates: BTreeSet<VarName>,
     pub dist_constraint_set: HashSet<VarName>,
-    pub replay_history: Option<crate::io::replay_history::ReplayHistory>,
+    pub default_planning_context: Option<PlanningContextSnapshot>,
     _semantics: std::marker::PhantomData<S>,
     _config: std::marker::PhantomData<AC>,
 }
@@ -48,16 +53,29 @@ where
         dist_constraints: Vec<VarName>,
         output_vars: Vec<VarName>,
         spec: UntypedDsrvSpecification,
-        replay_history: Option<crate::io::replay_history::ReplayHistory>,
+        default_planning_context: Option<PlanningContextSnapshot>,
     ) -> Self {
         let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();
+        let localised_dist_spec = spec.localise(&dist_constraints);
+        let local_input_vars = localised_dist_spec.input_vars();
+        let required_planning_inputs = local_input_vars
+            .iter()
+            .cloned()
+            .into_iter()
+            .filter(|var| var.to_string().ends_with("Pose"))
+            .collect();
+        let planning_binding_candidates =
+            planning_binding_candidates(&spec, local_input_vars.into_iter());
 
         Self {
             dist_constraints,
             output_vars,
             spec,
+            localised_dist_spec,
+            required_planning_inputs,
+            planning_binding_candidates,
             dist_constraint_set,
-            replay_history,
+            default_planning_context,
             _semantics: std::marker::PhantomData,
             _config: std::marker::PhantomData,
         }
@@ -67,94 +85,137 @@ where
         self: Rc<Self>,
         graph: Rc<DistributionGraph>,
     ) -> LabelledDistGraphStream {
+        let planning_context = self.default_planning_context.clone();
+        self.possible_labelled_dist_graph_stream_with_context(graph, planning_context)
+    }
+
+    pub fn possible_labelled_dist_graph_stream_with_context(
+        self: Rc<Self>,
+        graph: Rc<DistributionGraph>,
+        planning_context: Option<PlanningContextSnapshot>,
+    ) -> LabelledDistGraphStream {
+        let total_started = Instant::now();
         info!("Starting SAT monitored_at-only distribution solving");
-        let spec = self.spec.localise(&self.dist_constraints);
+        let spec = &self.localised_dist_spec;
 
         let mut state = CnfCompilerState::new(&graph);
         state.declared_dist_constraints = self.dist_constraint_set.clone();
+        let context_started = Instant::now();
 
-        let snapshot = self.replay_history.as_ref().and_then(|h| h.snapshot());
-
-        // Build replay bindings from the full (unlocalised) parsed spec first, then
+        // Build context bindings from the full (unlocalised) parsed spec first, then
         // project those bindings onto localised inputs. This mirrors brute-force flow
-        // where replay values feed evaluation before/through localisation.
-        let mut replay_bindings_full_spec = BTreeMap::<VarName, Value>::new();
+        // where observed values feed evaluation before/through localisation.
+        let mut context_bindings_full_spec = planning_context
+            .map(|context| context.latest_bindings)
+            .unwrap_or_default();
+        context_bindings_full_spec.retain(|k, v| {
+            !self.dist_constraint_set.contains(k) && !matches!(v, Value::NoVal | Value::Deferred)
+        });
 
-        if let Some(snap) = &snapshot {
-            for (_t, row) in snap {
-                for (k, v) in row {
-                    if !self.dist_constraint_set.contains(k) && *v != Value::NoVal {
-                        replay_bindings_full_spec.insert(k.clone(), v.clone());
-                    }
-                }
-            }
-        }
-
-        // Close replay bindings over helper vars that can be computed from other replay values.
+        // Close context bindings over helper vars that can be computed from other observed values.
         // We do this on the original parsed spec so helper vars that become inputs after
         // localisation can still be derived.
         let mut changed = true;
+        let mut successful_eval_cache = BTreeMap::<VarName, Value>::new();
         while changed {
             changed = false;
 
-            let full_spec_input_vars = self.spec.input_vars();
-            for v in full_spec_input_vars {
-                if replay_bindings_full_spec.contains_key(&v) {
+            for v in &self.planning_binding_candidates {
+                if context_bindings_full_spec.contains_key(&v) {
                     continue;
                 }
-                if let Some(expr) = self.spec.var_expr(&v) {
-                    let mut st_full = CnfCompilerState::new(&graph);
-                    st_full.value_bindings = replay_bindings_full_spec.clone();
-                    if let Some(val) = eval_const_expr(expr, &self.spec, &st_full) {
-                        if val != Value::NoVal {
-                            replay_bindings_full_spec.insert(v.clone(), val);
-                            changed = true;
-                        }
-                    }
-                }
-            }
-
-            for v in self.spec.output_vars() {
-                if replay_bindings_full_spec.contains_key(&v) {
+                if let Some(val) = successful_eval_cache.get(v).cloned() {
+                    context_bindings_full_spec.insert(v.clone(), val);
+                    changed = true;
                     continue;
                 }
-                if let Some(expr) = self.spec.var_expr(&v) {
-                    let mut st_full = CnfCompilerState::new(&graph);
-                    st_full.value_bindings = replay_bindings_full_spec.clone();
-                    if let Some(val) = eval_const_expr(expr, &self.spec, &st_full) {
-                        if val != Value::NoVal {
-                            replay_bindings_full_spec.insert(v.clone(), val);
-                            changed = true;
-                        }
-                    }
-                }
-            }
-
-            for v in self.spec.aux_vars() {
-                if replay_bindings_full_spec.contains_key(&v) {
-                    continue;
-                }
-                if let Some(expr) = self.spec.var_expr(&v) {
-                    let mut st_full = CnfCompilerState::new(&graph);
-                    st_full.value_bindings = replay_bindings_full_spec.clone();
-                    if let Some(val) = eval_const_expr(expr, &self.spec, &st_full) {
-                        if val != Value::NoVal {
-                            replay_bindings_full_spec.insert(v.clone(), val);
-                            changed = true;
-                        }
-                    }
+                if let Some(val) = eval_bound_var(
+                    v,
+                    &self.spec,
+                    graph.as_ref(),
+                    &context_bindings_full_spec,
+                    &mut successful_eval_cache,
+                ) {
+                    context_bindings_full_spec.insert(v.clone(), val);
+                    changed = true;
                 }
             }
         }
 
         // Keep only bindings needed by localised constraint evaluation inputs.
         let local_input_set = spec.input_vars.iter().cloned().collect::<HashSet<_>>();
-        for (k, v) in replay_bindings_full_spec {
+        for (k, v) in context_bindings_full_spec {
             if local_input_set.contains(&k) {
                 state.value_bindings.insert(k, v);
             }
         }
+        // ACSOS paper benchmark instrumentation: log additional timing information
+        warn!(
+            target: "benchmark",
+            event = "benchmark_sat_solver",
+            phase = "context_bindings",
+            nodes = graph.graph.node_count(),
+            edges = graph.graph.edge_count(),
+            constraints = self.dist_constraints.len(),
+            outputs = self.output_vars.len(),
+            bound_values = state.value_bindings.len(),
+            duration_ms = context_started.elapsed().as_secs_f64() * 1000.0,
+            "benchmark_sat_solver"
+        );
 
+        let guarded_started = Instant::now();
+        if let Some(labelled) = try_build_labelled_graph_from_guarded_monitored_choices(
+            &graph,
+            &self.output_vars,
+            &self.dist_constraints,
+            &self.dist_constraint_set,
+            &spec,
+            &state,
+        ) {
+            let assigned_streams = labelled.node_labels.values().map(Vec::len).sum::<usize>();
+            let guarded_duration_ms = guarded_started.elapsed().as_secs_f64() * 1000.0;
+            info!(
+                assigned_streams,
+                "Guarded monitored_at fast path is applicable, but SAT solving is forced"
+            );
+            // ACSOS paper benchmark instrumentation: log additional timing information
+            warn!(
+                target: "benchmark",
+                event = "benchmark_sat_solver",
+                phase = "guarded_fast_path",
+                result = "applicable",
+                fast_path = true,
+                forced_sat = true,
+                nodes = graph.graph.node_count(),
+                edges = graph.graph.edge_count(),
+                constraints = self.dist_constraints.len(),
+                outputs = self.output_vars.len(),
+                assigned_streams,
+                clauses = state.cnf.len(),
+                vars = state.next_var_id.saturating_sub(1),
+                atoms = state.atoms_to_var_node.len(),
+                duration_ms = guarded_duration_ms,
+                "benchmark_sat_solver"
+            );
+        } else {
+            // ACSOS paper benchmark instrumentation: log additional timing information
+            warn!(
+                target: "benchmark",
+                event = "benchmark_sat_solver",
+                phase = "guarded_fast_path",
+                result = "not_applicable",
+                fast_path = false,
+                forced_sat = true,
+                nodes = graph.graph.node_count(),
+                edges = graph.graph.edge_count(),
+                constraints = self.dist_constraints.len(),
+                outputs = self.output_vars.len(),
+                duration_ms = guarded_started.elapsed().as_secs_f64() * 1000.0,
+                "benchmark_sat_solver"
+            );
+        }
+
+        let compile_started = Instant::now();
         let mut top_lits = Vec::new();
 
         for c in &self.dist_constraints {
@@ -174,21 +235,372 @@ where
             state.add_clause1(lit);
         }
 
-        // Exactly-one-node placement for all streams appearing in monitored_at(...)
-        state.emit_exactly_one_constraints();
+        // At-most-one-node placement for all streams appearing in monitored_at(...).
+        // The distribution constraints themselves encode when at least one placement
+        // is required. Adding unconditional at-least-one here forces inactive
+        // properties to be monitored by arbitrary nodes.
+        state.emit_at_most_one_node_per_stream_constraints();
+        // ACSOS paper benchmark instrumentation: log additional timing information
+        warn!(
+            target: "benchmark",
+            event = "benchmark_sat_solver",
+            phase = "cnf_compile",
+            nodes = graph.graph.node_count(),
+            edges = graph.graph.edge_count(),
+            constraints = self.dist_constraints.len(),
+            outputs = self.output_vars.len(),
+            clauses = state.cnf.len(),
+            vars = state.next_var_id.saturating_sub(1),
+            atoms = state.atoms_to_var_node.len(),
+            duration_ms = compile_started.elapsed().as_secs_f64() * 1000.0,
+            "benchmark_sat_solver"
+        );
 
-        let sat_assignment = solve_with_sat_solver(&state).unwrap_or_else(|| {
-            panic!("No valid assignment exists for given monitored_at constraints")
-        });
+        let solve_started = Instant::now();
+        let Some(sat_assignment) = solve_with_sat_solver(&state) else {
+            let solve_duration_ms = solve_started.elapsed().as_secs_f64() * 1000.0;
+            info!("No valid SAT assignment exists for the current monitored_at constraints");
+            // ACSOS paper benchmark instrumentation: log additional timing information
+            warn!(
+                target: "benchmark",
+                event = "benchmark_sat_solver",
+                phase = "sat_solve",
+                result = "unsat",
+                nodes = graph.graph.node_count(),
+                edges = graph.graph.edge_count(),
+                constraints = self.dist_constraints.len(),
+                outputs = self.output_vars.len(),
+                clauses = state.cnf.len(),
+                vars = state.next_var_id.saturating_sub(1),
+                atoms = state.atoms_to_var_node.len(),
+                duration_ms = solve_duration_ms,
+                total_duration_ms = total_started.elapsed().as_secs_f64() * 1000.0,
+                "benchmark_sat_solver"
+            );
+            return Box::pin(futures::stream::empty());
+        };
+        let solve_duration_ms = solve_started.elapsed().as_secs_f64() * 1000.0;
 
         let labelled =
             build_labelled_graph_from_solution(&graph, &self.output_vars, &state, &sat_assignment);
+        let assigned_streams = labelled.node_labels.values().map(Vec::len).sum::<usize>();
+        // ACSOS paper benchmark instrumentation: log additional timing information
+        warn!(
+            target: "benchmark",
+            event = "benchmark_sat_solver",
+            phase = "sat_solve",
+            result = "sat",
+            nodes = graph.graph.node_count(),
+            edges = graph.graph.edge_count(),
+            constraints = self.dist_constraints.len(),
+            outputs = self.output_vars.len(),
+            assigned_streams,
+            clauses = state.cnf.len(),
+            vars = state.next_var_id.saturating_sub(1),
+            atoms = state.atoms_to_var_node.len(),
+            duration_ms = solve_duration_ms,
+            total_duration_ms = total_started.elapsed().as_secs_f64() * 1000.0,
+            "benchmark_sat_solver"
+        );
 
         let labelled = Rc::new(labelled);
 
         Box::pin(stream! {
             yield labelled;
         })
+    }
+}
+
+fn planning_binding_candidates(
+    spec: &UntypedDsrvSpecification,
+    roots: impl IntoIterator<Item = VarName>,
+) -> BTreeSet<VarName> {
+    let mut candidates = BTreeSet::new();
+    let mut pending = roots.into_iter().collect::<Vec<_>>();
+
+    while let Some(var) = pending.pop() {
+        if !candidates.insert(var.clone()) {
+            continue;
+        }
+
+        if let Some(expr) = spec.var_expr(&var) {
+            pending.extend(expr.node.inputs());
+        }
+    }
+
+    candidates
+}
+
+fn eval_bound_var(
+    var: &VarName,
+    spec: &UntypedDsrvSpecification,
+    graph: &DistributionGraph,
+    value_bindings: &BTreeMap<VarName, Value>,
+    successful_eval_cache: &mut BTreeMap<VarName, Value>,
+) -> Option<Value> {
+    if let Some(val) = successful_eval_cache.get(var).cloned() {
+        return Some(val);
+    }
+
+    let expr = spec.var_expr(var)?;
+    let mut st_full = CnfCompilerState::new(graph);
+    st_full.value_bindings = value_bindings.clone();
+    let val = eval_const_expr(expr, spec, &st_full)?;
+
+    if matches!(val, Value::NoVal | Value::Deferred) {
+        return None;
+    }
+
+    successful_eval_cache.insert(var.clone(), val.clone());
+    Some(val)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GuardedChoice {
+    False,
+    True,
+    Choices(Vec<(VarName, NodeName)>),
+}
+
+fn try_build_labelled_graph_from_guarded_monitored_choices(
+    graph: &Rc<DistributionGraph>,
+    output_vars: &[VarName],
+    dist_constraints: &[VarName],
+    dist_constraint_set: &HashSet<VarName>,
+    spec: &UntypedDsrvSpecification,
+    st: &CnfCompilerState,
+) -> Option<LabelledDistributionGraph> {
+    let mut constrained_streams = BTreeSet::new();
+    for c in dist_constraints {
+        collect_monitored_streams(spec.var_expr(c)?, spec, &mut constrained_streams);
+    }
+
+    let mut placements = BTreeMap::<VarName, NodeName>::new();
+
+    for c in dist_constraints {
+        let expr = spec.var_expr(c)?;
+        let choices = guarded_monitored_choices(expr, spec, st).ok()?;
+        match choices {
+            GuardedChoice::True => {}
+            GuardedChoice::False => return None,
+            GuardedChoice::Choices(choices) => {
+                let (stream, node) = choices.into_iter().next()?;
+                if let Some(existing) = placements.get(&stream) {
+                    if existing != &node {
+                        return None;
+                    }
+                } else {
+                    placements.insert(stream, node);
+                }
+            }
+        }
+    }
+
+    Some(build_labelled_graph_from_direct_placements(
+        graph,
+        output_vars,
+        dist_constraint_set,
+        &constrained_streams,
+        placements,
+    ))
+}
+
+fn collect_monitored_streams(
+    expr: SpannedExpr,
+    spec: &UntypedDsrvSpecification,
+    streams: &mut BTreeSet<VarName>,
+) {
+    match expr.node {
+        SExpr::MonitoredAt(v, _) => {
+            streams.insert(v);
+        }
+        SExpr::Var(v) => {
+            if let Some(expr) = spec.var_expr(&v) {
+                collect_monitored_streams(expr, spec, streams);
+            }
+        }
+        SExpr::BinOp(lhs, rhs, _) => {
+            collect_monitored_streams(*lhs, spec, streams);
+            collect_monitored_streams(*rhs, spec, streams);
+        }
+        SExpr::If(cond, then_e, else_e) => {
+            collect_monitored_streams(*cond, spec, streams);
+            collect_monitored_streams(*then_e, spec, streams);
+            collect_monitored_streams(*else_e, spec, streams);
+        }
+        SExpr::Not(e)
+        | SExpr::SIndex(e, _)
+        | SExpr::Dynamic(e, _)
+        | SExpr::RestrictedDynamic(e, _, _)
+        | SExpr::Defer(e, _, _)
+        | SExpr::IsDefined(e)
+        | SExpr::When(e)
+        | SExpr::LHead(e)
+        | SExpr::LTail(e)
+        | SExpr::LLen(e)
+        | SExpr::MGet(e, _)
+        | SExpr::SGet(e, _)
+        | SExpr::MRemove(e, _)
+        | SExpr::MHasKey(e, _)
+        | SExpr::Sin(e)
+        | SExpr::Cos(e)
+        | SExpr::Tan(e)
+        | SExpr::Abs(e) => collect_monitored_streams(*e, spec, streams),
+        SExpr::Update(lhs, rhs)
+        | SExpr::Default(lhs, rhs)
+        | SExpr::Latch(lhs, rhs)
+        | SExpr::Init(lhs, rhs)
+        | SExpr::LIndex(lhs, rhs)
+        | SExpr::LAppend(lhs, rhs)
+        | SExpr::LConcat(lhs, rhs) => {
+            collect_monitored_streams(*lhs, spec, streams);
+            collect_monitored_streams(*rhs, spec, streams);
+        }
+        SExpr::List(items) => {
+            for item in items {
+                collect_monitored_streams(item, spec, streams);
+            }
+        }
+        SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
+            for (_, item) in map {
+                collect_monitored_streams(item, spec, streams);
+            }
+        }
+        SExpr::MInsert(map, _, value) => {
+            collect_monitored_streams(*map, spec, streams);
+            collect_monitored_streams(*value, spec, streams);
+        }
+        SExpr::Val(_) | SExpr::Dist(_, _) => {}
+    }
+}
+
+fn guarded_monitored_choices(
+    expr: SpannedExpr,
+    spec: &UntypedDsrvSpecification,
+    st: &CnfCompilerState,
+) -> Result<GuardedChoice, ()> {
+    if let Some(value) = eval_const_expr(expr.clone(), spec, st) {
+        return match value {
+            Value::Bool(true) => Ok(GuardedChoice::True),
+            Value::Bool(false) | Value::NoVal | Value::Deferred => Ok(GuardedChoice::False),
+            _ => Err(()),
+        };
+    }
+
+    match expr.node {
+        SExpr::MonitoredAt(v, n) => Ok(GuardedChoice::Choices(vec![(v, n)])),
+        SExpr::Var(v) => {
+            let expr = spec.var_expr(&v).ok_or(())?;
+            guarded_monitored_choices(expr, spec, st)
+        }
+        SExpr::If(cond, then_e, else_e) => match eval_const_expr(*cond, spec, st) {
+            Some(Value::Bool(true)) => guarded_monitored_choices(*then_e, spec, st),
+            Some(Value::Bool(false) | Value::NoVal | Value::Deferred) => {
+                guarded_monitored_choices(*else_e, spec, st)
+            }
+            _ => Err(()),
+        },
+        SExpr::BinOp(
+            lhs,
+            rhs,
+            crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::And),
+        ) => {
+            let lhs = guarded_monitored_choices(*lhs, spec, st)?;
+            let rhs = guarded_monitored_choices(*rhs, spec, st)?;
+            guarded_choice_and(lhs, rhs)
+        }
+        SExpr::BinOp(
+            lhs,
+            rhs,
+            crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::Or),
+        ) => {
+            let lhs = guarded_monitored_choices(*lhs, spec, st)?;
+            let rhs = guarded_monitored_choices(*rhs, spec, st)?;
+            Ok(guarded_choice_or(lhs, rhs))
+        }
+        SExpr::BinOp(_, _, _) | SExpr::Not(_) => {
+            if let Some(value) = eval_const_expr(expr, spec, st) {
+                match value {
+                    Value::Bool(true) => Ok(GuardedChoice::True),
+                    Value::Bool(false) | Value::NoVal | Value::Deferred => Ok(GuardedChoice::False),
+                    _ => Err(()),
+                }
+            } else {
+                Err(())
+            }
+        }
+        _ => Err(()),
+    }
+}
+
+fn guarded_choice_and(lhs: GuardedChoice, rhs: GuardedChoice) -> Result<GuardedChoice, ()> {
+    match (lhs, rhs) {
+        (GuardedChoice::False, _) | (_, GuardedChoice::False) => Ok(GuardedChoice::False),
+        (GuardedChoice::True, other) | (other, GuardedChoice::True) => Ok(other),
+        (GuardedChoice::Choices(_), GuardedChoice::Choices(_)) => Err(()),
+    }
+}
+
+fn guarded_choice_or(lhs: GuardedChoice, rhs: GuardedChoice) -> GuardedChoice {
+    match (lhs, rhs) {
+        (GuardedChoice::True, _) | (_, GuardedChoice::True) => GuardedChoice::True,
+        (GuardedChoice::False, other) | (other, GuardedChoice::False) => other,
+        (GuardedChoice::Choices(mut lhs), GuardedChoice::Choices(rhs)) => {
+            lhs.extend(rhs);
+            GuardedChoice::Choices(lhs)
+        }
+    }
+}
+
+fn build_labelled_graph_from_direct_placements(
+    graph: &Rc<DistributionGraph>,
+    output_vars: &[VarName],
+    declared_dist_constraints: &HashSet<VarName>,
+    constrained_streams: &BTreeSet<VarName>,
+    placements: BTreeMap<VarName, NodeName>,
+) -> LabelledDistributionGraph {
+    let mut node_labels: BTreeMap<_, Vec<VarName>> = graph
+        .graph
+        .node_indices()
+        .map(|idx| (idx, Vec::new()))
+        .collect();
+
+    let assignment_vars: Vec<VarName> = output_vars
+        .iter()
+        .filter(|v| !declared_dist_constraints.contains(*v))
+        .cloned()
+        .collect();
+    let assignment_var_set: HashSet<VarName> = assignment_vars.iter().cloned().collect();
+
+    for (stream, node) in placements {
+        if !assignment_var_set.contains(&stream) {
+            continue;
+        }
+        let idx = graph
+            .get_node_index_by_name(&node)
+            .unwrap_or_else(|| panic!("Node `{}` missing in graph", node));
+        node_labels.entry(idx).or_default().push(stream);
+    }
+
+    for v in &assignment_vars {
+        if constrained_streams.contains(v) {
+            continue;
+        }
+        node_labels
+            .entry(graph.central_monitor)
+            .or_default()
+            .push(v.clone());
+    }
+
+    for vars in node_labels.values_mut() {
+        let mut seen = BTreeSet::new();
+        vars.retain(|v| seen.insert(v.clone()));
+    }
+
+    LabelledDistributionGraph {
+        dist_graph: graph.clone(),
+        var_names: assignment_vars,
+        node_labels,
     }
 }
 
@@ -204,7 +616,7 @@ struct CnfCompilerState {
     var_node_to_atom: BTreeMap<(VarName, NodeName), usize>,
     // SAT var -> (stream, node)
     atoms_to_var_node: BTreeMap<usize, (VarName, NodeName)>,
-    // bound substitutions from replay history for non-constraint variables
+    // bound substitutions from planning context for non-constraint variables
     value_bindings: BTreeMap<VarName, Value>,
     // streams appearing in monitored_at(...)
     constrained_streams: BTreeSet<VarName>,
@@ -304,7 +716,7 @@ impl CnfCompilerState {
         x
     }
 
-    fn emit_exactly_one_constraints(&mut self) {
+    fn emit_at_most_one_node_per_stream_constraints(&mut self) {
         let streams: Vec<_> = self.constrained_streams.iter().cloned().collect();
         for s in streams {
             let mut atoms = Vec::with_capacity(self.nodes.len());
@@ -312,9 +724,6 @@ impl CnfCompilerState {
                 let lit = self.atom_for_monitored_at(s.clone(), n);
                 atoms.push(lit);
             }
-
-            // At least one
-            self.cnf.push(atoms.clone());
 
             // At most one (pairwise)
             for i in 0..atoms.len() {
@@ -479,6 +888,14 @@ fn eval_const_expr(
             let v = eval_const_expr(*e, spec, st)?;
             match v {
                 Value::Bool(b) => Some(Value::Bool(!b)),
+                _ => None,
+            }
+        }
+        SExpr::Abs(e) => {
+            let v = eval_const_expr(*e, spec, st)?;
+            match v {
+                Value::Int(i) => i.checked_abs().map(Value::Int),
+                Value::Float(f) => Some(Value::Float(f.abs())),
                 _ => None,
             }
         }
@@ -901,7 +1318,7 @@ fn compile_expr_to_lit(
                 compile_expr_to_lit(inlined, spec, st)
             } else if spec.input_vars.contains(&v) {
                 // Unresolved input booleans are treated as symbolic SAT variables.
-                // This preserves satisfiability exploration when replay data does not
+                // This preserves satisfiability exploration when context data does not
                 // bind all inputs yet.
                 let x = i32::try_from(st.fresh_var())
                     .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
@@ -910,7 +1327,7 @@ fn compile_expr_to_lit(
                 Err(SatCompileError::UnsupportedExpr(format!(
                     "Unsupported unresolved variable in SAT constraint compilation: `{}`. \
 This SAT solver requires non-input variables in distribution constraints to be resolvable \
-(after localisation and replay substitution). Nested/indirect aux-variable chains that \
+(after localisation and planning-context substitution). Nested/indirect aux-variable chains that \
 leave unresolved vars are currently unsupported.",
                     v
                 )))
@@ -1034,7 +1451,7 @@ fn build_labelled_graph_from_solution(
         vars.retain(|v| seen.insert(v.clone()));
     }
 
-    // Sanity check: each constrained assignment var must be placed exactly once.
+    // Sanity check: each constrained assignment var must be placed at most once.
     for s in constrained
         .iter()
         .filter(|s| assignment_var_set.contains(*s))
@@ -1045,7 +1462,7 @@ fn build_labelled_graph_from_solution(
                 count = count.saturating_add(1);
             }
         }
-        if count != 1 {
+        if count > 1 {
             panic!(
                 "Internal solver inconsistency: constrained assignment stream `{}` placed {} times",
                 s, count
@@ -1063,8 +1480,8 @@ fn build_labelled_graph_from_solution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::distributed::scheduling::planning_context::PlanningContext;
     use crate::dsrv_fixtures::TestDistConfig;
-    use crate::io::replay_history::ReplayHistory;
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lang::dsrv::parser::dsrv_specification;
     use crate::runtime::RuntimeBuilder;
@@ -1086,6 +1503,27 @@ mod tests {
             central_monitor: a,
             graph,
         })
+    }
+
+    fn planning_snapshot_from_rows(
+        snapshot: std::collections::BTreeMap<usize, BTreeMap<VarName, Value>>,
+    ) -> PlanningContextSnapshot {
+        let step = snapshot.keys().max().copied();
+        let mut latest_bindings = BTreeMap::new();
+        for row in snapshot.values() {
+            for (var, value) in row {
+                if !matches!(value, Value::NoVal | Value::Deferred) {
+                    latest_bindings.insert(var.clone(), value.clone());
+                }
+            }
+        }
+
+        PlanningContextSnapshot {
+            version: 0,
+            step,
+            latest_bindings,
+            history: BTreeMap::new(),
+        }
     }
 
     #[apply(crate::async_test)]
@@ -1112,8 +1550,10 @@ mod tests {
         assert!(!labelled.node_labels[&b_idx].contains(&"x".into()));
     }
 
-    #[test]
-    fn sat_solver_panics_on_unsat_constraints() {
+    #[apply(crate::async_test)]
+    async fn sat_solver_returns_empty_stream_on_unsat_constraints(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
         let mut spec_src = "in x\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
         let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
@@ -1124,12 +1564,9 @@ mod tests {
         ));
 
         let graph = simple_dist_graph();
+        let mut stream = solver.possible_labelled_dist_graph_stream(graph);
 
-        let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _ = solver.possible_labelled_dist_graph_stream(graph);
-        }));
-
-        assert!(res.is_err());
+        assert!(futures::StreamExt::next(&mut stream).await.is_none());
     }
 
     #[apply(crate::async_test)]
@@ -1166,20 +1603,48 @@ mod tests {
     }
 
     #[test]
+    fn fast_path_handles_guarded_multi_robot_choice_shape() {
+        let mut spec_src = r#"
+in b1
+in b2
+out x
+out distX
+distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x, B))) else true
+"#;
+        let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
+        let graph = simple_dist_graph();
+        let mut st = CnfCompilerState::new(&graph);
+        st.value_bindings.insert("b1".into(), Value::Bool(false));
+        st.value_bindings.insert("b2".into(), Value::Bool(true));
+
+        let labelled = try_build_labelled_graph_from_guarded_monitored_choices(
+            &graph,
+            &vec!["x".into(), "distX".into()],
+            &vec!["distX".into()],
+            &HashSet::from(["distX".into()]),
+            &spec,
+            &st,
+        )
+        .expect("multi-robot guarded monitored_at shape should use fast path");
+
+        let a_idx = graph.get_node_index_by_name(&"A".into()).unwrap();
+        let b_idx = graph.get_node_index_by_name(&"B".into()).unwrap();
+
+        assert!(!labelled.node_labels[&a_idx].contains(&"x".into()));
+        assert!(labelled.node_labels[&b_idx].contains(&"x".into()));
+    }
+
+    #[test]
     fn sat_solver_panics_on_unsupported_dist_constraint() {
         let mut spec_src = "in x\nout c\nc = dist(A, B)";
         let spec = dsrv_specification(&mut spec_src).expect("spec should parse");
-        let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
-            DistributedSemantics<LALRParser>,
-            TestDistConfig,
-        >::new(
-            vec!["c".into()], vec!["x".into(), "c".into()], spec, None
-        ));
-
-        let graph = simple_dist_graph();
 
         let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _ = solver.possible_labelled_dist_graph_stream(graph);
+            let _solver =
+                SatMonitoredAtDistConstraintSolver::<
+                    DistributedSemantics<LALRParser>,
+                    TestDistConfig,
+                >::new(vec!["c".into()], vec!["x".into(), "c".into()], spec, None);
         }));
 
         assert!(res.is_err(), "expected panic for unsupported dist(...)");
@@ -1289,9 +1754,7 @@ c6 = (List.len(List(9, 10, 11)) == 3) && monitored_at(x, A)"#;
     async fn sat_solver_supports_replay_bound_map_variables_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-        use crate::io::replay_history::{ReplayHistory, StoreAllReplayHistory};
+        use std::collections::BTreeMap;
 
         let mut spec_src = r#"in m
 out x
@@ -1306,9 +1769,7 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
         );
         let mut snapshot = BTreeMap::<usize, BTreeMap<VarName, Value>>::new();
         snapshot.insert(0usize, row);
-        let replay_history = ReplayHistory::StoreAll(Rc::new(RefCell::new(
-            StoreAllReplayHistory::from_snapshot(snapshot),
-        )));
+        let planning_context = planning_snapshot_from_rows(snapshot);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -1317,7 +1778,7 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
             vec!["c".into()],
             vec!["x".into(), "c".into()],
             spec,
-            Some(replay_history),
+            Some(planning_context),
         ));
 
         let graph = simple_dist_graph();
@@ -1334,9 +1795,7 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
     async fn sat_solver_supports_replay_bound_list_variables_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-        use crate::io::replay_history::{ReplayHistory, StoreAllReplayHistory};
+        use std::collections::BTreeMap;
 
         let mut spec_src = r#"in xs
 out x
@@ -1351,9 +1810,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         );
         let mut snapshot = BTreeMap::<usize, BTreeMap<VarName, Value>>::new();
         snapshot.insert(0usize, row);
-        let replay_history = ReplayHistory::StoreAll(Rc::new(RefCell::new(
-            StoreAllReplayHistory::from_snapshot(snapshot),
-        )));
+        let planning_context = planning_snapshot_from_rows(snapshot);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -1362,7 +1819,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
             vec!["c".into()],
             vec!["x".into(), "c".into()],
             spec,
-            Some(replay_history),
+            Some(planning_context),
         ));
 
         let graph = simple_dist_graph();
@@ -1376,7 +1833,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     }
 
     #[test]
-    fn sat_compiler_emits_exactly_one_constraints_for_constrained_streams() {
+    fn sat_compiler_emits_at_most_one_node_constraints_for_constrained_streams() {
         let mut graph = DiGraph::new();
         let a = graph.add_node("A".into());
         let b = graph.add_node("B".into());
@@ -1391,9 +1848,8 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         let lit_a = st.atom_for_monitored_at(VarName::new("x"), "A".into());
         let lit_b = st.atom_for_monitored_at(VarName::new("x"), "B".into());
 
-        st.emit_exactly_one_constraints();
+        st.emit_at_most_one_node_per_stream_constraints();
 
-        assert!(st.cnf.iter().any(|c| c == &vec![lit_a, lit_b]));
         assert!(st.cnf.iter().any(|c| c == &vec![-lit_a, -lit_b]));
     }
 
@@ -1678,9 +2134,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     async fn sat_solver_merges_replay_values_across_rows_for_const_eval(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-        use crate::io::replay_history::{ReplayHistory, StoreAllReplayHistory};
+        use std::collections::BTreeMap;
 
         let mut spec_src = r#"in m
 in xs
@@ -1715,9 +2169,7 @@ c = (Map.get(m, "k") == 7)
         snapshot.insert(1usize, row1);
         snapshot.insert(2usize, row2);
 
-        let replay_history = ReplayHistory::StoreAll(Rc::new(RefCell::new(
-            StoreAllReplayHistory::from_snapshot(snapshot),
-        )));
+        let planning_context = planning_snapshot_from_rows(snapshot);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -1726,7 +2178,7 @@ c = (Map.get(m, "k") == 7)
             vec!["c".into()],
             vec!["x".into(), "c".into()],
             spec,
-            Some(replay_history),
+            Some(planning_context),
         ));
 
         let graph = simple_dist_graph();
@@ -1970,9 +2422,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
     async fn sat_solver_scales_to_5_nodes_20_streams_with_replay_substitution(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-        use crate::io::replay_history::{ReplayHistory, StoreAllReplayHistory};
+        use std::collections::BTreeMap;
 
         let node_count = 5usize;
         let stream_count = 20usize;
@@ -1996,15 +2446,16 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         let mut snapshot = BTreeMap::<usize, BTreeMap<VarName, Value>>::new();
         snapshot.insert(0usize, latest_row);
 
-        let replay_history = ReplayHistory::StoreAll(Rc::new(RefCell::new(
-            StoreAllReplayHistory::from_snapshot(snapshot),
-        )));
+        let planning_context = planning_snapshot_from_rows(snapshot);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
             TestDistConfig,
         >::new(
-            dist_constraints, output_vars, spec, Some(replay_history)
+            dist_constraints,
+            output_vars,
+            spec,
+            Some(planning_context),
         ));
 
         let mut stream = solver.possible_labelled_dist_graph_stream(graph.clone());
@@ -2446,7 +2897,8 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
         }
         let input_vars = inferred_input_vars.into_iter().collect::<Vec<_>>();
 
-        let shared_replay = ReplayHistory::store_all_with_snapshot(replay_snapshot);
+        let sat_planning_context = planning_snapshot_from_rows(replay_snapshot.clone());
+        let shared_planning_context = PlanningContext::from_history(replay_snapshot);
 
         let sat_solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -2458,7 +2910,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
                 let mut spec_src = spec.as_str();
                 dsrv_specification(&mut spec_src).expect("fixed property-test spec should parse")
             },
-            Some(shared_replay.clone()),
+            Some(sat_planning_context),
         ));
 
         let sat_labelled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2489,7 +2941,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
                 dist_constraints: dist_constraints.clone(),
                 input_vars,
                 output_vars,
-                replay_history: Some(shared_replay),
+                planning_context: Some(shared_planning_context),
             },
         );
 
@@ -2737,7 +3189,7 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
             ]),
         )]);
 
-        let replay_history = ReplayHistory::store_all_with_snapshot(replay_snapshot);
+        let planning_context = planning_snapshot_from_rows(replay_snapshot);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics<LALRParser>,
@@ -2753,7 +3205,7 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
                 "d3".into(),
             ],
             spec,
-            Some(replay_history),
+            Some(planning_context),
         ));
 
         let mut stream = solver.possible_labelled_dist_graph_stream(graph.clone());

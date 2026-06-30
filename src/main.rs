@@ -14,6 +14,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
+use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::InputProviderBuilder;
 use trustworthiness_checker::io::builders::OutputHandlerBuilder;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
@@ -158,7 +159,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             (Some(constraints), LangSpecification::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
                     constraints.iter().cloned().map(VarName::from).collect();
-                LangSpecification::Dsrv(model.localise(&localized_constraint_vars))
+                let mut localized = model.localise(&localized_constraint_vars);
+                for var in dist_constraint_input_vars(model, &localized_constraint_vars) {
+                    localized.add_input_var(var);
+                }
+                LangSpecification::Dsrv(localized)
             }
             _ => model.clone(),
         }

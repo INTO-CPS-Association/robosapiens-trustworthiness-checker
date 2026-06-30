@@ -378,7 +378,7 @@ impl InputProvider for RosInputProvider {
         (!selected.is_empty()).then(|| Self::merge_ros_streams(selected))
     }
 
-    fn event_stream_needs_control(&self) -> bool {
+    fn event_stream_requires_control(&self) -> bool {
         false
     }
 

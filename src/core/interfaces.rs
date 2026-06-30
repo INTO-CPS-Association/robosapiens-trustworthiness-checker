@@ -1,13 +1,13 @@
 use crate::core::StreamType;
-use crate::io::replay_history::ReplayHistory;
 use async_trait::async_trait;
 use clap::ValueEnum;
+use futures::StreamExt;
 use futures::future::LocalBoxFuture;
-use std::collections::BTreeSet;
-use std::{collections::BTreeMap, fmt::Debug};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use strum_macros::Display;
 
-use super::{StreamData, Value, VarName};
+use super::{StreamData, VarName};
 
 /* Enum specifying which semantics is to be used */
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
@@ -36,31 +36,52 @@ pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
 #[async_trait(?Send)]
 pub trait InputProvider {
-    type Val;
+    type Val: 'static;
 
     fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
+
+    fn event_stream(
+        &mut self,
+        vars: &BTreeSet<VarName>,
+    ) -> Option<OutputStream<(VarName, Self::Val)>> {
+        let streams = vars.iter().filter_map(|var| {
+            self.var_stream(var).map(|stream| {
+                let var = var.clone();
+                Box::pin(stream.map(move |value| (var.clone(), value)))
+                    as OutputStream<(VarName, Self::Val)>
+            })
+        });
+        let mut streams = futures::stream::select_all(streams);
+        (!streams.is_empty()).then(|| {
+            Box::pin(async_stream::stream! {
+                while let Some(event) = streams.next().await {
+                    yield event;
+                }
+            }) as OutputStream<(VarName, Self::Val)>
+        })
+    }
+
+    fn batched_event_stream(
+        &mut self,
+        vars: &BTreeSet<VarName>,
+    ) -> Option<OutputStream<Vec<(VarName, Self::Val)>>> {
+        self.event_stream(vars).map(|mut events| {
+            Box::pin(async_stream::stream! {
+                while let Some(event) = events.next().await {
+                    yield vec![event];
+                }
+            }) as OutputStream<Vec<(VarName, Self::Val)>>
+        })
+    }
+
+    fn event_stream_requires_control(&self) -> bool {
+        true
+    }
 
     /// Returns an OutputStream of Result<()> indicating if the InputProvider has encountered an
     /// error (Err) or has successfully provided one batch of values (Ok).
     /// Awaiting the control_stream attempts to progress the InputProvider by one step.
     async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
-
-    /// Optional replay snapshot accessor.
-    ///
-    /// Input providers that can expose deterministic historical values for replay
-    /// (e.g. file-backed providers) may override this to return a full
-    /// time-indexed snapshot map.
-    ///
-    /// The default implementation returns `None`, indicating replay history is
-    /// not available.
-    fn replay_history(&self) -> Option<BTreeMap<usize, BTreeMap<VarName, Value>>> {
-        None
-    }
-
-    /// Optional live replay-history handle accessor.
-    fn replay_history_handle(&self) -> Option<ReplayHistory> {
-        None
-    }
 }
 
 pub trait Specification: Debug + std::fmt::Display + Clone + 'static {

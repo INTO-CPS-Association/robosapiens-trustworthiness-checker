@@ -9,6 +9,7 @@ use crate::{
     UntypedDsrvSpecification, Value,
     distributed::{
         distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
+        scheduling::planning_context::PlanningContext,
         solvers::brute_solver::BruteForceDistConstraintSolver,
     },
     semantics::{
@@ -56,12 +57,23 @@ where
         &self,
         graph: Rc<DistributionGraph>,
         _scheduler_tick: usize,
+        planning_context: Option<PlanningContext>,
     ) -> Option<Rc<LabelledDistributionGraph>> {
         if let Some(chosen_dist_graph) = self.chosen_dist_graph.get() {
             return Some(chosen_dist_graph.clone());
         }
 
         info!("Initial dist graph stream {:?}", graph);
+
+        if !self.solver.input_vars.is_empty() {
+            while planning_context
+                .as_ref()
+                .is_some_and(|context| context.snapshot().history.is_empty())
+            {
+                info!("Static optimized planner waiting for planning context history");
+                Timer::after(Duration::from_millis(25)).await;
+            }
+        }
 
         let mut labelled_dist_graphs: LocalBoxStream<Rc<LabelledDistributionGraph>> = self
             .solver
@@ -82,7 +94,7 @@ where
 
 /// Planner for dynamic optimization:
 /// recomputes an optimized labelled distribution graph whenever replanning is triggered.
-/// The replay timestep used for constraint evaluation is provided by the scheduler tick.
+/// The context history step used for constraint evaluation is derived from the scheduler tick.
 pub struct DynamicOptimizedSchedulerPlanner<S, AC>
 where
     S: MonitoringSemantics<AC>,
@@ -116,45 +128,43 @@ where
         &self,
         graph: Rc<DistributionGraph>,
         scheduler_tick: usize,
+        planning_context: Option<PlanningContext>,
     ) -> Option<Rc<LabelledDistributionGraph>> {
-        // Scheduler tick 0 is the bootstrap planning cycle; align replay by offsetting:
-        // tick 0 -> replay step 0 (bootstrap), tick 1 -> replay step 0, tick 2 -> replay step 1, ...
-        let replay_target_step = scheduler_tick.saturating_sub(1);
+        // Scheduler tick 0 is the bootstrap planning cycle; align context history by offsetting:
+        // tick 0 -> context step 0 (bootstrap), tick 1 -> step 0, tick 2 -> step 1, ...
+        let context_target_step = scheduler_tick.saturating_sub(1);
 
         info!(
-            "Dynamic optimization planning for graph {:?} at scheduler tick {} (replay_target_step={})",
-            graph, scheduler_tick, replay_target_step
+            "Dynamic optimization planning for graph {:?} at scheduler tick {} (context_target_step={})",
+            graph, scheduler_tick, context_target_step
         );
 
-        // Keep searching forward in replay time until we find a feasible assignment.
-        let mut probe_step = replay_target_step;
+        // Keep searching forward in recorded context time until we find a feasible assignment.
+        let mut probe_step = context_target_step;
         loop {
-            let latest_replay_step = self
-                .solver
-                .replay_history
+            let latest_context_step = planning_context
                 .as_ref()
-                .and_then(|history| history.snapshot())
-                .and_then(|snapshot| snapshot.keys().max().copied());
+                .and_then(|context| context.snapshot().history.keys().max().copied());
 
-            let Some(latest_replay_step) = latest_replay_step else {
+            let Some(latest_context_step) = latest_context_step else {
                 info!(
-                    "No replay history available yet (scheduler tick {}), waiting for input data",
+                    "No planning context history available yet (scheduler tick {}), waiting for input data",
                     scheduler_tick
                 );
                 Timer::after(Duration::from_millis(25)).await;
                 continue;
             };
 
-            if probe_step > latest_replay_step {
+            if probe_step > latest_context_step {
                 info!(
-                    "Replay history not advanced enough (probe_step={}, latest_step={}, scheduler tick {}), waiting for new input data",
-                    probe_step, latest_replay_step, scheduler_tick
+                    "Planning context history not advanced enough (probe_step={}, latest_step={}, scheduler tick {}), waiting for new input data",
+                    probe_step, latest_context_step, scheduler_tick
                 );
                 Timer::after(Duration::from_millis(25)).await;
                 continue;
             }
 
-            while probe_step <= latest_replay_step {
+            while probe_step <= latest_context_step {
                 let mut labelled_dist_graphs: LocalBoxStream<Rc<LabelledDistributionGraph>> = self
                     .solver
                     .clone()
@@ -165,14 +175,14 @@ where
 
                 if let Some(chosen_dist_graph) = labelled_dist_graphs.next().await {
                     info!(
-                        "Labelled optimized graph (dynamic plan, tick {}, replay_target_step={}, resolved_step={}): {:?}",
-                        scheduler_tick, replay_target_step, probe_step, chosen_dist_graph
+                        "Labelled optimized graph (dynamic plan, tick {}, context_target_step={}, resolved_step={}): {:?}",
+                        scheduler_tick, context_target_step, probe_step, chosen_dist_graph
                     );
                     return Some(chosen_dist_graph);
                 }
 
                 info!(
-                    "No feasible dynamic optimized graph at replay step {} (scheduler tick {}), trying next available replay step",
+                    "No feasible dynamic optimized graph at context step {} (scheduler tick {}), trying next available context step",
                     probe_step, scheduler_tick
                 );
 

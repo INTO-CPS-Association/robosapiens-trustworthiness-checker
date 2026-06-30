@@ -170,7 +170,7 @@ where
         self
     }
 
-    pub fn add_callback(mut self, callback: Box<dyn Fn(&mut DistributedContext<AC>)>) -> Self {
+    pub fn add_callback(mut self, callback: Box<dyn FnOnce(&mut DistributedContext<AC>)>) -> Self {
         self.built_callbacks.push(callback);
         self
     }

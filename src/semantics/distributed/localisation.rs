@@ -47,6 +47,7 @@ pub trait Localisable {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self;
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn replace_var(var: &VarName, var_expr: &SpannedExpr, repl_expr: &SpannedExpr) -> SpannedExpr {
     // Replaces all occurrences of var in the repl_expr with var_expr
     if matches!(&repl_expr.node, SExpr::Var(v) if v == var) {
@@ -187,6 +188,414 @@ fn replace_var(var: &VarName, var_expr: &SpannedExpr, repl_expr: &SpannedExpr) -
     }
 }
 
+fn expand_aux_var(
+    aux: &VarName,
+    aux_defs: &BTreeMap<VarName, SpannedExpr>,
+    expanded_aux_defs: &mut BTreeMap<VarName, SpannedExpr>,
+    visiting: &mut BTreeSet<VarName>,
+) -> SpannedExpr {
+    if let Some(expr) = expanded_aux_defs.get(aux) {
+        return expr.clone();
+    }
+
+    if !visiting.insert(aux.clone()) {
+        panic!(
+            "Recursive/cyclic aux definition detected while localising at aux variable {:?}",
+            aux
+        );
+    }
+
+    let aux_expr = aux_defs.get(aux).unwrap_or_else(|| {
+        panic!(
+            "Aux variable {:?} does not have a definition in the expressions",
+            aux
+        )
+    });
+    let expanded = replace_aux_refs(aux_expr, aux_defs, expanded_aux_defs, visiting);
+    visiting.remove(aux);
+    expanded_aux_defs.insert(aux.clone(), expanded.clone());
+
+    expanded
+}
+
+fn replace_aux_refs(
+    repl_expr: &SpannedExpr,
+    aux_defs: &BTreeMap<VarName, SpannedExpr>,
+    expanded_aux_defs: &mut BTreeMap<VarName, SpannedExpr>,
+    visiting: &mut BTreeSet<VarName>,
+) -> SpannedExpr {
+    let node = match &repl_expr.node {
+        SExpr::Var(v) if aux_defs.contains_key(v) => {
+            return expand_aux_var(v, aux_defs, expanded_aux_defs, visiting);
+        }
+        SExpr::Var(_) => repl_expr.node.clone(),
+        SExpr::BinOp(lhs, rhs, op) => SExpr::BinOp(
+            Box::new(replace_aux_refs(lhs, aux_defs, expanded_aux_defs, visiting)),
+            Box::new(replace_aux_refs(rhs, aux_defs, expanded_aux_defs, visiting)),
+            op.clone(),
+        ),
+        SExpr::If(sexpr, sexpr1, sexpr2) => SExpr::If(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr2,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::SIndex(sexpr, idx) => SExpr::SIndex(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            *idx,
+        ),
+        SExpr::Val(value) => SExpr::Val(value.clone()),
+        SExpr::Dynamic(sexpr, stream_type_ascription) => SExpr::Dynamic(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            stream_type_ascription.clone(),
+        ),
+        SExpr::RestrictedDynamic(sexpr, stream_type_ascription, eco_vec) => {
+            SExpr::RestrictedDynamic(
+                Box::new(replace_aux_refs(
+                    sexpr,
+                    aux_defs,
+                    expanded_aux_defs,
+                    visiting,
+                )),
+                stream_type_ascription.clone(),
+                eco_vec.clone(),
+            )
+        }
+        SExpr::Defer(sexpr, stream_type_ascription, eco_vec) => SExpr::Defer(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            stream_type_ascription.clone(),
+            eco_vec.clone(),
+        ),
+        SExpr::Update(sexpr, sexpr1) => SExpr::Update(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::Default(sexpr, sexpr1) => SExpr::Default(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::When(sexpr) => SExpr::When(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::Latch(sexpr, sexpr1) => SExpr::Latch(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::Init(sexpr, sexpr1) => SExpr::Init(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::Not(sexpr) => SExpr::Not(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::List(eco_vec) => SExpr::List(
+            eco_vec
+                .iter()
+                .map(|e| replace_aux_refs(e, aux_defs, expanded_aux_defs, visiting))
+                .collect(),
+        ),
+        SExpr::LIndex(sexpr, sexpr1) => SExpr::LIndex(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::LAppend(sexpr, sexpr1) => SExpr::LAppend(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::LConcat(sexpr, sexpr1) => SExpr::LConcat(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::LHead(sexpr) => SExpr::LHead(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::LTail(sexpr) => SExpr::LTail(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::LLen(sexpr) => SExpr::LLen(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::Map(btree_map) => SExpr::Map(
+            btree_map
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        replace_aux_refs(v, aux_defs, expanded_aux_defs, visiting),
+                    )
+                })
+                .collect(),
+        ),
+        SExpr::Struct(btree_map) => SExpr::Struct(
+            btree_map
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        replace_aux_refs(v, aux_defs, expanded_aux_defs, visiting),
+                    )
+                })
+                .collect(),
+        ),
+        SExpr::ObjectLiteral(btree_map) => SExpr::ObjectLiteral(
+            btree_map
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        replace_aux_refs(v, aux_defs, expanded_aux_defs, visiting),
+                    )
+                })
+                .collect(),
+        ),
+        SExpr::MGet(sexpr, eco_string) => SExpr::MGet(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            eco_string.clone(),
+        ),
+        SExpr::SGet(sexpr, eco_string) => SExpr::SGet(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            eco_string.clone(),
+        ),
+        SExpr::MInsert(sexpr, eco_string, sexpr1) => SExpr::MInsert(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            eco_string.clone(),
+            Box::new(replace_aux_refs(
+                sexpr1,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::MRemove(sexpr, eco_string) => SExpr::MRemove(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            eco_string.clone(),
+        ),
+        SExpr::MHasKey(sexpr, eco_string) => SExpr::MHasKey(
+            Box::new(replace_aux_refs(
+                sexpr,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            eco_string.clone(),
+        ),
+        SExpr::Sin(sexpr) => SExpr::Sin(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::Cos(sexpr) => SExpr::Cos(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::Tan(sexpr) => SExpr::Tan(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::Abs(sexpr) => SExpr::Abs(Box::new(replace_aux_refs(
+            sexpr,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::MonitoredAt(var_name, node_name) => {
+            if aux_defs.contains_key(var_name) {
+                panic!("Localisation of monitored_at expression with aux variable not allowed")
+            } else {
+                SExpr::MonitoredAt(var_name.clone(), node_name.clone())
+            }
+        }
+        SExpr::Dist(_, _) => {
+            unimplemented!("Dist currently unsupported")
+        }
+    };
+
+    SpannedExpr {
+        node,
+        span: repl_expr.span,
+    }
+}
+
+fn dependency_closure(
+    spec: &UntypedDsrvSpecification,
+    roots: impl IntoIterator<Item = VarName>,
+) -> BTreeSet<VarName> {
+    let mut reachable = BTreeSet::new();
+    let mut pending = roots.into_iter().collect::<Vec<_>>();
+
+    while let Some(var) = pending.pop() {
+        if !reachable.insert(var.clone()) {
+            continue;
+        }
+
+        if let Some(expr) = spec.exprs.get(&var) {
+            pending.extend(expr.inputs());
+        }
+    }
+
+    reachable
+}
+
+fn prune_to_dependency_closure(
+    mut spec: UntypedDsrvSpecification,
+    roots: &[VarName],
+) -> UntypedDsrvSpecification {
+    let reachable = dependency_closure(&spec, roots.iter().cloned());
+    let root_set = roots.iter().cloned().collect::<BTreeSet<_>>();
+
+    spec.output_vars.retain(|v| root_set.contains(v));
+    spec.aux_vars.retain(|v| reachable.contains(v));
+    spec.exprs.retain(|v, _| reachable.contains(v));
+    spec.type_annotations.retain(|v, _| reachable.contains(v));
+
+    spec
+}
+
 fn inline_aux(spec: UntypedDsrvSpecification) -> UntypedDsrvSpecification {
     // Inline auxiliary variables transitively, while rejecting recursive/cyclic definitions.
     let aux_vars: BTreeSet<VarName> = spec.aux_vars();
@@ -205,56 +614,22 @@ fn inline_aux(spec: UntypedDsrvSpecification) -> UntypedDsrvSpecification {
         })
         .collect();
 
-    // Expand any references to aux variables within the expressions for other aux variables
-    // Cycle check: if an aux still references any aux after one full substitution pass,
-    // we treat it as recursive/cyclic and reject localisation (we are guaranteed to remove any
-    // non-cyclic dependencies after aux_vars.len() passes).
-    let expanded_aux_defs: BTreeMap<VarName, SpannedExpr> =
-        (0..aux_vars.len()).fold(aux_defs.clone(), |current_defs, _| {
-            current_defs
-                .iter()
-                .map(|(name, expr)| {
-                    let expanded = aux_vars.iter().fold(expr.clone(), |acc, dep| {
-                        if dep == name {
-                            // This is the current dependency
-                            acc
-                        } else if let Some(dep_expr) = current_defs.get(dep) {
-                            // Replace the current dependency in the current expression
-                            replace_var(dep, dep_expr, &acc)
-                        } else {
-                            // Leave unchanged
-                            acc
-                        }
-                    });
-                    (name.clone(), expanded)
-                })
-                .collect()
-        });
-
-    // Check for remaining cyclic references
-    if let Some((name, _)) = expanded_aux_defs
-        .iter()
-        .find(|(_, expr)| expr.inputs().into_iter().any(|v| aux_vars.contains(&v)))
-    {
-        panic!(
-            "Recursive/cyclic aux definition detected while localising at aux variable {:?}",
-            name
-        );
+    let mut expanded_aux_defs = BTreeMap::new();
+    for aux in &aux_vars {
+        expand_aux_var(aux, &aux_defs, &mut expanded_aux_defs, &mut BTreeSet::new());
     }
 
-    // Replace all aux references in all expressions with their fully-expanded definitions.
-    let replaced_exprs = aux_vars.iter().fold(spec.exprs, |exprs_acc, aux| {
-        let aux_expr = expanded_aux_defs.get(aux).unwrap_or_else(|| {
-            panic!(
-                "Expanded aux expression missing for auxiliary variable {:?}",
-                aux
+    let mut visiting = BTreeSet::new();
+    let replaced_exprs = spec
+        .exprs
+        .into_iter()
+        .map(|(name, repl_expr)| {
+            (
+                name,
+                replace_aux_refs(&repl_expr, &aux_defs, &mut expanded_aux_defs, &mut visiting),
             )
-        });
-        exprs_acc
-            .into_iter()
-            .map(|(name, repl_expr)| (name, replace_var(aux, aux_expr, &repl_expr)))
-            .collect::<BTreeMap<_, _>>()
-    });
+        })
+        .collect::<BTreeMap<_, _>>();
 
     // Remove aux declarations/definitions from final spec and rebuild via constructor.
     let filtered_exprs: BTreeMap<VarName, SpannedExpr> = replaced_exprs
@@ -285,8 +660,8 @@ fn inline_aux(spec: UntypedDsrvSpecification) -> UntypedDsrvSpecification {
 
 impl Localisable for UntypedDsrvSpecification {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self {
-        let spec = inline_aux(self.clone());
         let local_vars = locality_spec.local_vars();
+        let spec = inline_aux(prune_to_dependency_closure(self.clone(), &local_vars));
         let mut exprs = spec.exprs.clone();
         let mut output_vars = spec.output_vars.clone();
         let mut aux_vars = spec.aux_vars.clone();
@@ -294,6 +669,11 @@ impl Localisable for UntypedDsrvSpecification {
 
         let mut to_remove = vec![];
         for v in output_vars.iter() {
+            if !local_vars.contains(v) {
+                to_remove.push(v.clone());
+            }
+        }
+        for v in exprs.keys() {
             if !local_vars.contains(v) {
                 to_remove.push(v.clone());
             }

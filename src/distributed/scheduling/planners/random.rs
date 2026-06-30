@@ -9,6 +9,7 @@ use crate::{
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistributionGraph, graph_to_png,
     },
+    distributed::scheduling::planning_context::PlanningContext,
 };
 
 use super::core::SchedulerPlanner;
@@ -23,6 +24,7 @@ impl SchedulerPlanner for RandomSchedulerPlanner {
         &self,
         graph: Rc<DistributionGraph>,
         _scheduler_tick: usize,
+        _planning_context: Option<PlanningContext>,
     ) -> Option<Rc<LabelledDistributionGraph>> {
         info!("Received distribution graph: generating random labelling");
         let node_indicies = graph.graph.node_indices().collect::<Vec<_>>();
