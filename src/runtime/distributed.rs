@@ -3,18 +3,23 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 use crate::io::TopicMapping;
 
 use async_trait::async_trait;
-use futures::{StreamExt, future::LocalBoxFuture, join};
+use futures::{FutureExt, StreamExt, future::LocalBoxFuture, join, select};
 use smol::LocalExecutor;
 use tracing::debug;
+use unsync::spsc;
 
 use crate::{
-    InputProvider, Specification, UntypedDsrvSpecification, Value, VarName,
+    InputProvider, OutputStream, Specification, UntypedDsrvSpecification, Value, VarName,
     core::{OutputHandler, Runtime},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         scheduling::{
             ReplanningCondition, Scheduler,
             communication::{NullSchedulerCommunicator, SchedulerCommunicator},
+            dist_constraint_evaluator::{
+                ConstraintInputBatch, ConstraintInputIndex, dist_constraint_event_stream,
+                dist_constraint_input_vars,
+            },
             planners::{
                 constrained::{DynamicOptimizedSchedulerPlanner, StaticOptimizedSchedulerPlanner},
                 constrained_sat::{
@@ -25,16 +30,14 @@ use crate::{
                 },
                 random::RandomSchedulerPlanner,
             },
+            planning_context::{PlanningContext, spawn_planning_context_recorder},
         },
         solvers::{
             brute_solver::BruteForceDistConstraintSolver,
             sat_solver::SatMonitoredAtDistConstraintSolver,
         },
     },
-    io::{
-        mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
-        testing::NullOutputHandler,
-    },
+    io::mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
     runtime::RuntimeBuilder,
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
@@ -43,6 +46,7 @@ use crate::{
             localisation::Localisable,
         },
     },
+    stream_utils::channel_to_output_stream,
 };
 
 #[cfg(feature = "ros")]
@@ -363,36 +367,73 @@ pub enum SchedulerCommunication {
     },
 }
 
+struct DirectSchedulerInputRuntime {
+    input_provider: Option<Box<dyn InputProvider<Val = Value>>>,
+    input_events: OutputStream<Vec<(VarName, Value)>>,
+    constraint_input_index: ConstraintInputIndex,
+    constraint_sender: spsc::Sender<ConstraintInputBatch>,
+    planning_context: Option<PlanningContext>,
+}
+
+impl DirectSchedulerInputRuntime {
+    async fn run(mut self) -> anyhow::Result<()> {
+        let mut control_stream = if let Some(input_provider) = self.input_provider.as_mut() {
+            input_provider.control_stream().await
+        } else {
+            Box::pin(futures::stream::pending()) as OutputStream<anyhow::Result<()>>
+        };
+
+        loop {
+            select! {
+                result = control_stream.next().fuse() => {
+                    match result {
+                        Some(result) => result?,
+                        None => control_stream = Box::pin(futures::stream::pending()),
+                    }
+                },
+                event = self.input_events.next().fuse() => {
+                    let Some(batch) = event else {
+                        return Ok(());
+                    };
+                    let mut compact_batch = Vec::new();
+                    let mut planning_batch = Vec::new();
+                    for (var, value) in batch {
+                        if matches!(value, Value::NoVal | Value::Deferred) {
+                            continue;
+                        }
+
+                        if let Some(index) = self.constraint_input_index.index_of(&var) {
+                            compact_batch.push((index, value.clone()));
+                        }
+                        planning_batch.push((var, value));
+                    }
+
+                    if let Some(planning_context) = &self.planning_context {
+                        planning_context.record_batch(planning_batch);
+                    }
+
+                    if !compact_batch.is_empty() {
+                        self.constraint_sender.send(compact_batch).await?;
+                    }
+                },
+            }
+        }
+    }
+}
+
 impl<S, AC> DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     AC::Spec: Localisable,
 {
-    fn extract_replay_history(&self) -> Option<crate::io::replay_history::ReplayHistory> {
-        self.input
-            .as_ref()
-            .and_then(|input| input.replay_history_handle())
-            .or_else(|| {
-                self.input
-                    .as_ref()
-                    .and_then(|input| input.replay_history())
-                    .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
-            })
-    }
-
     fn make_sat_solver(
         &self,
         dist_constraints: Vec<VarName>,
         output_vars: Vec<VarName>,
         spec: &AC::Spec,
     ) -> SatMonitoredAtDistConstraintSolver<S, AC> {
-        SatMonitoredAtDistConstraintSolver::new(
-            dist_constraints,
-            output_vars,
-            spec.clone(),
-            self.extract_replay_history(),
-        )
+        SatMonitoredAtDistConstraintSolver::new(dist_constraints, output_vars, spec.clone(), None)
     }
 
     pub fn var_msg_types(mut self, var_msg_types: BTreeMap<VarName, String>) -> Self {
@@ -515,293 +556,118 @@ where
                 .output_vars()
                 .into_iter()
                 .collect();
-            let (planner, locations, dist_graph_provider, dist_constraints, replanning_condition): (
-            Box<dyn SchedulerPlanner>,
-            Vec<NodeName>,
-            Box<dyn DistGraphProvider>,
-            Vec<VarName>, // Distribution constraints
-            ReplanningCondition,
-        ) = match dist_graph_mode {
-            DistGraphMode::Static(graph) => {
-                let graph = Rc::new(graph);
-                let dist_graph_provider =
-                    Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
-                let locations = graph.dist_graph.graph.node_weights().cloned().collect();
-                let planner = Box::new(StaticFixedSchedulerPlanner { fixed_graph: graph });
-                (
-                    planner,
-                    locations,
-                    dist_graph_provider,
-                    vec![],
-                    ReplanningCondition::Never,
-                )
-            }
-            DistGraphMode::MqttCentralised(locations) => {
-                debug!("Creating MQTT dist graph provider");
-                let location_names = locations.keys().cloned().collect();
-                let dist_graph_provider = Box::new(
-                    dist_graph_provider::MqttDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
+            let planning_context = match &dist_graph_mode {
+                DistGraphMode::MqttStaticOptimized(_, _)
+                | DistGraphMode::MqttDynamicOptimized(_, _)
+                | DistGraphMode::RosStaticOptimized(_, _, _)
+                | DistGraphMode::RosDynamicOptimized(_, _, _)
+                | DistGraphMode::PredefinedDynamicOptimized(_, _) => {
+                    Some(PlanningContext::new(true))
+                }
+                DistGraphMode::MqttStaticOptimizedSat(_, _)
+                | DistGraphMode::MqttDynamicOptimizedSat(_, _)
+                | DistGraphMode::RosStaticOptimizedSat(_, _, _)
+                | DistGraphMode::RosDynamicOptimizedSat(_, _, _)
+                | DistGraphMode::PredefinedDynamicOptimizedSat(_, _) => {
+                    Some(PlanningContext::new(false))
+                }
+                _ => None,
+            };
+            let (
+                planner,
+                locations,
+                dist_graph_provider,
+                dist_constraints,
+                replanning_condition,
+                cached_localised_spec,
+            ): (
+                Box<dyn SchedulerPlanner>,
+                Vec<NodeName>,
+                Box<dyn DistGraphProvider>,
+                Vec<VarName>, // Distribution constraints
+                ReplanningCondition,
+                Option<AC::Spec>,
+            ) = match dist_graph_mode {
+                DistGraphMode::Static(graph) => {
+                    let graph = Rc::new(graph);
+                    let dist_graph_provider =
+                        Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
+                    let locations = graph.dist_graph.graph.node_weights().cloned().collect();
+                    let planner = Box::new(StaticFixedSchedulerPlanner { fixed_graph: graph });
+                    (
+                        planner,
                         locations,
+                        dist_graph_provider,
+                        vec![],
+                        ReplanningCondition::Never,
+                        None,
                     )
-                    .expect("Failed to create MQTT dist graph provider"),
-                );
-                let planner: Box<dyn SchedulerPlanner> = Box::new(CentralisedSchedulerPlanner {
-                    var_names,
-                    central_node: dist_graph_provider.central_node.clone(),
-                });
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    vec![],
-                    ReplanningCondition::Always,
-                )
-            }
-            DistGraphMode::MqttRandom(locations) => {
-                debug!("Creating random dist graph stream");
-                let location_names = locations.keys().cloned().collect();
-                let dist_graph_provider = Box::new(
-                    dist_graph_provider::MqttDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        locations,
-                    )
-                    .expect("Failed to create MQTT dist graph provider"),
-                );
-                let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(RandomSchedulerPlanner { var_names });
-
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    vec![],
-                    ReplanningCondition::Always,
-                )
-            }
-            DistGraphMode::MqttStaticOptimized(locations, dist_constraints) => {
-                debug!("Creating static optimized dist graph provider");
-                let location_names = locations.keys().cloned().collect();
-                let dist_graph_provider = Box::new(
-                    dist_graph_provider::MqttDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        locations,
-                    )
-                    .expect("Failed to create MQTT dist graph provider"),
-                );
-
-                let replay_history = self.extract_replay_history();
-
-                let solver = BruteForceDistConstraintSolver {
-                    executor: executor.clone(),
-                    monitor_builder: self.partial_clone(),
-                    context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
-                    dist_constraints: dist_constraints.clone(),
-                    input_vars: self
-                        .async_monitor_builder
-                        .model
-                        .as_ref()
-                        .unwrap()
-                        .input_vars()
-                        .into_iter()
-                        .collect(),
-                    output_vars: output_vars.clone(),
-                    replay_history,
-                };
-                let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(StaticOptimizedSchedulerPlanner::new(solver));
-
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    dist_constraints,
-                    ReplanningCondition::Never,
-                )
-            }
-            DistGraphMode::MqttStaticOptimizedSat(locations, dist_constraints) => {
-                debug!("Creating static optimized SAT dist graph provider");
-                let location_names = locations.keys().cloned().collect();
-                let dist_graph_provider = Box::new(
-                    dist_graph_provider::MqttDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        locations,
-                    )
-                    .expect("Failed to create MQTT dist graph provider"),
-                );
-
-                let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
-                    self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
-                let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(StaticOptimizedSchedulerPlannerSat::new(solver));
-
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    dist_constraints,
-                    ReplanningCondition::Never,
-                )
-            }
-            DistGraphMode::MqttDynamicOptimized(locations, dist_constraints) => {
-                debug!("Creating dynamic optimized dist graph provider");
-                let location_names = locations.keys().cloned().collect();
-                let dist_graph_provider = Box::new(
-                    dist_graph_provider::MqttDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        locations,
-                    )
-                    .expect("Failed to create MQTT dist graph provider"),
-                );
-
-                let replay_history = self.extract_replay_history();
-
-                let solver = BruteForceDistConstraintSolver {
-                    executor: executor.clone(),
-                    monitor_builder: self.partial_clone(),
-                    context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
-                    dist_constraints: dist_constraints.clone(),
-                    input_vars: self
-                        .async_monitor_builder
-                        .model
-                        .as_ref()
-                        .unwrap()
-                        .input_vars()
-                        .into_iter()
-                        .collect(),
-                    output_vars: output_vars.clone(),
-                    replay_history,
-                };
-                let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
-
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    dist_constraints,
-                    ReplanningCondition::ConstraintsFail,
-                )
-            }
-            DistGraphMode::MqttDynamicOptimizedSat(locations, dist_constraints) => {
-                debug!("Creating dynamic optimized SAT dist graph provider");
-                let location_names = locations.keys().cloned().collect();
-                let dist_graph_provider = Box::new(
-                    dist_graph_provider::MqttDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        locations,
-                    )
-                    .expect("Failed to create MQTT dist graph provider"),
-                );
-
-                let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
-                    self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
-                let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
-
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    dist_constraints,
-                    ReplanningCondition::ConstraintsFail,
-                )
-            }
-            DistGraphMode::RosCentralised(_locations, _dist_graph_topic) => {
-                debug!(
-                    "Creating ROS dist graph provider with topic: {}",
-                    _dist_graph_topic
-                );
-                #[cfg(feature = "ros")]
-                {
-                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        _locations,
-                        _dist_graph_topic,
-                    )
-                    .expect("Failed to create ROS dist graph provider");
-                    let central_node = provider.central_node.clone();
+                }
+                DistGraphMode::MqttCentralised(locations) => {
+                    debug!("Creating MQTT dist graph provider");
+                    let location_names = locations.keys().cloned().collect();
+                    let dist_graph_provider = Box::new(
+                        dist_graph_provider::MqttDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            locations,
+                        )
+                        .expect("Failed to create MQTT dist graph provider"),
+                    );
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(CentralisedSchedulerPlanner {
                             var_names,
-                            central_node,
+                            central_node: dist_graph_provider.central_node.clone(),
                         });
                     (
                         planner,
                         location_names,
-                        Box::new(provider) as Box<dyn DistGraphProvider>,
+                        dist_graph_provider,
                         vec![],
                         ReplanningCondition::Always,
+                        None,
                     )
                 }
-                #[cfg(not(feature = "ros"))]
-                {
-                    panic!("ROS dist graph mode requires building with feature 'ros'");
-                }
-            }
-            DistGraphMode::RosRandom(_locations, _dist_graph_topic) => {
-                debug!(
-                    "Creating ROS random dist graph stream with topic: {}",
-                    _dist_graph_topic
-                );
-                #[cfg(feature = "ros")]
-                {
-                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        _locations,
-                        _dist_graph_topic,
-                    )
-                    .expect("Failed to create ROS dist graph provider");
-
+                DistGraphMode::MqttRandom(locations) => {
+                    debug!("Creating random dist graph stream");
+                    let location_names = locations.keys().cloned().collect();
+                    let dist_graph_provider = Box::new(
+                        dist_graph_provider::MqttDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            locations,
+                        )
+                        .expect("Failed to create MQTT dist graph provider"),
+                    );
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(RandomSchedulerPlanner { var_names });
 
                     (
                         planner,
                         location_names,
-                        Box::new(provider) as Box<dyn DistGraphProvider>,
+                        dist_graph_provider,
                         vec![],
                         ReplanningCondition::Always,
+                        None,
                     )
                 }
-                #[cfg(not(feature = "ros"))]
-                {
-                    panic!("ROS dist graph mode requires building with feature 'ros'");
-                }
-            }
-            DistGraphMode::RosStaticOptimized(_locations, _dist_constraints, _dist_graph_topic) => {
-                debug!(
-                    "Creating ROS static optimized dist graph provider with topic: {}",
-                    _dist_graph_topic
-                );
-                #[cfg(feature = "ros")]
-                {
-                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        _locations,
-                        _dist_graph_topic,
-                    )
-                    .expect("Failed to create ROS dist graph provider");
-
-                    let replay_history = self.extract_replay_history();
+                DistGraphMode::MqttStaticOptimized(locations, dist_constraints) => {
+                    debug!("Creating static optimized dist graph provider");
+                    let location_names = locations.keys().cloned().collect();
+                    let dist_graph_provider = Box::new(
+                        dist_graph_provider::MqttDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            locations,
+                        )
+                        .expect("Failed to create MQTT dist graph provider"),
+                    );
 
                     let solver = BruteForceDistConstraintSolver {
                         executor: executor.clone(),
                         monitor_builder: self.partial_clone(),
                         context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
-                        dist_constraints: _dist_constraints.clone(),
+                        dist_constraints: dist_constraints.clone(),
                         input_vars: self
                             .async_monitor_builder
                             .model
@@ -811,7 +677,7 @@ where
                             .into_iter()
                             .collect(),
                         output_vars: output_vars.clone(),
-                        replay_history,
+                        planning_context: planning_context.clone(),
                     };
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(StaticOptimizedSchedulerPlanner::new(solver));
@@ -819,81 +685,56 @@ where
                     (
                         planner,
                         location_names,
-                        Box::new(provider) as Box<dyn DistGraphProvider>,
-                        _dist_constraints,
+                        dist_graph_provider,
+                        dist_constraints,
                         ReplanningCondition::Never,
+                        None,
                     )
                 }
-                #[cfg(not(feature = "ros"))]
-                {
-                    panic!("ROS dist graph mode requires building with feature 'ros'");
-                }
-            }
-            DistGraphMode::RosStaticOptimizedSat(
-                _locations,
-                _dist_constraints,
-                _dist_graph_topic,
-            ) => {
-                debug!(
-                    "Creating ROS static optimized SAT dist graph provider with topic: {}",
-                    _dist_graph_topic
-                );
-                #[cfg(feature = "ros")]
-                {
-                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        _locations,
-                        _dist_graph_topic,
-                    )
-                    .expect("Failed to create ROS dist graph provider");
+                DistGraphMode::MqttStaticOptimizedSat(locations, dist_constraints) => {
+                    debug!("Creating static optimized SAT dist graph provider");
+                    let location_names = locations.keys().cloned().collect();
+                    let dist_graph_provider = Box::new(
+                        dist_graph_provider::MqttDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            locations,
+                        )
+                        .expect("Failed to create MQTT dist graph provider"),
+                    );
 
                     let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
-                        self.make_sat_solver(_dist_constraints.clone(), output_vars.clone(), &spec);
+                        self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
+                    let localised_dist_spec = solver.localised_dist_spec.clone();
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(StaticOptimizedSchedulerPlannerSat::new(solver));
 
                     (
                         planner,
                         location_names,
-                        Box::new(provider) as Box<dyn DistGraphProvider>,
-                        _dist_constraints,
+                        dist_graph_provider,
+                        dist_constraints,
                         ReplanningCondition::Never,
+                        Some(localised_dist_spec),
                     )
                 }
-                #[cfg(not(feature = "ros"))]
-                {
-                    panic!("ROS dist graph mode requires building with feature 'ros'");
-                }
-            }
-            DistGraphMode::RosDynamicOptimized(
-                _locations,
-                _dist_constraints,
-                _dist_graph_topic,
-            ) => {
-                debug!(
-                    "Creating ROS dynamic optimized dist graph provider with topic: {}",
-                    _dist_graph_topic
-                );
-                #[cfg(feature = "ros")]
-                {
-                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        _locations,
-                        _dist_graph_topic,
-                    )
-                    .expect("Failed to create ROS dist graph provider");
-
-                    let replay_history = self.extract_replay_history();
+                DistGraphMode::MqttDynamicOptimized(locations, dist_constraints) => {
+                    debug!("Creating dynamic optimized dist graph provider");
+                    let location_names = locations.keys().cloned().collect();
+                    let dist_graph_provider = Box::new(
+                        dist_graph_provider::MqttDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            locations,
+                        )
+                        .expect("Failed to create MQTT dist graph provider"),
+                    );
 
                     let solver = BruteForceDistConstraintSolver {
                         executor: executor.clone(),
                         monitor_builder: self.partial_clone(),
                         context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
-                        dist_constraints: _dist_constraints.clone(),
+                        dist_constraints: dist_constraints.clone(),
                         input_vars: self
                             .async_monitor_builder
                             .model
@@ -903,7 +744,7 @@ where
                             .into_iter()
                             .collect(),
                         output_vars: output_vars.clone(),
-                        replay_history,
+                        planning_context: planning_context.clone(),
                     };
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
@@ -911,120 +752,357 @@ where
                     (
                         planner,
                         location_names,
-                        Box::new(provider) as Box<dyn DistGraphProvider>,
-                        _dist_constraints,
+                        dist_graph_provider,
+                        dist_constraints,
                         ReplanningCondition::ConstraintsFail,
+                        None,
                     )
                 }
-                #[cfg(not(feature = "ros"))]
-                {
-                    panic!("ROS dist graph mode requires building with feature 'ros'");
-                }
-            }
-            DistGraphMode::RosDynamicOptimizedSat(
-                _locations,
-                _dist_constraints,
-                _dist_graph_topic,
-            ) => {
-                debug!(
-                    "Creating ROS dynamic optimized SAT dist graph provider with topic: {}",
-                    _dist_graph_topic
-                );
-                #[cfg(feature = "ros")]
-                {
-                    let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
-                    let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
-                        executor.clone(),
-                        "central".to_string().into(),
-                        _locations,
-                        _dist_graph_topic,
-                    )
-                    .expect("Failed to create ROS dist graph provider");
+                DistGraphMode::MqttDynamicOptimizedSat(locations, dist_constraints) => {
+                    debug!("Creating dynamic optimized SAT dist graph provider");
+                    let location_names = locations.keys().cloned().collect();
+                    let dist_graph_provider = Box::new(
+                        dist_graph_provider::MqttDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            locations,
+                        )
+                        .expect("Failed to create MQTT dist graph provider"),
+                    );
 
                     let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
-                        self.make_sat_solver(_dist_constraints.clone(), output_vars.clone(), &spec);
+                        self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
+                    let localised_dist_spec = solver.localised_dist_spec.clone();
                     let planner: Box<dyn SchedulerPlanner> =
                         Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
 
                     (
                         planner,
                         location_names,
-                        Box::new(provider) as Box<dyn DistGraphProvider>,
-                        _dist_constraints,
+                        dist_graph_provider,
+                        dist_constraints,
                         ReplanningCondition::ConstraintsFail,
+                        Some(localised_dist_spec),
                     )
                 }
-                #[cfg(not(feature = "ros"))]
-                {
-                    panic!("ROS dist graph mode requires building with feature 'ros'");
+                DistGraphMode::RosCentralised(_locations, _dist_graph_topic) => {
+                    debug!(
+                        "Creating ROS dist graph provider with topic: {}",
+                        _dist_graph_topic
+                    );
+                    #[cfg(feature = "ros")]
+                    {
+                        let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                        let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            _locations,
+                            _dist_graph_topic,
+                        )
+                        .expect("Failed to create ROS dist graph provider");
+                        let central_node = provider.central_node.clone();
+                        let planner: Box<dyn SchedulerPlanner> =
+                            Box::new(CentralisedSchedulerPlanner {
+                                var_names,
+                                central_node,
+                            });
+                        (
+                            planner,
+                            location_names,
+                            Box::new(provider) as Box<dyn DistGraphProvider>,
+                            vec![],
+                            ReplanningCondition::Always,
+                            None,
+                        )
+                    }
+                    #[cfg(not(feature = "ros"))]
+                    {
+                        panic!("ROS dist graph mode requires building with feature 'ros'");
+                    }
                 }
-            }
-            DistGraphMode::PredefinedDynamicOptimized(graph, dist_constraints) => {
-                debug!("Creating predefined dynamic optimized dist graph provider");
-                let graph = Rc::new(graph);
-                let location_names = graph.dist_graph.graph.node_weights().cloned().collect();
-                let dist_graph_provider =
-                    Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
+                DistGraphMode::RosRandom(_locations, _dist_graph_topic) => {
+                    debug!(
+                        "Creating ROS random dist graph stream with topic: {}",
+                        _dist_graph_topic
+                    );
+                    #[cfg(feature = "ros")]
+                    {
+                        let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                        let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            _locations,
+                            _dist_graph_topic,
+                        )
+                        .expect("Failed to create ROS dist graph provider");
 
-                let replay_history = self
-                    .input
-                    .as_ref()
-                    .and_then(|input| input.replay_history_handle())
-                    .or_else(|| {
-                        self.input
+                        let planner: Box<dyn SchedulerPlanner> =
+                            Box::new(RandomSchedulerPlanner { var_names });
+
+                        (
+                            planner,
+                            location_names,
+                            Box::new(provider) as Box<dyn DistGraphProvider>,
+                            vec![],
+                            ReplanningCondition::Always,
+                            None,
+                        )
+                    }
+                    #[cfg(not(feature = "ros"))]
+                    {
+                        panic!("ROS dist graph mode requires building with feature 'ros'");
+                    }
+                }
+                DistGraphMode::RosStaticOptimized(
+                    _locations,
+                    _dist_constraints,
+                    _dist_graph_topic,
+                ) => {
+                    debug!(
+                        "Creating ROS static optimized dist graph provider with topic: {}",
+                        _dist_graph_topic
+                    );
+                    #[cfg(feature = "ros")]
+                    {
+                        let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                        let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            _locations,
+                            _dist_graph_topic,
+                        )
+                        .expect("Failed to create ROS dist graph provider");
+
+                        let solver = BruteForceDistConstraintSolver {
+                            executor: executor.clone(),
+                            monitor_builder: self.partial_clone(),
+                            context_builder: self
+                                .context_builder
+                                .as_ref()
+                                .map(|b| b.partial_clone()),
+                            dist_constraints: _dist_constraints.clone(),
+                            input_vars: self
+                                .async_monitor_builder
+                                .model
+                                .as_ref()
+                                .unwrap()
+                                .input_vars()
+                                .into_iter()
+                                .collect(),
+                            output_vars: output_vars.clone(),
+                            planning_context: planning_context.clone(),
+                        };
+                        let planner: Box<dyn SchedulerPlanner> =
+                            Box::new(StaticOptimizedSchedulerPlanner::new(solver));
+
+                        (
+                            planner,
+                            location_names,
+                            Box::new(provider) as Box<dyn DistGraphProvider>,
+                            _dist_constraints,
+                            ReplanningCondition::Never,
+                            None,
+                        )
+                    }
+                    #[cfg(not(feature = "ros"))]
+                    {
+                        panic!("ROS dist graph mode requires building with feature 'ros'");
+                    }
+                }
+                DistGraphMode::RosStaticOptimizedSat(
+                    _locations,
+                    _dist_constraints,
+                    _dist_graph_topic,
+                ) => {
+                    debug!(
+                        "Creating ROS static optimized SAT dist graph provider with topic: {}",
+                        _dist_graph_topic
+                    );
+                    #[cfg(feature = "ros")]
+                    {
+                        let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                        let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            _locations,
+                            _dist_graph_topic,
+                        )
+                        .expect("Failed to create ROS dist graph provider");
+
+                        let solver: SatMonitoredAtDistConstraintSolver<S, AC> = self
+                            .make_sat_solver(_dist_constraints.clone(), output_vars.clone(), &spec);
+                        let localised_dist_spec = solver.localised_dist_spec.clone();
+                        let planner: Box<dyn SchedulerPlanner> =
+                            Box::new(StaticOptimizedSchedulerPlannerSat::new(solver));
+
+                        (
+                            planner,
+                            location_names,
+                            Box::new(provider) as Box<dyn DistGraphProvider>,
+                            _dist_constraints,
+                            ReplanningCondition::Never,
+                            Some(localised_dist_spec),
+                        )
+                    }
+                    #[cfg(not(feature = "ros"))]
+                    {
+                        panic!("ROS dist graph mode requires building with feature 'ros'");
+                    }
+                }
+                DistGraphMode::RosDynamicOptimized(
+                    _locations,
+                    _dist_constraints,
+                    _dist_graph_topic,
+                ) => {
+                    debug!(
+                        "Creating ROS dynamic optimized dist graph provider with topic: {}",
+                        _dist_graph_topic
+                    );
+                    #[cfg(feature = "ros")]
+                    {
+                        let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                        let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            _locations,
+                            _dist_graph_topic,
+                        )
+                        .expect("Failed to create ROS dist graph provider");
+
+                        let solver = BruteForceDistConstraintSolver {
+                            executor: executor.clone(),
+                            monitor_builder: self.partial_clone(),
+                            context_builder: self
+                                .context_builder
+                                .as_ref()
+                                .map(|b| b.partial_clone()),
+                            dist_constraints: _dist_constraints.clone(),
+                            input_vars: self
+                                .async_monitor_builder
+                                .model
+                                .as_ref()
+                                .unwrap()
+                                .input_vars()
+                                .into_iter()
+                                .collect(),
+                            output_vars: output_vars.clone(),
+                            planning_context: planning_context.clone(),
+                        };
+                        let planner: Box<dyn SchedulerPlanner> =
+                            Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
+
+                        (
+                            planner,
+                            location_names,
+                            Box::new(provider) as Box<dyn DistGraphProvider>,
+                            _dist_constraints,
+                            ReplanningCondition::ConstraintsFail,
+                            None,
+                        )
+                    }
+                    #[cfg(not(feature = "ros"))]
+                    {
+                        panic!("ROS dist graph mode requires building with feature 'ros'");
+                    }
+                }
+                DistGraphMode::RosDynamicOptimizedSat(
+                    _locations,
+                    _dist_constraints,
+                    _dist_graph_topic,
+                ) => {
+                    debug!(
+                        "Creating ROS dynamic optimized SAT dist graph provider with topic: {}",
+                        _dist_graph_topic
+                    );
+                    #[cfg(feature = "ros")]
+                    {
+                        let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
+                        let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
+                            executor.clone(),
+                            "central".to_string().into(),
+                            _locations,
+                            _dist_graph_topic,
+                        )
+                        .expect("Failed to create ROS dist graph provider");
+
+                        let solver: SatMonitoredAtDistConstraintSolver<S, AC> = self
+                            .make_sat_solver(_dist_constraints.clone(), output_vars.clone(), &spec);
+                        let localised_dist_spec = solver.localised_dist_spec.clone();
+                        let planner: Box<dyn SchedulerPlanner> =
+                            Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
+
+                        (
+                            planner,
+                            location_names,
+                            Box::new(provider) as Box<dyn DistGraphProvider>,
+                            _dist_constraints,
+                            ReplanningCondition::ConstraintsFail,
+                            Some(localised_dist_spec),
+                        )
+                    }
+                    #[cfg(not(feature = "ros"))]
+                    {
+                        panic!("ROS dist graph mode requires building with feature 'ros'");
+                    }
+                }
+                DistGraphMode::PredefinedDynamicOptimized(graph, dist_constraints) => {
+                    debug!("Creating predefined dynamic optimized dist graph provider");
+                    let graph = Rc::new(graph);
+                    let location_names = graph.dist_graph.graph.node_weights().cloned().collect();
+                    let dist_graph_provider =
+                        Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
+
+                    let solver = BruteForceDistConstraintSolver {
+                        executor: executor.clone(),
+                        monitor_builder: self.partial_clone(),
+                        context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
+                        dist_constraints: dist_constraints.clone(),
+                        input_vars: self
+                            .async_monitor_builder
+                            .model
                             .as_ref()
-                            .and_then(|input| input.replay_history())
-                            .map(crate::io::replay_history::ReplayHistory::store_all_with_snapshot)
-                    });
+                            .unwrap()
+                            .input_vars()
+                            .into_iter()
+                            .collect(),
+                        output_vars: output_vars.clone(),
+                        planning_context: planning_context.clone(),
+                    };
+                    let planner: Box<dyn SchedulerPlanner> =
+                        Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
 
-                let solver = BruteForceDistConstraintSolver {
-                    executor: executor.clone(),
-                    monitor_builder: self.partial_clone(),
-                    context_builder: self.context_builder.as_ref().map(|b| b.partial_clone()),
-                    dist_constraints: dist_constraints.clone(),
-                    input_vars: self
-                        .async_monitor_builder
-                        .model
-                        .as_ref()
-                        .unwrap()
-                        .input_vars()
-                        .into_iter()
-                        .collect(),
-                    output_vars: output_vars.clone(),
-                    replay_history,
-                };
-                let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(DynamicOptimizedSchedulerPlanner::new(solver));
+                    (
+                        planner,
+                        location_names,
+                        dist_graph_provider,
+                        dist_constraints,
+                        ReplanningCondition::ConstraintsFail,
+                        None,
+                    )
+                }
+                DistGraphMode::PredefinedDynamicOptimizedSat(graph, dist_constraints) => {
+                    debug!("Creating predefined dynamic optimized SAT dist graph provider");
+                    let graph = Rc::new(graph);
+                    let location_names = graph.dist_graph.graph.node_weights().cloned().collect();
+                    let dist_graph_provider =
+                        Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
 
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    dist_constraints,
-                    ReplanningCondition::ConstraintsFail,
-                )
-            }
-            DistGraphMode::PredefinedDynamicOptimizedSat(graph, dist_constraints) => {
-                debug!("Creating predefined dynamic optimized SAT dist graph provider");
-                let graph = Rc::new(graph);
-                let location_names = graph.dist_graph.graph.node_weights().cloned().collect();
-                let dist_graph_provider =
-                    Box::new(StaticDistGraphProvider::new(graph.dist_graph.clone()));
+                    let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
+                        self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
+                    let localised_dist_spec = solver.localised_dist_spec.clone();
+                    let planner: Box<dyn SchedulerPlanner> =
+                        Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
 
-                let solver: SatMonitoredAtDistConstraintSolver<S, AC> =
-                    self.make_sat_solver(dist_constraints.clone(), output_vars.clone(), &spec);
-                let planner: Box<dyn SchedulerPlanner> =
-                    Box::new(DynamicOptimizedSchedulerPlannerSat::new(solver));
-
-                (
-                    planner,
-                    location_names,
-                    dist_graph_provider,
-                    dist_constraints,
-                    ReplanningCondition::ConstraintsFail,
-                )
-            }
-        };
+                    (
+                        planner,
+                        location_names,
+                        dist_graph_provider,
+                        dist_constraints,
+                        ReplanningCondition::ConstraintsFail,
+                        Some(localised_dist_spec),
+                    )
+                }
+            };
             let scheduler_mode = self.scheduler_mode.unwrap_or(SchedulerCommunication::Null);
             let scheduler_communicator = match scheduler_mode {
                 SchedulerCommunication::Null => {
@@ -1064,58 +1142,121 @@ where
                 scheduler_communicator,
                 dist_graph_provider,
                 replanning_condition,
+                planning_context.clone(),
+                dist_constraints.is_empty(),
                 false,
             ))));
+            let placement_labelling_stream = scheduler
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .take_placement_labelling_stream();
+            if !dist_constraints.is_empty() {
+                let constraint_inputs = dist_constraint_input_vars(&spec, &dist_constraints);
+                let constraint_input_index =
+                    ConstraintInputIndex::new(constraint_inputs.iter().cloned());
+                let input_vars_for_planning_context = spec.input_vars();
+                let all_scheduler_input_vars = constraint_inputs
+                    .iter()
+                    .chain(input_vars_for_planning_context.iter())
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>();
+                let mut input = self.input.expect("Input provider not set");
+                let needs_control = input.event_stream_requires_control();
+                let input_events = input
+                    .batched_event_stream(&all_scheduler_input_vars)
+                    .unwrap_or_else(|| Box::pin(futures::stream::pending()));
+                let constraint_channel_size =
+                    constraint_input_index.len().saturating_mul(4).max(64);
+                let (constraint_sender, constraint_receiver) =
+                    spsc::channel(constraint_channel_size);
+                let constraint_events = channel_to_output_stream(constraint_receiver);
+
+                let stream = dist_constraint_event_stream(
+                    spec.clone(),
+                    dist_constraints.clone(),
+                    placement_labelling_stream,
+                    constraint_input_index.clone(),
+                    constraint_events,
+                );
+                scheduler
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .provide_dist_constraints_streams(vec![stream]);
+
+                return DistributedRuntime {
+                    async_monitor: None,
+                    direct_input_runtime: Some(DirectSchedulerInputRuntime {
+                        input_provider: needs_control.then_some(input),
+                        input_events,
+                        constraint_input_index: constraint_input_index.clone(),
+                        constraint_sender,
+                        planning_context,
+                    }),
+                    scheduler: scheduler.take().unwrap(),
+                };
+            }
+
             let dist_graph_stream = scheduler.borrow_mut().as_mut().unwrap().take_graph_stream();
             let scheduler_clone = scheduler.clone();
-            let dist_constraints_for_callback = dist_constraints.clone();
+            let input_vars_for_planning_context = spec.input_vars().into_iter().collect::<Vec<_>>();
+            let planning_context_for_callback = planning_context.clone();
+            let executor_for_planning_context = executor.clone();
             let context_builder = self
                 .context_builder
                 .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
                 .node_names(locations.clone())
                 .add_callback(Box::new(move |ctx| {
-                    let mut scheduler_borrow = scheduler_clone.borrow_mut();
-                    let scheduler_ref = (&mut *scheduler_borrow).as_mut().unwrap();
-                    scheduler_ref.provide_dist_constraints_streams(
-                        dist_constraints_for_callback
+                    if let Some(planning_context) = planning_context_for_callback {
+                        let streams = input_vars_for_planning_context
                             .iter()
-                            .map(|x| {
-                                let stream = ctx.var(x).unwrap();
-                                // TODO: This should be an Option<bool> stream where None means NoVal.
-                                // Currently, NoVal triggers false which means we replan on NoVal.
-                                Box::pin(stream.map(|v| match v {
-                                    Value::Bool(b) => b,
-                                    _ => false,
-                                })) as crate::OutputStream<bool>
+                            .filter_map(|var| {
+                                ctx.var(var).map(|stream| {
+                                    let var = var.clone();
+                                    Box::pin(stream.map(move |value| vec![(var.clone(), value)]))
+                                        as OutputStream<Vec<(VarName, Value)>>
+                                })
                             })
-                            .collect(),
-                    )
+                            .collect::<Vec<_>>();
+                        let batches = Box::pin(futures::stream::select_all(streams))
+                            as OutputStream<Vec<(VarName, Value)>>;
+                        spawn_planning_context_recorder(
+                            executor_for_planning_context.clone(),
+                            planning_context,
+                            batches,
+                        )
+                        .detach();
+                    }
+
+                    scheduler_clone
+                        .borrow_mut()
+                        .as_mut()
+                        .unwrap()
+                        .provide_dist_constraints_streams(Vec::new());
                 }));
 
-            let localised_spec = if dist_constraints.is_empty() {
-                spec
+            let monitor_spec = if dist_constraints.is_empty() {
+                if let Some(localised_spec) = cached_localised_spec {
+                    localised_spec
+                } else {
+                    spec.clone()
+                }
             } else {
-                spec.localise(&dist_constraints)
+                unreachable!("nonempty distribution constraints use the direct scheduler runtime")
             };
 
-            let mut async_builder = self
+            let async_builder = self
                 .async_monitor_builder
                 .maybe_input(self.input)
                 .context_builder(context_builder)
-                .model(localised_spec);
-
-            if !dist_constraints.is_empty() {
-                let null_output = Box::new(NullOutputHandler::new(
-                    executor.clone(),
-                    dist_constraints.clone().into_iter().collect(),
-                ));
-                async_builder = async_builder.output(null_output);
-            }
+                .model(monitor_spec);
 
             let async_monitor = async_builder.build().await;
 
             DistributedRuntime {
-                async_monitor,
+                async_monitor: Some(async_monitor),
+                direct_input_runtime: None,
                 scheduler: scheduler.take().unwrap(),
             }
         })
@@ -1140,7 +1281,8 @@ where
     AC::Spec: Localisable,
     S: MonitoringSemantics<AC>,
 {
-    pub(crate) async_monitor: AsyncRuntime<AC, S>,
+    pub(crate) async_monitor: Option<AsyncRuntime<AC, S>>,
+    direct_input_runtime: Option<DirectSchedulerInputRuntime>,
     // TODO: should we be responsible for building the stream of graphs
     pub(crate) scheduler: Scheduler<AC::Spec>,
 }
@@ -1155,12 +1297,20 @@ where
     S: MonitoringSemantics<AC>,
 {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {
-        let (res1, res2) = join!(self.scheduler.run(), self.async_monitor.run());
-        res1.and(res2)
+        self.run().await
     }
 
     async fn run(self: Self) -> anyhow::Result<()> {
-        let (res1, res2) = join!(self.scheduler.run(), self.async_monitor.run());
-        res1.and(res2)
+        match (self.async_monitor, self.direct_input_runtime) {
+            (Some(async_monitor), None) => {
+                let (res1, res2) = join!(self.scheduler.run(), async_monitor.run());
+                res1.and(res2)
+            }
+            (None, Some(direct_input_runtime)) => {
+                let (res1, res2) = join!(self.scheduler.run(), direct_input_runtime.run());
+                res1.and(res2)
+            }
+            _ => panic!("Distributed runtime must have exactly one input driver"),
+        }
     }
 }

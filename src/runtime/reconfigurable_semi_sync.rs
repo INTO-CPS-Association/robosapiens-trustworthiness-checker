@@ -14,7 +14,7 @@ use crate::{
         RuntimeBuilder,
         semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncRuntime, SemiSyncRuntimeBuilder},
     },
-    semantics::{AsyncConfig, MonitoringSemantics},
+    semantics::{AsyncConfig, MonitoringSemantics, StreamContext},
 };
 use anyhow::anyhow;
 use async_stream::try_stream;
@@ -784,6 +784,7 @@ where
             self.self_builder.starting_history = Some(starting_history);
         }
         warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
+        context.cancel();
         // For now, reassign existing InputProvider with empty to shut down. In future when we can reconfig them, we should do that instead.
         self.input_provider = Box::new(MapInputProvider::new(BTreeMap::new()));
         let new_self = Box::new(self.self_builder.clone()).build().await;

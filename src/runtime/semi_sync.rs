@@ -20,8 +20,9 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
+    time::Instant,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use unsync::spsc;
 
 const CHANNEL_SIZE: usize = 8;
@@ -445,6 +446,12 @@ where
     fn set_history_to_retain(&mut self, history_to_retain: usize) {
         self.retained_history.capacity = history_to_retain;
     }
+
+    fn cancel(&mut self) {
+        self.value_stream = Box::pin(futures::stream::empty());
+        self.subscribers.clear();
+        self.new_subscribers.clear();
+    }
 }
 
 pub struct SemiSyncRuntime<AC, MS>
@@ -646,14 +653,49 @@ where
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<StreamState> {
         info!("SemiSyncRuntime work_task: Waiting for next tick...");
+        let step_started = Instant::now();
         let aux_vars = ctx.aux_vars.clone();
+        let expr_evaluator_count = expr_evals.len();
+        let non_aux_expr_evaluator_count = expr_evals
+            .iter()
+            .filter(|expr_eval| !aux_vars.contains(&expr_eval.var_name))
+            .count();
         let result = futures::join!(
-            ctx.forward_values(),
-            Self::eval_expr_evals(expr_evals, &aux_vars)
+            async {
+                let started = Instant::now();
+                let result = ctx.forward_values().await;
+                (result, started.elapsed().as_secs_f64() * 1000.0)
+            },
+            async {
+                let started = Instant::now();
+                let result = Self::eval_expr_evals(expr_evals, &aux_vars).await;
+                (result, started.elapsed().as_secs_f64() * 1000.0)
+            }
+        );
+        let ((forward_result, forward_values_duration_ms), (eval_result, eval_expr_duration_ms)) =
+            result;
+        let total_duration_ms = step_started.elapsed().as_secs_f64() * 1000.0;
+        let forward_state = stream_state_name(forward_result.as_ref().ok());
+        let eval_state = stream_state_name(eval_result.as_ref().ok());
+
+        // ACSOS paper benchmark instrumentation: log additional timing information
+        warn!(
+            target: "benchmark",
+            event = "benchmark_monitoring_step",
+            context_id = ctx.id,
+            expr_evaluator_count,
+            non_aux_expr_evaluator_count,
+            aux_var_count = aux_vars.len(),
+            forward_state,
+            eval_state,
+            forward_values_duration_ms,
+            eval_expr_duration_ms,
+            duration_ms = total_duration_ms,
+            "benchmark_monitoring_step"
         );
 
         // A bit verbose but it is nice for debugging...
-        match result {
+        match (forward_result, eval_result) {
             (Ok(StreamState::Pending), Ok(StreamState::Pending)) => {
                 debug!(
                     "SemiSyncRuntime work_task: Both forward_values and eval_expr_evals pending, continuing..."
@@ -801,6 +843,14 @@ where
     }
 }
 
+fn stream_state_name(state: Option<&StreamState>) -> &'static str {
+    match state {
+        Some(StreamState::Pending) => "pending",
+        Some(StreamState::Finished) => "finished",
+        None => "error",
+    }
+}
+
 #[async_trait(?Send)]
 impl<AC, MS> Runtime for SemiSyncRuntime<AC, MS>
 where
@@ -847,6 +897,7 @@ where
 {
     var_managers: Option<BTreeMap<VarName, VarManager<AC>>>,
     spec: Option<AC::Spec>,
+    cancellation_token: Option<CancellationToken>,
 }
 
 impl<AC> SemiSyncContextBuilder<AC>
@@ -868,6 +919,13 @@ where
             ..self
         }
     }
+
+    fn cancellation_token(self, cancellation_token: CancellationToken) -> Self {
+        Self {
+            cancellation_token: Some(cancellation_token),
+            ..self
+        }
+    }
 }
 
 impl<AC> AbstractContextBuilder for SemiSyncContextBuilder<AC>
@@ -883,6 +941,7 @@ where
         Self {
             var_managers: None,
             spec: None,
+            cancellation_token: None,
         }
     }
 
@@ -907,12 +966,14 @@ where
     }
 
     fn build(self) -> <Self::AC as AsyncConfig>::Ctx {
-        let ctx = SemiSyncContext::new(
+        let ctx = SemiSyncContext::new_with_token(
             Rc::new(RefCell::new(self.var_managers.expect(
                 "VarManagers must be set before building SemiSyncContext",
             ))),
             self.spec
                 .expect("Spec must be set before building SemiSyncContext"),
+            self.cancellation_token
+                .unwrap_or_else(CancellationToken::new),
         );
         info!(
             "SemiSyncContextBuilder: Built SemiSyncContext with id {:?} and VarManagers: {:?}",
@@ -941,6 +1002,7 @@ where
     // Dependencies from the specification
     deps: Box<dyn DependencyResolver<AC>>,
     aux_vars: BTreeSet<VarName>,
+    cancellation_token: CancellationToken,
 }
 
 impl<AC> SemiSyncContext<AC>
@@ -950,7 +1012,11 @@ where
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
-    fn new(var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>, spec: AC::Spec) -> Self {
+    fn new_with_token(
+        var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC>>>>,
+        spec: AC::Spec,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!(
             "Creating SemiSyncContext {:?} with vars: {:?}",
@@ -975,6 +1041,7 @@ where
             spec,
             deps,
             aux_vars,
+            cancellation_token,
         }
     }
 
@@ -1053,7 +1120,8 @@ where
         );
         let builder = SemiSyncContextBuilder::new()
             .var_managers(new_managers)
-            .spec(self.spec.clone());
+            .spec(self.spec.clone())
+            .cancellation_token(self.cancellation_token.clone());
         builder.build()
     }
 
@@ -1135,11 +1203,14 @@ where
     }
 
     fn cancellation_token(&self) -> CancellationToken {
-        unimplemented!("StreamContext::cancellation_token")
+        self.cancellation_token.clone()
     }
 
     fn cancel(&self) {
-        unimplemented!("StreamContext::cancel")
+        self.cancellation_token.cancel();
+        for manager in self.var_managers.borrow_mut().values_mut() {
+            manager.cancel();
+        }
     }
 }
 

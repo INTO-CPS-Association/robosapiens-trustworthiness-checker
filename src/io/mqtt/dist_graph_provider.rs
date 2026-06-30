@@ -59,9 +59,8 @@ impl DistGraphProvider for StaticDistGraphProvider {
     fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
         let graph = self.graph.clone();
         Box::pin(stream! {
-            loop {
-                yield graph.clone()
-            }
+            yield graph.clone();
+            futures::future::pending::<()>().await;
         })
     }
 }
