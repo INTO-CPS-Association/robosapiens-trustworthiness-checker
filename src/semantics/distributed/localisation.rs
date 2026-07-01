@@ -105,12 +105,35 @@ fn replace_var(var: &VarName, var_expr: &SpannedExpr, repl_expr: &SpannedExpr) -
             Box::new(replace_var(var, var_expr, sexpr1)),
         ),
         SExpr::Not(sexpr) => SExpr::Not(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::Lambda(params, body) => {
+            SExpr::Lambda(params.clone(), Box::new(replace_var(var, var_expr, body)))
+        }
+        SExpr::Apply(func, args) => SExpr::Apply(
+            Box::new(replace_var(var, var_expr, func)),
+            args.iter()
+                .map(|arg| replace_var(var, var_expr, arg))
+                .collect(),
+        ),
+        SExpr::Fix(func) => SExpr::Fix(Box::new(replace_var(var, var_expr, func))),
+        SExpr::Partial(func, args) => SExpr::Partial(
+            Box::new(replace_var(var, var_expr, func)),
+            args.iter()
+                .map(|arg| replace_var(var, var_expr, arg))
+                .collect(),
+        ),
         SExpr::List(eco_vec) => {
             let vec = eco_vec
                 .iter()
                 .map(|e| replace_var(var, var_expr, e))
                 .collect();
             SExpr::List(vec)
+        }
+        SExpr::Tuple(eco_vec) => {
+            let vec = eco_vec
+                .iter()
+                .map(|e| replace_var(var, var_expr, e))
+                .collect();
+            SExpr::Tuple(vec)
         }
         SExpr::LIndex(sexpr, sexpr1) => SExpr::LIndex(
             Box::new(replace_var(var, var_expr, sexpr)),
@@ -127,6 +150,19 @@ fn replace_var(var: &VarName, var_expr: &SpannedExpr, repl_expr: &SpannedExpr) -
         SExpr::LHead(sexpr) => SExpr::LHead(Box::new(replace_var(var, var_expr, sexpr))),
         SExpr::LTail(sexpr) => SExpr::LTail(Box::new(replace_var(var, var_expr, sexpr))),
         SExpr::LLen(sexpr) => SExpr::LLen(Box::new(replace_var(var, var_expr, sexpr))),
+        SExpr::LMap(func, list) => SExpr::LMap(
+            Box::new(replace_var(var, var_expr, func)),
+            Box::new(replace_var(var, var_expr, list)),
+        ),
+        SExpr::LFilter(func, list) => SExpr::LFilter(
+            Box::new(replace_var(var, var_expr, func)),
+            Box::new(replace_var(var, var_expr, list)),
+        ),
+        SExpr::LFold(func, init, list) => SExpr::LFold(
+            Box::new(replace_var(var, var_expr, func)),
+            Box::new(replace_var(var, var_expr, init)),
+            Box::new(replace_var(var, var_expr, list)),
+        ),
         SExpr::Map(btree_map) => SExpr::Map(
             btree_map
                 .iter()
@@ -369,7 +405,50 @@ fn replace_aux_refs(
             expanded_aux_defs,
             visiting,
         ))),
+        SExpr::Lambda(params, body) => SExpr::Lambda(
+            params.clone(),
+            Box::new(replace_aux_refs(
+                body,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::Apply(func, args) => SExpr::Apply(
+            Box::new(replace_aux_refs(
+                func,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            args.iter()
+                .map(|arg| replace_aux_refs(arg, aux_defs, expanded_aux_defs, visiting))
+                .collect(),
+        ),
+        SExpr::Fix(func) => SExpr::Fix(Box::new(replace_aux_refs(
+            func,
+            aux_defs,
+            expanded_aux_defs,
+            visiting,
+        ))),
+        SExpr::Partial(func, args) => SExpr::Partial(
+            Box::new(replace_aux_refs(
+                func,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            args.iter()
+                .map(|arg| replace_aux_refs(arg, aux_defs, expanded_aux_defs, visiting))
+                .collect(),
+        ),
         SExpr::List(eco_vec) => SExpr::List(
+            eco_vec
+                .iter()
+                .map(|e| replace_aux_refs(e, aux_defs, expanded_aux_defs, visiting))
+                .collect(),
+        ),
+        SExpr::Tuple(eco_vec) => SExpr::Tuple(
             eco_vec
                 .iter()
                 .map(|e| replace_aux_refs(e, aux_defs, expanded_aux_defs, visiting))
@@ -435,6 +514,54 @@ fn replace_aux_refs(
             expanded_aux_defs,
             visiting,
         ))),
+        SExpr::LMap(func, list) => SExpr::LMap(
+            Box::new(replace_aux_refs(
+                func,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                list,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::LFilter(func, list) => SExpr::LFilter(
+            Box::new(replace_aux_refs(
+                func,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                list,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
+        SExpr::LFold(func, init, list) => SExpr::LFold(
+            Box::new(replace_aux_refs(
+                func,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                init,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+            Box::new(replace_aux_refs(
+                list,
+                aux_defs,
+                expanded_aux_defs,
+                visiting,
+            )),
+        ),
         SExpr::Map(btree_map) => SExpr::Map(
             btree_map
                 .iter()

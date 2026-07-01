@@ -23,9 +23,11 @@ pub enum TCType {
     Bool,
     Unit,
     Map(Box<TCType>),
+    Tuple(EcoVec<TCType>),
     List(Box<TCType>),
     /// Struct specified as a list of field/type pairs and whether extra fields are allowed.
     Struct(EcoVec<(EcoString, TCType)>, bool),
+    Function(EcoVec<TCType>, Box<TCType>),
     /// Placeholder used for empty list literals whose element type is not yet known.
     EmptyList,
     /// Placeholder used for empty map literals whose value type is not yet known.
@@ -68,6 +70,9 @@ impl TCType {
             StreamType::Bool => TCType::Bool,
             StreamType::Unit => TCType::Unit,
             StreamType::List(inner) => TCType::List(Box::new(TCType::from_stream_type(inner))),
+            StreamType::Tuple(inner) => {
+                TCType::Tuple(inner.iter().map(TCType::from_stream_type).collect())
+            }
             StreamType::Map(inner) => TCType::Map(Box::new(TCType::from_stream_type(inner))),
             StreamType::Struct(inner, allow_extra) => TCType::Struct(
                 inner
@@ -75,6 +80,10 @@ impl TCType {
                     .map(|(n, t)| (n.clone(), TCType::from_stream_type(t)))
                     .collect(),
                 *allow_extra,
+            ),
+            StreamType::Function(args, ret) => TCType::Function(
+                args.iter().map(TCType::from_stream_type).collect(),
+                Box::new(TCType::from_stream_type(ret)),
             ),
             StreamType::Any => TCType::Any,
         }
@@ -91,6 +100,11 @@ impl TCType {
             TCType::List(inner) => inner
                 .to_stream_type()
                 .map(|x| StreamType::List(Box::new(x))),
+            TCType::Tuple(inner) => inner
+                .iter()
+                .map(TCType::to_stream_type)
+                .collect::<Option<EcoVec<_>>>()
+                .map(StreamType::Tuple),
             TCType::Map(inner) => inner.to_stream_type().map(|x| StreamType::Map(Box::new(x))),
             TCType::Struct(inner, allow_extra) => inner
                 .iter()
@@ -105,6 +119,14 @@ impl TCType {
                         _ => unreachable!(),
                     },
                 ),
+            TCType::Function(args, ret) => {
+                let args = args
+                    .iter()
+                    .map(TCType::to_stream_type)
+                    .collect::<Option<EcoVec<_>>>()?;
+                let ret = ret.to_stream_type()?;
+                Some(StreamType::Function(args, Box::new(ret)))
+            }
             TCType::Any => Some(StreamType::Any),
             TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => None,
         }
@@ -120,6 +142,15 @@ impl std::fmt::Display for TCType {
             TCType::Bool => write!(f, "Bool"),
             TCType::Unit => write!(f, "Unit"),
             TCType::List(typ) => write!(f, "List<{}>", typ),
+            TCType::Tuple(inner) => {
+                let len = inner.len();
+                let inner = inner.iter().map(|typ| format!("{}", typ)).join(", ");
+                if len == 1 {
+                    write!(f, "({},)", inner)
+                } else {
+                    write!(f, "({})", inner)
+                }
+            }
             TCType::Map(typ) => write!(f, "Map<{}>", typ),
             TCType::Struct(inner, allow_extra) => {
                 let mut fields = inner
@@ -130,6 +161,10 @@ impl std::fmt::Display for TCType {
                     fields.push("...".into());
                 }
                 write!(f, "Struct<{}>", fields.join(", "))
+            }
+            TCType::Function(args, ret) => {
+                let args = args.iter().map(|arg| format!("{}", arg)).join(", ");
+                write!(f, "({} -> {})", args, ret)
             }
             TCType::Any => write!(f, "Any"),
             TCType::EmptyList => write!(f, "EmptyList"),
@@ -179,6 +214,7 @@ pub enum SExprBool {
     // Map/struct operations producing Bool
     MGetMap(TypedMapExpr, EcoString),
     SGetStruct(TypedStructExpr, EcoString),
+    SGetTuple(TypedTupleExpr, usize),
     MHasKeyMap(TypedMapExpr, EcoString),
 
     // Deferred and dynamic expressions
@@ -232,6 +268,7 @@ pub enum SExprInt {
     // Map/struct value extraction producing Int
     MGetMap(TypedMapExpr, EcoString),
     SGetStruct(TypedStructExpr, EcoString),
+    SGetTuple(TypedTupleExpr, usize),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -281,6 +318,7 @@ pub enum SExprFloat {
     // Map/struct value extraction producing Float
     MGetMap(TypedMapExpr, EcoString),
     SGetStruct(TypedStructExpr, EcoString),
+    SGetTuple(TypedTupleExpr, usize),
 }
 
 // Stream expressions - now with types
@@ -321,6 +359,7 @@ pub enum SExprUnit {
     // Map/struct value extraction producing Unit
     MGetMap(TypedMapExpr, EcoString),
     SGetStruct(TypedStructExpr, EcoString),
+    SGetTuple(TypedTupleExpr, usize),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -362,6 +401,7 @@ pub enum SExprStr {
     // Map/struct value extraction producing Str
     MGetMap(TypedMapExpr, EcoString),
     SGetStruct(TypedStructExpr, EcoString),
+    SGetTuple(TypedTupleExpr, usize),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -380,10 +420,13 @@ pub enum TypedListExprKind {
     LTail(Box<TypedListExpr>),
     LConcat(Box<TypedListExpr>, Box<TypedListExpr>),
     LAppend(Box<TypedListExpr>, Box<SExprTE>),
+    LMap(Box<TypedFunctionExpr>, Box<TypedListExpr>),
+    LFilter(Box<TypedFunctionExpr>, Box<TypedListExpr>),
     LHeadList(Box<TypedListExpr>),
     LIndexList(Box<TypedListExpr>, Box<SExprInt>),
     MGetMap(Box<TypedMapExpr>, EcoString),
     SGetStruct(Box<TypedStructExpr>, EcoString),
+    SGetTuple(Box<TypedTupleExpr>, usize),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -464,6 +507,72 @@ impl TypedListExpr {
             kind: TypedListExprKind::LAppend(Box::new(self.clone()), elem),
         }
     }
+
+    pub fn typed_map(&self, func: Box<TypedFunctionExpr>, element_type: TCType) -> TypedListExpr {
+        TypedListExpr {
+            element_type,
+            kind: TypedListExprKind::LMap(func, Box::new(self.clone())),
+        }
+    }
+
+    pub fn typed_filter(&self, func: Box<TypedFunctionExpr>) -> TypedListExpr {
+        TypedListExpr {
+            element_type: self.element_type.clone(),
+            kind: TypedListExprKind::LFilter(func, Box::new(self.clone())),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedFunctionExpr {
+    pub params: EcoVec<(VarName, TCType)>,
+    pub body: Box<SExprTE>,
+    pub return_type: TCType,
+    pub recursive_name: Option<VarName>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum TypedTupleExprKind {
+    Var(VarName),
+    Literal(Vec<SExprTE>),
+    Default(Box<TypedTupleExpr>, Box<TypedTupleExpr>),
+    If(Box<SExprBool>, Box<TypedTupleExpr>, Box<TypedTupleExpr>),
+    Update(Box<TypedTupleExpr>, Box<TypedTupleExpr>),
+    Latch(Box<TypedTupleExpr>, Box<TypedTupleExpr>),
+    Init(Box<TypedTupleExpr>, Box<TypedTupleExpr>),
+    SIndex(Box<TypedTupleExpr>, u64),
+    TGetTuple(Box<TypedTupleExpr>, usize),
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedTupleExpr {
+    pub element_types: EcoVec<TCType>,
+    pub kind: TypedTupleExprKind,
+}
+
+impl TypedTupleExpr {
+    pub fn tuple_tc_type(&self) -> TCType {
+        TCType::Tuple(self.element_types.clone())
+    }
+
+    pub fn to_stream_type(&self) -> Option<StreamType> {
+        self.tuple_tc_type().to_stream_type()
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedFoldExpr {
+    pub func: Box<TypedFunctionExpr>,
+    pub init: Box<SExprTE>,
+    pub list: Box<TypedListExpr>,
+    pub result_type: TCType,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TypedApplyExpr {
+    pub func: Box<TypedFunctionExpr>,
+    pub args: EcoVec<SExprTE>,
+    pub result_type: TCType,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -483,6 +592,7 @@ pub enum TypedMapExprKind {
     MRemove(Box<TypedMapExpr>, EcoString),
     MGetMap(Box<TypedMapExpr>, EcoString),
     SGetStruct(Box<TypedStructExpr>, EcoString),
+    SGetTuple(Box<TypedTupleExpr>, usize),
     LHeadList(Box<TypedListExpr>),
     LIndexList(Box<TypedListExpr>, Box<SExprInt>),
 }
@@ -683,6 +793,10 @@ pub enum SExprTE {
     List(TypedListExpr),
     Map(TypedMapExpr),
     Struct(TypedStructExpr),
+    Tuple(TypedTupleExpr),
+    Function(TypedFunctionExpr),
+    Fold(TypedFoldExpr),
+    Apply(TypedApplyExpr),
     Any(SExprAny),
 }
 
@@ -777,6 +891,13 @@ pub fn extract_type(expr: &SExprTE) -> TCType {
         SExprTE::List(tl) => tl.list_tc_type(),
         SExprTE::Map(tm) => tm.map_tc_type(),
         SExprTE::Struct(st) => TCType::Struct(st.typ_map.clone(), st.allow_extra_fields),
+        SExprTE::Tuple(tuple) => tuple.tuple_tc_type(),
+        SExprTE::Function(func) => TCType::Function(
+            func.params.iter().map(|(_, typ)| typ.clone()).collect(),
+            Box::new(func.return_type.clone()),
+        ),
+        SExprTE::Fold(fold) => fold.result_type.clone(),
+        SExprTE::Apply(apply) => apply.result_type.clone(),
         SExprTE::Any(_) => TCType::Any,
     }
 }
@@ -792,8 +913,36 @@ impl Display for SExprTE {
             SExprTE::List(e) => write!(f, "{}", e),
             SExprTE::Map(e) => write!(f, "{}", e),
             SExprTE::Struct(e) => write!(f, "{}", e),
+            SExprTE::Tuple(e) => write!(f, "{}", e),
+            SExprTE::Function(e) => write!(f, "{}", e),
+            SExprTE::Fold(e) => write!(f, "{}", e),
+            SExprTE::Apply(e) => write!(f, "{}", e),
             SExprTE::Any(e) => write!(f, "{}", e),
         }
+    }
+}
+
+impl Display for TypedFunctionExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params = self
+            .params
+            .iter()
+            .map(|(name, typ)| format!("{}: {}", name, typ))
+            .join(", ");
+        write!(f, "\\{} -> {}", params, self.body)
+    }
+}
+
+impl Display for TypedFoldExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "List.fold({}, {}, {})", self.func, self.init, self.list)
+    }
+}
+
+impl Display for TypedApplyExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let args = self.args.iter().map(|arg| format!("{}", arg)).join(", ");
+        write!(f, "{}({})", self.func, args)
     }
 }
 
@@ -831,10 +980,13 @@ impl Display for TypedListExpr {
             LTail(e) => write!(f, "List.tail({})", e),
             LConcat(e1, e2) => write!(f, "List.concat({}, {})", e1, e2),
             LAppend(e, v) => write!(f, "List.append({}, {})", e, v),
+            LMap(func, list) => write!(f, "List.map({}, {})", func, list),
+            LFilter(func, list) => write!(f, "List.filter({}, {})", func, list),
             LHeadList(e) => write!(f, "List.head({})", e),
             LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
             MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
             SGetStruct(e, key) => write!(f, "{}.{}", e, key),
+            SGetTuple(e, idx) => write!(f, "{}.{}", e, idx),
         }
     }
 }
@@ -867,8 +1019,29 @@ impl Display for TypedMapExpr {
             MRemove(e, key) => write!(f, "Map.remove({}, {:?})", e, key),
             MGetMap(e, key) => write!(f, "Map.get({}, {:?})", e, key),
             SGetStruct(e, key) => write!(f, "{}.{}", e, key),
+            SGetTuple(e, idx) => write!(f, "{}.{}", e, idx),
             LHeadList(e) => write!(f, "List.head({})", e),
             LIndexList(e, i) => write!(f, "List.get({}, {})", e, i),
+        }
+    }
+}
+
+impl Display for TypedTupleExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use TypedTupleExprKind::*;
+        match &self.kind {
+            Var(v) => write!(f, "{}", v),
+            Literal(items) => {
+                let items = items.iter().map(|e| format!("{}", e)).join(", ");
+                write!(f, "Tuple({})", items)
+            }
+            Default(e, v) => write!(f, "default({}, {})", e, v),
+            If(b, e1, e2) => write!(f, "(if {} then {} else {})", b, e1, e2),
+            Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
+            Latch(e1, e2) => write!(f, "latch({}, {})", e1, e2),
+            Init(e1, e2) => write!(f, "init({}, {})", e1, e2),
+            SIndex(e, i) => write!(f, "{}[{}]", e, i),
+            TGetTuple(e, idx) => write!(f, "{}.{}", e, idx),
         }
     }
 }
@@ -942,6 +1115,7 @@ impl Display for SExprInt {
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
             SGetStruct(st, key) => write!(f, "{}.{}", st, key),
+            SGetTuple(tuple, idx) => write!(f, "{}.{}", tuple, idx),
         }
     }
 }
@@ -983,6 +1157,7 @@ impl Display for SExprFloat {
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
             SGetStruct(st, key) => write!(f, "{}.{}", st, key),
+            SGetTuple(tuple, idx) => write!(f, "{}.{}", tuple, idx),
         }
     }
 }
@@ -1015,6 +1190,7 @@ impl Display for SExprStr {
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
             SGetStruct(st, key) => write!(f, "{}.{}", st, key),
+            SGetTuple(tuple, idx) => write!(f, "{}.{}", tuple, idx),
         }
     }
 }
@@ -1046,6 +1222,7 @@ impl Display for SExprUnit {
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
             SGetStruct(st, key) => write!(f, "{}.{}", st, key),
+            SGetTuple(tuple, idx) => write!(f, "{}.{}", tuple, idx),
         }
     }
 }
@@ -1084,6 +1261,7 @@ impl Display for SExprBool {
             LIndexList(list, idx) => write!(f, "List.get({}, {})", list, idx),
             MGetMap(map, key) => write!(f, "Map.get({}, {:?})", map, key),
             SGetStruct(st, key) => write!(f, "{}.{}", st, key),
+            SGetTuple(tuple, idx) => write!(f, "{}.{}", tuple, idx),
             MHasKeyMap(map, key) => write!(f, "Map.has_key({}, {:?})", map, key),
 
             Defer(e, _, _) => write!(f, "defer({}: Bool)", e),

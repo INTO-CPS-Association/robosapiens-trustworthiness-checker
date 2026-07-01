@@ -204,7 +204,11 @@ fn var_name(s: &mut &str) -> Result<VarName> {
 }
 
 fn node_name(s: &mut &str) -> Result<NodeName> {
-    ident.map(|name: &str| name.into()).parse_next(s)
+    alt((
+        ident.map(|name: &str| name.into()),
+        string.map(|name| name.into()),
+    ))
+    .parse_next(s)
 }
 
 fn node_name_or_string(s: &mut &str) -> Result<NodeName> {
@@ -1312,6 +1316,31 @@ fn map_stream_type(s: &mut &str) -> Result<StreamType> {
     .parse_next(s)
 }
 
+fn tuple_stream_type(s: &mut &str) -> Result<StreamType> {
+    delimited(
+        seq!('(', loop_ms_or_lb_or_lc),
+        seq!(
+            stream_type,
+            _: loop_ms_or_lb_or_lc,
+            _: ',',
+            _: loop_ms_or_lb_or_lc,
+            separated(
+                0..,
+                stream_type,
+                seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+            ),
+        ),
+        seq!(loop_ms_or_lb_or_lc, ')'),
+    )
+    .map(|(first, rest): (StreamType, Vec<StreamType>)| {
+        let mut elems = EcoVec::new();
+        elems.push(first);
+        elems.extend(rest);
+        StreamType::Tuple(elems)
+    })
+    .parse_next(s)
+}
+
 fn struct_stream_type_field(s: &mut &str) -> Result<Option<(EcoString, StreamType)>> {
     alt((
         literal("...").value(None),
@@ -1351,6 +1380,7 @@ fn stream_type(s: &mut &str) -> Result<StreamType> {
         alt((
             list_stream_type,
             map_stream_type,
+            tuple_stream_type,
             struct_stream_type,
             primitive_stream_type,
         )),

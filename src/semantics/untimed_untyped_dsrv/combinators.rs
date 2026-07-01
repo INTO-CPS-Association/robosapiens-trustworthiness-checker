@@ -713,6 +713,27 @@ pub fn list(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     })
 }
 
+pub fn tuple(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
+    let mut xs = xs
+        .into_iter()
+        .map(|x| stream_lift_base(x))
+        .collect::<Vec<_>>();
+
+    Box::pin(stream! {
+        if xs.is_empty() {
+            Value::Tuple(EcoVec::new());
+        }
+        loop {
+            let vals = join_all(xs.iter_mut().map(|x| x.next())).await;
+            if vals.iter().all(|x| x.is_some()) {
+                yield Value::Tuple(vals.iter().map(|x| x.clone().unwrap()).collect());
+            } else {
+                return;
+            }
+        }
+    })
+}
+
 pub fn lindex(x: OutputStream<Value>, i: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(
         move |l, idx| {
@@ -819,6 +840,19 @@ pub fn llen(x: OutputStream<Value>) -> OutputStream<Value> {
                 "Invalid list len. Expected List expression. Received: List.len({:?})",
                 l
             ),
+        },
+        x,
+    )
+}
+
+pub fn tget(x: OutputStream<Value>, idx: usize) -> OutputStream<Value> {
+    stream_lift1(
+        move |tuple| match tuple {
+            Value::Tuple(values) | Value::List(values) => values
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| panic!("Tuple index out of bounds: {}", idx)),
+            other => panic!("Expected tuple for .{} access, got {}", idx, other),
         },
         x,
     )

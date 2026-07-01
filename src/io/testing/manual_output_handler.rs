@@ -256,8 +256,10 @@ mod tests {
                 Int(_) => 4,
                 Float(_) => 5,
                 Str(_) => 6,
-                List(_) => 7,
-                Map(_) => 8,
+                Function(_) => 7,
+                List(_) => 8,
+                Tuple(_) => 9,
+                Map(_) => 10,
             };
 
             // First compare based on variant order
@@ -278,7 +280,9 @@ mod tests {
                     ordered_float::OrderedFloat(*a).cmp(&ordered_float::OrderedFloat(*b))
                 }
                 (Str(a), Str(b)) => a.cmp(b),
+                (Function(a), Function(b)) => a.display_source().cmp(b.display_source()),
                 (List(a), List(b)) => a.cmp(b), // Vec<Value> implements Ord if Value does
+                (Tuple(a), Tuple(b)) => a.cmp(b),
                 _ => Ordering::Equal, // Unit and Deferred are considered equal within their kind
             }
         }

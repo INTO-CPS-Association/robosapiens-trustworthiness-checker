@@ -97,6 +97,10 @@ ExprList: EcoVec<SpannedExpr> = {
     <items: SepListOpt<Expr, ",">> => items
 };
 
+LambdaParam: (VarName, StreamType) = {
+    <name: Ident> ":" <typ: StreamTyp> => (name, typ),
+}
+
 // -----------------------------------------------------------------------------
 // Terminals / simple expressions
 // -----------------------------------------------------------------------------
@@ -156,6 +160,12 @@ ContainerExpr: SpannedExpr = {
   <l:@L> "List" "(" <v:ExprList> ")" <r:@R> => {
         Spanned {
             node: SExpr::List(v),
+            span: Span::new(l as u32, r as u32),
+        }
+    },
+  <l:@L> "Tuple" "(" <v:ExprList> ")" <r:@R> => {
+        Spanned {
+            node: SExpr::Tuple(v),
             span: Span::new(l as u32, r as u32),
         }
     },
@@ -228,6 +238,16 @@ SpecialKeywords: SpannedExpr = {
        Spanned { node: SExpr::LTail(e), span: Span::new(l as u32, r as u32)},
   <l:@L> "List.len" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::LLen(e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.map" "(" <f: BoxNode<Expr>> "," <e: BoxNode<Expr>> ")" <r:@R> =>
+       Spanned { node: SExpr::LMap(f, e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.filter" "(" <f: BoxNode<Expr>> "," <e: BoxNode<Expr>> ")" <r:@R> =>
+       Spanned { node: SExpr::LFilter(f, e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "List.fold" "(" <f: BoxNode<Expr>> "," <init: BoxNode<Expr>> "," <e: BoxNode<Expr>> ")" <r:@R> =>
+       Spanned { node: SExpr::LFold(f, init, e), span: Span::new(l as u32, r as u32)},
+  <l:@L> "fix" "(" <f: BoxNode<Expr>> ")" <r:@R> =>
+       Spanned { node: SExpr::Fix(f), span: Span::new(l as u32, r as u32)},
+  <l:@L> "partial" "(" <f: BoxNode<Expr>> <args:("," <Expr>)*> ")" <r:@R> =>
+       Spanned { node: SExpr::Partial(f, args.into()), span: Span::new(l as u32, r as u32)},
   <l:@L> "Map.get" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> =>
        Spanned { node: SExpr::MGet(e, k), span: Span::new(l as u32, r as u32)},
   <l:@L> "Map.remove" "(" <e: BoxNode<Expr>> "," <k: String> ")" <r:@R> =>
@@ -263,14 +283,29 @@ AtomBase: SpannedExpr = {
     SpannedParen
 }
 
+CallSuffix: EcoVec<SpannedExpr> = {
+    "(" <args: SepListOpt<Expr, ",">> ")" => args,
+}
+
+FieldName: EcoString = {
+    <field: Ident> => field.name().into(),
+    <idx: Uint> => idx.to_string().into(),
+}
+
 // Field access expression e.field. This is typed-struct-only shorthand.
 Atom: SpannedExpr = {
-    <base: AtomBase> <fields:("." <Ident>)*> <r:@R> => {
+    <base: AtomBase> <calls:CallSuffix*> <fields:("." <FieldName>)*> <r:@R> => {
         let span_start = base.span.start;
         let span_end = r as u32;
-        fields.into_iter().fold(base, |expr, field| {
+        let called = calls.into_iter().fold(base, |expr, args| {
             Spanned {
-                node: SExpr::SGet(Box::new(expr), field.name().into()),
+                node: SExpr::Apply(Box::new(expr), args),
+                span: Span::new(span_start, span_end),
+            }
+        });
+        fields.into_iter().fold(called, |expr, field| {
+            Spanned {
+                node: SExpr::SGet(Box::new(expr), field),
                 span: Span::new(span_start, span_end),
             }
         })
@@ -455,6 +490,15 @@ Ifelse: SpannedExpr = {
    }
 }
 
+LambdaExpr: SpannedExpr = {
+   <l:@L> "\\" <params: SepList<LambdaParam, ",">> "->" <body: BoxNode<Expr>> <r:@R> => {
+    Spanned {
+        node: SExpr::Lambda(params, body),
+        span: Span::new(l as u32, r as u32),
+    }
+   }
+}
+
 // -----------------------------------------------------------------------------
 // Types / annotations
 // -----------------------------------------------------------------------------
@@ -482,6 +526,21 @@ StreamTyp: StreamType = {
     "Map" "<" <inner: StreamTyp> ">" => StreamType::Map(Box::new(inner)),
     "Struct" "<" <fields: StructPermissiveFields> ">" => StreamType::Struct(fields, true),
     "Struct" "<" <fields: SepListOpt<StructTypeField, ",">> ">" => StreamType::Struct(fields, false),
+    "(" <first: StreamTyp> "," ")" => {
+        let mut elems = EcoVec::new();
+        elems.push(first);
+        StreamType::Tuple(elems)
+    },
+    "(" <first: StreamTyp> "," <second: StreamTyp> <rest:("," <StreamTyp>)*> ")" => {
+        let mut elems = EcoVec::new();
+        elems.push(first);
+        elems.push(second);
+        elems.extend(rest);
+        StreamType::Tuple(elems)
+    },
+    "(" <arg: StreamTyp> "->" <ret: StreamTyp> ")" => {
+        StreamType::Function(EcoVec::from(vec![arg]), Box::new(ret))
+    },
 }
 
 TypeAnno: StreamType = {
@@ -500,6 +559,7 @@ PrecChain<Final>: SpannedExpr = {
 // The top-level expression
 pub Expr: SpannedExpr = {
     Ifelse, // If-else binds weaker than the PrecChain chain to handle dangling else, i.e., if a then b else c + d is parsed as if a then b else (c + d)
+    LambdaExpr,
     PrecChain<Atom>
 };
 

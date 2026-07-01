@@ -413,7 +413,10 @@ impl DirectSchedulerInputRuntime {
                     }
 
                     if !compact_batch.is_empty() {
-                        self.constraint_sender.send(compact_batch).await?;
+                        self.constraint_sender
+                            .send(compact_batch)
+                            .await
+                            .map_err(|_| anyhow::anyhow!("failed to send scheduler constraint input batch"))?;
                     }
                 },
             }

@@ -50,6 +50,13 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
         | (StreamType::Bool, TCType::Bool)
         | (StreamType::Unit, TCType::Unit) => true,
         (StreamType::List(e), TCType::List(a)) => gradual_consistent(e, a),
+        (StreamType::Tuple(elems), TCType::Tuple(actual)) => {
+            elems.len() == actual.len()
+                && elems
+                    .iter()
+                    .zip(actual.iter())
+                    .all(|(e, a)| gradual_consistent(e, a))
+        }
         (StreamType::Map(e), TCType::Map(a)) => gradual_consistent(e, a),
         (StreamType::Struct(ef, _), TCType::Struct(af, _)) => {
             ef.len() == af.len()

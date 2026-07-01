@@ -24,6 +24,30 @@ impl TypeCheckableHelper<SExprTE> for Value {
             Value::Str(v) => Ok(SExprTE::Str(SExprStr::Val(PartialStreamValue::Known(
                 v.into(),
             )))),
+            Value::Function(_) => {
+                let Some(StreamType::Function(args, ret)) = expected else {
+                    errs.push(SemanticError::MissingTypeAscription(
+                        "Function value requires an expected function type".into(),
+                        None,
+                    ));
+                    return Err(());
+                };
+                Ok(SExprTE::Function(TypedFunctionExpr {
+                    params: args
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, arg)| {
+                            (
+                                VarName::from(format!("${idx}")),
+                                TCType::from_stream_type(arg),
+                            )
+                        })
+                        .collect(),
+                    body: Box::new(SExprTE::Any(SExprAny::Val(self.clone()))),
+                    return_type: TCType::from_stream_type(ret),
+                    recursive_name: None,
+                }))
+            }
             Value::Bool(v) => Ok(SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(*v)))),
             Value::List(elems) => {
                 if elems.is_empty() {
@@ -67,6 +91,9 @@ impl TypeCheckableHelper<SExprTE> for Value {
 
                     Ok(SExprTE::List(make_list_literal(typed_elems, first_type)))
                 }
+            }
+            Value::Tuple(elems) => {
+                type_check_tuple_literal(elems.iter().cloned().collect(), expected, ctx, errs)
             }
             Value::Map(entries) => type_check_map_literal(
                 entries
@@ -638,7 +665,18 @@ impl TypeCheckableHelper<SExprTE> for (&SpannedExpr, u64) {
                 SExprTE::List(tl) => Ok(SExprTE::List(tl.typed_sindex(idx))),
                 SExprTE::Map(tm) => Ok(SExprTE::Map(tm.typed_sindex(idx))),
                 SExprTE::Struct(se) => Ok(SExprTE::Struct(se.typed_sindex(idx))),
+                SExprTE::Tuple(tuple) => Ok(SExprTE::Tuple(TypedTupleExpr {
+                    element_types: tuple.element_types.clone(),
+                    kind: TypedTupleExprKind::SIndex(Box::new(tuple), idx),
+                })),
                 SExprTE::Any(e) => Ok(SExprTE::Any(e)),
+                SExprTE::Function(_) | SExprTE::Fold(_) | SExprTE::Apply(_) => {
+                    errs.push(SemanticError::type_error(
+                        TypeErrorKind::FunctionTypeMismatch,
+                        "Function expressions cannot be stream-indexed".into(),
+                    ));
+                    Err(())
+                }
             },
             // If there's already an error just propagate it
             Err(_) => Err(()),
@@ -666,6 +704,10 @@ impl TypeCheckableHelper<SExprTE> for VarName {
                     let typed_list = make_list_var(self.clone(), TCType::from_stream_type(inner));
                     Ok(SExprTE::List(typed_list))
                 }
+                StreamType::Tuple(inner) => {
+                    let element_types = inner.iter().map(TCType::from_stream_type).collect();
+                    Ok(SExprTE::Tuple(make_tuple_var(self.clone(), element_types)))
+                }
                 StreamType::Map(inner) => {
                     let typed_map = make_map_var(self.clone(), TCType::from_stream_type(inner));
                     Ok(SExprTE::Map(typed_map))
@@ -678,6 +720,21 @@ impl TypeCheckableHelper<SExprTE> for VarName {
                     let typed_struct = make_struct_var(self.clone(), typed_inner, *allow_extra);
                     Ok(SExprTE::Struct(typed_struct))
                 }
+                StreamType::Function(args, ret) => Ok(SExprTE::Function(TypedFunctionExpr {
+                    params: args
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, arg)| {
+                            (
+                                VarName::from(format!("${idx}")),
+                                TCType::from_stream_type(arg),
+                            )
+                        })
+                        .collect(),
+                    body: Box::new(SExprTE::Any(SExprAny::Var(self.clone()))),
+                    return_type: TCType::from_stream_type(ret),
+                    recursive_name: Some(self.clone()),
+                })),
                 StreamType::Any => Ok(SExprTE::Any(SExprAny::Var(self.clone()))),
             },
             None => {
@@ -705,6 +762,20 @@ fn make_list_literal(elements: Vec<SExprTE>, element_type: TCType) -> TypedListE
     }
 }
 
+fn make_tuple_var(var: VarName, element_types: EcoVec<TCType>) -> TypedTupleExpr {
+    TypedTupleExpr {
+        element_types,
+        kind: TypedTupleExprKind::Var(var),
+    }
+}
+
+fn make_tuple_literal(elements: Vec<SExprTE>, element_types: EcoVec<TCType>) -> TypedTupleExpr {
+    TypedTupleExpr {
+        element_types,
+        kind: TypedTupleExprKind::Literal(elements),
+    }
+}
+
 fn make_map_var(var: VarName, value_type: TCType) -> TypedMapExpr {
     TypedMapExpr {
         value_type,
@@ -729,6 +800,263 @@ fn make_struct_var(
         allow_extra_fields,
         kind: TypedStructExprKind::Var(var),
     }
+}
+
+fn type_check_lambda(
+    params: &EcoVec<(VarName, StreamType)>,
+    body: &SpannedExpr,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    let old_bindings: Vec<_> = params
+        .iter()
+        .map(|(name, typ)| (name.clone(), ctx.insert(name.clone(), typ.clone())))
+        .collect();
+    let body_te = body.type_check_raw(None, ctx, errs);
+    for (name, old) in old_bindings.into_iter().rev() {
+        match old {
+            Some(typ) => {
+                ctx.insert(name, typ);
+            }
+            None => {
+                ctx.remove(&name);
+            }
+        }
+    }
+    let body_te = body_te?;
+    Ok(SExprTE::Function(TypedFunctionExpr {
+        params: params
+            .iter()
+            .map(|(name, typ)| (name.clone(), TCType::from_stream_type(typ)))
+            .collect(),
+        return_type: extract_type(&body_te),
+        body: Box::new(body_te),
+        recursive_name: None,
+    }))
+}
+
+fn function_type(func: &TypedFunctionExpr) -> TCType {
+    TCType::Function(
+        func.params.iter().map(|(_, typ)| typ.clone()).collect(),
+        Box::new(func.return_type.clone()),
+    )
+}
+
+fn type_check_apply(
+    func_expr: &SpannedExpr,
+    args: &EcoVec<SpannedExpr>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    let func_te = func_expr.type_check_raw(None, ctx, errs)?;
+    let SExprTE::Function(func) = func_te else {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::ExpectedFunction,
+            format!(
+                "Function application requires a function, got {}",
+                func_te.display_with_type()
+            ),
+        ));
+        return Err(());
+    };
+    type_check_apply_function(func, args, ctx, errs)
+}
+
+fn type_check_apply_function(
+    func: TypedFunctionExpr,
+    args: &EcoVec<SpannedExpr>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    if func.params.len() != args.len() {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::FunctionArityMismatch,
+            format!(
+                "Function expects {} arguments, got {}",
+                func.params.len(),
+                args.len()
+            ),
+        ));
+        return Err(());
+    }
+
+    let mut typed_args = EcoVec::new();
+    for ((_, expected), arg) in func.params.iter().zip(args) {
+        let expected_stream = expected.to_stream_type();
+        let arg_te = arg.type_check_raw(expected_stream.as_ref(), ctx, errs)?;
+        let actual = extract_type(&arg_te);
+        if unify_element_types(expected, &actual).is_none() {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::FunctionTypeMismatch,
+                format!("Function argument expected {}, got {}", expected, actual),
+            ));
+            return Err(());
+        }
+        typed_args.push(arg_te);
+    }
+
+    Ok(SExprTE::Apply(TypedApplyExpr {
+        result_type: func.return_type.clone(),
+        func: Box::new(func),
+        args: typed_args,
+    }))
+}
+
+fn type_check_fix(
+    func_expr: &SpannedExpr,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    let func_te = func_expr.type_check_raw(None, ctx, errs)?;
+    let SExprTE::Function(mut func) = func_te else {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::ExpectedFunction,
+            format!(
+                "fix requires a function, got {}",
+                func_te.display_with_type()
+            ),
+        ));
+        return Err(());
+    };
+    let Some((recursive_name, recursive_type)) = func.params.first().cloned() else {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::FunctionArityMismatch,
+            "fix requires a function with a recursive function parameter".into(),
+        ));
+        return Err(());
+    };
+    let expected_recursive_type = TCType::Function(
+        func.params
+            .iter()
+            .skip(1)
+            .map(|(_, typ)| typ.clone())
+            .collect(),
+        Box::new(func.return_type.clone()),
+    );
+    if recursive_type != expected_recursive_type {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::FunctionTypeMismatch,
+            format!(
+                "fix recursive parameter has type {}, expected {}",
+                recursive_type, expected_recursive_type
+            ),
+        ));
+        return Err(());
+    }
+    func.params = func.params.iter().skip(1).cloned().collect();
+    func.recursive_name = Some(recursive_name);
+    Ok(SExprTE::Function(func))
+}
+
+fn typed_var_for_type(
+    name: VarName,
+    typ: &TCType,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    match typ {
+        TCType::Int => Ok(SExprTE::Int(SExprInt::Var(name))),
+        TCType::Float => Ok(SExprTE::Float(SExprFloat::Var(name))),
+        TCType::Str => Ok(SExprTE::Str(SExprStr::Var(name))),
+        TCType::Bool => Ok(SExprTE::Bool(SExprBool::Var(name))),
+        TCType::Unit => Ok(SExprTE::Unit(SExprUnit::Var(name))),
+        TCType::List(inner) => Ok(SExprTE::List(make_list_var(name, *inner.clone()))),
+        TCType::Tuple(inner) => Ok(SExprTE::Tuple(make_tuple_var(name, inner.clone()))),
+        TCType::Map(inner) => Ok(SExprTE::Map(make_map_var(name, *inner.clone()))),
+        TCType::Struct(fields, allow_extra) => Ok(SExprTE::Struct(make_struct_var(
+            name,
+            fields.clone(),
+            *allow_extra,
+        ))),
+        TCType::Function(args, ret) => Ok(SExprTE::Function(TypedFunctionExpr {
+            params: args
+                .iter()
+                .enumerate()
+                .map(|(idx, arg)| (VarName::from(format!("_f{idx}")), arg.clone()))
+                .collect(),
+            body: Box::new(SExprTE::Any(SExprAny::Var(name.clone()))),
+            return_type: *ret.clone(),
+            recursive_name: Some(name),
+        })),
+        TCType::Any => Ok(SExprTE::Any(SExprAny::Var(name))),
+        TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::FunctionTypeMismatch,
+                format!(
+                    "Cannot create partial function parameter with unresolved type {}",
+                    typ
+                ),
+            ));
+            Err(())
+        }
+    }
+}
+
+fn type_check_partial(
+    func_expr: &SpannedExpr,
+    args: &EcoVec<SpannedExpr>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    let func_te = func_expr.type_check_raw(None, ctx, errs)?;
+    let SExprTE::Function(func) = func_te else {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::ExpectedFunction,
+            format!(
+                "partial requires a function as first argument, got {}",
+                func_te.display_with_type()
+            ),
+        ));
+        return Err(());
+    };
+
+    if args.len() > func.params.len() {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::FunctionArityMismatch,
+            format!(
+                "partial supplied {} arguments to a function with {} parameters",
+                args.len(),
+                func.params.len()
+            ),
+        ));
+        return Err(());
+    }
+
+    if args.is_empty() {
+        return Ok(SExprTE::Function(func));
+    }
+
+    let mut apply_args = EcoVec::new();
+    for ((_, expected), arg) in func.params.iter().zip(args) {
+        let expected_stream = expected.to_stream_type();
+        let arg_te = arg.type_check_raw(expected_stream.as_ref(), ctx, errs)?;
+        let actual = extract_type(&arg_te);
+        if unify_element_types(expected, &actual).is_none() {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::FunctionTypeMismatch,
+                format!("partial argument expected {}, got {}", expected, actual),
+            ));
+            return Err(());
+        }
+        apply_args.push(arg_te);
+    }
+
+    let remaining_params: EcoVec<(VarName, TCType)> =
+        func.params.iter().skip(args.len()).cloned().collect();
+    for (name, typ) in &remaining_params {
+        apply_args.push(typed_var_for_type(name.clone(), typ, errs)?);
+    }
+
+    let return_type = func.return_type.clone();
+    Ok(SExprTE::Function(TypedFunctionExpr {
+        params: remaining_params,
+        body: Box::new(SExprTE::Apply(TypedApplyExpr {
+            func: Box::new(func),
+            args: apply_args,
+            result_type: return_type.clone(),
+        })),
+        return_type,
+        recursive_name: None,
+    }))
 }
 
 fn type_check_struct_literal<T>(
@@ -843,6 +1171,70 @@ where
     }
 }
 
+fn type_check_tuple_literal<T>(
+    elems: Vec<T>,
+    expected: Option<&StreamType>,
+    ctx: &mut TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()>
+where
+    T: TypeCheckableHelper<SExprTE>,
+{
+    let expected_elems = match expected {
+        Some(StreamType::Tuple(types)) => Some(types),
+        Some(_) => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::StructExpected,
+                "Tuple constructor requires an expected Tuple type".into(),
+            ));
+            return Err(());
+        }
+        None => None,
+    };
+
+    if let Some(types) = expected_elems {
+        if elems.len() != types.len() {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::StructFieldTypeMismatch,
+                format!(
+                    "Tuple literal has {} elements, expected {}",
+                    elems.len(),
+                    types.len()
+                ),
+            ));
+            return Err(());
+        }
+    }
+
+    let mut typed_elems = Vec::new();
+    let mut element_types = EcoVec::new();
+    for (idx, elem) in elems.into_iter().enumerate() {
+        let expected_type = expected_elems.and_then(|types| types.get(idx));
+        let typed_elem = elem.type_check_raw(expected_type, ctx, errs)?;
+        let actual_type = extract_type(&typed_elem);
+        if let Some(expected_type) = expected_type {
+            let expected_tc = TCType::from_stream_type(expected_type);
+            if actual_type != expected_tc {
+                errs.push(SemanticError::type_error(
+                    TypeErrorKind::StructFieldTypeMismatch,
+                    format!(
+                        "Tuple field .{} has type {}, expected {}",
+                        idx, actual_type, expected_tc
+                    ),
+                ));
+                return Err(());
+            }
+        }
+        typed_elems.push(typed_elem);
+        element_types.push(actual_type);
+    }
+
+    Ok(SExprTE::Tuple(make_tuple_literal(
+        typed_elems,
+        element_types,
+    )))
+}
+
 fn type_check_object_literal<T>(
     entries: Vec<(EcoString, T)>,
     expected: Option<&StreamType>,
@@ -922,6 +1314,17 @@ fn unify_element_types(t1: &TCType, t2: &TCType) -> Option<TCType> {
         _ if t1 == t2 => Some(t1.clone()),
         (TCType::EmptyList, other) | (other, TCType::EmptyList) => Some(other.clone()),
         (TCType::EmptyMap, other) | (other, TCType::EmptyMap) => Some(other.clone()),
+        (TCType::Tuple(elems1), TCType::Tuple(elems2)) if elems1.len() == elems2.len() => {
+            let elems = elems1
+                .iter()
+                .zip(elems2.iter())
+                .filter_map(|(a, b)| unify_element_types(a, b))
+                .collect::<EcoVec<_>>();
+            if elems.len() != elems1.len() {
+                return None;
+            }
+            Some(TCType::Tuple(elems))
+        }
         (TCType::Struct(fields1, allow_extra1), TCType::Struct(fields2, allow_extra2))
             if allow_extra1 == allow_extra2
                 && fields1.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()
@@ -975,7 +1378,11 @@ pub(super) fn cast_to_type(expr: SExprTE, target: &StreamType) -> SExprTE {
             other => SExprTE::Unit(SExprUnit::Cast(Box::new(other))),
         },
         StreamType::Any => expr,
-        StreamType::List(_) | StreamType::Map(_) | StreamType::Struct(_, _) => expr,
+        StreamType::List(_)
+        | StreamType::Tuple(_)
+        | StreamType::Map(_)
+        | StreamType::Struct(_, _)
+        | StreamType::Function(_, _) => expr,
     }
 }
 
@@ -1030,6 +1437,26 @@ fn typed_struct_get(
             allow_extra_fields,
             kind: TypedStructExprKind::SGet(Box::new(typed_struct), key),
         })),
+        TCType::Tuple(_) => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::StructFieldAccess,
+                format!(
+                    "Struct field {:?} has tuple type and cannot be projected here",
+                    key
+                ),
+            ));
+            Err(())
+        }
+        TCType::Function(_, _) => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::FunctionTypeMismatch,
+                format!(
+                    "Struct field {:?} has function type and cannot be used as a stream",
+                    key
+                ),
+            ));
+            Err(())
+        }
         TCType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::SGet(
             Box::new(SExpr::Val(Value::Unit).into()),
             key,
@@ -1040,6 +1467,81 @@ fn typed_struct_get(
                 format!(
                     "Struct field {:?} has unresolved field type {}",
                     key, field_type
+                ),
+            ));
+            Err(())
+        }
+    }
+}
+
+fn typed_tuple_get(
+    typed_tuple: TypedTupleExpr,
+    key: EcoString,
+    errs: &mut SemanticErrors,
+) -> Result<SExprTE, ()> {
+    let Ok(idx) = key.parse::<usize>() else {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::StructFieldAccess,
+            format!("Tuple fields must be numeric, got {:?}", key),
+        ));
+        return Err(());
+    };
+    let Some(field_type) = typed_tuple.element_types.get(idx).cloned() else {
+        errs.push(SemanticError::type_error(
+            TypeErrorKind::StructFieldAccess,
+            format!("Tuple has no field .{}", idx),
+        ));
+        return Err(());
+    };
+
+    match field_type {
+        TCType::Int => Ok(SExprTE::Int(SExprInt::SGetTuple(typed_tuple, idx))),
+        TCType::Float => Ok(SExprTE::Float(SExprFloat::SGetTuple(typed_tuple, idx))),
+        TCType::Bool => Ok(SExprTE::Bool(SExprBool::SGetTuple(typed_tuple, idx))),
+        TCType::Str => Ok(SExprTE::Str(SExprStr::SGetTuple(typed_tuple, idx))),
+        TCType::Unit => Ok(SExprTE::Unit(SExprUnit::SGetTuple(typed_tuple, idx))),
+        TCType::List(inner) => Ok(SExprTE::List(TypedListExpr {
+            element_type: *inner,
+            kind: TypedListExprKind::SGetTuple(Box::new(typed_tuple), idx),
+        })),
+        TCType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
+            value_type: *inner,
+            kind: TypedMapExprKind::SGetTuple(Box::new(typed_tuple), idx),
+        })),
+        TCType::Struct(_, _) => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::StructFieldAccess,
+                format!(
+                    "Tuple field .{} has struct type and cannot be projected here",
+                    idx
+                ),
+            ));
+            Err(())
+        }
+        TCType::Tuple(fields) => Ok(SExprTE::Tuple(TypedTupleExpr {
+            element_types: fields,
+            kind: TypedTupleExprKind::TGetTuple(Box::new(typed_tuple), idx),
+        })),
+        TCType::Function(_, _) => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::FunctionTypeMismatch,
+                format!(
+                    "Tuple field .{} has function type and cannot be used as a stream",
+                    idx
+                ),
+            ));
+            Err(())
+        }
+        TCType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::SGet(
+            Box::new(SExpr::Val(Value::Unit).into()),
+            key,
+        )))),
+        TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::StructUnresolvedFieldType,
+                format!(
+                    "Tuple field .{} has unresolved field type {}",
+                    idx, field_type
                 ),
             ));
             Err(())
@@ -1089,6 +1591,26 @@ fn typed_map_get(
             allow_extra_fields,
             kind: TypedStructExprKind::MGetMap(Box::new(typed_map), key),
         })),
+        TCType::Tuple(_) => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::MapOperationTypeMismatch,
+                format!(
+                    "Map value {:?} has tuple type and cannot be used as a stream",
+                    key
+                ),
+            ));
+            Err(())
+        }
+        TCType::Function(_, _) => {
+            errs.push(SemanticError::type_error(
+                TypeErrorKind::FunctionTypeMismatch,
+                format!(
+                    "Map value {:?} has function type and cannot be used as a stream",
+                    key
+                ),
+            ));
+            Err(())
+        }
     }
 }
 
@@ -1333,7 +1855,21 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             kind: TypedStructExprKind::Dynamic(Box::new(e_str), ctx.clone()),
                         }))
                     }
+                    StreamType::Tuple(_) => {
+                        errs.push(SemanticError::UnsupportedExpression(
+                            "dynamic cannot produce a tuple stream".into(),
+                            None,
+                        ));
+                        Err(())
+                    }
                     StreamType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit)))),
+                    StreamType::Function(_, _) => {
+                        errs.push(SemanticError::UnsupportedExpression(
+                            "dynamic cannot produce a function stream".into(),
+                            None,
+                        ));
+                        Err(())
+                    }
                 }
             }
             SExpr::RestrictedDynamic(e, type_ascription, vs) => {
@@ -1423,7 +1959,21 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             ),
                         }))
                     }
+                    StreamType::Tuple(_) => {
+                        errs.push(SemanticError::UnsupportedExpression(
+                            "dynamic cannot produce a tuple stream".into(),
+                            None,
+                        ));
+                        Err(())
+                    }
                     StreamType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit)))),
+                    StreamType::Function(_, _) => {
+                        errs.push(SemanticError::UnsupportedExpression(
+                            "dynamic cannot produce a function stream".into(),
+                            None,
+                        ));
+                        Err(())
+                    }
                 }
             }
             SExpr::Defer(e, type_ascription, vs) => {
@@ -1505,7 +2055,21 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             ),
                         }))
                     }
+                    StreamType::Tuple(_) => {
+                        errs.push(SemanticError::UnsupportedExpression(
+                            "defer cannot produce a tuple stream".into(),
+                            None,
+                        ));
+                        Err(())
+                    }
                     StreamType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit)))),
+                    StreamType::Function(_, _) => {
+                        errs.push(SemanticError::UnsupportedExpression(
+                            "defer cannot produce a function stream".into(),
+                            None,
+                        ));
+                        Err(())
+                    }
                 }
             }
             SExpr::Update(lhs, rhs) => type_check_same_typed_stream_op(
@@ -1530,6 +2094,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     }
                 }
             }
+            SExpr::Lambda(params, body) => type_check_lambda(params, body, ctx, errs),
+            SExpr::Apply(func, args) => type_check_apply(func, args, ctx, errs),
+            SExpr::Fix(func) => type_check_fix(func, ctx, errs),
+            SExpr::Partial(func, args) => type_check_partial(func, args, ctx, errs),
             SExpr::List(exprs) => {
                 if exprs.is_empty() {
                     // Use expected type to resolve the element type of an empty list.
@@ -1573,6 +2141,9 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     let typed_list = make_list_literal(typed_exprs, first_type);
                     Ok(SExprTE::List(typed_list))
                 }
+            }
+            SExpr::Tuple(exprs) => {
+                type_check_tuple_literal(exprs.iter().cloned().collect(), expected, ctx, errs)
             }
             SExpr::LIndex(list_expr, idx_expr) => {
                 // If we expect element type T, then the list should be List<T>
@@ -1662,6 +2233,20 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                         Box::new(idx_int),
                                     ),
                                 }))
+                            }
+                            TCType::Tuple(_) => {
+                                errs.push(SemanticError::type_error(
+                                    TypeErrorKind::ListOperationTypeMismatch,
+                                    "Cannot index a list of tuples as stream values".into(),
+                                ));
+                                Err(())
+                            }
+                            TCType::Function(_, _) => {
+                                errs.push(SemanticError::type_error(
+                                    TypeErrorKind::FunctionTypeMismatch,
+                                    "Cannot index a list of functions as stream values".into(),
+                                ));
+                                Err(())
                             }
                         }
                     }
@@ -1800,6 +2385,22 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                                     kind: TypedStructExprKind::LHeadList(Box::new(typed_list)),
                                 }))
                             }
+                            TCType::Tuple(_) => {
+                                errs.push(SemanticError::type_error(
+                                    TypeErrorKind::ListOperationTypeMismatch,
+                                    "Cannot take the head of a list of tuples as a stream value"
+                                        .into(),
+                                ));
+                                Err(())
+                            }
+                            TCType::Function(_, _) => {
+                                errs.push(SemanticError::type_error(
+                                    TypeErrorKind::FunctionTypeMismatch,
+                                    "Cannot take the head of a list of functions as a stream value"
+                                        .into(),
+                                ));
+                                Err(())
+                            }
                         }
                     }
                     other => {
@@ -1834,6 +2435,152 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::ListOperationTypeMismatch,
                             format!("LLen requires a List, got {}", other.display_with_type()),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::LMap(func_expr, list_expr) => {
+                let func_te = func_expr.type_check_raw(None, ctx, errs)?;
+                let list_te = list_expr.type_check_raw(None, ctx, errs)?;
+                match (func_te, list_te) {
+                    (SExprTE::Function(func), SExprTE::List(typed_list)) => {
+                        if func.params.len() != 1 {
+                            errs.push(SemanticError::type_error(
+                                TypeErrorKind::FunctionArityMismatch,
+                                format!(
+                                    "List.map function must take one argument, got {}",
+                                    func.params.len()
+                                ),
+                            ));
+                            return Err(());
+                        }
+                        let arg_type = &func.params[0].1;
+                        let elem_type = typed_list.element_type().clone();
+                        if unify_element_types(arg_type, &elem_type).is_none() {
+                            errs.push(SemanticError::type_error(
+                                TypeErrorKind::FunctionTypeMismatch,
+                                format!(
+                                    "List.map function argument has type {}, list element type is {}",
+                                    arg_type, elem_type
+                                ),
+                            ));
+                            return Err(());
+                        }
+                        Ok(SExprTE::List(typed_list.typed_map(
+                            Box::new(func.clone()),
+                            func.return_type.clone(),
+                        )))
+                    }
+                    (func, list) => {
+                        errs.push(SemanticError::type_error(
+                            TypeErrorKind::ListOperationTypeMismatch,
+                            format!(
+                                "List.map requires a function and a list, got {} and {}",
+                                func.display_with_type(),
+                                list.display_with_type()
+                            ),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::LFilter(func_expr, list_expr) => {
+                let func_te = func_expr.type_check_raw(None, ctx, errs)?;
+                let list_te = list_expr.type_check_raw(None, ctx, errs)?;
+                match (func_te, list_te) {
+                    (SExprTE::Function(func), SExprTE::List(typed_list)) => {
+                        if func.params.len() != 1 {
+                            errs.push(SemanticError::type_error(
+                                TypeErrorKind::FunctionArityMismatch,
+                                format!(
+                                    "List.filter function must take one argument, got {}",
+                                    func.params.len()
+                                ),
+                            ));
+                            return Err(());
+                        }
+                        let arg_type = &func.params[0].1;
+                        let elem_type = typed_list.element_type().clone();
+                        if func.return_type != TCType::Bool
+                            || unify_element_types(arg_type, &elem_type).is_none()
+                        {
+                            errs.push(SemanticError::type_error(
+                                TypeErrorKind::FunctionTypeMismatch,
+                                format!(
+                                    "List.filter requires a function from {} to Bool, got {}",
+                                    elem_type,
+                                    function_type(&func)
+                                ),
+                            ));
+                            return Err(());
+                        }
+                        Ok(SExprTE::List(typed_list.typed_filter(Box::new(func))))
+                    }
+                    (func, list) => {
+                        errs.push(SemanticError::type_error(
+                            TypeErrorKind::ListOperationTypeMismatch,
+                            format!(
+                                "List.filter requires a function and a list, got {} and {}",
+                                func.display_with_type(),
+                                list.display_with_type()
+                            ),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            SExpr::LFold(func_expr, init_expr, list_expr) => {
+                let func_te = func_expr.type_check_raw(None, ctx, errs)?;
+                let init_te = init_expr.type_check_raw(expected, ctx, errs)?;
+                let list_te = list_expr.type_check_raw(None, ctx, errs)?;
+                match (func_te, list_te) {
+                    (SExprTE::Function(func), SExprTE::List(typed_list)) => {
+                        if func.params.len() != 2 {
+                            errs.push(SemanticError::type_error(
+                                TypeErrorKind::FunctionArityMismatch,
+                                format!(
+                                    "List.fold function must take two arguments, got {}",
+                                    func.params.len()
+                                ),
+                            ));
+                            return Err(());
+                        }
+                        let acc_type = extract_type(&init_te);
+                        let elem_type = typed_list.element_type().clone();
+                        let param_acc_type = &func.params[0].1;
+                        let param_elem_type = &func.params[1].1;
+                        if unify_element_types(param_acc_type, &acc_type).is_none()
+                            || unify_element_types(param_elem_type, &elem_type).is_none()
+                            || unify_element_types(&func.return_type, &acc_type).is_none()
+                        {
+                            errs.push(SemanticError::type_error(
+                                TypeErrorKind::FunctionTypeMismatch,
+                                format!(
+                                    "List.fold requires ({}, {} -> {}) but got {}",
+                                    acc_type,
+                                    elem_type,
+                                    acc_type,
+                                    function_type(&func)
+                                ),
+                            ));
+                            return Err(());
+                        }
+                        Ok(SExprTE::Fold(TypedFoldExpr {
+                            func: Box::new(func),
+                            init: Box::new(init_te),
+                            list: Box::new(typed_list),
+                            result_type: acc_type,
+                        }))
+                    }
+                    (func, list) => {
+                        errs.push(SemanticError::type_error(
+                            TypeErrorKind::ListOperationTypeMismatch,
+                            format!(
+                                "List.fold requires a function and a list, got {} and {}",
+                                func.display_with_type(),
+                                list.display_with_type()
+                            ),
                         ));
                         Err(())
                     }
@@ -2051,6 +2798,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     SExprTE::Struct(typed_struct) => {
                         typed_struct_get(typed_struct, key.clone(), errs)
                     }
+                    SExprTE::Tuple(typed_tuple) => typed_tuple_get(typed_tuple, key.clone(), errs),
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::MapOperationTypeMismatch,
@@ -2069,11 +2817,12 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     SExprTE::Struct(typed_struct) => {
                         typed_struct_get(typed_struct, key.clone(), errs)
                     }
+                    SExprTE::Tuple(typed_tuple) => typed_tuple_get(typed_tuple, key.clone(), errs),
                     other => {
                         errs.push(SemanticError::type_error(
                             TypeErrorKind::StructExpected,
                             format!(
-                                "Dot field access requires a Struct in typed semantics, got {}",
+                                "Dot field access requires a Struct or Tuple in typed semantics, got {}",
                                 other.display_with_type()
                             ),
                         ));
@@ -4678,6 +5427,71 @@ mod tests {
         let result = expr.type_check(&mut ctx);
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
         assert_eq!(extract_type(&result.unwrap()), TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_partial_one_argument() {
+        let f = SExpr::Lambda(
+            EcoVec::from(vec![
+                ("x".into(), StreamType::Int),
+                ("y".into(), StreamType::Int),
+            ]),
+            Box::new(SExpr::BinOp(
+                Box::new(SExpr::Var("x".into())),
+                Box::new(SExpr::Var("y".into())),
+                SBinOp::NOp(NumericalBinOp::Add),
+            )),
+        );
+        let expr = SExpr::Partial(Box::new(f), EcoVec::from(vec![SExpr::Val(Value::Int(1))]));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::Function(EcoVec::from(vec![TCType::Int]), Box::new(TCType::Int))
+        );
+    }
+
+    #[test]
+    fn test_partial_all_arguments_returns_zero_arg_function() {
+        let f = SExpr::Lambda(
+            EcoVec::from(vec![("x".into(), StreamType::Int)]),
+            Box::new(SExpr::Var("x".into())),
+        );
+        let expr = SExpr::Partial(Box::new(f), EcoVec::from(vec![SExpr::Val(Value::Int(1))]));
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(
+            extract_type(&result.unwrap()),
+            TCType::Function(EcoVec::new(), Box::new(TCType::Int))
+        );
+    }
+
+    #[test]
+    fn test_partial_too_many_arguments_errors() {
+        let f = SExpr::Lambda(
+            EcoVec::from(vec![("x".into(), StreamType::Int)]),
+            Box::new(SExpr::Var("x".into())),
+        );
+        let expr = SExpr::Partial(
+            Box::new(f),
+            EcoVec::from(vec![SExpr::Val(Value::Int(1)), SExpr::Val(Value::Int(2))]),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_partial_argument_type_mismatch_errors() {
+        let f = SExpr::Lambda(
+            EcoVec::from(vec![("x".into(), StreamType::Int)]),
+            Box::new(SExpr::Var("x".into())),
+        );
+        let expr = SExpr::Partial(
+            Box::new(f),
+            EcoVec::from(vec![SExpr::Val(Value::Bool(true))]),
+        );
+        let result = expr.type_check(&mut TypeInfo::new());
+        assert!(result.is_err());
     }
 
     #[test]

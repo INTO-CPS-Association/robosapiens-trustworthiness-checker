@@ -1,0 +1,6 @@
+0: samples = [1, 2, 3]
+   bias = 10
+1: samples = [-1, 4, 5]
+   bias = 20
+2: samples = [0, 0, 7]
+   bias = -2

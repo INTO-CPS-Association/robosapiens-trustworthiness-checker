@@ -1,0 +1,13 @@
+in samples: List<Int>
+in bias: Int
+out doubled: List<Int>
+out positives: List<Int>
+out sum: Int
+out adjustedSum: Int
+out allPositive: Bool
+
+doubled = List.map(\x: Int -> x * 2, samples)
+positives = List.filter(\x: Int -> x > 0, samples)
+sum = List.fold(\acc: Int, x: Int -> acc + x, 0, samples)
+adjustedSum = (\total: Int -> total + bias)(sum)
+allPositive = List.fold(\acc: Bool, x: Int -> acc && (x > 0), true, samples)

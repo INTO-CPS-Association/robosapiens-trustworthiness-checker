@@ -246,14 +246,24 @@ pub enum SExpr {
     // Unary expressions (refactor if more are added...)
     Not(Box<SpannedExpr>),
 
+    // First-class function expressions
+    Lambda(EcoVec<(VarName, StreamType)>, Box<SpannedExpr>),
+    Apply(Box<SpannedExpr>, EcoVec<SpannedExpr>),
+    Fix(Box<SpannedExpr>),
+    Partial(Box<SpannedExpr>, EcoVec<SpannedExpr>),
+
     // List and list expressions
     List(EcoVec<SpannedExpr>),
+    Tuple(EcoVec<SpannedExpr>),
     LIndex(Box<SpannedExpr>, Box<SpannedExpr>), // List index: First is list, second is index
     LAppend(Box<SpannedExpr>, Box<SpannedExpr>), // List append -- First is list, second is el to add
     LConcat(Box<SpannedExpr>, Box<SpannedExpr>), // List concat -- First is list, second is other list
     LHead(Box<SpannedExpr>),                     // List head -- get first element of list
     LTail(Box<SpannedExpr>),                     // List tail -- get all but first element of list
     LLen(Box<SpannedExpr>),                      // List length -- returns length of the list
+    LMap(Box<SpannedExpr>, Box<SpannedExpr>),
+    LFilter(Box<SpannedExpr>, Box<SpannedExpr>),
+    LFold(Box<SpannedExpr>, Box<SpannedExpr>, Box<SpannedExpr>),
 
     // Map and struct expressions
     Map(BTreeMap<EcoString, SpannedExpr>), // Map from String to SExpr
@@ -305,6 +315,22 @@ impl SExpr {
             }
             Var(v) => vec![v.clone()],
             Not(b) => b.inputs(),
+            Lambda(_, body) => body.inputs(),
+            Apply(func, args) => {
+                let mut inputs = func.inputs();
+                for arg in args {
+                    inputs.extend(arg.inputs());
+                }
+                inputs
+            }
+            Fix(func) => func.inputs(),
+            Partial(func, args) => {
+                let mut inputs = func.inputs();
+                for arg in args {
+                    inputs.extend(arg.inputs());
+                }
+                inputs
+            }
             Dynamic(e, _) => e.inputs(),
             RestrictedDynamic(_, _, vs) => vs.iter().cloned().collect(),
             Defer(e, _, _) => e.inputs(),
@@ -330,7 +356,7 @@ impl SExpr {
                 inputs.extend(e2.inputs());
                 inputs
             }
-            List(es) => {
+            List(es) | Tuple(es) => {
                 let mut inputs = vec![];
                 for e in es {
                     inputs.extend(e.inputs());
@@ -344,9 +370,15 @@ impl SExpr {
                 }
                 inputs
             }
-            LIndex(e1, e2) | LAppend(e1, e2) | LConcat(e1, e2) => {
+            LIndex(e1, e2) | LAppend(e1, e2) | LConcat(e1, e2) | LMap(e1, e2) | LFilter(e1, e2) => {
                 let mut inputs = e1.inputs();
                 inputs.extend(e2.inputs());
+                inputs
+            }
+            LFold(func, init, list) => {
+                let mut inputs = func.inputs();
+                inputs.extend(init.inputs());
+                inputs.extend(list.inputs());
                 inputs
             }
             MGet(e, _)
@@ -447,6 +479,24 @@ impl UntypedDsrvSpecification {
                 SExpr::Val(v) => SExpr::Val(v.clone()),
                 SExpr::When(sexpr) => SExpr::When(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Not(sexpr) => SExpr::Not(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::Lambda(params, body) => {
+                    SExpr::Lambda(params, Box::new(traverse_expr(*body, vars)))
+                }
+                SExpr::Apply(func, args) => {
+                    let new_args = args
+                        .into_iter()
+                        .map(|arg| traverse_expr(arg, vars))
+                        .collect();
+                    SExpr::Apply(Box::new(traverse_expr(*func, vars)), new_args)
+                }
+                SExpr::Fix(func) => SExpr::Fix(Box::new(traverse_expr(*func, vars))),
+                SExpr::Partial(func, args) => {
+                    let new_args = args
+                        .into_iter()
+                        .map(|arg| traverse_expr(arg, vars))
+                        .collect();
+                    SExpr::Partial(Box::new(traverse_expr(*func, vars)), new_args)
+                }
                 SExpr::SIndex(sexpr, i) => SExpr::SIndex(Box::new(traverse_expr(*sexpr, vars)), i),
                 SExpr::Sin(sexpr) => SExpr::Sin(Box::new(traverse_expr(*sexpr, vars))),
                 SExpr::Cos(sexpr) => SExpr::Cos(Box::new(traverse_expr(*sexpr, vars))),
@@ -483,6 +533,19 @@ impl UntypedDsrvSpecification {
                     Box::new(traverse_expr(*sexpr, vars)),
                     Box::new(traverse_expr(*sexpr1, vars)),
                 ),
+                SExpr::LMap(func, list) => SExpr::LMap(
+                    Box::new(traverse_expr(*func, vars)),
+                    Box::new(traverse_expr(*list, vars)),
+                ),
+                SExpr::LFilter(func, list) => SExpr::LFilter(
+                    Box::new(traverse_expr(*func, vars)),
+                    Box::new(traverse_expr(*list, vars)),
+                ),
+                SExpr::LFold(func, init, list) => SExpr::LFold(
+                    Box::new(traverse_expr(*func, vars)),
+                    Box::new(traverse_expr(*init, vars)),
+                    Box::new(traverse_expr(*list, vars)),
+                ),
                 SExpr::Update(sexpr, sexpr1) => SExpr::Update(
                     Box::new(traverse_expr(*sexpr, vars)),
                     Box::new(traverse_expr(*sexpr1, vars)),
@@ -504,6 +567,14 @@ impl UntypedDsrvSpecification {
                         .collect();
 
                     SExpr::List(new_vec)
+                }
+                SExpr::Tuple(vec) => {
+                    let new_vec = vec
+                        .into_iter()
+                        .map(|sexpr| traverse_expr(sexpr, vars))
+                        .collect();
+
+                    SExpr::Tuple(new_vec)
                 }
                 SExpr::Map(map) => {
                     let new_map = map
@@ -666,6 +737,35 @@ impl Display for SpannedExpr {
             BinOp(e1, e2, COp(CompBinOp::Ge)) => write!(f, "({} >= {})", e1, e2),
             BinOp(e1, e2, COp(CompBinOp::Gt)) => write!(f, "({} > {})", e1, e2),
             Not(b) => write!(f, "!{}", b),
+            Lambda(params, body) => {
+                let params = params
+                    .iter()
+                    .map(|(name, typ)| format!("{}: {}", name, typ))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "\\{} -> {}", params, body)
+            }
+            Apply(func, args) => {
+                let args = args
+                    .iter()
+                    .map(|arg| format!("{}", arg))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{}({})", func, args)
+            }
+            Fix(func) => write!(f, "fix({})", func),
+            Partial(func, args) => {
+                let args = args
+                    .iter()
+                    .map(|arg| format!("{}", arg))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if args.is_empty() {
+                    write!(f, "partial({})", func)
+                } else {
+                    write!(f, "partial({}, {})", func, args)
+                }
+            }
             Var(v) => write!(f, "{}", v),
             MonitoredAt(u, v) => {
                 write!(f, "monitored_at({}, {})", u, v)
@@ -704,12 +804,19 @@ impl Display for SpannedExpr {
                 let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "[{}]", es_str.join(", "))
             }
+            Tuple(es) => {
+                let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
+                write!(f, "Tuple({})", es_str.join(", "))
+            }
             LIndex(e, i) => write!(f, "List.get({}, {})", e, i),
             LAppend(lst, el) => write!(f, "List.append({}, {})", lst, el),
             LConcat(lst1, lst2) => write!(f, "List.concat({}, {})", lst1, lst2),
             LHead(lst) => write!(f, "List.head({})", lst),
             LTail(lst) => write!(f, "List.tail({})", lst),
             LLen(lst) => write!(f, "List.len({})", lst),
+            LMap(func, lst) => write!(f, "List.map({}, {})", func, lst),
+            LFilter(func, lst) => write!(f, "List.filter({}, {})", func, lst),
+            LFold(func, init, lst) => write!(f, "List.fold({}, {}, {})", func, init, lst),
             Map(map) => {
                 let map_str: Vec<String> =
                     map.iter().map(|(k, v)| format!("{:?}: {}", k, v)).collect();

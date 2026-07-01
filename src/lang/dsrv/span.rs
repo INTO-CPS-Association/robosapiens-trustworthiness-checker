@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Deref, Range};
 
-use crate::core::{StreamTypeAscription, Value, VarName};
+use crate::core::{StreamType, StreamTypeAscription, Value, VarName};
 
 use crate::{
     SExpr,
@@ -213,6 +213,34 @@ impl SpannedExpr {
         SExpr::Not(Box::new((*e).into())).into()
     }
 
+    pub fn Lambda(
+        params: EcoVec<(VarName, StreamType)>,
+        body: Box<impl Into<SpannedExpr>>,
+    ) -> Self {
+        SExpr::Lambda(params, Box::new((*body).into())).into()
+    }
+
+    pub fn Apply<F>(func: Box<F>, args: EcoVec<SpannedExpr>) -> Self
+    where
+        F: Into<SpannedExpr>,
+    {
+        SExpr::Apply(Box::new((*func).into()), args).into()
+    }
+
+    pub fn Fix<F>(func: Box<F>) -> Self
+    where
+        F: Into<SpannedExpr>,
+    {
+        SExpr::Fix(Box::new((*func).into())).into()
+    }
+
+    pub fn Partial<F>(func: Box<F>, args: EcoVec<SpannedExpr>) -> Self
+    where
+        F: Into<SpannedExpr>,
+    {
+        SExpr::Partial(Box::new((*func).into()), args).into()
+    }
+
     pub fn IsDefined<E>(e: Box<E>) -> Self
     where
         E: Into<SpannedExpr>,
@@ -262,6 +290,10 @@ impl SpannedExpr {
 
     pub fn List(items: EcoVec<SpannedExpr>) -> Self {
         SExpr::List(items).into()
+    }
+
+    pub fn Tuple(items: EcoVec<SpannedExpr>) -> Self {
+        SExpr::Tuple(items).into()
     }
 
     pub fn LIndex<L, R>(lhs: Box<L>, rhs: Box<R>) -> Self
@@ -395,6 +427,16 @@ pub fn strip_span(e: &Spanned<SExpr>) -> String {
         SExpr::Latch(v, t) => format!("Latch({}, {})", strip_span(v), strip_span(t)),
         SExpr::Init(e1, e2) => format!("Init({}, {})", strip_span(e1), strip_span(e2)),
         SExpr::Not(e) => format!("Not({})", strip_span(e)),
+        SExpr::Lambda(params, body) => format!("Lambda({:?}, {})", params, strip_span(body)),
+        SExpr::Apply(func, args) => {
+            let args = args.iter().map(strip_span).collect::<Vec<_>>().join(", ");
+            format!("Apply({}, [{}])", strip_span(func), args)
+        }
+        SExpr::Fix(func) => format!("Fix({})", strip_span(func)),
+        SExpr::Partial(func, args) => {
+            let args = args.iter().map(strip_span).collect::<Vec<_>>().join(", ");
+            format!("Partial({}, [{}])", strip_span(func), args)
+        }
         SExpr::List(es) => {
             let items = es
                 .iter()
@@ -403,12 +445,30 @@ pub fn strip_span(e: &Spanned<SExpr>) -> String {
                 .join(", ");
             format!("List([{}])", items)
         }
+        SExpr::Tuple(es) => {
+            let items = es
+                .iter()
+                .map(|e| strip_span(e))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Tuple([{}])", items)
+        }
         SExpr::LAppend(lst, e1) => format!("LAppend({}, {})", strip_span(lst), strip_span(e1)),
         SExpr::LIndex(e, i) => format!("LIndex({}, {})", strip_span(e), strip_span(i)),
         SExpr::LConcat(lst, e1) => format!("LConcat({}, {})", strip_span(lst), strip_span(e1)),
         SExpr::LHead(e) => format!("LHead({})", strip_span(e)),
         SExpr::LTail(e) => format!("LTail({})", strip_span(e)),
         SExpr::LLen(e) => format!("LLen({})", strip_span(e)),
+        SExpr::LMap(func, list) => format!("LMap({}, {})", strip_span(func), strip_span(list)),
+        SExpr::LFilter(func, list) => {
+            format!("LFilter({}, {})", strip_span(func), strip_span(list))
+        }
+        SExpr::LFold(func, init, list) => format!(
+            "LFold({}, {}, {})",
+            strip_span(func),
+            strip_span(init),
+            strip_span(list)
+        ),
 
         SExpr::Map(map) => {
             let items = map

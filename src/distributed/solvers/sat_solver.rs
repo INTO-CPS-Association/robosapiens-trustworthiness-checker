@@ -429,6 +429,8 @@ fn collect_monitored_streams(
             collect_monitored_streams(*else_e, spec, streams);
         }
         SExpr::Not(e)
+        | SExpr::Lambda(_, e)
+        | SExpr::Fix(e)
         | SExpr::SIndex(e, _)
         | SExpr::Dynamic(e, _)
         | SExpr::RestrictedDynamic(e, _, _)
@@ -452,13 +454,32 @@ fn collect_monitored_streams(
         | SExpr::Init(lhs, rhs)
         | SExpr::LIndex(lhs, rhs)
         | SExpr::LAppend(lhs, rhs)
-        | SExpr::LConcat(lhs, rhs) => {
+        | SExpr::LConcat(lhs, rhs)
+        | SExpr::LMap(lhs, rhs)
+        | SExpr::LFilter(lhs, rhs) => {
             collect_monitored_streams(*lhs, spec, streams);
             collect_monitored_streams(*rhs, spec, streams);
         }
-        SExpr::List(items) => {
+        SExpr::LFold(func, init, list) => {
+            collect_monitored_streams(*func, spec, streams);
+            collect_monitored_streams(*init, spec, streams);
+            collect_monitored_streams(*list, spec, streams);
+        }
+        SExpr::List(items) | SExpr::Tuple(items) => {
             for item in items {
                 collect_monitored_streams(item, spec, streams);
+            }
+        }
+        SExpr::Apply(func, args) => {
+            collect_monitored_streams(*func, spec, streams);
+            for arg in args {
+                collect_monitored_streams(arg, spec, streams);
+            }
+        }
+        SExpr::Partial(func, args) => {
+            collect_monitored_streams(*func, spec, streams);
+            for arg in args {
+                collect_monitored_streams(arg, spec, streams);
             }
         }
         SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {

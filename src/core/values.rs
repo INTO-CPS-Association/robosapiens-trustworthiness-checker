@@ -1,7 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fmt::{Debug, Display},
-};
+use std::{collections::BTreeMap, fmt::Debug, fmt::Display, rc::Rc};
 
 use anyhow::anyhow;
 use ecow::{EcoString, EcoVec};
@@ -11,6 +8,75 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
 use std::fmt;
+
+use super::OutputStream;
+
+pub type RuntimeFunctionCallable =
+    Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static>;
+
+#[derive(Clone)]
+pub struct RuntimeFunction {
+    display: EcoString,
+    callable: Option<RuntimeFunctionCallable>,
+}
+
+impl RuntimeFunction {
+    pub fn opaque(display: impl Into<EcoString>) -> Self {
+        Self {
+            display: display.into(),
+            callable: None,
+        }
+    }
+
+    pub fn native(
+        display: impl Into<EcoString>,
+        callable: impl Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static,
+    ) -> Self {
+        Self {
+            display: display.into(),
+            callable: Some(Rc::new(callable)),
+        }
+    }
+
+    pub fn display_source(&self) -> &EcoString {
+        &self.display
+    }
+
+    pub fn call(&self, args: EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> {
+        let Some(callable) = &self.callable else {
+            return Err(anyhow!(
+                "Function {} is display-only and cannot be called",
+                self.display
+            ));
+        };
+        callable(args)
+    }
+
+    pub fn is_callable(&self) -> bool {
+        self.callable.is_some()
+    }
+}
+
+impl Debug for RuntimeFunction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeFunction")
+            .field("display", &self.display)
+            .field("callable", &self.callable.is_some())
+            .finish()
+    }
+}
+
+impl Display for RuntimeFunction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.display)
+    }
+}
+
+impl PartialEq for RuntimeFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.display == other.display
+    }
+}
 
 // Anything inside a stream should be clonable in O(1) time in order for the
 // runtimes to be efficiently implemented. This is why we use EcoString and
@@ -23,7 +89,9 @@ pub enum Value {
     Float(f64),
     Str(EcoString),
     Bool(bool),
+    Function(RuntimeFunction),
     List(EcoVec<Value>),
+    Tuple(EcoVec<Value>),
     Map(BTreeMap<EcoString, Value>),
     Unit,     // Indicates the absence of a value
     Deferred, // Indicates a value that cannot yet be computed due to lack of history
@@ -118,6 +186,7 @@ impl TryFrom<Value> for String {
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Str(i) => Ok(i.to_string()),
+            Value::Function(i) => Ok(i.display_source().to_string()),
             _ => Err(()),
         }
     }
@@ -137,7 +206,7 @@ impl TryFrom<Value> for EcoVec<Value> {
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::List(i) => Ok(i),
+            Value::List(i) | Value::Tuple(i) => Ok(i),
             _ => Err(()),
         }
     }
@@ -240,9 +309,11 @@ impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Int(i) => write!(f, "{}", i),
+            Value::Float(fl) if fl.is_finite() && fl.fract() == 0.0 => write!(f, "{fl:.1}"),
             Value::Float(fl) => write!(f, "{}", fl),
             Value::Str(s) => write!(f, "{:?}", s),
             Value::Bool(b) => write!(f, "{}", b),
+            Value::Function(function) => write!(f, "{}", function.display_source()),
             Value::List(vals) => {
                 let vals = vals
                     .iter()
@@ -250,6 +321,14 @@ impl Display for Value {
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "[{}]", vals)
+            }
+            Value::Tuple(vals) => {
+                let vals = vals
+                    .iter()
+                    .map(|val| format!("{}", val))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Tuple({})", vals)
             }
             Value::Map(map) => {
                 let entries = map
@@ -304,8 +383,10 @@ pub enum StreamType {
     Bool,
     Unit,
     List(Box<StreamType>),
+    Tuple(EcoVec<StreamType>),
     Map(Box<StreamType>),
     Struct(EcoVec<(EcoString, StreamType)>, bool), // ordered typed fields, true allows extra fields
+    Function(EcoVec<StreamType>, Box<StreamType>),
     /// Gradual/dynamic stream type. Values are represented as `Value` and checked at runtime when
     /// cast to a stricter type.
     Any,
@@ -320,6 +401,19 @@ impl Display for StreamType {
             StreamType::Bool => write!(f, "Bool"),
             StreamType::Unit => write!(f, "Unit"),
             StreamType::List(inner) => write!(f, "List<{}>", inner),
+            StreamType::Tuple(inner) => {
+                let len = inner.len();
+                let inner = inner
+                    .iter()
+                    .map(|typ| format!("{}", typ))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if len == 1 {
+                    write!(f, "({},)", inner)
+                } else {
+                    write!(f, "({})", inner)
+                }
+            }
             StreamType::Map(inner) => write!(f, "Map<{}>", inner),
             StreamType::Struct(inner, allow_extra) => {
                 let mut fields = inner
@@ -330,6 +424,14 @@ impl Display for StreamType {
                     fields.push("...".into());
                 }
                 write!(f, "Struct<{}>", fields.join(", "))
+            }
+            StreamType::Function(args, ret) => {
+                let args = args
+                    .iter()
+                    .map(|arg| format!("{}", arg))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "({} -> {})", args, ret)
             }
             StreamType::Any => write!(f, "Any"),
         }
@@ -401,7 +503,9 @@ impl Serialize for Value {
 
             Value::Str(s) => serializer.serialize_str(s),
 
-            Value::List(vals) => {
+            Value::Function(function) => serializer.serialize_str(function.display_source()),
+
+            Value::List(vals) | Value::Tuple(vals) => {
                 let mut seq = serializer.serialize_seq(Some(vals.len()))?;
                 for v in vals.iter() {
                     seq.serialize_element(v)?;
@@ -513,6 +617,7 @@ impl<'de> Deserialize<'de> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use serde_json::{json, to_value};
     use serde_json5::{from_str, to_string};
 
@@ -759,6 +864,35 @@ mod tests {
         let v = Value::Str("hello".into());
         let json = to_string(&v).unwrap();
         assert_eq!(json, "\"hello\"");
+    }
+
+    #[test]
+    fn test_json_serialize_function_as_source_string() {
+        let v = Value::Function(RuntimeFunction::opaque("\\x: Int -> x + 1"));
+        let json = to_string(&v).unwrap();
+        assert_eq!(json, "\"\\\\x: Int -> x + 1\"");
+    }
+
+    #[test]
+    fn test_display_function_as_source_string() {
+        let v = Value::Function(RuntimeFunction::opaque("\\x: Int -> x + 1"));
+        assert_eq!(format!("{}", v), "\\x: Int -> x + 1");
+    }
+
+    #[test]
+    fn test_runtime_function_can_carry_callable() {
+        let function = RuntimeFunction::native("identity", |args| {
+            Ok(Box::pin(futures::stream::iter(args.into_iter())))
+        });
+        assert!(function.is_callable());
+
+        let mut stream = function.call(vec![Value::Int(7)].into()).unwrap();
+        let value = futures::executor::block_on(stream.next()).unwrap();
+        assert_eq!(value, Value::Int(7));
+
+        let v = Value::Function(function);
+        let json = to_string(&v).unwrap();
+        assert_eq!(json, "\"identity\"");
     }
 
     #[test]

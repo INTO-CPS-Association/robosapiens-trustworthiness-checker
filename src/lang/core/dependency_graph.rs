@@ -9,8 +9,8 @@ use tracing::debug;
 use crate::lang::dsrv::ast::{SExpr, UntypedDsrvSpecification};
 use crate::lang::dsrv::type_checker::{
     SExprAny, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit,
-    TypedDsrvSpecification, TypedListExpr, TypedListExprKind, TypedMapExpr, TypedMapExprKind,
-    TypedStructExpr, TypedStructExprKind,
+    TypedDsrvSpecification, TypedFunctionExpr, TypedListExpr, TypedListExprKind, TypedMapExpr,
+    TypedMapExprKind, TypedStructExpr, TypedStructExprKind, TypedTupleExpr, TypedTupleExprKind,
 };
 use crate::semantics::AsyncConfig;
 use crate::{Specification, VarName};
@@ -227,7 +227,7 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
                 deps_impl(els, steps, map, current_node, current_idx);
             }
             SExpr::Val(_) | SExpr::MonitoredAt(_, _) | SExpr::Dist(_, _) => {}
-            SExpr::List(vec) => {
+            SExpr::List(vec) | SExpr::Tuple(vec) => {
                 vec.iter()
                     .for_each(|sexpr| deps_impl(sexpr, steps, map, current_node, current_idx));
             }
@@ -238,6 +238,8 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
             SExpr::Dynamic(sexpr, _)
             | SExpr::RestrictedDynamic(sexpr, _, _)
             | SExpr::Not(sexpr)
+            | SExpr::Lambda(_, sexpr)
+            | SExpr::Fix(sexpr)
             | SExpr::LHead(sexpr)
             | SExpr::LTail(sexpr)
             | SExpr::MGet(sexpr, _)
@@ -258,12 +260,31 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
             | SExpr::LIndex(sexpr1, sexpr2)
             | SExpr::LAppend(sexpr1, sexpr2)
             | SExpr::LConcat(sexpr1, sexpr2)
+            | SExpr::LMap(sexpr1, sexpr2)
+            | SExpr::LFilter(sexpr1, sexpr2)
             | SExpr::Latch(sexpr1, sexpr2)
             | SExpr::Init(sexpr1, sexpr2)
             | SExpr::MInsert(sexpr1, _, sexpr2) => {
                 // Need to clone on lhs to ensure that these dependencies are not shared with rhs
                 deps_impl(sexpr1, &mut steps.clone(), map, current_node, current_idx);
                 deps_impl(sexpr2, steps, map, current_node, current_idx);
+            }
+            SExpr::Apply(func, args) => {
+                deps_impl(func, &mut steps.clone(), map, current_node, current_idx);
+                for arg in args {
+                    deps_impl(arg, steps, map, current_node, current_idx);
+                }
+            }
+            SExpr::Partial(func, args) => {
+                deps_impl(func, &mut steps.clone(), map, current_node, current_idx);
+                for arg in args {
+                    deps_impl(arg, steps, map, current_node, current_idx);
+                }
+            }
+            SExpr::LFold(func, init, list) => {
+                deps_impl(func, &mut steps.clone(), map, current_node, current_idx);
+                deps_impl(init, &mut steps.clone(), map, current_node, current_idx);
+                deps_impl(list, steps, map, current_node, current_idx);
             }
         }
     }
@@ -303,8 +324,31 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             SExprTE::List(e) => deps_list(e, steps, map, current_node, current_idx),
             SExprTE::Map(e) => deps_map(e, steps, map, current_node, current_idx),
             SExprTE::Struct(e) => deps_struct(e, steps, map, current_node, current_idx),
+            SExprTE::Tuple(e) => deps_tuple(e, steps, map, current_node, current_idx),
+            SExprTE::Function(e) => deps_function(e, steps, map, current_node, current_idx),
+            SExprTE::Fold(e) => {
+                deps_function(&e.func, &mut steps.clone(), map, current_node, current_idx);
+                deps_te(&e.init, &mut steps.clone(), map, current_node, current_idx);
+                deps_list(&e.list, steps, map, current_node, current_idx);
+            }
+            SExprTE::Apply(e) => {
+                deps_function(&e.func, &mut steps.clone(), map, current_node, current_idx);
+                for arg in &e.args {
+                    deps_te(arg, steps, map, current_node, current_idx);
+                }
+            }
             SExprTE::Any(e) => deps_dyn(e, steps, map, current_node, current_idx),
         }
+    }
+
+    fn deps_function(
+        expr: &TypedFunctionExpr,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        deps_te(&expr.body, steps, map, current_node, current_idx);
     }
 
     fn deps_dyn(
@@ -368,6 +412,9 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             SExprInt::SGetStruct(struct_expr, _) => {
                 deps_struct(struct_expr, steps, map, current_node, current_idx)
             }
+            SExprInt::SGetTuple(tuple_expr, _) => {
+                deps_tuple(tuple_expr, steps, map, current_node, current_idx)
+            }
         }
     }
 
@@ -419,6 +466,9 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             SExprFloat::SGetStruct(struct_expr, _) => {
                 deps_struct(struct_expr, steps, map, current_node, current_idx)
             }
+            SExprFloat::SGetTuple(tuple_expr, _) => {
+                deps_tuple(tuple_expr, steps, map, current_node, current_idx)
+            }
         }
     }
 
@@ -466,6 +516,9 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             }
             SExprStr::SGetStruct(struct_expr, _) => {
                 deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+            SExprStr::SGetTuple(tuple_expr, _) => {
+                deps_tuple(tuple_expr, steps, map, current_node, current_idx)
             }
         }
     }
@@ -517,6 +570,9 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             }
             SExprBool::SGetStruct(struct_expr, _) => {
                 deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+            SExprBool::SGetTuple(tuple_expr, _) => {
+                deps_tuple(tuple_expr, steps, map, current_node, current_idx)
             }
             SExprBool::Defer(e, _, _)
             | SExprBool::Dynamic(e, _)
@@ -570,6 +626,9 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             SExprUnit::SGetStruct(struct_expr, _) => {
                 deps_struct(struct_expr, steps, map, current_node, current_idx)
             }
+            SExprUnit::SGetTuple(tuple_expr, _) => {
+                deps_tuple(tuple_expr, steps, map, current_node, current_idx)
+            }
         }
     }
 
@@ -615,6 +674,10 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
                 deps_list(list, &mut steps.clone(), map, current_node, current_idx);
                 deps_te(elem, steps, map, current_node, current_idx);
             }
+            TypedListExprKind::LMap(func, list) | TypedListExprKind::LFilter(func, list) => {
+                deps_function(func, &mut steps.clone(), map, current_node, current_idx);
+                deps_list(list, steps, map, current_node, current_idx);
+            }
             TypedListExprKind::LIndexList(list, idx) => {
                 deps_list(list, &mut steps.clone(), map, current_node, current_idx);
                 deps_int(idx, steps, map, current_node, current_idx);
@@ -624,6 +687,9 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             }
             TypedListExprKind::SGetStruct(struct_expr, _) => {
                 deps_struct(struct_expr, steps, map, current_node, current_idx)
+            }
+            TypedListExprKind::SGetTuple(tuple_expr, _) => {
+                deps_tuple(tuple_expr, steps, map, current_node, current_idx)
             }
         }
     }
@@ -671,6 +737,9 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             }
             TypedMapExprKind::SGetStruct(e, _) => {
                 deps_struct(e, steps, map, current_node, current_idx)
+            }
+            TypedMapExprKind::SGetTuple(e, _) => {
+                deps_tuple(e, steps, map, current_node, current_idx)
             }
             TypedMapExprKind::LHeadList(e) => deps_list(e, steps, map, current_node, current_idx),
             TypedMapExprKind::LIndexList(list, idx) => {
@@ -736,6 +805,41 @@ fn typed_sexpr_dependencies(expr: &SExprTE, root_name: &Node) -> DepGraph {
             TypedStructExprKind::LIndexList(list, idx) => {
                 deps_list(list, &mut steps.clone(), map, current_node, current_idx);
                 deps_int(idx, steps, map, current_node, current_idx);
+            }
+        }
+    }
+
+    fn deps_tuple(
+        expr: &TypedTupleExpr,
+        steps: &mut Vec<Weight>,
+        map: &mut DepGraph,
+        current_node: &NodeIndex,
+        current_idx: u64,
+    ) {
+        match &expr.kind {
+            TypedTupleExprKind::Var(name) => add_var_dep(map, current_node, name, steps),
+            TypedTupleExprKind::SIndex(inner, idx) => {
+                let new_idx = current_idx + *idx;
+                steps.push(new_idx);
+                deps_tuple(inner, steps, map, current_node, new_idx);
+            }
+            TypedTupleExprKind::Literal(items) => items
+                .iter()
+                .for_each(|e| deps_te(e, steps, map, current_node, current_idx)),
+            TypedTupleExprKind::If(c, t, e) => {
+                deps_bool(c, steps, map, current_node, current_idx);
+                deps_tuple(t, steps, map, current_node, current_idx);
+                deps_tuple(e, steps, map, current_node, current_idx);
+            }
+            TypedTupleExprKind::Default(a, b)
+            | TypedTupleExprKind::Update(a, b)
+            | TypedTupleExprKind::Latch(a, b)
+            | TypedTupleExprKind::Init(a, b) => {
+                deps_tuple(a, &mut steps.clone(), map, current_node, current_idx);
+                deps_tuple(b, steps, map, current_node, current_idx);
+            }
+            TypedTupleExprKind::TGetTuple(e, _) => {
+                deps_tuple(e, steps, map, current_node, current_idx)
             }
         }
     }

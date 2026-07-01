@@ -1,15 +1,477 @@
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use super::combinators as mc;
 use crate::core::OutputStream;
+use crate::core::RuntimeFunction;
+use crate::core::StreamType;
 use crate::core::Value;
 use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::{
     BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, SpannedExpr, StrBinOp,
 };
-use crate::semantics::AsyncConfig;
-use crate::semantics::MonitoringSemantics;
+use crate::lang::dsrv::span::Spanned;
+use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
+use async_stream::stream;
+use ecow::{EcoString, EcoVec};
+use futures::StreamExt;
 use tracing::debug;
+
+type UntypedFunctionEnv = BTreeMap<crate::VarName, SpannedExpr>;
+
+fn value_expr(value: Value, span: crate::lang::dsrv::span::Span) -> SpannedExpr {
+    Spanned {
+        node: SExpr::Val(value),
+        span,
+    }
+}
+
+fn subst_expr(expr: SpannedExpr, env: &UntypedFunctionEnv) -> SpannedExpr {
+    let span = expr.span;
+    let node = match expr.node {
+        SExpr::Val(_) => return expr,
+        SExpr::Var(v) => {
+            return env.get(&v).cloned().unwrap_or(Spanned {
+                node: SExpr::Var(v),
+                span,
+            });
+        }
+        SExpr::BinOp(a, b, op) => SExpr::BinOp(
+            Box::new(subst_expr(*a, env)),
+            Box::new(subst_expr(*b, env)),
+            op,
+        ),
+        SExpr::If(c, a, b) => SExpr::If(
+            Box::new(subst_expr(*c, env)),
+            Box::new(subst_expr(*a, env)),
+            Box::new(subst_expr(*b, env)),
+        ),
+        SExpr::SIndex(e, i) => SExpr::SIndex(Box::new(subst_expr(*e, env)), i),
+        SExpr::Default(a, b) => {
+            SExpr::Default(Box::new(subst_expr(*a, env)), Box::new(subst_expr(*b, env)))
+        }
+        SExpr::Update(a, b) => {
+            SExpr::Update(Box::new(subst_expr(*a, env)), Box::new(subst_expr(*b, env)))
+        }
+        SExpr::IsDefined(e) => SExpr::IsDefined(Box::new(subst_expr(*e, env))),
+        SExpr::When(e) => SExpr::When(Box::new(subst_expr(*e, env))),
+        SExpr::Latch(a, b) => {
+            SExpr::Latch(Box::new(subst_expr(*a, env)), Box::new(subst_expr(*b, env)))
+        }
+        SExpr::Init(a, b) => {
+            SExpr::Init(Box::new(subst_expr(*a, env)), Box::new(subst_expr(*b, env)))
+        }
+        SExpr::Not(e) => SExpr::Not(Box::new(subst_expr(*e, env))),
+        SExpr::Lambda(params, body) => {
+            let mut nested_env = env.clone();
+            for (name, _) in &params {
+                nested_env.remove(name);
+            }
+            SExpr::Lambda(params, Box::new(subst_expr(*body, &nested_env)))
+        }
+        SExpr::Apply(func, args) => SExpr::Apply(
+            Box::new(subst_expr(*func, env)),
+            args.into_iter().map(|arg| subst_expr(arg, env)).collect(),
+        ),
+        SExpr::Fix(func) => SExpr::Fix(Box::new(subst_expr(*func, env))),
+        SExpr::Partial(func, args) => SExpr::Partial(
+            Box::new(subst_expr(*func, env)),
+            args.into_iter().map(|arg| subst_expr(arg, env)).collect(),
+        ),
+        SExpr::List(items) => SExpr::List(items.into_iter().map(|e| subst_expr(e, env)).collect()),
+        SExpr::Tuple(items) => {
+            SExpr::Tuple(items.into_iter().map(|e| subst_expr(e, env)).collect())
+        }
+        SExpr::LIndex(a, b) => {
+            SExpr::LIndex(Box::new(subst_expr(*a, env)), Box::new(subst_expr(*b, env)))
+        }
+        SExpr::LAppend(a, b) => {
+            SExpr::LAppend(Box::new(subst_expr(*a, env)), Box::new(subst_expr(*b, env)))
+        }
+        SExpr::LConcat(a, b) => {
+            SExpr::LConcat(Box::new(subst_expr(*a, env)), Box::new(subst_expr(*b, env)))
+        }
+        SExpr::LHead(e) => SExpr::LHead(Box::new(subst_expr(*e, env))),
+        SExpr::LTail(e) => SExpr::LTail(Box::new(subst_expr(*e, env))),
+        SExpr::LLen(e) => SExpr::LLen(Box::new(subst_expr(*e, env))),
+        SExpr::LMap(f, l) => {
+            SExpr::LMap(Box::new(subst_expr(*f, env)), Box::new(subst_expr(*l, env)))
+        }
+        SExpr::LFilter(f, l) => {
+            SExpr::LFilter(Box::new(subst_expr(*f, env)), Box::new(subst_expr(*l, env)))
+        }
+        SExpr::LFold(f, init, l) => SExpr::LFold(
+            Box::new(subst_expr(*f, env)),
+            Box::new(subst_expr(*init, env)),
+            Box::new(subst_expr(*l, env)),
+        ),
+        SExpr::Map(map) => SExpr::Map(
+            map.into_iter()
+                .map(|(k, v)| (k, subst_expr(v, env)))
+                .collect(),
+        ),
+        SExpr::Struct(map) => SExpr::Struct(
+            map.into_iter()
+                .map(|(k, v)| (k, subst_expr(v, env)))
+                .collect(),
+        ),
+        SExpr::ObjectLiteral(map) => SExpr::ObjectLiteral(
+            map.into_iter()
+                .map(|(k, v)| (k, subst_expr(v, env)))
+                .collect(),
+        ),
+        SExpr::MGet(map, k) => SExpr::MGet(Box::new(subst_expr(*map, env)), k),
+        SExpr::SGet(st, k) => SExpr::SGet(Box::new(subst_expr(*st, env)), k),
+        SExpr::MInsert(map, k, v) => SExpr::MInsert(
+            Box::new(subst_expr(*map, env)),
+            k,
+            Box::new(subst_expr(*v, env)),
+        ),
+        SExpr::MRemove(map, k) => SExpr::MRemove(Box::new(subst_expr(*map, env)), k),
+        SExpr::MHasKey(map, k) => SExpr::MHasKey(Box::new(subst_expr(*map, env)), k),
+        SExpr::Sin(e) => SExpr::Sin(Box::new(subst_expr(*e, env))),
+        SExpr::Cos(e) => SExpr::Cos(Box::new(subst_expr(*e, env))),
+        SExpr::Tan(e) => SExpr::Tan(Box::new(subst_expr(*e, env))),
+        SExpr::Abs(e) => SExpr::Abs(Box::new(subst_expr(*e, env))),
+        SExpr::Dynamic(e, t) => SExpr::Dynamic(Box::new(subst_expr(*e, env)), t),
+        SExpr::RestrictedDynamic(e, t, vs) => {
+            SExpr::RestrictedDynamic(Box::new(subst_expr(*e, env)), t, vs)
+        }
+        SExpr::Defer(e, t, vs) => SExpr::Defer(Box::new(subst_expr(*e, env)), t, vs),
+        SExpr::MonitoredAt(v, n) => SExpr::MonitoredAt(v, n),
+        SExpr::Dist(a, b) => SExpr::Dist(a, b),
+    };
+    Spanned { node, span }
+}
+
+fn function_body_with_args(
+    params: &EcoVec<crate::VarName>,
+    body: &SpannedExpr,
+    args: EcoVec<Value>,
+) -> anyhow::Result<SpannedExpr> {
+    if params.len() != args.len() {
+        return Err(anyhow::anyhow!(
+            "Function expected {} arguments, got {}",
+            params.len(),
+            args.len()
+        ));
+    }
+
+    let mut env = UntypedFunctionEnv::new();
+    for (name, value) in params.iter().zip(args) {
+        env.insert(name.clone(), value_expr(value, body.span));
+    }
+    Ok(subst_expr(body.clone(), &env))
+}
+
+fn function_body_with_arg_exprs(
+    params: &EcoVec<(crate::VarName, StreamType)>,
+    body: SpannedExpr,
+    args: EcoVec<SpannedExpr>,
+) -> anyhow::Result<SpannedExpr> {
+    if params.len() != args.len() {
+        return Err(anyhow::anyhow!(
+            "Function expected {} arguments, got {}",
+            params.len(),
+            args.len()
+        ));
+    }
+
+    let mut env = UntypedFunctionEnv::new();
+    for ((name, _), arg) in params.iter().zip(args) {
+        env.insert(name.clone(), arg);
+    }
+    Ok(subst_expr(body, &env))
+}
+
+fn eval_untyped_function_values_once<AC, Parser>(
+    function: RuntimeFunction,
+    args: EcoVec<Value>,
+) -> impl std::future::Future<Output = Value>
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    async move {
+        let mut stream = function.call(args).expect("Function application failed");
+        stream.next().await.unwrap_or(Value::NoVal)
+    }
+}
+
+fn make_untyped_function<AC, Parser>(
+    display: EcoString,
+    params: EcoVec<crate::VarName>,
+    body: SpannedExpr,
+    ctx: &AC::Ctx,
+) -> Value
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    let callable_ctx = ctx.subcontext(0);
+    let runtime_function = RuntimeFunction::native(display, move |args| {
+        let body = function_body_with_args(&params, &body, args)?;
+        Ok(
+            <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                body,
+                &callable_ctx,
+            ),
+        )
+    });
+    Value::Function(runtime_function)
+}
+
+fn partial_function(
+    function: RuntimeFunction,
+    applied: EcoVec<Value>,
+    display: EcoString,
+) -> Value {
+    let runtime_function = RuntimeFunction::native(display, move |args| {
+        let mut all_args = applied.clone();
+        all_args.extend(args);
+        function.call(all_args)
+    });
+    Value::Function(runtime_function)
+}
+
+fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
+    let slot: Rc<RefCell<Option<RuntimeFunction>>> = Rc::new(RefCell::new(None));
+    let slot_for_call = slot.clone();
+    let runtime_function = RuntimeFunction::native(display, move |args| {
+        let self_function = slot_for_call
+            .borrow()
+            .as_ref()
+            .expect("recursive function initialized")
+            .clone();
+        let mut all_args = EcoVec::new();
+        all_args.push(Value::Function(self_function));
+        all_args.extend(args);
+        function.call(all_args)
+    });
+    *slot.borrow_mut() = Some(runtime_function.clone());
+    Value::Function(runtime_function)
+}
+
+fn eval_apply<AC, Parser>(
+    func_expr: SpannedExpr,
+    args: EcoVec<SpannedExpr>,
+    ctx: &AC::Ctx,
+) -> OutputStream<Value>
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    if let SExpr::Lambda(params, body) = func_expr.node {
+        let body = function_body_with_arg_exprs(&params, *body, args)
+            .expect("Function application failed");
+        return <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+            body, ctx,
+        );
+    }
+
+    let mut func_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx);
+    let mut arg_streams = args
+        .into_iter()
+        .map(|arg| {
+            <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(arg, ctx)
+        })
+        .collect::<Vec<_>>();
+    Box::pin(stream! {
+        loop {
+            let Some(func_value) = func_stream.next().await else {
+                return;
+            };
+            let mut args = EcoVec::new();
+            for arg_stream in &mut arg_streams {
+                let Some(arg) = arg_stream.next().await else {
+                    return;
+                };
+                args.push(arg);
+            }
+
+            if func_value == Value::NoVal || args.iter().any(|arg| *arg == Value::NoVal) {
+                yield Value::NoVal;
+                continue;
+            }
+            if func_value == Value::Deferred || args.iter().any(|arg| *arg == Value::Deferred) {
+                yield Value::Deferred;
+                continue;
+            }
+
+            let Value::Function(function) = func_value else {
+                panic!("Function application requires a function, got {}", func_value);
+            };
+            yield eval_untyped_function_values_once::<AC, Parser>(function, args).await;
+        }
+    })
+}
+
+fn eval_partial<AC, Parser>(
+    func_expr: SpannedExpr,
+    args: EcoVec<SpannedExpr>,
+    ctx: &AC::Ctx,
+) -> OutputStream<Value>
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    let display: EcoString = format!("partial({}, ...)", func_expr).into();
+    let mut func_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx);
+    let mut arg_streams = args
+        .into_iter()
+        .map(|arg| {
+            <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(arg, ctx)
+        })
+        .collect::<Vec<_>>();
+    Box::pin(stream! {
+        loop {
+            let Some(func_value) = func_stream.next().await else {
+                return;
+            };
+            let mut applied = EcoVec::new();
+            for arg_stream in &mut arg_streams {
+                let Some(arg) = arg_stream.next().await else {
+                    return;
+                };
+                applied.push(arg);
+            }
+
+            if func_value == Value::NoVal || applied.iter().any(|arg| *arg == Value::NoVal) {
+                yield Value::NoVal;
+                continue;
+            }
+            if func_value == Value::Deferred || applied.iter().any(|arg| *arg == Value::Deferred) {
+                yield Value::Deferred;
+                continue;
+            }
+
+            let Value::Function(function) = func_value else {
+                panic!("partial requires a function, got {}", func_value);
+            };
+            yield partial_function(function, applied, display.clone());
+        }
+    })
+}
+
+fn eval_fix<AC, Parser>(func_expr: SpannedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    let display: EcoString = format!("fix({})", func_expr).into();
+    let mut func_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx);
+    Box::pin(stream! {
+        while let Some(func_value) = func_stream.next().await {
+            match func_value {
+                Value::NoVal => yield Value::NoVal,
+                Value::Deferred => yield Value::Deferred,
+                Value::Function(function) => yield fix_function(function, display.clone()),
+                other => panic!("fix requires a function, got {}", other),
+            }
+        }
+    })
+}
+
+fn eval_list_map<AC, Parser>(
+    func_expr: SpannedExpr,
+    list_expr: SpannedExpr,
+    ctx: &AC::Ctx,
+) -> OutputStream<Value>
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    let mut func_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx);
+    let mut list_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(list_expr, ctx);
+    Box::pin(stream! {
+        while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
+            match (func_value, list_value) {
+                (Value::NoVal, _) | (_, Value::NoVal) => yield Value::NoVal,
+                (Value::Deferred, _) | (_, Value::Deferred) => yield Value::Deferred,
+                (Value::Function(function), Value::List(values)) => {
+                    let mut mapped = EcoVec::new();
+                    for value in values {
+                        mapped.push(eval_untyped_function_values_once::<AC, Parser>(function.clone(), EcoVec::from(vec![value])).await);
+                    }
+                    yield Value::List(mapped);
+                }
+                (func, list) => panic!("List.map requires a function and list, got {} and {}", func, list),
+            }
+        }
+    })
+}
+
+fn eval_list_filter<AC, Parser>(
+    func_expr: SpannedExpr,
+    list_expr: SpannedExpr,
+    ctx: &AC::Ctx,
+) -> OutputStream<Value>
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    let mut func_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx);
+    let mut list_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(list_expr, ctx);
+    Box::pin(stream! {
+        while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
+            match (func_value, list_value) {
+                (Value::NoVal, _) | (_, Value::NoVal) => yield Value::NoVal,
+                (Value::Deferred, _) | (_, Value::Deferred) => yield Value::Deferred,
+                (Value::Function(function), Value::List(values)) => {
+                    let mut filtered = EcoVec::new();
+                    for value in values {
+                        match eval_untyped_function_values_once::<AC, Parser>(function.clone(), EcoVec::from(vec![value.clone()])).await {
+                            Value::Bool(true) => filtered.push(value),
+                            Value::Bool(false) => {}
+                            other => panic!("List.filter returned non-bool value {}", other),
+                        }
+                    }
+                    yield Value::List(filtered);
+                }
+                (func, list) => panic!("List.filter requires a function and list, got {} and {}", func, list),
+            }
+        }
+    })
+}
+
+fn eval_list_fold<AC, Parser>(
+    func_expr: SpannedExpr,
+    init_expr: SpannedExpr,
+    list_expr: SpannedExpr,
+    ctx: &AC::Ctx,
+) -> OutputStream<Value>
+where
+    Parser: ExprParser<SpannedExpr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
+{
+    let mut func_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx);
+    let mut init_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(init_expr, ctx);
+    let mut list_stream =
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(list_expr, ctx);
+    Box::pin(stream! {
+        while let (Some(func_value), Some(init), Some(list_value)) = (func_stream.next().await, init_stream.next().await, list_stream.next().await) {
+            match (func_value, init, list_value) {
+                (Value::NoVal, _, _) | (_, Value::NoVal, _) | (_, _, Value::NoVal) => yield Value::NoVal,
+                (Value::Deferred, _, _) | (_, Value::Deferred, _) | (_, _, Value::Deferred) => yield Value::Deferred,
+                (Value::Function(function), mut acc, Value::List(values)) => {
+                    for value in values {
+                        acc = eval_untyped_function_values_once::<AC, Parser>(function.clone(), EcoVec::from(vec![acc, value])).await;
+                    }
+                    yield acc;
+                }
+                (func, _, list) => panic!("List.fold requires a function and list, got {} and {}", func, list),
+            }
+        }
+    })
+}
 
 #[derive(Clone)]
 pub struct UntimedDsrvSemantics<Parser>
@@ -160,6 +622,13 @@ where
                     .collect();
                 mc::list(exprs)
             }
+            SExpr::Tuple(exprs) => {
+                let exprs: Vec<_> = exprs
+                    .into_iter()
+                    .map(|e| <Self as MonitoringSemantics<AC>>::to_async_stream(e, ctx))
+                    .collect();
+                mc::tuple(exprs)
+            }
             SExpr::LIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 let i = <Self as MonitoringSemantics<AC>>::to_async_stream(*i, ctx);
@@ -186,6 +655,29 @@ where
             SExpr::LLen(lst) => {
                 let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst, ctx);
                 mc::llen(lst)
+            }
+            SExpr::Lambda(params, body) => {
+                let param_names = params.iter().map(|(name, _)| name.clone()).collect();
+                let params_display = params
+                    .iter()
+                    .map(|(name, typ)| format!("{}: {}", name, typ))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let display = format!("\\{} -> {}", params_display, body).into();
+                mc::val(make_untyped_function::<AC, Parser>(
+                    display,
+                    param_names,
+                    *body,
+                    ctx,
+                ))
+            }
+            SExpr::Apply(func, args) => eval_apply::<AC, Parser>(*func, args, ctx),
+            SExpr::Fix(func) => eval_fix::<AC, Parser>(*func, ctx),
+            SExpr::Partial(func, args) => eval_partial::<AC, Parser>(*func, args, ctx),
+            SExpr::LMap(func, list) => eval_list_map::<AC, Parser>(*func, *list, ctx),
+            SExpr::LFilter(func, list) => eval_list_filter::<AC, Parser>(*func, *list, ctx),
+            SExpr::LFold(func, init, list) => {
+                eval_list_fold::<AC, Parser>(*func, *init, *list, ctx)
             }
             SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
                 let map: BTreeMap<_, _> = map

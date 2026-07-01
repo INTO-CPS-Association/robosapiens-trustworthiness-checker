@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::SExpr;
 use crate::core::OutputStream;
-use crate::core::Value;
+use crate::core::{RuntimeFunction, Value};
 use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SpannedExpr, StrBinOp};
 use crate::semantics::AsyncConfig;
@@ -51,6 +51,24 @@ where
             SExpr::Not(e) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 mc::not(e)
+            }
+            SExpr::Lambda(params, body) => {
+                let params = params
+                    .iter()
+                    .map(|(name, typ)| format!("{}: {}", name, typ))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                mc::val(Value::Function(RuntimeFunction::opaque(format!(
+                    "\\{} -> {}",
+                    params, body
+                ))))
+            }
+            SExpr::Fix(func) => mc::val(Value::Function(RuntimeFunction::opaque(format!(
+                "fix({})",
+                func
+            )))),
+            SExpr::Apply(_, _) | SExpr::Partial(_, _) => {
+                panic!("function application requires typed DSRV semantics")
             }
             SExpr::Var(v) => mc::var::<AC>(ctx, v),
             SExpr::Dynamic(e, _) => {
@@ -110,6 +128,13 @@ where
                     .collect();
                 mc::list(exprs)
             }
+            SExpr::Tuple(exprs) => {
+                let exprs: Vec<_> = exprs
+                    .into_iter()
+                    .map(|e| <Self as MonitoringSemantics<AC>>::to_async_stream(e, ctx))
+                    .collect();
+                mc::tuple(exprs)
+            }
             SExpr::LIndex(e, i) => {
                 let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
                 let i = <Self as MonitoringSemantics<AC>>::to_async_stream(*i, ctx);
@@ -136,6 +161,9 @@ where
             SExpr::LLen(lst) => {
                 let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst, ctx);
                 mc::llen(lst)
+            }
+            SExpr::LMap(_, _) | SExpr::LFilter(_, _) | SExpr::LFold(_, _, _) => {
+                panic!("higher-order list operations require typed DSRV semantics")
             }
             SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
                 let map: BTreeMap<_, _> = map

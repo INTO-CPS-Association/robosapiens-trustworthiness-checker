@@ -11,6 +11,8 @@ use trustworthiness_checker::core::{
 use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::lang::core::parser::SpecParser;
+use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
@@ -113,6 +115,66 @@ async fn run_typed_runtime_with_spec(
         .output(output_handler)
         .runtime(runtime)
         .semantics(Semantics::TypedUntimed)
+        .build()
+        .await;
+
+    executor.spawn(monitor.run()).detach();
+    with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
+}
+
+async fn run_typed_lalr_runtime_with_spec(
+    executor: Rc<LocalExecutor<'static>>,
+    runtime: RuntimeSpec,
+    spec_str: &str,
+    input_streams: BTreeMap<VarName, Vec<Value>>,
+    timeout_label: &'static str,
+) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+    let mut spec_input = spec_str;
+    let spec = LALRParser::parse(&mut spec_input)?;
+    let input_streams = MapInputProvider::new(input_streams);
+    let mut output_handler = Box::new(ManualOutputHandler::new(
+        executor.clone(),
+        spec.output_vars(),
+    ));
+    let outputs = output_handler.get_output();
+
+    let monitor = GeneralRuntimeBuilder::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(Box::new(input_streams))
+        .output(output_handler)
+        .runtime(runtime)
+        .semantics(Semantics::TypedUntimed)
+        .build()
+        .await;
+
+    executor.spawn(monitor.run()).detach();
+    with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
+}
+
+async fn run_untyped_lalr_runtime_with_spec(
+    executor: Rc<LocalExecutor<'static>>,
+    runtime: RuntimeSpec,
+    spec_str: &str,
+    input_streams: BTreeMap<VarName, Vec<Value>>,
+    timeout_label: &'static str,
+) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+    let mut spec_input = spec_str;
+    let spec = LALRParser::parse(&mut spec_input)?;
+    let input_streams = MapInputProvider::new(input_streams);
+    let mut output_handler = Box::new(ManualOutputHandler::new(
+        executor.clone(),
+        spec.output_vars(),
+    ));
+    let outputs = output_handler.get_output();
+
+    let monitor = GeneralRuntimeBuilder::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(Box::new(input_streams))
+        .output(output_handler)
+        .runtime(runtime)
+        .semantics(Semantics::Untimed)
         .build()
         .await;
 
@@ -814,6 +876,187 @@ structid = objstruct.id
             ),
         ]
     );
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_typed_runtime_function_bodies_use_all_container_types(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+out pair: (Int, Int)
+out mapped: List<Int>
+out filtered: List<Int>
+out total: Int
+out list_pick: Int
+out selected: Int
+aux xs: List<Int>
+aux scores: Map<Int>
+aux robot: Struct<id: Int>
+aux direct: Int
+xs = List(tick, tick + 1, tick + 2)
+pair = Tuple(tick, tick + 1)
+scores = Map("a": tick, "b": tick + 10)
+robot = Struct("id": tick + 100)
+direct = (\t: (Int, Int) -> t.0 + t.1)(pair)
+mapped = List.map(\x: Int -> x + 1, xs)
+filtered = List.filter(\x: Int -> x > 1, xs)
+total = List.fold(\acc: Int, x: Int -> acc + x, 0, xs)
+list_pick = (\ys: List<Int> -> List.get(ys, 1))(xs)
+selected = (\m: Map<Int>, s: Struct<id: Int>, t: (Int, Int) -> Map.get(m, "b") + s.id + t.1)(scores, robot, pair)
+"#;
+
+    let expected = vec![
+        (
+            0,
+            BTreeMap::from([
+                (
+                    "filtered".into(),
+                    Value::List(vec![Value::Int(2), Value::Int(3)].into()),
+                ),
+                ("list_pick".into(), Value::Int(2)),
+                (
+                    "mapped".into(),
+                    Value::List(vec![Value::Int(2), Value::Int(3), Value::Int(4)].into()),
+                ),
+                (
+                    "pair".into(),
+                    Value::Tuple(vec![Value::Int(1), Value::Int(2)].into()),
+                ),
+                ("selected".into(), Value::Int(114)),
+                ("total".into(), Value::Int(6)),
+            ]),
+        ),
+        (
+            1,
+            BTreeMap::from([
+                (
+                    "filtered".into(),
+                    Value::List(vec![Value::Int(2), Value::Int(3), Value::Int(4)].into()),
+                ),
+                ("list_pick".into(), Value::Int(3)),
+                (
+                    "mapped".into(),
+                    Value::List(vec![Value::Int(3), Value::Int(4), Value::Int(5)].into()),
+                ),
+                (
+                    "pair".into(),
+                    Value::Tuple(vec![Value::Int(2), Value::Int(3)].into()),
+                ),
+                ("selected".into(), Value::Int(117)),
+                ("total".into(), Value::Int(9)),
+            ]),
+        ),
+    ];
+
+    let input = || BTreeMap::from([("tick".into(), vec![Value::Int(1), Value::Int(2)])]);
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_typed_lalr_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            input(),
+            "typed function container body runtime outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs, expected,
+            "unexpected function container body outputs for runtime {runtime:?}",
+        );
+    }
+
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn test_untyped_runtime_lambdas_partials_and_folds(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in xs
+in bias
+out direct
+out mapped
+out filtered
+out sum
+out partialResult
+aux addBias
+
+direct = (\x: Int -> x + bias)(List.get(xs, 0))
+mapped = List.map(\x: Int -> x * 2, xs)
+filtered = List.filter(\x: Int -> x > 0, xs)
+sum = List.fold(\acc: Int, x: Int -> acc + x, 0, xs)
+addBias = partial(\x: Int, y: Int -> x + y, bias)
+partialResult = addBias(3)
+"#;
+
+    let expected = vec![
+        (
+            0,
+            BTreeMap::from([
+                ("direct".into(), Value::Int(11)),
+                (
+                    "filtered".into(),
+                    Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()),
+                ),
+                (
+                    "mapped".into(),
+                    Value::List(vec![Value::Int(2), Value::Int(4), Value::Int(6)].into()),
+                ),
+                ("partialResult".into(), Value::Int(13)),
+                ("sum".into(), Value::Int(6)),
+            ]),
+        ),
+        (
+            1,
+            BTreeMap::from([
+                ("direct".into(), Value::Int(19)),
+                (
+                    "filtered".into(),
+                    Value::List(vec![Value::Int(4), Value::Int(5)].into()),
+                ),
+                (
+                    "mapped".into(),
+                    Value::List(vec![Value::Int(-2), Value::Int(8), Value::Int(10)].into()),
+                ),
+                ("partialResult".into(), Value::Int(23)),
+                ("sum".into(), Value::Int(8)),
+            ]),
+        ),
+    ];
+
+    let input = || {
+        BTreeMap::from([
+            (
+                "xs".into(),
+                vec![
+                    Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()),
+                    Value::List(vec![Value::Int(-1), Value::Int(4), Value::Int(5)].into()),
+                ],
+            ),
+            ("bias".into(), vec![Value::Int(10), Value::Int(20)]),
+        ])
+    };
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_untyped_lalr_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            input(),
+            "untyped function runtime outputs.collect()",
+        )
+        .await?;
+
+        assert_eq!(
+            outputs, expected,
+            "unexpected untyped function outputs for runtime {runtime:?}",
+        );
+    }
+
     Ok(())
 }
 

@@ -5,6 +5,7 @@ use super::*;
 use crate::Value;
 use crate::core::StreamType;
 use crate::lang::dsrv::span::Span;
+use ecow::EcoVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeErrorKind {
@@ -27,6 +28,9 @@ pub enum TypeErrorKind {
     StructFieldAccess,
     StructUnresolvedFieldType,
     StructOperationTypeMismatch,
+    FunctionTypeMismatch,
+    FunctionArityMismatch,
+    ExpectedFunction,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -217,8 +221,17 @@ fn check_value_type_ref(typ: &TCType, value: &Value) -> Result<(), String> {
         (TCType::Bool, Value::Bool(_)) => Ok(()),
         (TCType::Float, Value::Float(_)) => Ok(()),
         (TCType::Unit, Value::Unit) => Ok(()),
+        (TCType::Function(_, _), Value::Function(_)) => Ok(()),
         (TCType::Any, _) => Ok(()),
         (TCType::EmptyList | TCType::EmptyMap | TCType::Unknown, _) => Ok(()),
+        (TCType::Tuple(types), Value::Tuple(values) | Value::List(values))
+            if types.len() == values.len() =>
+        {
+            types
+                .iter()
+                .zip(values.iter())
+                .try_for_each(|(typ, val)| check_value_type_ref(typ, val))
+        }
         (typ, Value::List(inner_values)) if typ.list_element_type().is_some() => {
             let inner_type = typ.list_element_type().expect("checked above");
             inner_values
@@ -250,6 +263,7 @@ pub fn check_value_stream_type(typ: &StreamType, value: &Value) -> Result<(), St
 pub fn extract_value_type(value: Value) -> TCType {
     match value {
         Value::Str(_) => TCType::Str,
+        Value::Function(_) => TCType::Function(EcoVec::new(), Box::new(TCType::Any)),
         Value::Int(_) => TCType::Int,
         Value::Bool(_) => TCType::Bool,
         Value::Float(_) => TCType::Float,
@@ -260,6 +274,9 @@ pub fn extract_value_type(value: Value) -> TCType {
             } else {
                 TCType::List(Box::new(extract_value_type(values[0].clone())))
             }
+        }
+        Value::Tuple(values) => {
+            TCType::Tuple(values.iter().cloned().map(extract_value_type).collect())
         }
         Value::Map(values) => {
             if values.is_empty() {

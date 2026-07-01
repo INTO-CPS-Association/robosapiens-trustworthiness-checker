@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use super::combinators as mc;
 use crate::core::OutputStream;
 use crate::core::PartialStreamValue;
+use crate::core::RuntimeFunction;
 use crate::core::Value;
 use crate::core::stream_casting::{from_typed_stream, to_typed_partial_stream, to_typed_stream};
 use crate::core::values::StreamType;
@@ -12,12 +13,15 @@ use crate::lang::dsrv::ast::{
 };
 use crate::lang::dsrv::ast::{SExpr, SpannedExpr};
 use crate::lang::dsrv::type_checker::{
-    SExprAny, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedListExpr,
-    TypedListExprKind, TypedMapExpr, TypedMapExprKind, TypedStructExpr, TypedStructExprKind,
+    SExprAny, SExprBool, SExprFloat, SExprInt, SExprStr, SExprTE, SExprUnit, TypedApplyExpr,
+    TypedFoldExpr, TypedFunctionExpr, TypedListExpr, TypedListExprKind, TypedMapExpr,
+    TypedMapExprKind, TypedStructExpr, TypedStructExprKind, TypedTupleExpr, TypedTupleExprKind,
 };
 use crate::semantics::untimed_untyped_dsrv::combinators as uc;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
+use async_stream::stream;
 use ecow::EcoVec;
+use futures::StreamExt;
 
 #[derive(Clone)]
 pub struct TypedUntimedDsrvSemantics<Parser>
@@ -55,6 +59,10 @@ where
             ),
             SExprTE::Map(tm) => eval_typed_map::<AC, Parser>(tm, ctx),
             SExprTE::Struct(st) => eval_typed_struct::<AC, Parser>(st, ctx),
+            SExprTE::Tuple(tuple) => eval_typed_tuple::<AC, Parser>(tuple, ctx),
+            SExprTE::Function(func) => eval_typed_function::<AC, Parser>(func, ctx),
+            SExprTE::Fold(fold) => eval_typed_fold::<AC, Parser>(fold, ctx),
+            SExprTE::Apply(apply) => eval_typed_apply::<AC, Parser>(apply, ctx),
             SExprTE::Any(e) => eval_dyn::<AC, Parser>(e, ctx),
         }
     }
@@ -132,6 +140,12 @@ where
                 .map(|e| eval_untyped_expr::<AC, Parser>(e, ctx))
                 .collect(),
         ),
+        SExpr::Tuple(exprs) => uc::tuple(
+            exprs
+                .into_iter()
+                .map(|e| eval_untyped_expr::<AC, Parser>(e, ctx))
+                .collect(),
+        ),
         SExpr::LIndex(e, i) => uc::lindex(
             eval_untyped_expr::<AC, Parser>(*e, ctx),
             eval_untyped_expr::<AC, Parser>(*i, ctx),
@@ -147,6 +161,12 @@ where
         SExpr::LHead(lst) => uc::lhead(eval_untyped_expr::<AC, Parser>(*lst, ctx)),
         SExpr::LTail(lst) => uc::ltail(eval_untyped_expr::<AC, Parser>(*lst, ctx)),
         SExpr::LLen(lst) => uc::llen(eval_untyped_expr::<AC, Parser>(*lst, ctx)),
+        SExpr::Lambda(_, _) | SExpr::Apply(_, _) | SExpr::Fix(_) | SExpr::Partial(_, _) => {
+            panic!("function values require typed DSRV semantics")
+        }
+        SExpr::LMap(_, _) | SExpr::LFilter(_, _) | SExpr::LFold(_, _, _) => {
+            panic!("higher-order list operations require typed DSRV semantics")
+        }
         SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => uc::map(
             map.into_iter()
                 .map(|(k, v)| (k, eval_untyped_expr::<AC, Parser>(v, ctx)))
@@ -177,6 +197,757 @@ where
             unimplemented!("Function dist only supported in distributed semantics")
         }
     }
+}
+
+fn function_source(func: &TypedFunctionExpr) -> String {
+    match func.body.as_ref() {
+        SExprTE::Any(SExprAny::Val(Value::Function(function))) => {
+            function.display_source().to_string()
+        }
+        _ => format!("{}", func),
+    }
+}
+
+fn function_body_with_value_args(
+    func: &TypedFunctionExpr,
+    args: EcoVec<Value>,
+) -> anyhow::Result<SExprTE> {
+    if func.params.len() != args.len() {
+        return Err(anyhow::anyhow!(
+            "Function expected {} arguments, got {}",
+            func.params.len(),
+            args.len()
+        ));
+    }
+
+    let mut env = FunctionEnv::new();
+    if let Some(name) = &func.recursive_name {
+        env.insert(name.clone(), SExprTE::Function(func.clone()));
+    }
+    for ((name, typ), value) in func.params.iter().zip(args) {
+        env.insert(name.clone(), typed_value_expr(value, typ));
+    }
+    Ok(subst_te((*func.body).clone(), &env))
+}
+
+fn eval_typed_function<AC, Parser>(func: TypedFunctionExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+{
+    match (func.body.as_ref(), &func.recursive_name) {
+        (SExprTE::Any(SExprAny::Var(v)), Some(name)) if v == name => ctx.var(v).unwrap(),
+        _ => {
+            let source = function_source(&func);
+            let callable_func = func.clone();
+            let callable_ctx = ctx.subcontext(0);
+            let runtime_function = RuntimeFunction::native(source, move |args| {
+                let body = function_body_with_value_args(&callable_func, args)?;
+                Ok(<TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<
+                    AC,
+                >>::to_async_stream(body, &callable_ctx))
+            });
+            uc::val(Value::Function(runtime_function))
+        }
+    }
+}
+
+type FunctionEnv = BTreeMap<crate::VarName, SExprTE>;
+
+fn typed_value_expr(value: Value, typ: &crate::lang::dsrv::type_checker::TCType) -> SExprTE {
+    use crate::lang::dsrv::type_checker::TCType;
+    match typ {
+        TCType::Int => match value {
+            Value::Int(v) => SExprTE::Int(SExprInt::Val(PartialStreamValue::Known(v))),
+            Value::Deferred => SExprTE::Int(SExprInt::Val(PartialStreamValue::Deferred)),
+            Value::NoVal => SExprTE::Int(SExprInt::Val(PartialStreamValue::NoVal)),
+            other => panic!("expected Int function argument, got {}", other),
+        },
+        TCType::Float => match value {
+            Value::Float(v) => SExprTE::Float(SExprFloat::Val(PartialStreamValue::Known(v))),
+            Value::Deferred => SExprTE::Float(SExprFloat::Val(PartialStreamValue::Deferred)),
+            Value::NoVal => SExprTE::Float(SExprFloat::Val(PartialStreamValue::NoVal)),
+            other => panic!("expected Float function argument, got {}", other),
+        },
+        TCType::Str => match value {
+            Value::Str(v) => SExprTE::Str(SExprStr::Val(PartialStreamValue::Known(v.into()))),
+            Value::Deferred => SExprTE::Str(SExprStr::Val(PartialStreamValue::Deferred)),
+            Value::NoVal => SExprTE::Str(SExprStr::Val(PartialStreamValue::NoVal)),
+            other => panic!("expected Str function argument, got {}", other),
+        },
+        TCType::Bool => match value {
+            Value::Bool(v) => SExprTE::Bool(SExprBool::Val(PartialStreamValue::Known(v))),
+            Value::Deferred => SExprTE::Bool(SExprBool::Val(PartialStreamValue::Deferred)),
+            Value::NoVal => SExprTE::Bool(SExprBool::Val(PartialStreamValue::NoVal)),
+            other => panic!("expected Bool function argument, got {}", other),
+        },
+        TCType::Unit => match value {
+            Value::Unit => SExprTE::Unit(SExprUnit::Val(PartialStreamValue::Known(()))),
+            Value::Deferred => SExprTE::Unit(SExprUnit::Val(PartialStreamValue::Deferred)),
+            Value::NoVal => SExprTE::Unit(SExprUnit::Val(PartialStreamValue::NoVal)),
+            other => panic!("expected Unit function argument, got {}", other),
+        },
+        TCType::List(inner) => match value {
+            Value::List(values) => SExprTE::List(TypedListExpr {
+                element_type: *inner.clone(),
+                kind: TypedListExprKind::Literal(
+                    values
+                        .into_iter()
+                        .map(|value| typed_value_expr(value, inner))
+                        .collect(),
+                ),
+            }),
+            Value::Deferred => SExprTE::List(TypedListExpr {
+                element_type: *inner.clone(),
+                kind: TypedListExprKind::Literal(Vec::new()),
+            }),
+            other => panic!("expected List function argument, got {}", other),
+        },
+        TCType::Map(inner) => match value {
+            Value::Map(values) => SExprTE::Map(TypedMapExpr {
+                value_type: *inner.clone(),
+                kind: TypedMapExprKind::Literal(
+                    values
+                        .into_iter()
+                        .map(|(key, value)| (key, typed_value_expr(value, inner)))
+                        .collect(),
+                ),
+            }),
+            other => panic!("expected Map function argument, got {}", other),
+        },
+        TCType::Struct(fields, allow_extra_fields) => match value {
+            Value::Map(values) => SExprTE::Struct(TypedStructExpr {
+                typ_map: fields.clone(),
+                allow_extra_fields: *allow_extra_fields,
+                kind: TypedStructExprKind::Literal(
+                    fields
+                        .iter()
+                        .map(|(key, typ)| {
+                            let value = values.get(key).cloned().unwrap_or(Value::Unit);
+                            (key.clone(), typed_value_expr(value, typ))
+                        })
+                        .collect(),
+                ),
+            }),
+            other => panic!("expected Struct function argument, got {}", other),
+        },
+        TCType::Tuple(types) => match value {
+            Value::Tuple(values) | Value::List(values) => SExprTE::Tuple(TypedTupleExpr {
+                element_types: types.clone(),
+                kind: TypedTupleExprKind::Literal(
+                    values
+                        .into_iter()
+                        .zip(types.iter())
+                        .map(|(value, typ)| typed_value_expr(value, typ))
+                        .collect(),
+                ),
+            }),
+            other => panic!("expected Tuple function argument, got {}", other),
+        },
+        TCType::Function(_, _) => match value {
+            Value::Function(function) => SExprTE::Any(SExprAny::Val(Value::Function(function))),
+            other => panic!("expected Function function argument, got {}", other),
+        },
+        TCType::Any | TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {
+            SExprTE::Any(SExprAny::Val(value))
+        }
+    }
+}
+
+fn env_expr<'a>(env: &'a FunctionEnv, name: &crate::VarName) -> Option<&'a SExprTE> {
+    env.get(name)
+}
+
+fn subst_te(expr: SExprTE, env: &FunctionEnv) -> SExprTE {
+    match expr {
+        SExprTE::Int(e) => SExprTE::Int(subst_int(e, env)),
+        SExprTE::Float(e) => SExprTE::Float(subst_float(e, env)),
+        SExprTE::Str(e) => SExprTE::Str(subst_str(e, env)),
+        SExprTE::Bool(e) => SExprTE::Bool(subst_bool(e, env)),
+        SExprTE::Unit(e) => SExprTE::Unit(subst_unit(e, env)),
+        SExprTE::List(e) => SExprTE::List(subst_list(e, env)),
+        SExprTE::Map(e) => SExprTE::Map(subst_map(e, env)),
+        SExprTE::Struct(e) => SExprTE::Struct(subst_struct(e, env)),
+        SExprTE::Tuple(e) => SExprTE::Tuple(subst_tuple(e, env)),
+        SExprTE::Function(e) => {
+            if let (SExprTE::Any(SExprAny::Var(v)), Some(name)) =
+                (e.body.as_ref(), &e.recursive_name)
+            {
+                if v == name {
+                    if let Some(replacement) = env_expr(env, v) {
+                        return replacement.clone();
+                    }
+                }
+            }
+            SExprTE::Function(subst_function(e, env))
+        }
+        SExprTE::Fold(e) => SExprTE::Fold(TypedFoldExpr {
+            func: Box::new(subst_function(*e.func, env)),
+            init: Box::new(subst_te(*e.init, env)),
+            list: Box::new(subst_list(*e.list, env)),
+            result_type: e.result_type,
+        }),
+        SExprTE::Apply(e) => {
+            let func = match subst_te(SExprTE::Function(*e.func), env) {
+                SExprTE::Function(func) => func,
+                other => panic!("function substitution produced non-function {}", other),
+            };
+            SExprTE::Apply(TypedApplyExpr {
+                func: Box::new(func),
+                args: e.args.into_iter().map(|arg| subst_te(arg, env)).collect(),
+                result_type: e.result_type,
+            })
+        }
+        SExprTE::Any(SExprAny::Var(v)) => env_expr(env, &v)
+            .cloned()
+            .unwrap_or(SExprTE::Any(SExprAny::Var(v))),
+        SExprTE::Any(e) => SExprTE::Any(e),
+    }
+}
+
+fn subst_function(func: TypedFunctionExpr, env: &FunctionEnv) -> TypedFunctionExpr {
+    let mut nested_env = env.clone();
+    for (name, _) in &func.params {
+        nested_env.remove(name);
+    }
+    if let Some(name) = &func.recursive_name {
+        nested_env.remove(name);
+    }
+    TypedFunctionExpr {
+        params: func.params,
+        body: Box::new(subst_te(*func.body, &nested_env)),
+        return_type: func.return_type,
+        recursive_name: func.recursive_name,
+    }
+}
+
+fn subst_int(expr: SExprInt, env: &FunctionEnv) -> SExprInt {
+    use SExprInt::*;
+    match expr {
+        Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Int(e)) => e.clone(),
+            Some(other) => panic!("expected Int substitution for {}, got {}", v, other),
+            None => Var(v),
+        },
+        Cast(e) => Cast(Box::new(subst_te(*e, env))),
+        If(c, a, b) => If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_int(*a, env)),
+            Box::new(subst_int(*b, env)),
+        ),
+        SIndex(e, i) => SIndex(Box::new(subst_int(*e, env)), i),
+        BinOp(a, b, op) => BinOp(
+            Box::new(subst_int(*a, env)),
+            Box::new(subst_int(*b, env)),
+            op,
+        ),
+        Default(a, b) => Default(Box::new(subst_int(*a, env)), Box::new(subst_int(*b, env))),
+        Update(a, b) => Update(Box::new(subst_int(*a, env)), Box::new(subst_int(*b, env))),
+        Latch(a, b) => Latch(Box::new(subst_int(*a, env)), Box::new(subst_int(*b, env))),
+        Abs(e) => Abs(Box::new(subst_int(*e, env))),
+        Init(a, b) => Init(Box::new(subst_int(*a, env)), Box::new(subst_int(*b, env))),
+        Defer(e, t, vs) => Defer(Box::new(subst_str(*e, env)), t, vs),
+        Dynamic(e, t) => Dynamic(Box::new(subst_str(*e, env)), t),
+        RestrictedDynamic(e, vs, t) => RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t),
+        LLen(e) => LLen(subst_list(e, env)),
+        LHeadList(e) => LHeadList(subst_list(e, env)),
+        LIndexList(e, idx) => LIndexList(subst_list(e, env), Box::new(subst_int(*idx, env))),
+        MGetMap(e, k) => MGetMap(subst_map(e, env), k),
+        SGetStruct(e, k) => SGetStruct(subst_struct(e, env), k),
+        SGetTuple(e, i) => SGetTuple(subst_tuple(e, env), i),
+        Val(v) => Val(v),
+    }
+}
+
+fn subst_float(expr: SExprFloat, env: &FunctionEnv) -> SExprFloat {
+    use SExprFloat::*;
+    match expr {
+        Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Float(e)) => e.clone(),
+            Some(other) => panic!("expected Float substitution for {}, got {}", v, other),
+            None => Var(v),
+        },
+        Cast(e) => Cast(Box::new(subst_te(*e, env))),
+        If(c, a, b) => If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_float(*a, env)),
+            Box::new(subst_float(*b, env)),
+        ),
+        SIndex(e, i) => SIndex(Box::new(subst_float(*e, env)), i),
+        BinOp(a, b, op) => BinOp(
+            Box::new(subst_float(*a, env)),
+            Box::new(subst_float(*b, env)),
+            op,
+        ),
+        Default(a, b) => Default(
+            Box::new(subst_float(*a, env)),
+            Box::new(subst_float(*b, env)),
+        ),
+        Update(a, b) => Update(
+            Box::new(subst_float(*a, env)),
+            Box::new(subst_float(*b, env)),
+        ),
+        Latch(a, b) => Latch(
+            Box::new(subst_float(*a, env)),
+            Box::new(subst_float(*b, env)),
+        ),
+        Sin(e) => Sin(Box::new(subst_float(*e, env))),
+        Cos(e) => Cos(Box::new(subst_float(*e, env))),
+        Tan(e) => Tan(Box::new(subst_float(*e, env))),
+        Abs(e) => Abs(Box::new(subst_float(*e, env))),
+        Init(a, b) => Init(
+            Box::new(subst_float(*a, env)),
+            Box::new(subst_float(*b, env)),
+        ),
+        Defer(e, t, vs) => Defer(Box::new(subst_str(*e, env)), t, vs),
+        Dynamic(e, t) => Dynamic(Box::new(subst_str(*e, env)), t),
+        RestrictedDynamic(e, vs, t) => RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t),
+        LHeadList(e) => LHeadList(subst_list(e, env)),
+        LIndexList(e, idx) => LIndexList(subst_list(e, env), Box::new(subst_int(*idx, env))),
+        MGetMap(e, k) => MGetMap(subst_map(e, env), k),
+        SGetStruct(e, k) => SGetStruct(subst_struct(e, env), k),
+        SGetTuple(e, i) => SGetTuple(subst_tuple(e, env), i),
+        Val(v) => Val(v),
+    }
+}
+
+fn subst_str(expr: SExprStr, env: &FunctionEnv) -> SExprStr {
+    use SExprStr::*;
+    match expr {
+        Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Str(e)) => e.clone(),
+            Some(other) => panic!("expected Str substitution for {}, got {}", v, other),
+            None => Var(v),
+        },
+        Cast(e) => Cast(Box::new(subst_te(*e, env))),
+        If(c, a, b) => If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_str(*a, env)),
+            Box::new(subst_str(*b, env)),
+        ),
+        SIndex(e, i) => SIndex(Box::new(subst_str(*e, env)), i),
+        BinOp(a, b, op) => BinOp(
+            Box::new(subst_str(*a, env)),
+            Box::new(subst_str(*b, env)),
+            op,
+        ),
+        Default(a, b) => Default(Box::new(subst_str(*a, env)), Box::new(subst_str(*b, env))),
+        Update(a, b) => Update(Box::new(subst_str(*a, env)), Box::new(subst_str(*b, env))),
+        Latch(a, b) => Latch(Box::new(subst_str(*a, env)), Box::new(subst_str(*b, env))),
+        Init(a, b) => Init(Box::new(subst_str(*a, env)), Box::new(subst_str(*b, env))),
+        Defer(e, t, vs) => Defer(Box::new(subst_str(*e, env)), t, vs),
+        Dynamic(e, t) => Dynamic(Box::new(subst_str(*e, env)), t),
+        RestrictedDynamic(e, vs, t) => RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t),
+        LHeadList(e) => LHeadList(subst_list(e, env)),
+        LIndexList(e, idx) => LIndexList(subst_list(e, env), Box::new(subst_int(*idx, env))),
+        MGetMap(e, k) => MGetMap(subst_map(e, env), k),
+        SGetStruct(e, k) => SGetStruct(subst_struct(e, env), k),
+        SGetTuple(e, i) => SGetTuple(subst_tuple(e, env), i),
+        Val(v) => Val(v),
+    }
+}
+
+fn subst_bool(expr: SExprBool, env: &FunctionEnv) -> SExprBool {
+    use SExprBool::*;
+    match expr {
+        Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Bool(e)) => e.clone(),
+            Some(other) => panic!("expected Bool substitution for {}, got {}", v, other),
+            None => Var(v),
+        },
+        Cast(e) => Cast(Box::new(subst_te(*e, env))),
+        Cmp(op, a, b) => Cmp(op, Box::new(subst_te(*a, env)), Box::new(subst_te(*b, env))),
+        BinOp(a, b, op) => BinOp(
+            Box::new(subst_bool(*a, env)),
+            Box::new(subst_bool(*b, env)),
+            op,
+        ),
+        Not(e) => Not(Box::new(subst_bool(*e, env))),
+        If(c, a, b) => If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_bool(*a, env)),
+            Box::new(subst_bool(*b, env)),
+        ),
+        SIndex(e, i) => SIndex(Box::new(subst_bool(*e, env)), i),
+        Default(a, b) => Default(Box::new(subst_bool(*a, env)), Box::new(subst_bool(*b, env))),
+        Update(a, b) => Update(Box::new(subst_bool(*a, env)), Box::new(subst_bool(*b, env))),
+        Latch(a, b) => Latch(Box::new(subst_bool(*a, env)), Box::new(subst_bool(*b, env))),
+        Init(a, b) => Init(Box::new(subst_bool(*a, env)), Box::new(subst_bool(*b, env))),
+        IsDefined(e) => IsDefined(Box::new(subst_te(*e, env))),
+        When(e) => When(Box::new(subst_te(*e, env))),
+        LHeadList(e) => LHeadList(subst_list(e, env)),
+        LIndexList(e, idx) => LIndexList(subst_list(e, env), Box::new(subst_int(*idx, env))),
+        MGetMap(e, k) => MGetMap(subst_map(e, env), k),
+        SGetStruct(e, k) => SGetStruct(subst_struct(e, env), k),
+        SGetTuple(e, i) => SGetTuple(subst_tuple(e, env), i),
+        MHasKeyMap(e, k) => MHasKeyMap(subst_map(e, env), k),
+        Defer(e, t, vs) => Defer(Box::new(subst_str(*e, env)), t, vs),
+        Dynamic(e, t) => Dynamic(Box::new(subst_str(*e, env)), t),
+        RestrictedDynamic(e, vs, t) => RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t),
+        Val(v) => Val(v),
+    }
+}
+
+fn subst_unit(expr: SExprUnit, env: &FunctionEnv) -> SExprUnit {
+    use SExprUnit::*;
+    match expr {
+        Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Unit(e)) => e.clone(),
+            Some(other) => panic!("expected Unit substitution for {}, got {}", v, other),
+            None => Var(v),
+        },
+        Cast(e) => Cast(Box::new(subst_te(*e, env))),
+        If(c, a, b) => If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_unit(*a, env)),
+            Box::new(subst_unit(*b, env)),
+        ),
+        SIndex(e, i) => SIndex(Box::new(subst_unit(*e, env)), i),
+        Default(a, b) => Default(Box::new(subst_unit(*a, env)), Box::new(subst_unit(*b, env))),
+        Update(a, b) => Update(Box::new(subst_unit(*a, env)), Box::new(subst_unit(*b, env))),
+        Latch(a, b) => Latch(Box::new(subst_unit(*a, env)), Box::new(subst_unit(*b, env))),
+        Init(a, b) => Init(Box::new(subst_unit(*a, env)), Box::new(subst_unit(*b, env))),
+        Defer(e, t, vs) => Defer(Box::new(subst_str(*e, env)), t, vs),
+        Dynamic(e, t) => Dynamic(Box::new(subst_str(*e, env)), t),
+        RestrictedDynamic(e, vs, t) => RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t),
+        LHeadList(e) => LHeadList(subst_list(e, env)),
+        LIndexList(e, idx) => LIndexList(subst_list(e, env), Box::new(subst_int(*idx, env))),
+        MGetMap(e, k) => MGetMap(subst_map(e, env), k),
+        SGetStruct(e, k) => SGetStruct(subst_struct(e, env), k),
+        SGetTuple(e, i) => SGetTuple(subst_tuple(e, env), i),
+        Val(v) => Val(v),
+    }
+}
+
+fn subst_list(expr: TypedListExpr, env: &FunctionEnv) -> TypedListExpr {
+    let element_type = expr.element_type;
+    let kind = match expr.kind {
+        TypedListExprKind::Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::List(e)) => return e.clone(),
+            Some(other) => panic!("expected List substitution for {}, got {}", v, other),
+            None => TypedListExprKind::Var(v),
+        },
+        TypedListExprKind::If(c, a, b) => TypedListExprKind::If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_list(*a, env)),
+            Box::new(subst_list(*b, env)),
+        ),
+        TypedListExprKind::SIndex(e, i) => {
+            TypedListExprKind::SIndex(Box::new(subst_list(*e, env)), i)
+        }
+        TypedListExprKind::Default(a, b) => {
+            TypedListExprKind::Default(Box::new(subst_list(*a, env)), Box::new(subst_list(*b, env)))
+        }
+        TypedListExprKind::Update(a, b) => {
+            TypedListExprKind::Update(Box::new(subst_list(*a, env)), Box::new(subst_list(*b, env)))
+        }
+        TypedListExprKind::Latch(a, b) => {
+            TypedListExprKind::Latch(Box::new(subst_list(*a, env)), Box::new(subst_list(*b, env)))
+        }
+        TypedListExprKind::Init(a, b) => {
+            TypedListExprKind::Init(Box::new(subst_list(*a, env)), Box::new(subst_list(*b, env)))
+        }
+        TypedListExprKind::Defer(e, t, vs) => {
+            TypedListExprKind::Defer(Box::new(subst_str(*e, env)), t, vs)
+        }
+        TypedListExprKind::Dynamic(e, t) => {
+            TypedListExprKind::Dynamic(Box::new(subst_str(*e, env)), t)
+        }
+        TypedListExprKind::RestrictedDynamic(e, vs, t) => {
+            TypedListExprKind::RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t)
+        }
+        TypedListExprKind::Literal(items) => {
+            TypedListExprKind::Literal(items.into_iter().map(|e| subst_te(e, env)).collect())
+        }
+        TypedListExprKind::LTail(e) => TypedListExprKind::LTail(Box::new(subst_list(*e, env))),
+        TypedListExprKind::LConcat(a, b) => {
+            TypedListExprKind::LConcat(Box::new(subst_list(*a, env)), Box::new(subst_list(*b, env)))
+        }
+        TypedListExprKind::LAppend(list, elem) => TypedListExprKind::LAppend(
+            Box::new(subst_list(*list, env)),
+            Box::new(subst_te(*elem, env)),
+        ),
+        TypedListExprKind::LMap(func, list) => TypedListExprKind::LMap(
+            Box::new(subst_function(*func, env)),
+            Box::new(subst_list(*list, env)),
+        ),
+        TypedListExprKind::LFilter(func, list) => TypedListExprKind::LFilter(
+            Box::new(subst_function(*func, env)),
+            Box::new(subst_list(*list, env)),
+        ),
+        TypedListExprKind::LHeadList(e) => {
+            TypedListExprKind::LHeadList(Box::new(subst_list(*e, env)))
+        }
+        TypedListExprKind::LIndexList(e, idx) => TypedListExprKind::LIndexList(
+            Box::new(subst_list(*e, env)),
+            Box::new(subst_int(*idx, env)),
+        ),
+        TypedListExprKind::MGetMap(e, k) => {
+            TypedListExprKind::MGetMap(Box::new(subst_map(*e, env)), k)
+        }
+        TypedListExprKind::SGetStruct(e, k) => {
+            TypedListExprKind::SGetStruct(Box::new(subst_struct(*e, env)), k)
+        }
+        TypedListExprKind::SGetTuple(e, i) => {
+            TypedListExprKind::SGetTuple(Box::new(subst_tuple(*e, env)), i)
+        }
+    };
+    TypedListExpr { element_type, kind }
+}
+
+fn subst_map(expr: TypedMapExpr, env: &FunctionEnv) -> TypedMapExpr {
+    let value_type = expr.value_type;
+    let kind = match expr.kind {
+        TypedMapExprKind::Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Map(e)) => return e.clone(),
+            Some(other) => panic!("expected Map substitution for {}, got {}", v, other),
+            None => TypedMapExprKind::Var(v),
+        },
+        TypedMapExprKind::Literal(entries) => TypedMapExprKind::Literal(
+            entries
+                .into_iter()
+                .map(|(k, v)| (k, subst_te(v, env)))
+                .collect(),
+        ),
+        TypedMapExprKind::Default(a, b) => {
+            TypedMapExprKind::Default(Box::new(subst_map(*a, env)), Box::new(subst_map(*b, env)))
+        }
+        TypedMapExprKind::If(c, a, b) => TypedMapExprKind::If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_map(*a, env)),
+            Box::new(subst_map(*b, env)),
+        ),
+        TypedMapExprKind::Update(a, b) => {
+            TypedMapExprKind::Update(Box::new(subst_map(*a, env)), Box::new(subst_map(*b, env)))
+        }
+        TypedMapExprKind::Latch(a, b) => {
+            TypedMapExprKind::Latch(Box::new(subst_map(*a, env)), Box::new(subst_map(*b, env)))
+        }
+        TypedMapExprKind::Init(a, b) => {
+            TypedMapExprKind::Init(Box::new(subst_map(*a, env)), Box::new(subst_map(*b, env)))
+        }
+        TypedMapExprKind::SIndex(e, i) => TypedMapExprKind::SIndex(Box::new(subst_map(*e, env)), i),
+        TypedMapExprKind::Defer(e, t, vs) => {
+            TypedMapExprKind::Defer(Box::new(subst_str(*e, env)), t, vs)
+        }
+        TypedMapExprKind::Dynamic(e, t) => {
+            TypedMapExprKind::Dynamic(Box::new(subst_str(*e, env)), t)
+        }
+        TypedMapExprKind::RestrictedDynamic(e, vs, t) => {
+            TypedMapExprKind::RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t)
+        }
+        TypedMapExprKind::MInsert(map, k, v) => TypedMapExprKind::MInsert(
+            Box::new(subst_map(*map, env)),
+            k,
+            Box::new(subst_te(*v, env)),
+        ),
+        TypedMapExprKind::MRemove(map, k) => {
+            TypedMapExprKind::MRemove(Box::new(subst_map(*map, env)), k)
+        }
+        TypedMapExprKind::MGetMap(map, k) => {
+            TypedMapExprKind::MGetMap(Box::new(subst_map(*map, env)), k)
+        }
+        TypedMapExprKind::SGetStruct(st, k) => {
+            TypedMapExprKind::SGetStruct(Box::new(subst_struct(*st, env)), k)
+        }
+        TypedMapExprKind::SGetTuple(tuple, i) => {
+            TypedMapExprKind::SGetTuple(Box::new(subst_tuple(*tuple, env)), i)
+        }
+        TypedMapExprKind::LHeadList(list) => {
+            TypedMapExprKind::LHeadList(Box::new(subst_list(*list, env)))
+        }
+        TypedMapExprKind::LIndexList(list, idx) => TypedMapExprKind::LIndexList(
+            Box::new(subst_list(*list, env)),
+            Box::new(subst_int(*idx, env)),
+        ),
+    };
+    TypedMapExpr { value_type, kind }
+}
+
+fn subst_struct(expr: TypedStructExpr, env: &FunctionEnv) -> TypedStructExpr {
+    let typ_map = expr.typ_map;
+    let allow_extra_fields = expr.allow_extra_fields;
+    let kind = match expr.kind {
+        TypedStructExprKind::Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Struct(e)) => return e.clone(),
+            Some(other) => panic!("expected Struct substitution for {}, got {}", v, other),
+            None => TypedStructExprKind::Var(v),
+        },
+        TypedStructExprKind::Literal(entries) => TypedStructExprKind::Literal(
+            entries
+                .into_iter()
+                .map(|(k, v)| (k, subst_te(v, env)))
+                .collect(),
+        ),
+        TypedStructExprKind::Default(a, b) => TypedStructExprKind::Default(
+            Box::new(subst_struct(*a, env)),
+            Box::new(subst_struct(*b, env)),
+        ),
+        TypedStructExprKind::If(c, a, b) => TypedStructExprKind::If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_struct(*a, env)),
+            Box::new(subst_struct(*b, env)),
+        ),
+        TypedStructExprKind::Update(a, b) => TypedStructExprKind::Update(
+            Box::new(subst_struct(*a, env)),
+            Box::new(subst_struct(*b, env)),
+        ),
+        TypedStructExprKind::Latch(a, b) => TypedStructExprKind::Latch(
+            Box::new(subst_struct(*a, env)),
+            Box::new(subst_struct(*b, env)),
+        ),
+        TypedStructExprKind::Init(a, b) => TypedStructExprKind::Init(
+            Box::new(subst_struct(*a, env)),
+            Box::new(subst_struct(*b, env)),
+        ),
+        TypedStructExprKind::SIndex(e, i) => {
+            TypedStructExprKind::SIndex(Box::new(subst_struct(*e, env)), i)
+        }
+        TypedStructExprKind::Defer(e, t, vs) => {
+            TypedStructExprKind::Defer(Box::new(subst_str(*e, env)), t, vs)
+        }
+        TypedStructExprKind::Dynamic(e, t) => {
+            TypedStructExprKind::Dynamic(Box::new(subst_str(*e, env)), t)
+        }
+        TypedStructExprKind::RestrictedDynamic(e, vs, t) => {
+            TypedStructExprKind::RestrictedDynamic(Box::new(subst_str(*e, env)), vs, t)
+        }
+        TypedStructExprKind::SUpdate(st, k, v) => TypedStructExprKind::SUpdate(
+            Box::new(subst_struct(*st, env)),
+            k,
+            Box::new(subst_te(*v, env)),
+        ),
+        TypedStructExprKind::SGet(st, k) => {
+            TypedStructExprKind::SGet(Box::new(subst_struct(*st, env)), k)
+        }
+        TypedStructExprKind::MGetMap(map, k) => {
+            TypedStructExprKind::MGetMap(Box::new(subst_map(*map, env)), k)
+        }
+        TypedStructExprKind::LHeadList(list) => {
+            TypedStructExprKind::LHeadList(Box::new(subst_list(*list, env)))
+        }
+        TypedStructExprKind::LIndexList(list, idx) => TypedStructExprKind::LIndexList(
+            Box::new(subst_list(*list, env)),
+            Box::new(subst_int(*idx, env)),
+        ),
+    };
+    TypedStructExpr {
+        typ_map,
+        allow_extra_fields,
+        kind,
+    }
+}
+
+fn subst_tuple(expr: TypedTupleExpr, env: &FunctionEnv) -> TypedTupleExpr {
+    let element_types = expr.element_types;
+    let kind = match expr.kind {
+        TypedTupleExprKind::Var(v) => match env_expr(env, &v) {
+            Some(SExprTE::Tuple(e)) => return e.clone(),
+            Some(other) => panic!("expected Tuple substitution for {}, got {}", v, other),
+            None => TypedTupleExprKind::Var(v),
+        },
+        TypedTupleExprKind::Literal(items) => {
+            TypedTupleExprKind::Literal(items.into_iter().map(|e| subst_te(e, env)).collect())
+        }
+        TypedTupleExprKind::Default(a, b) => TypedTupleExprKind::Default(
+            Box::new(subst_tuple(*a, env)),
+            Box::new(subst_tuple(*b, env)),
+        ),
+        TypedTupleExprKind::If(c, a, b) => TypedTupleExprKind::If(
+            Box::new(subst_bool(*c, env)),
+            Box::new(subst_tuple(*a, env)),
+            Box::new(subst_tuple(*b, env)),
+        ),
+        TypedTupleExprKind::Update(a, b) => TypedTupleExprKind::Update(
+            Box::new(subst_tuple(*a, env)),
+            Box::new(subst_tuple(*b, env)),
+        ),
+        TypedTupleExprKind::Latch(a, b) => TypedTupleExprKind::Latch(
+            Box::new(subst_tuple(*a, env)),
+            Box::new(subst_tuple(*b, env)),
+        ),
+        TypedTupleExprKind::Init(a, b) => TypedTupleExprKind::Init(
+            Box::new(subst_tuple(*a, env)),
+            Box::new(subst_tuple(*b, env)),
+        ),
+        TypedTupleExprKind::SIndex(e, i) => {
+            TypedTupleExprKind::SIndex(Box::new(subst_tuple(*e, env)), i)
+        }
+        TypedTupleExprKind::TGetTuple(e, i) => {
+            TypedTupleExprKind::TGetTuple(Box::new(subst_tuple(*e, env)), i)
+        }
+    };
+    TypedTupleExpr {
+        element_types,
+        kind,
+    }
+}
+async fn eval_function_values_once<AC, Parser>(
+    func: &TypedFunctionExpr,
+    args: Vec<Value>,
+    ctx: &AC::Ctx,
+) -> Value
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+{
+    let body =
+        function_body_with_value_args(func, args.into()).expect("Function application failed");
+    let mut stream =
+        <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(body, ctx);
+    stream.next().await.unwrap_or(Value::NoVal)
+}
+
+fn eval_typed_apply<AC, Parser>(apply: TypedApplyExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+{
+    let func = *apply.func;
+    let mut env = FunctionEnv::new();
+    if let Some(name) = &func.recursive_name {
+        env.insert(name.clone(), SExprTE::Function(func.clone()));
+    }
+    for ((name, _), arg) in func.params.iter().zip(apply.args.into_iter()) {
+        env.insert(name.clone(), arg);
+    }
+    let body = subst_te(*func.body, &env);
+    <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(body, ctx)
+}
+
+fn eval_typed_fold<AC, Parser>(fold: TypedFoldExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+{
+    let func = *fold.func;
+    let mut init_stream =
+        <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+            *fold.init, ctx,
+        );
+    let mut list_stream = eval_typed_list::<AC, Parser>(*fold.list, ctx);
+    let ctx = ctx.subcontext(0);
+    Box::pin(stream! {
+        loop {
+            let Some(init) = init_stream.next().await else {
+                return;
+            };
+            let Some(list) = list_stream.next().await else {
+                return;
+            };
+            let mut acc = init;
+            match list {
+                PartialStreamValue::Known(values) => {
+                    for value in values {
+                        acc = eval_function_values_once::<AC, Parser>(&func, vec![acc, value], &ctx).await;
+                    }
+                    yield acc;
+                }
+                PartialStreamValue::Deferred => yield Value::Deferred,
+                PartialStreamValue::NoVal => yield Value::NoVal,
+            }
+        }
+    })
 }
 
 fn eval_typed_list<AC, Parser>(typed_list: TypedListExpr, ctx: &AC::Ctx) -> mc::ListStream
@@ -281,6 +1052,48 @@ where
             let elem_partial = mc::to_partial_value_stream(elem_stream);
             mc::lappend(list_stream, elem_partial, list_stream_type)
         }
+        TypedListExprKind::LMap(func, list) => {
+            let mut list_stream = eval_typed_list::<AC, Parser>(*list, ctx);
+            let ctx = ctx.subcontext(0);
+            Box::pin(stream! {
+                while let Some(value) = list_stream.next().await {
+                    match value {
+                        PartialStreamValue::Known(values) => {
+                            let mut mapped = EcoVec::new();
+                            for value in values {
+                                mapped.push(eval_function_values_once::<AC, Parser>(&func, vec![value], &ctx).await);
+                            }
+                            yield PartialStreamValue::Known(mapped);
+                        }
+                        PartialStreamValue::Deferred => yield PartialStreamValue::Deferred,
+                        PartialStreamValue::NoVal => yield PartialStreamValue::NoVal,
+                    }
+                }
+            })
+        }
+        TypedListExprKind::LFilter(func, list) => {
+            let mut list_stream = eval_typed_list::<AC, Parser>(*list, ctx);
+            let ctx = ctx.subcontext(0);
+            Box::pin(stream! {
+                while let Some(value) = list_stream.next().await {
+                    match value {
+                        PartialStreamValue::Known(values) => {
+                            let mut filtered = EcoVec::new();
+                            for value in values {
+                                match eval_function_values_once::<AC, Parser>(&func, vec![value.clone()], &ctx).await {
+                                    Value::Bool(true) => filtered.push(value),
+                                    Value::Bool(false) => {}
+                                    other => panic!("List.filter returned non-bool value {}", other),
+                                }
+                            }
+                            yield PartialStreamValue::Known(filtered);
+                        }
+                        PartialStreamValue::Deferred => yield PartialStreamValue::Deferred,
+                        PartialStreamValue::NoVal => yield PartialStreamValue::NoVal,
+                    }
+                }
+            })
+        }
         TypedListExprKind::LHeadList(inner_list) => {
             let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
             mc::lhead::<EcoVec<Value>>(inner_stream)
@@ -296,6 +1109,9 @@ where
         )),
         TypedListExprKind::SGetStruct(st, key) => to_typed_partial_stream::<EcoVec<Value>>(
             uc::mget(eval_typed_struct::<AC, Parser>(*st, ctx), key),
+        ),
+        TypedListExprKind::SGetTuple(tuple, idx) => to_typed_partial_stream::<EcoVec<Value>>(
+            uc::tget(eval_typed_tuple::<AC, Parser>(*tuple, ctx), idx),
         ),
     }
 }
@@ -425,6 +1241,62 @@ where
     }
 }
 
+fn eval_typed_tuple<AC, Parser>(typed_tuple: TypedTupleExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value, Expr = SExprTE>,
+    Parser: ExprParser<SpannedExpr> + 'static,
+{
+    match typed_tuple.kind {
+        TypedTupleExprKind::Var(v) => ctx.var(&v).unwrap(),
+        TypedTupleExprKind::Literal(items) => {
+            let streams = items
+                .into_iter()
+                .map(|e| {
+                    <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
+                        e, ctx,
+                    )
+                })
+                .collect();
+            uc::tuple(streams)
+        }
+        TypedTupleExprKind::Default(e1, e2) => {
+            let e1 = eval_typed_tuple::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_tuple::<AC, Parser>(*e2, ctx);
+            uc::default(e1, e2)
+        }
+        TypedTupleExprKind::Update(e1, e2) => {
+            let e1 = eval_typed_tuple::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_tuple::<AC, Parser>(*e2, ctx);
+            uc::update(e1, e2)
+        }
+        TypedTupleExprKind::Latch(e1, e2) => {
+            let e1 = eval_typed_tuple::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_tuple::<AC, Parser>(*e2, ctx);
+            uc::latch(e1, e2)
+        }
+        TypedTupleExprKind::If(b, e1, e2) => {
+            let b = from_typed_stream::<PartialStreamValue<bool>>(
+                to_async_stream_bool::<AC, Parser>(*b, ctx),
+            );
+            let e1 = eval_typed_tuple::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_tuple::<AC, Parser>(*e2, ctx);
+            uc::if_stm(b, e1, e2)
+        }
+        TypedTupleExprKind::Init(e1, e2) => {
+            let e1 = eval_typed_tuple::<AC, Parser>(*e1, ctx);
+            let e2 = eval_typed_tuple::<AC, Parser>(*e2, ctx);
+            uc::init(e1, e2)
+        }
+        TypedTupleExprKind::SIndex(e, i) => {
+            let e = eval_typed_tuple::<AC, Parser>(*e, ctx);
+            uc::sindex(e, i)
+        }
+        TypedTupleExprKind::TGetTuple(e, idx) => {
+            uc::tget(eval_typed_tuple::<AC, Parser>(*e, ctx), idx)
+        }
+    }
+}
+
 fn eval_typed_map<AC, Parser>(typed_map: TypedMapExpr, ctx: &AC::Ctx) -> OutputStream<Value>
 where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
@@ -500,6 +1372,9 @@ where
         }
         TypedMapExprKind::SGetStruct(st, key) => {
             uc::mget(eval_typed_struct::<AC, Parser>(*st, ctx), key)
+        }
+        TypedMapExprKind::SGetTuple(tuple, idx) => {
+            uc::tget(eval_typed_tuple::<AC, Parser>(*tuple, ctx), idx)
         }
         TypedMapExprKind::LHeadList(inner_list) => {
             let inner_stream = eval_typed_list::<AC, Parser>(*inner_list, ctx);
@@ -652,6 +1527,10 @@ where
         SExprInt::SGetStruct(st, key) => {
             to_typed_partial_stream::<i64>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
         }
+        SExprInt::SGetTuple(tuple, idx) => to_typed_partial_stream::<i64>(uc::tget(
+            eval_typed_tuple::<AC, Parser>(tuple, ctx),
+            idx,
+        )),
     }
 }
 
@@ -767,6 +1646,10 @@ where
         SExprFloat::SGetStruct(st, key) => {
             to_typed_partial_stream::<f64>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
         }
+        SExprFloat::SGetTuple(tuple, idx) => to_typed_partial_stream::<f64>(uc::tget(
+            eval_typed_tuple::<AC, Parser>(tuple, ctx),
+            idx,
+        )),
     }
 }
 
@@ -862,6 +1745,10 @@ where
         SExprStr::SGetStruct(st, key) => to_typed_partial_stream::<String>(uc::mget(
             eval_typed_struct::<AC, Parser>(st, ctx),
             key,
+        )),
+        SExprStr::SGetTuple(tuple, idx) => to_typed_partial_stream::<String>(uc::tget(
+            eval_typed_tuple::<AC, Parser>(tuple, ctx),
+            idx,
         )),
     }
 }
@@ -960,6 +1847,18 @@ where
         SExprTE::Struct(e) => {
             to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_struct::<AC, Parser>(e, ctx)))
         }
+        SExprTE::Tuple(e) => {
+            to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_tuple::<AC, Parser>(e, ctx)))
+        }
+        SExprTE::Function(e) => to_typed_partial_stream::<bool>(uc::is_defined(
+            eval_typed_function::<AC, Parser>(e, ctx),
+        )),
+        SExprTE::Fold(e) => {
+            to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_fold::<AC, Parser>(e, ctx)))
+        }
+        SExprTE::Apply(e) => {
+            to_typed_partial_stream::<bool>(uc::is_defined(eval_typed_apply::<AC, Parser>(e, ctx)))
+        }
         SExprTE::Any(e) => {
             to_typed_partial_stream::<bool>(uc::is_defined(eval_dyn::<AC, Parser>(e, ctx)))
         }
@@ -984,6 +1883,18 @@ where
         }
         SExprTE::Struct(e) => {
             to_typed_partial_stream::<bool>(uc::when(eval_typed_struct::<AC, Parser>(e, ctx)))
+        }
+        SExprTE::Tuple(e) => {
+            to_typed_partial_stream::<bool>(uc::when(eval_typed_tuple::<AC, Parser>(e, ctx)))
+        }
+        SExprTE::Function(e) => {
+            to_typed_partial_stream::<bool>(uc::when(eval_typed_function::<AC, Parser>(e, ctx)))
+        }
+        SExprTE::Fold(e) => {
+            to_typed_partial_stream::<bool>(uc::when(eval_typed_fold::<AC, Parser>(e, ctx)))
+        }
+        SExprTE::Apply(e) => {
+            to_typed_partial_stream::<bool>(uc::when(eval_typed_apply::<AC, Parser>(e, ctx)))
         }
         SExprTE::Any(e) => {
             to_typed_partial_stream::<bool>(uc::when(eval_dyn::<AC, Parser>(e, ctx)))
@@ -1092,6 +2003,10 @@ where
         SExprBool::SGetStruct(st, key) => {
             to_typed_partial_stream::<bool>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
         }
+        SExprBool::SGetTuple(tuple, idx) => to_typed_partial_stream::<bool>(uc::tget(
+            eval_typed_tuple::<AC, Parser>(tuple, ctx),
+            idx,
+        )),
         SExprBool::MHasKeyMap(map, key) => to_typed_partial_stream::<bool>(uc::mhas_key(
             eval_typed_map::<AC, Parser>(map, ctx),
             key,
@@ -1179,6 +2094,9 @@ where
         }
         SExprUnit::SGetStruct(st, key) => {
             to_typed_partial_stream::<()>(uc::mget(eval_typed_struct::<AC, Parser>(st, ctx), key))
+        }
+        SExprUnit::SGetTuple(tuple, idx) => {
+            to_typed_partial_stream::<()>(uc::tget(eval_typed_tuple::<AC, Parser>(tuple, ctx), idx))
         }
     }
 }
