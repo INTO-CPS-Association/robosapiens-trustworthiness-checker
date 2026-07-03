@@ -42,6 +42,7 @@ pub async fn dummy_redis_sender(
 
     for message in messages.into_iter() {
         debug!(?message, ?channel, "Publishing message");
+        let message = serde_json5::to_string(&message)?;
         con.publish(&channel, message).await?;
     }
 
@@ -66,6 +67,7 @@ pub async fn dummy_redis_stream_sender(
 
     while let Some(message) = stream.next().await {
         debug!(?message, ?channel, "Publishing message");
+        let message = serde_json5::to_string(&message)?;
         con.publish(&channel, message).await?;
     }
 

@@ -93,8 +93,8 @@ mod integration_tests {
         (TickSender, smol::Task<anyhow::Result<()>>),
         (TickSender, smol::Task<anyhow::Result<()>>),
     ) {
-        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
-        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed_local());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed_local());
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
         let x_publisher_task = executor.spawn(with_timeout_res(
@@ -364,7 +364,7 @@ mod integration_tests {
         let runtime_task = executor.spawn(runtime.run());
 
         let values = vec![mstlo_mqtt_input(0, 7.0), mstlo_mqtt_input(10, 4.0)];
-        let (mut tick, publish_stream) = tick_stream(stream::iter(values.clone()).boxed());
+        let (mut tick, publish_stream) = tick_stream(stream::iter(values.clone()).boxed_local());
         let publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "mstlo_x_publisher".to_string(),
@@ -479,8 +479,8 @@ mod integration_tests {
 
         let x_values = vec![mstlo_mqtt_input(0, 7.0)];
         let y_values = vec![mstlo_mqtt_input(0, 2.0)];
-        let (mut x_tick, x_stream) = tick_stream(stream::iter(x_values.clone()).boxed());
-        let (mut y_tick, y_stream) = tick_stream(stream::iter(y_values.clone()).boxed());
+        let (mut x_tick, x_stream) = tick_stream(stream::iter(x_values.clone()).boxed_local());
+        let (mut y_tick, y_stream) = tick_stream(stream::iter(y_values.clone()).boxed_local());
         let x_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "mstlo_multi_x_publisher".to_string(),
@@ -572,7 +572,7 @@ mod integration_tests {
             ])),
         ];
         let (mut payload_tick, payload_stream) =
-            tick_stream(stream::iter(payloads.clone()).boxed());
+            tick_stream(stream::iter(payloads.clone()).boxed_local());
         let publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 format!("payload_publisher_{client_suffix}"),
@@ -839,8 +839,8 @@ mod reconf_tests {
         (TickSender, smol::Task<anyhow::Result<()>>),
         (TickSender, smol::Task<anyhow::Result<()>>),
     ) {
-        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
-        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed_local());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed_local());
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
         let x_publisher_task = executor.spawn(with_timeout_res(
@@ -1168,7 +1168,7 @@ mod reconf_tests {
             })
             .to_string()
         })
-        .boxed();
+        .boxed_local();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -1405,7 +1405,7 @@ mod reconf_tests {
             })
             .to_string()
         })
-        .boxed();
+        .boxed_local();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -1584,7 +1584,7 @@ mod reconf_tests {
             })
             .to_string()
         })
-        .boxed();
+        .boxed_local();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -1787,7 +1787,7 @@ mod reconf_tests {
             })
             .to_string()
         })
-        .boxed();
+        .boxed_local();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -1960,7 +1960,7 @@ mod reconf_tests {
             })
             .to_string()
         })
-        .boxed();
+        .boxed_local();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),
@@ -2127,7 +2127,7 @@ mod reconf_tests {
             })
             .to_string()
         })
-        .boxed();
+        .boxed_local();
         let _reconf_publisher_task = executor.spawn(with_timeout_res(
             dummy_stream_mqtt_publisher(
                 "reconf_publisher".to_string(),

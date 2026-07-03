@@ -40,9 +40,9 @@ mod integration_tests {
         (TickSender, smol::Task<anyhow::Result<()>>),
         (TickSender, smol::Task<anyhow::Result<()>>),
     ) {
-        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
-        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
-        let (z_tick, z_pub_stream) = tick_stream(stream::iter(zs.clone()).boxed());
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed_local());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed_local());
+        let (z_tick, z_pub_stream) = tick_stream(stream::iter(zs.clone()).boxed_local());
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
         let x_publisher_task = executor.spawn(with_timeout_res(

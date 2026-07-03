@@ -3387,6 +3387,7 @@ dependencies = [
  "redis-macros",
  "serde",
  "serde_json",
+ "serde_json5",
  "smol",
  "smol-macros",
  "test-log",

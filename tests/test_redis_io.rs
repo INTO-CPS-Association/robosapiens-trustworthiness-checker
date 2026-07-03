@@ -55,8 +55,8 @@ mod integration_tests {
         (TickSender, smol::Task<anyhow::Result<()>>),
         (TickSender, smol::Task<anyhow::Result<()>>),
     ) {
-        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
-        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+        let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed_local());
+        let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed_local());
 
         // Spawn dummy MQTT publisher nodes and keep handles to wait for completion
         let x_publisher_task = executor.spawn(with_timeout_res(
@@ -605,7 +605,8 @@ mod integration_tests {
             let key = format!("wire_test_{}", uuid::Uuid::new_v4());
 
             // Use Redis SET command to store the value, then GET it back as a raw string
-            con.set(&key, &value).await?;
+            let value_json = serde_json5::to_string(&value)?;
+            con.set(&key, value_json).await?;
             let raw_string: String = con.get(&key).await?.unwrap_or_default();
 
             info!("Value: {:?}", value);
@@ -624,7 +625,8 @@ mod integration_tests {
             Value::List(vec![Value::Int(1), Value::Str("hello".into()), Value::Bool(true)].into());
 
         let complex_key = format!("complex_wire_test_{}", uuid::Uuid::new_v4());
-        con.set(&complex_key, &complex_value).await?;
+        let complex_value_json = serde_json5::to_string(&complex_value)?;
+        con.set(&complex_key, complex_value_json).await?;
         let complex_raw: String = con.get(&complex_key).await?.unwrap_or_default();
 
         info!("Complex value: {:?}", complex_value);

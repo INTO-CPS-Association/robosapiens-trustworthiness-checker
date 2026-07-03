@@ -1630,9 +1630,9 @@ mod integration_tests {
             (TickSender, smol::Task<anyhow::Result<()>>),
         ) {
             let (x_tick, x_pub_stream) =
-                tc_testutils::streams::tick_stream(stream::iter(xs.clone()).boxed());
+                tc_testutils::streams::tick_stream(stream::iter(xs.clone()).boxed_local());
             let (y_tick, y_pub_stream) =
-                tc_testutils::streams::tick_stream(stream::iter(ys.clone()).boxed());
+                tc_testutils::streams::tick_stream(stream::iter(ys.clone()).boxed_local());
 
             let x_publisher_task = executor.spawn(with_timeout_res(
                 dummy_stream_mqtt_publisher(
@@ -1671,9 +1671,9 @@ mod integration_tests {
             (TickSender, smol::Task<anyhow::Result<()>>),
         ) {
             let (x_tick, x_pub_stream) =
-                tc_testutils::streams::tick_stream(stream::iter(xs).boxed());
+                tc_testutils::streams::tick_stream(stream::iter(xs).boxed_local());
             let (y_tick, y_pub_stream) =
-                tc_testutils::streams::tick_stream(stream::iter(ys).boxed());
+                tc_testutils::streams::tick_stream(stream::iter(ys).boxed_local());
 
             let x_publisher_task = executor.spawn(with_timeout_res(
                 dummy_redis_stream_sender(

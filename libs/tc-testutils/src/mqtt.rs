@@ -68,7 +68,7 @@ pub async fn get_mqtt_outputs(
 
 /// Publishes all values from a Vec<Value>.
 #[instrument(level = tracing::Level::INFO)]
-pub async fn dummy_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>(
+pub async fn dummy_mqtt_publisher<T: Debug + Sized + Serialize + 'static>(
     client_name: String,
     topic: String,
     values: Vec<T>,
@@ -78,7 +78,7 @@ pub async fn dummy_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>
     publish_values(
         &client_name,
         &topic,
-        futures::stream::iter(values).boxed(),
+        futures::stream::iter(values).boxed_local(),
         len,
         port,
     )
@@ -87,7 +87,7 @@ pub async fn dummy_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>
 
 /// Publishes all values from an OutputStream<Value>.
 #[instrument(level = tracing::Level::INFO, skip(values))]
-pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Send + Serialize + 'static>(
+pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Serialize + 'static>(
     client_name: String,
     topic: String,
     values: OutputStream<T>,
@@ -98,7 +98,7 @@ pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Send + Serialize + '
 }
 
 /// Generic logic for the dummy publishers
-async fn publish_values<T: Debug + Sized + Send + Serialize + 'static>(
+async fn publish_values<T: Debug + Sized + Serialize + 'static>(
     client_name: &str,
     topic: &str,
     mut values: OutputStream<T>,

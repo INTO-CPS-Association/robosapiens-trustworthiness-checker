@@ -122,8 +122,8 @@ pub fn generate_xy_test_publisher_tasks_with_topics<T: Copy>(
     (TickSender, smol::Task<anyhow::Result<()>>),
     (TickSender, smol::Task<anyhow::Result<()>>),
 ) {
-    let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed());
-    let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed());
+    let (x_tick, x_pub_stream) = tick_stream(stream::iter(xs.clone()).boxed_local());
+    let (y_tick, y_pub_stream) = tick_stream(stream::iter(ys.clone()).boxed_local());
 
     let x_publisher_task = executor.spawn(with_timeout_res(
         ros_stream_publisher(
