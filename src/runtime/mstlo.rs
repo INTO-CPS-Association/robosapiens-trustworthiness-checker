@@ -13,7 +13,7 @@ use mstlo::{
 use smol::LocalExecutor;
 
 use crate::{
-    InputStream, OutputStream, Runtime, Value, VarName, core::OutputHandler,
+    ExecutionPolicy, InputStream, OutputStream, Runtime, Value, VarName, core::OutputHandler,
     lang::mstlo::MstloSpecification, runtime::builder::RuntimeBuilder, stream_utils,
 };
 
@@ -50,6 +50,7 @@ struct MstloRuntime<RS> {
     monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
     input_stream: InputStream<Value>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
+    execution_policy: ExecutionPolicy,
 }
 
 struct MstloInputState<'a, RS> {
@@ -87,9 +88,24 @@ pub struct MstloRuntimeBuilder {
     variables: Variables,
     input: Option<InputStream<Value>>,
     output: Option<Box<dyn OutputHandler<Val = Value>>>,
+    execution_policy: ExecutionPolicy,
 }
 
 impl MstloRuntimeBuilder {
+    pub fn execution_policy(mut self, execution_policy: ExecutionPolicy) -> Self {
+        self.execution_policy = execution_policy;
+        self
+    }
+
+    pub fn controlled_input(self, input: InputStream<Value>) -> (Self, crate::io::InputController) {
+        let (input, controller) = crate::io::controlled(input);
+        (
+            self.execution_policy(ExecutionPolicy::Synchronous)
+                .input(input),
+            controller,
+        )
+    }
+
     pub fn algorithm(mut self, algorithm: Algorithm) -> Self {
         self.algorithm = algorithm;
         self
@@ -129,6 +145,7 @@ impl MstloRuntimeBuilder {
         monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
         input_stream: InputStream<Value>,
         output_handler: Box<dyn OutputHandler<Val = Value>>,
+        execution_policy: ExecutionPolicy,
     ) -> Box<dyn Runtime>
     where
         RS: RobustnessSemantics + MstloOutputValue + Debug + 'static,
@@ -139,6 +156,7 @@ impl MstloRuntimeBuilder {
             monitors,
             input_stream,
             output_handler,
+            execution_policy,
         })
     }
 }
@@ -156,6 +174,7 @@ impl RuntimeBuilder<MstloSpecification, Value> for MstloRuntimeBuilder {
             variables: Variables::new(),
             input: None,
             output: None,
+            execution_policy: ExecutionPolicy::Buffered,
         }
     }
 
@@ -191,6 +210,7 @@ impl RuntimeBuilder<MstloSpecification, Value> for MstloRuntimeBuilder {
             let variables = self.variables;
             let input_stream = self.input.expect("MSTLO input stream must be set");
             let output_handler = self.output.expect("MSTLO output handler must be set");
+            let execution_policy = self.execution_policy;
 
             match semantics {
                 Semantics::DelayedQuantitative => {
@@ -209,7 +229,14 @@ impl RuntimeBuilder<MstloSpecification, Value> for MstloRuntimeBuilder {
                             (name, monitor)
                         })
                         .collect();
-                    Self::runtime(executor, input_vars, monitors, input_stream, output_handler)
+                    Self::runtime(
+                        executor,
+                        input_vars,
+                        monitors,
+                        input_stream,
+                        output_handler,
+                        execution_policy,
+                    )
                 }
                 Semantics::DelayedQualitative => {
                     let monitors = formulae
@@ -227,7 +254,14 @@ impl RuntimeBuilder<MstloSpecification, Value> for MstloRuntimeBuilder {
                             (name, monitor)
                         })
                         .collect();
-                    Self::runtime(executor, input_vars, monitors, input_stream, output_handler)
+                    Self::runtime(
+                        executor,
+                        input_vars,
+                        monitors,
+                        input_stream,
+                        output_handler,
+                        execution_policy,
+                    )
                 }
                 Semantics::EagerQualitative => {
                     let monitors = formulae
@@ -245,7 +279,14 @@ impl RuntimeBuilder<MstloSpecification, Value> for MstloRuntimeBuilder {
                             (name, monitor)
                         })
                         .collect();
-                    Self::runtime(executor, input_vars, monitors, input_stream, output_handler)
+                    Self::runtime(
+                        executor,
+                        input_vars,
+                        monitors,
+                        input_stream,
+                        output_handler,
+                        execution_policy,
+                    )
                 }
                 Semantics::RobustnessInterval => {
                     let monitors = formulae
@@ -263,7 +304,14 @@ impl RuntimeBuilder<MstloSpecification, Value> for MstloRuntimeBuilder {
                             (name, monitor)
                         })
                         .collect();
-                    Self::runtime(executor, input_vars, monitors, input_stream, output_handler)
+                    Self::runtime(
+                        executor,
+                        input_vars,
+                        monitors,
+                        input_stream,
+                        output_handler,
+                        execution_policy,
+                    )
                 }
             }
         })
@@ -501,12 +549,26 @@ where
                     match tick {
                         [event] => {
                             input.process_event(event)?;
+                            if self.execution_policy == ExecutionPolicy::Synchronous
+                                && !input.flush_pending().await
+                            {
+                                return Ok(());
+                            }
                         }
-                        events => input.process_step(events)?,
+                        events => {
+                            input.process_step(events)?;
+                            let flush = self.execution_policy == ExecutionPolicy::Synchronous
+                                || input.blocked;
+                            if flush && !input.flush_pending().await {
+                                return Ok(());
+                            }
+                        }
                     }
-                    if input.blocked && !input.flush_pending().await {
-                        return Ok(());
-                    }
+                }
+                if self.execution_policy == ExecutionPolicy::Buffered
+                    && !input.flush_pending().await
+                {
+                    return Ok(());
                 }
             }
             let _ = input.flush_pending().await;
@@ -637,6 +699,47 @@ mod tests {
         assert_eq!(outputs.len(), 2);
         assert_eq!(output_value(&outputs[0], "out"), (0, 2.0));
         assert_eq!(output_value(&outputs[1], "out"), (10, -1.0));
+    }
+
+    #[apply(async_test)]
+    async fn synchronous_controller_acknowledges_processed_mstlo_ticks(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let formula = MstloSpecification::single(
+            VarName::new("out"),
+            FormulaDefinition::GreaterThan("x", 5.0),
+        );
+        let input = static_input(BTreeMap::from([(
+            VarName::new("x"),
+            vec![compact_timed_value(0, 7.0), compact_timed_value(10, 4.0)],
+        )]))
+        .unwrap();
+        let output_var = VarName::new("out");
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            BTreeSet::from([output_var]),
+        ));
+        let mut outputs = output_handler.get_output();
+        let (builder, controller) = MstloRuntimeBuilder::new()
+            .executor(executor)
+            .model(formula)
+            .controlled_input(input);
+        let runtime = builder.output(output_handler).build().await;
+
+        let control = async move {
+            controller.advance().await.unwrap();
+            assert_eq!(
+                output_value(&outputs.next().await.unwrap(), "out"),
+                (0, 2.0)
+            );
+            controller.advance().await.unwrap();
+            assert_eq!(
+                output_value(&outputs.next().await.unwrap(), "out"),
+                (10, -1.0)
+            );
+        };
+        let (runtime, ()) = futures::join!(runtime.run(), control);
+        runtime.unwrap();
     }
 
     #[apply(async_test)]

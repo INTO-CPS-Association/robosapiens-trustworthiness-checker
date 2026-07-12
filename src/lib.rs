@@ -3,7 +3,8 @@
 pub mod benches_common;
 pub mod core;
 pub use core::{
-    InputBatch, InputEvent, InputStream, OutputStream, Runtime, Specification, Value, VarName,
+    ExecutionPolicy, InputBatch, InputEvent, InputStream, OutputStream, Runtime, Specification,
+    Value, VarName,
 };
 pub(crate) use core::{InputTickStream, into_tick_stream};
 pub mod cli;

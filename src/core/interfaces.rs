@@ -21,13 +21,25 @@ pub enum Semantics {
     RobustnessInterval,
 }
 
-/* Enum specifying which runtime is to be used */
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+/// Controls when a runtime may accept the next logical input tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
+pub enum ExecutionPolicy {
+    /// Permit runtime-specific pipelining and output batching.
+    #[default]
+    Buffered,
+    /// Complete the current tick's downstream computation before accepting the
+    /// next. This requires a runtime with a global logical-tick boundary.
+    Synchronous,
+}
+
+/* Runtime and supported execution policy. */
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RuntimeSpec {
     #[default]
     Async,
-    Dataflow,
+    Dataflow(ExecutionPolicy),
+    Mstlo(ExecutionPolicy),
     Distributed,
     SemiSync,
     ReconfSemiSync,

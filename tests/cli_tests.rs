@@ -783,6 +783,8 @@ mod integration_tests {
             "mstlo",
             "--semantics",
             "delayed-qualitative",
+            "--execution-policy",
+            "synchronous",
             "--mstlo-synchronization",
             "none",
         ])

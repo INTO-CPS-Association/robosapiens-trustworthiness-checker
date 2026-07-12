@@ -27,7 +27,7 @@ use trustworthiness_checker::{Value, VarName};
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, InputAggregationMode, Language, OutputMode, ParserMode,
+    Cli, InputAggregationMode, Language, OutputMode, ParserMode, resolve_runtime,
 };
 
 #[global_allocator]
@@ -44,6 +44,20 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let _log_guard = init_tracing(cli.log_file.as_deref())?;
     debug!("CLI arguments: {:?}", cli);
 
+    let runtime_was_explicit = matches
+        .value_source("runtime")
+        .is_some_and(|source| source == ValueSource::CommandLine);
+    let runtime = resolve_runtime(
+        cli.language,
+        cli.runtime,
+        cli.execution_policy,
+        runtime_was_explicit,
+    )
+    .unwrap_or_else(|error| {
+        cmd.error(ErrorKind::ArgumentConflict, error.to_string())
+            .exit()
+    });
+
     let builder = <GeneralRuntimeBuilder<LangSpecification, Value> as RuntimeBuilder<
         LangSpecification,
         Value,
@@ -56,26 +70,25 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.semantics(cli.semantics);
 
-    let builder = builder.runtime(cli.runtime);
+    let builder = builder.runtime(runtime);
 
     let parser_was_explicit = matches
         .value_source("parser")
         .is_some_and(|source| source == ValueSource::CommandLine);
 
-    let effective_parser = if matches!(cli.language, Language::DSRV)
-        && matches!(cli.runtime, RuntimeSpec::Distributed)
-    {
-        if parser_was_explicit && !matches!(cli.parser, ParserMode::Combinator) {
-            cmd.error(
-                ErrorKind::ArgumentConflict,
-                "--parser combinator is required when --runtime distributed is used",
-            )
-            .exit();
-        }
-        ParserMode::Combinator
-    } else {
-        cli.parser
-    };
+    let effective_parser =
+        if matches!(cli.language, Language::DSRV) && matches!(runtime, RuntimeSpec::Distributed) {
+            if parser_was_explicit && !matches!(cli.parser, ParserMode::Combinator) {
+                cmd.error(
+                    ErrorKind::ArgumentConflict,
+                    "--parser combinator is required when --runtime distributed is used",
+                )
+                .exit();
+            }
+            ParserMode::Combinator
+        } else {
+            cli.parser
+        };
 
     let builder = builder.parser(effective_parser);
 
@@ -96,7 +109,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode.clone())
             .maybe_mqtt_port(mqtt_port)
             .maybe_local_node(cli.local_node.clone())
-            .runtime(cli.runtime)
+            .runtime(runtime)
             .maybe_dist_constraints(dist_constraints.clone())
             .dist_constraint_solver(cli.dist_constraint_solver)
             .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
@@ -156,7 +169,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // For distributed runtime with distribution constraints, create a localised model
     // to restrict input subscriptions the constraint variables only (and their true input
     // dependencies).
-    let localized_model = if matches!(cli.runtime, RuntimeSpec::Distributed) {
+    let localized_model = if matches!(runtime, RuntimeSpec::Distributed) {
         match (&dist_constraints, &model) {
             (Some(constraints), LangSpecification::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
@@ -199,7 +212,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         }
         input_factory = input_factory.input_aggregation(aggregation)?;
     }
-    let builder = if matches!(cli.runtime, RuntimeSpec::ReconfSemiSync) {
+    let builder = if matches!(runtime, RuntimeSpec::ReconfSemiSync) {
         builder.input_factory(input_factory)?
     } else {
         builder.input(

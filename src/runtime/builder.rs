@@ -9,6 +9,7 @@ use mstlo::{Algorithm, SynchronizationStrategy, Variables};
 use smol::LocalExecutor;
 use tracing::{debug, warn};
 
+use crate::ExecutionPolicy;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
     InputStream, Runtime, Specification, UntypedDsrvSpecification, Value, VarName,
@@ -862,7 +863,11 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     input_factory: self.input_factory,
                     output: self.output,
                     output_handler_builder: self.output_handler_builder,
-                    runtime: RuntimeSpec::Async,
+                    runtime: match self.runtime {
+                        RuntimeSpec::Mstlo(policy) => RuntimeSpec::Mstlo(policy),
+                        RuntimeSpec::Async => RuntimeSpec::Mstlo(ExecutionPolicy::Buffered),
+                        runtime => panic!("MSTLO specification cannot use {runtime:?}"),
+                    },
                     semantics: self.semantics,
                     distribution_mode: DistributionMode::CentralMonitor,
                     distribution_mode_builder: None,
@@ -964,7 +969,7 @@ impl RuntimeBuilder<MstloSpecification, Value>
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
             distribution_mode_builder: None,
-            runtime: RuntimeSpec::Async,
+            runtime: RuntimeSpec::Mstlo(ExecutionPolicy::Buffered),
             semantics: Semantics::GradualTypedUntimed,
             var_msg_types: None,
             topic_mapping: None,
@@ -1031,9 +1036,13 @@ impl GeneralRuntimeBuilder<MstloSpecification, Value> {
             self.input_factory.is_none(),
             "InputStreamFactory is only supported by ReconfigurableSemiSync DSRV runtimes"
         );
+        let RuntimeSpec::Mstlo(execution_policy) = self.runtime else {
+            panic!("MSTLO builder requires RuntimeSpec::Mstlo")
+        };
         let mut builder = MstloRuntimeBuilder::new()
             .maybe_executor(self.executor)
             .maybe_model(self.model)
+            .execution_policy(execution_policy)
             .algorithm(self.mstlo_algorithm)
             .semantics(Self::mstlo_semantics(self.semantics))
             .synchronization_strategy(self.mstlo_synchronization_strategy)
@@ -1093,18 +1102,20 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                     UntimedDsrvSemantics<CombExprParser>,
                 >::new())
             }
-            (RuntimeSpec::Dataflow, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new())
+            (RuntimeSpec::Dataflow(policy), Semantics::Untimed, ParserMode::Lalr) => Box::new(
+                DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new().execution_policy(policy),
+            ),
+            (RuntimeSpec::Dataflow(policy), Semantics::TypedUntimed, ParserMode::Lalr) => {
+                Box::new(TypeCheckingBuilder(
+                    DataflowRuntimeBuilder::<TypedDsrvSpecification>::new()
+                        .execution_policy(policy),
+                ))
             }
-            (RuntimeSpec::Dataflow, Semantics::TypedUntimed, ParserMode::Lalr) => {
-                Box::new(TypeCheckingBuilder(DataflowRuntimeBuilder::<
-                    TypedDsrvSpecification,
-                >::new()))
-            }
-            (RuntimeSpec::Dataflow, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
-                Box::new(GradualTypeCheckingBuilder(DataflowRuntimeBuilder::<
-                    TypedDsrvSpecification,
-                >::new()))
+            (RuntimeSpec::Dataflow(policy), Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
+                Box::new(GradualTypeCheckingBuilder(
+                    DataflowRuntimeBuilder::<TypedDsrvSpecification>::new()
+                        .execution_policy(policy),
+                ))
             }
             (RuntimeSpec::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(SemiSyncRuntimeBuilder::<
@@ -1437,7 +1448,6 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                 self.topic_mapping.clone(),
                 self.var_msg_types.clone(),
             );
-
         // Construct inputs and outputs:
         // Skip this for ReconfigurableSemiSync runtime since we handle builders directly in the match above
         let builder = if self.runtime == RuntimeSpec::ReconfSemiSync {

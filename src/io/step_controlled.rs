@@ -10,8 +10,9 @@ pub struct InputController {
 }
 
 impl InputController {
-    /// Release one logical tick and wait until the runtime requests the next.
-    /// The acknowledgement means the runtime has requested the next tick.
+    /// Allow one logical tick and wait until the runtime is ready to accept
+    /// another. With [`crate::ExecutionPolicy::Synchronous`], readiness means
+    /// the released tick's downstream computation has completed.
     pub async fn advance(&self) -> anyhow::Result<()> {
         self.permits
             .send(())
@@ -23,9 +24,9 @@ impl InputController {
     }
 }
 
-/// Adds deterministic delivery control to a self-driving batch input stream.
+/// Adds deterministic tick-by-tick delivery control to an input stream.
 ///
-/// Unwrapped streams pay neither a branch nor storage cost for step control.
+/// Unwrapped streams pay neither a branch nor storage cost for input control.
 pub fn controlled<V: 'static>(inner: InputStream<V>) -> (InputStream<V>, InputController) {
     let (permits, permit_receiver) = async_channel::bounded(1);
     let (completed, completions) = async_channel::bounded(1);
@@ -52,14 +53,14 @@ pub fn controlled<V: 'static>(inner: InputStream<V>) -> (InputStream<V>, InputCo
 #[cfg(test)]
 mod tests {
     use futures::{FutureExt, StreamExt};
-    use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+    use std::{cell::RefCell, collections::BTreeMap, num::NonZeroUsize, rc::Rc};
 
-    use crate::{Value, VarName, io::map};
+    use crate::{InputBatch, InputEvent, InputStream, Value, VarName, io::map};
 
     use super::controlled;
 
     #[test]
-    fn releases_exactly_one_logical_batch_per_permit() {
+    fn releases_exactly_one_logical_tick_per_permit() {
         smol::block_on(async {
             let inner = map::input_stream(BTreeMap::from([(
                 VarName::new("x"),
@@ -83,6 +84,48 @@ mod tests {
                 assert_eq!(&*values.borrow(), &[Value::Int(1)]);
                 controller.advance().await.unwrap();
                 assert_eq!(&*values.borrow(), &[Value::Int(1), Value::Int(2)]);
+            };
+            futures::join!(drive, control);
+        });
+    }
+
+    #[test]
+    fn splits_packed_transport_batches_at_logical_tick_boundaries() {
+        smol::block_on(async {
+            let packed = InputBatch::packed_steps(
+                NonZeroUsize::new(2).unwrap(),
+                vec![
+                    InputEvent::new("x".into(), 1),
+                    InputEvent::new("y".into(), 2),
+                    InputEvent::new("x".into(), 3),
+                    InputEvent::new("y".into(), 4),
+                ],
+            )
+            .unwrap();
+            let input: InputStream<i32> = Box::pin(futures::stream::iter([Ok(packed)]));
+            let (mut batches, controller) = controlled(input);
+
+            let observed = Rc::new(RefCell::new(Vec::new()));
+            let consumed = observed.clone();
+            let drive = async move {
+                while let Some(batch) = batches.next().await {
+                    consumed.borrow_mut().push(
+                        batch
+                            .unwrap()
+                            .ticks()
+                            .next()
+                            .unwrap()
+                            .iter()
+                            .map(|event| event.value)
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            };
+            let control = async {
+                controller.advance().await.unwrap();
+                assert_eq!(&*observed.borrow(), &[vec![1, 2]]);
+                controller.advance().await.unwrap();
+                assert_eq!(&*observed.borrow(), &[vec![1, 2], vec![3, 4]]);
             };
             futures::join!(drive, control);
         });

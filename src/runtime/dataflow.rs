@@ -8,7 +8,7 @@ use futures::{FutureExt, StreamExt, select};
 use smol::LocalExecutor;
 use unsync::spsc;
 
-use crate::core::{InputStream, OutputHandler, OutputStream, Runtime, Value};
+use crate::core::{ExecutionPolicy, InputStream, OutputHandler, OutputStream, Runtime, Value};
 use crate::dataflow::{DataflowCompileError, DataflowMonitor};
 use crate::runtime::builder::RuntimeBuilder;
 use crate::stream_utils::channel_to_output_stream;
@@ -19,7 +19,8 @@ const DATAFLOW_OUTPUT_BATCH_CHANNEL_SIZE: usize = 1024;
 pub struct DataflowRuntime {
     input_stream: InputStream<Value>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
-    monitor: Result<crate::dataflow::DataflowMonitor, crate::dataflow::DataflowCompileError>,
+    monitor: Result<DataflowMonitor, DataflowCompileError>,
+    execution_policy: ExecutionPolicy,
 }
 
 pub struct DataflowRuntimeBuilder<S>
@@ -30,6 +31,29 @@ where
     model: Option<S>,
     input: Option<InputStream<Value>>,
     output: Option<Box<dyn OutputHandler<Val = Value>>>,
+    execution_policy: ExecutionPolicy,
+}
+
+impl<S> DataflowRuntimeBuilder<S>
+where
+    S: 'static,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompileError>,
+{
+    pub fn execution_policy(self, execution_policy: ExecutionPolicy) -> Self {
+        Self {
+            execution_policy,
+            ..self
+        }
+    }
+
+    pub fn controlled_input(self, input: InputStream<Value>) -> (Self, crate::io::InputController) {
+        let (input, controller) = crate::io::controlled(input);
+        (
+            self.execution_policy(ExecutionPolicy::Synchronous)
+                .input(input),
+            controller,
+        )
+    }
 }
 
 impl<S> RuntimeBuilder<S, Value> for DataflowRuntimeBuilder<S>
@@ -44,6 +68,7 @@ where
             model: None,
             input: None,
             output: None,
+            execution_policy: ExecutionPolicy::Buffered,
         }
     }
 
@@ -80,6 +105,7 @@ where
                 input_stream: self.input.expect("Input stream not supplied"),
                 output_handler: self.output.expect("Output handler not supplied"),
                 monitor,
+                execution_policy: self.execution_policy,
             }
         })
     }
@@ -106,7 +132,13 @@ impl Runtime for DataflowRuntime {
 
         self.output_handler.provide_streams(output_streams);
         let output_fut = self.output_handler.run().fuse();
-        let engine_fut = run_dataflow_engine(self.input_stream, monitor, output_senders).fuse();
+        let engine_fut = run_dataflow_engine(
+            self.input_stream,
+            monitor,
+            output_senders,
+            self.execution_policy,
+        )
+        .fuse();
         pin_mut!(output_fut, engine_fut);
 
         select! {
@@ -123,6 +155,7 @@ async fn run_dataflow_engine(
     mut input_stream: InputStream<Value>,
     monitor: DataflowMonitor,
     output_senders: Vec<spsc::Sender<Vec<Value>>>,
+    execution_policy: ExecutionPolicy,
 ) -> anyhow::Result<()> {
     let mut engine = DataflowEngine::new(monitor, output_senders);
     let mut pending = 0;
@@ -132,7 +165,9 @@ async fn run_dataflow_engine(
         for tick in batch.ticks() {
             engine.evaluate_tick(tick)?;
             pending += 1;
-            if pending == DATAFLOW_RUNTIME_BATCH_SIZE {
+            let flush = execution_policy == ExecutionPolicy::Synchronous
+                || pending == DATAFLOW_RUNTIME_BATCH_SIZE;
+            if flush {
                 if !engine.flush().await {
                     return Ok(());
                 }
@@ -282,6 +317,38 @@ mod tests {
         .await;
     }
 
+    #[apply(async_test)]
+    async fn dataflow_synchronous_controller_acknowledges_processed_ticks(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let mut spec_src = "in x\nout z\nz = x + 1";
+        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let mut output_handler = Box::new(ManualOutputHandler::new(
+            executor.clone(),
+            spec.output_vars.clone(),
+        ));
+        let mut outputs = output_handler.get_output();
+        let input = map::input_stream(BTreeMap::from([(
+            VarName::new("x"),
+            vec![Value::Int(1), Value::Int(2)],
+        )]));
+        let (builder, controller) = DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new()
+            .executor(executor)
+            .model(spec)
+            .controlled_input(input);
+        let runtime = builder.output(output_handler).build().await;
+
+        let control = async move {
+            controller.advance().await.unwrap();
+            let first = outputs.next().await.unwrap();
+            assert_eq!(first.get(&VarName::new("z")), Some(&Value::Int(2)));
+            controller.advance().await.unwrap();
+            let second = outputs.next().await.unwrap();
+            assert_eq!(second.get(&VarName::new("z")), Some(&Value::Int(3)));
+        };
+        let (result, ()) = futures::join!(runtime.run(), control);
+        result.unwrap();
+    }
     #[apply(async_test)]
     async fn dataflow_runtime_evaluates_recursive_accumulator(
         executor: Rc<LocalExecutor<'static>>,

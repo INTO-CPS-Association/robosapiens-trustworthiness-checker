@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, path::PathBuf};
 use clap::{Args, Parser, ValueEnum, builder::OsStr};
 use strum_macros::Display;
 
-use crate::core::{RuntimeSpec, Semantics};
+use crate::core::{ExecutionPolicy, RuntimeSpec, Semantics};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -26,6 +26,55 @@ pub enum Language {
     DSRV,
     /// Signal Temporal Logic properties monitored by the MSTLO runtime
     MSTLO,
+}
+
+/// Runtime engines selectable for DSRV specifications. MSTLO specifications
+/// select their dedicated runtime through `--language mstlo`.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum RuntimeKind {
+    #[default]
+    Async,
+    Dataflow,
+    Distributed,
+    SemiSync,
+    ReconfSemiSync,
+}
+
+impl RuntimeKind {
+    pub fn with_policy(self, policy: ExecutionPolicy) -> RuntimeSpec {
+        match self {
+            Self::Async => RuntimeSpec::Async,
+            Self::Dataflow => RuntimeSpec::Dataflow(policy),
+            Self::Distributed => RuntimeSpec::Distributed,
+            Self::SemiSync => RuntimeSpec::SemiSync,
+            Self::ReconfSemiSync => RuntimeSpec::ReconfSemiSync,
+        }
+    }
+}
+
+pub fn resolve_runtime(
+    language: Language,
+    runtime: RuntimeKind,
+    policy: ExecutionPolicy,
+    runtime_was_explicit: bool,
+) -> anyhow::Result<RuntimeSpec> {
+    match language {
+        Language::DSRV => {
+            if policy == ExecutionPolicy::Synchronous && runtime != RuntimeKind::Dataflow {
+                anyhow::bail!(
+                    "--execution-policy synchronous requires --runtime dataflow for DSRV specifications"
+                );
+            }
+            Ok(runtime.with_policy(policy))
+        }
+        Language::MSTLO => {
+            if runtime_was_explicit {
+                anyhow::bail!("--runtime is selected by --language mstlo; omit --runtime");
+            }
+            Ok(RuntimeSpec::Mstlo(policy))
+        }
+    }
 }
 
 /// Parser implementation strategies for specification parsing
@@ -265,8 +314,15 @@ pub struct Cli {
     pub language: Language,
     #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::GradualTypedUntimed)]
     pub semantics: Semantics,
-    #[arg(long, help = "Runtime system to use for execution", default_value_t = RuntimeSpec::Async)]
-    pub runtime: RuntimeSpec,
+    #[arg(long, help = "DSRV runtime system to use for execution", default_value_t = RuntimeKind::Async)]
+    pub runtime: RuntimeKind,
+
+    #[arg(
+        long,
+        help = "Input execution policy for Dataflow and MSTLO runtimes",
+        default_value_t = ExecutionPolicy::Buffered
+    )]
+    pub execution_policy: ExecutionPolicy,
 
     #[arg(long, help = "MSTLO monitor algorithm", default_value_t = MstloAlgorithm::Incremental)]
     pub mstlo_algorithm: MstloAlgorithm,
@@ -358,4 +414,56 @@ pub struct Cli {
         default_value = "/dist_graph"
     )]
     pub ros_dist_graph_topic: String,
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn dataflow_runtime_carries_its_execution_policy() {
+        assert_eq!(
+            RuntimeKind::Dataflow.with_policy(ExecutionPolicy::Synchronous),
+            RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous),
+        );
+    }
+
+    #[test]
+    fn runtimes_without_a_completion_boundary_do_not_carry_policy_state() {
+        assert_eq!(
+            RuntimeKind::Async.with_policy(ExecutionPolicy::Buffered),
+            RuntimeSpec::Async,
+        );
+        assert_eq!(
+            RuntimeKind::SemiSync.with_policy(ExecutionPolicy::Buffered),
+            RuntimeSpec::SemiSync,
+        );
+    }
+
+    #[test]
+    fn runtime_resolution_rejects_unsupported_synchronous_execution() {
+        assert!(
+            resolve_runtime(
+                Language::DSRV,
+                RuntimeKind::Async,
+                ExecutionPolicy::Synchronous,
+                false,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn runtime_resolution_selects_policy_bearing_mstlo() {
+        assert_eq!(
+            resolve_runtime(
+                Language::MSTLO,
+                RuntimeKind::Async,
+                ExecutionPolicy::Synchronous,
+                false,
+            )
+            .unwrap(),
+            RuntimeSpec::Mstlo(ExecutionPolicy::Synchronous),
+        );
+    }
 }
