@@ -6,6 +6,7 @@ use smol::LocalExecutor;
 use tracing::{debug_span, warn};
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
+use crate::io::InputAggregation;
 use crate::io::config::{MsgTypeMapping, TopicMapping};
 use crate::io::mqtt::MqttFactory;
 
@@ -38,17 +39,47 @@ enum InputFactoryKind {
     Manual(BTreeMap<VarName, Rc<Fanout<Value>>>),
 }
 
+impl InputFactoryKind {
+    fn produces_independent_events(&self) -> bool {
+        matches!(
+            self,
+            Self::Ros { .. } | Self::Mqtt { .. } | Self::Redis { .. }
+        )
+    }
+}
+
 /// Rebuildable input configuration for reconfigurable runtimes.
 ///
 /// Normal runtimes should receive a constructed [`InputStream`] directly.
 #[derive(Clone, Debug)]
 pub struct InputStreamFactory {
     kind: InputFactoryKind,
+    input_aggregation: Option<InputAggregation>,
 }
 
 impl InputStreamFactory {
     fn new(kind: InputFactoryKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            input_aggregation: None,
+        }
+    }
+
+    /// Aggregate independent events before delivering them to a runtime.
+    ///
+    /// File and manual sources already define simultaneous input ticks, so
+    /// changing their boundaries is rejected rather than silently ignored.
+    pub fn input_aggregation(mut self, aggregation: InputAggregation) -> anyhow::Result<Self> {
+        if aggregation.is_passthrough() {
+            self.input_aggregation = None;
+            return Ok(self);
+        }
+        anyhow::ensure!(
+            self.kind.produces_independent_events(),
+            "input aggregation requires an independent-event source; file and manual inputs define atomic ticks"
+        );
+        self.input_aggregation = Some(aggregation);
+        Ok(self)
     }
 
     pub fn file(path: String) -> Self {
@@ -383,6 +414,12 @@ impl InputStreamFactory {
                 tc::io::testing::from_streams(rxs)
             }
         };
+        if let Some(aggregation) = self.input_aggregation {
+            return Ok(crate::io::aggregation::aggregate_input_stream(
+                stream,
+                aggregation,
+            ));
+        }
         Ok(stream)
     }
 }
@@ -408,6 +445,20 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "file input cannot be used by a reconfigurable runtime"
+        );
+    }
+
+    #[test]
+    fn atomic_input_is_rejected_for_aggregation() {
+        let error = InputStreamFactory::file("trace.input".into())
+            .input_aggregation(InputAggregation::new(
+                std::time::Duration::from_millis(1),
+                crate::io::AggregationSemantics::PreserveTicks,
+            ))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "input aggregation requires an independent-event source; file and manual inputs define atomic ticks"
         );
     }
 

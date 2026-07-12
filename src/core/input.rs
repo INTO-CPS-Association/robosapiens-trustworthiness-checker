@@ -108,6 +108,15 @@ impl<V> InputBatch<V> {
         events.chunks(tick_width)
     }
 
+    /// Consume a batch of independent events, returning the atomic tick width
+    /// when the batch instead contains `AtomicTicks`.
+    pub(crate) fn into_independent_events(self) -> Result<Vec<InputEvent<V>>, NonZeroUsize> {
+        match self.representation {
+            InputBatchRepresentation::Events(events) => Ok(events),
+            InputBatchRepresentation::AtomicTicks { tick_width, .. } => Err(tick_width),
+        }
+    }
+
     pub(crate) fn into_ticks(self) -> impl Iterator<Item = Vec<InputEvent<V>>> {
         let (events, tick_width) = match self.representation {
             InputBatchRepresentation::Events(events) => (events, 1),
@@ -192,6 +201,20 @@ mod tests {
         let batch = InputBatch::<()>::events(Vec::new());
         assert_eq!(batch.ticks().count(), 0);
         assert_eq!(batch.into_ticks().count(), 0);
+    }
+
+    #[test]
+    fn only_event_batches_can_be_consumed_as_independent_events() {
+        let events = InputBatch::events(vec![InputEvent::new("x".into(), 1)])
+            .into_independent_events()
+            .unwrap();
+        assert_eq!(events, [InputEvent::new("x".into(), 1)]);
+
+        let tick_width = InputBatch::step(vec![InputEvent::new("x".into(), 1)])
+            .unwrap()
+            .into_independent_events()
+            .unwrap_err();
+        assert_eq!(tick_width, NonZeroUsize::MIN);
     }
 
     #[test]

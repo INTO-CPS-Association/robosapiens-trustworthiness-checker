@@ -539,8 +539,7 @@ mod tests {
         let cli = Cli::parse_from([
             "trustworthiness_checker",
             "model.dsrv",
-            "--input-file",
-            "input.txt",
+            "--mqtt-input",
             "--output-stdout",
             "--scheduling-mode",
             "ros",
@@ -596,6 +595,48 @@ mod tests {
 
         assert_eq!(cli.reconf_topic, "/reconf");
         assert!(cli.no_context_transfer);
+    }
+
+    #[test]
+    fn parses_input_aggregation() {
+        let cli = Cli::parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--input-file",
+            "input.txt",
+            "--output-stdout",
+            "--input-aggregation-delay-ms",
+            "4",
+            "--input-aggregation-mode",
+            "atomic-step",
+            "--input-aggregation-event-limit",
+            "32",
+        ]);
+
+        assert_eq!(cli.input_aggregation_delay_ms, Some(4));
+        assert_eq!(
+            cli.input_aggregation_mode,
+            Some(crate::cli::args::InputAggregationMode::AtomicStep)
+        );
+        assert_eq!(cli.input_aggregation_event_limit.unwrap().get(), 32);
+    }
+
+    #[test]
+    fn input_aggregation_event_limit_requires_a_delay() {
+        let error = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--mqtt-input",
+            "--output-stdout",
+            "--input-aggregation-event-limit",
+            "32",
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 
     #[cfg(feature = "ros")]

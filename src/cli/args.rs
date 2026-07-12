@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{num::NonZeroUsize, path::PathBuf};
 
 use clap::{Args, Parser, ValueEnum, builder::OsStr};
 use strum_macros::Display;
@@ -59,6 +59,13 @@ pub enum MstloSynchronizationStrategy {
     None,
     ZeroOrderHold,
     Linear,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum InputAggregationMode {
+    PreserveTicks,
+    AtomicStep,
 }
 
 /// Input source configuration for monitoring data
@@ -309,6 +316,27 @@ pub struct Cli {
 
     #[arg(long, help = "Port number for Redis server connection")]
     pub redis_port: Option<u16>,
+
+    #[arg(
+        long,
+        help = "Maximum aggregation delay for independent-event inputs, in milliseconds"
+    )]
+    pub input_aggregation_delay_ms: Option<u64>,
+
+    #[arg(
+        long,
+        value_enum,
+        requires = "input_aggregation_delay_ms",
+        help = "Whether aggregated events preserve logical ticks or form one atomic tick"
+    )]
+    pub input_aggregation_mode: Option<InputAggregationMode>,
+
+    #[arg(
+        long,
+        requires = "input_aggregation_delay_ms",
+        help = "Optional raw-event limit that emits an input aggregation early"
+    )]
+    pub input_aggregation_event_limit: Option<NonZeroUsize>,
 
     #[arg(
         long,

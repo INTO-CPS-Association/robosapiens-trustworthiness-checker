@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 // #![deny(warnings)]
 use anyhow::{self, Context};
@@ -15,7 +16,7 @@ use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::{DistributionModeBuilder, input_factory};
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
-use trustworthiness_checker::io::OutputHandlerBuilder;
+use trustworthiness_checker::io::{AggregationSemantics, InputAggregation, OutputHandlerBuilder};
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
@@ -25,7 +26,9 @@ use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
-use trustworthiness_checker::cli::args::{Cli, Language, OutputMode, ParserMode};
+use trustworthiness_checker::cli::args::{
+    Cli, InputAggregationMode, Language, OutputMode, ParserMode,
+};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -176,12 +179,26 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     );
 
     // Configure the input stream factory.
-    let input_factory = input_factory(
+    let mut input_factory = input_factory(
         cli.input_mode.clone(),
         executor.clone(),
         mqtt_port,
         redis_port,
     )?;
+    if let Some(delay_ms) = cli.input_aggregation_delay_ms {
+        let semantics = match cli
+            .input_aggregation_mode
+            .unwrap_or(InputAggregationMode::PreserveTicks)
+        {
+            InputAggregationMode::PreserveTicks => AggregationSemantics::PreserveTicks,
+            InputAggregationMode::AtomicStep => AggregationSemantics::CoalesceToAtomicStep,
+        };
+        let mut aggregation = InputAggregation::new(Duration::from_millis(delay_ms), semantics);
+        if let Some(event_limit) = cli.input_aggregation_event_limit {
+            aggregation = aggregation.with_event_limit(event_limit);
+        }
+        input_factory = input_factory.input_aggregation(aggregation)?;
+    }
     let builder = if matches!(cli.runtime, RuntimeSpec::ReconfSemiSync) {
         builder.input_factory(input_factory)?
     } else {
