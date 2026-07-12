@@ -8,11 +8,11 @@ use std::time::Duration;
 use tracing::{Level, debug, info, instrument};
 use uuid::Uuid;
 
-/* An interface for creating the MQTT client that can be used
- * across all whole application (i.e. sharing it between the input
- * input stream and the output handler). */
+/* Factory for the generic Paho client used by MQTT output, distribution,
+ * and the compatibility input backend. Input backend selection lives in
+ * `input_backend` because rumqttc does not implement this client interface. */
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MqttFactory {
     Paho,
 }

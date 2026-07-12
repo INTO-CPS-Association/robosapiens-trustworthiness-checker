@@ -197,6 +197,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         executor.clone(),
         mqtt_port,
         redis_port,
+        cli.mqtt_input_backend(),
     )?;
     if let Some(delay_ms) = cli.input_aggregation_delay_ms {
         let semantics = match cli

@@ -34,6 +34,7 @@ paho-mqtt = { version = "0.14.0", default-features = false, features = [
     "bundled",
     "ssl",
 ] }
+rumqttc = { version = "0.25.1", default-features = false }
 async-trait = "0.1.89"
 tracing = { version = "0.1.44", features = [
     "attributes",
@@ -57,7 +58,7 @@ smol = "2.0.2"
 async-unsync = "0.3.0"
 smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.2"
-async-compat = {version = "0.2.5", optional = true}
+async-compat = "0.2.5"
 tikv-jemallocator = "0.6.1"
 ecow = { version = "0.3.0", features = ["serde"] }
 async_cell = "0.2.3"
@@ -99,7 +100,7 @@ codegen-units = 16
 
 [features]
 ros = ["dep:r2r", "tc-testutils/ros"]
-testcontainers = ["tc-testutils/testcontainers", "async-compat"]
+testcontainers = ["tc-testutils/testcontainers"]
 span-tracing = []
 extended-proptests = []
 

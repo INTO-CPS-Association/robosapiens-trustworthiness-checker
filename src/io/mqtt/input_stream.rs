@@ -15,7 +15,6 @@ const QOS: i32 = 1;
 /// Connect and subscribe to MQTT topics, returning the resulting input stream.
 #[instrument(level = Level::INFO, skip(var_topics))]
 pub async fn input_stream(
-    factory: MqttFactory,
     host: &str,
     port: Option<u16>,
     var_topics: VarTopicMap,
@@ -29,7 +28,9 @@ pub async fn input_stream(
         None => format!("tcp://{host}"),
     };
     info!(%uri, topics = var_topics.len(), "Connecting MQTT input stream");
-    let (client, stream) = factory.connect_and_receive(&uri, max_attempts).await?;
+    let (client, stream) = MqttFactory::Paho
+        .connect_and_receive(&uri, max_attempts)
+        .await?;
     let stream: OutputStream<MqttMessage> = stream;
     let topics = var_topics.values().cloned().collect::<Vec<_>>();
     let qos = vec![QOS; topics.len()];
@@ -50,7 +51,7 @@ pub async fn input_stream(
     let cancellation_token = drop_guard.clone_tok();
     Ok(Box::pin(async_stream::try_stream! {
         let _drop_guard = drop_guard;
-        let mqtt_input_span = info_span!("MQTT input stream event_batch_logic");
+        let mqtt_input_span = info_span!("Paho MQTT input stream");
         let _enter = mqtt_input_span.enter();
         let mut mqtt_stream = stream;
         let var_topics_inverse = invert_topics(var_topics);
@@ -60,7 +61,7 @@ pub async fn input_stream(
             let msg = futures::select! {
                 msg = mqtt_stream.next().fuse() => msg,
                 _ = cancellation_token.cancelled().fuse() => {
-                    debug!("MQTT input stream: Event batch task cancelled");
+                    debug!("Paho MQTT input stream cancelled");
                     break;
                 }
             };
@@ -93,22 +94,6 @@ fn invert_topics(var_topics: VarTopicMap) -> InverseVarTopicMap {
         .collect()
 }
 
-fn parse_value(payload: &str) -> anyhow::Result<Value> {
-    let mut value: Value = serde_json::from_str(payload).or_else(|json_error| {
-        serde_json5::from_str(payload).map_err(|json5_error| {
-            anyhow::anyhow!(json5_error).context(format!(
-                "Failed to parse value {payload:?} sent from MQTT; JSON error was {json_error}",
-            ))
-        })
-    })?;
-    if let Value::Map(map) = &mut value
-        && let Some(inner) = map.remove("value")
-    {
-        value = inner;
-    }
-    Ok(value)
-}
-
 fn parse_event(
     msg: MqttMessage,
     var_topics_inverse: &InverseVarTopicMap,
@@ -116,7 +101,7 @@ fn parse_event(
     let Some(var) = var_topics_inverse.get(&msg.topic).cloned() else {
         return Ok(None);
     };
-    let value = parse_value(&msg.payload)?;
+    let value = super::input_backend::parse_value(msg.payload.as_bytes())?;
     Ok(Some(InputEvent::new(var, value)))
 }
 
@@ -124,13 +109,13 @@ fn parse_event(
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{MqttFactory, input_stream};
+    use super::input_stream;
 
     #[test]
     fn empty_input_needs_no_connection() {
         smol::block_on(async {
             assert!(
-                input_stream(MqttFactory::Paho, "localhost", None, BTreeMap::new(), 0)
+                input_stream("localhost", None, BTreeMap::new(), 0)
                     .await
                     .is_ok()
             );

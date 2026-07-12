@@ -370,6 +370,20 @@ pub struct Cli {
     #[arg(long, help = "Port number for MQTT broker connection")]
     pub mqtt_port: Option<u16>,
 
+    #[arg(
+        long = "mqtt-paho",
+        conflicts_with = "mqtt_rumqttc",
+        help = "Use the legacy Paho MQTT input backend"
+    )]
+    pub mqtt_paho: bool,
+
+    #[arg(
+        long = "mqtt-rumqttc",
+        conflicts_with = "mqtt_paho",
+        help = "Use the rumqttc MQTT input backend (default)"
+    )]
+    pub mqtt_rumqttc: bool,
+
     #[arg(long, help = "Port number for Redis server connection")]
     pub redis_port: Option<u16>,
 

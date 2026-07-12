@@ -16,7 +16,7 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::core::{RuntimeSpec, Semantics};
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
-    use trustworthiness_checker::io::mqtt::MqttFactory;
+    use trustworthiness_checker::io::mqtt::{MqttFactory, MqttInputBackend};
     use trustworthiness_checker::io::testing::ManualOutputHandler;
     use trustworthiness_checker::lang::mstlo::MstloSpecification;
     use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
@@ -34,11 +34,12 @@ mod integration_tests {
         core::Runtime,
         dsrv_fixtures::{float_pair_input_stream, spec_simple_add_monitor_typed_float},
         dsrv_specification,
-        io::mqtt::{self, MqttOutputHandler},
+        io::mqtt::{self, MqttMessage, MqttOutputHandler},
         runtime::RuntimeBuilder,
     };
 
     const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
+    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Paho;
 
     async fn start_mqtt_get_port() -> (Box<dyn std::any::Any>, u16) {
         let mqtt_server = start_mqtt().await;
@@ -239,7 +240,13 @@ mod integration_tests {
         ]);
 
         let mut input_stream = with_timeout_res(
-            mqtt::input_stream(MQTT_FACTORY, "localhost", Some(mqtt_port), var_topics, 0),
+            mqtt::input_stream(
+                MQTT_INPUT_BACKEND,
+                "localhost",
+                Some(mqtt_port),
+                var_topics,
+                0,
+            ),
             5,
             "input_stream_connect",
         )
@@ -261,6 +268,106 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
+    async fn test_add_monitor_rumqttc_input(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let xs = vec![Value::Int(1), Value::Int(2)];
+        let ys = vec![Value::Int(3), Value::Int(4)];
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
+        let var_topics = BTreeMap::from([
+            (VarName::new("x"), X_TOPIC.to_owned()),
+            (VarName::new("y"), Y_TOPIC.to_owned()),
+        ]);
+
+        let mut input_batches = with_timeout_res(
+            mqtt::input_stream(
+                MqttInputBackend::Rumqttc,
+                "localhost",
+                Some(mqtt_port),
+                var_topics,
+                3,
+            ),
+            5,
+            "rumqttc_input_stream_connect",
+        )
+        .await?;
+
+        let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
+            generate_test_publisher_tasks(executor, xs.clone(), ys.clone(), mqtt_port);
+        expect_events_serially(&mut x_tick, &mut y_tick, &mut input_batches, xs, ys).await?;
+
+        x_tick.send(()).await?;
+        y_tick.send(()).await?;
+        x_publisher_task.await?;
+        y_publisher_task.await?;
+        Ok(())
+    }
+
+    async fn publish_malformed_input(mqtt_port: u16, topic: &str) -> anyhow::Result<()> {
+        let publisher = MqttFactory::Paho
+            .connect(&format!("tcp://localhost:{mqtt_port}"))
+            .await?;
+        publisher
+            .publish(MqttMessage::new(
+                topic.to_owned(),
+                "not valid JSON".to_owned(),
+                1,
+            ))
+            .await?;
+        publisher.disconnect().await
+    }
+
+    #[apply(async_test)]
+    async fn paho_input_reports_malformed_payload() -> anyhow::Result<()> {
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
+        let mut batches = with_timeout_res(
+            mqtt::input_stream(
+                MqttInputBackend::Paho,
+                "localhost",
+                Some(mqtt_port),
+                BTreeMap::from([(VarName::new("x"), X_TOPIC.to_owned())]),
+                0,
+            ),
+            5,
+            "paho malformed input connect",
+        )
+        .await?;
+
+        publish_malformed_input(mqtt_port, X_TOPIC).await?;
+        let error = with_timeout(batches.next(), 5, "paho malformed input")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Paho input ended without reporting malformed data"))?
+            .unwrap_err();
+        assert!(error.to_string().contains("Failed to parse value"));
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn rumqttc_input_reports_malformed_payload() -> anyhow::Result<()> {
+        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
+        let mut batches = with_timeout_res(
+            mqtt::input_stream(
+                MqttInputBackend::Rumqttc,
+                "localhost",
+                Some(mqtt_port),
+                BTreeMap::from([(VarName::new("x"), X_TOPIC.to_owned())]),
+                3,
+            ),
+            5,
+            "rumqttc malformed input connect",
+        )
+        .await?;
+
+        publish_malformed_input(mqtt_port, X_TOPIC).await?;
+        let error = with_timeout(batches.next(), 5, "rumqttc malformed input")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("rumqttc input ended without reporting malformed data"))?
+            .unwrap_err();
+        assert!(error.to_string().contains("Failed to parse value"));
+        Ok(())
+    }
+
+    #[apply(async_test)]
     async fn test_mstlo_runtime_mqtt_input_output(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -271,7 +378,7 @@ mod integration_tests {
 
         let input_stream = with_timeout_res(
             mqtt::input_stream(
-                MQTT_FACTORY,
+                MQTT_INPUT_BACKEND,
                 "localhost",
                 Some(mqtt_port),
                 BTreeMap::from([(VarName::new("x"), MSTLO_IN_TOPIC.to_string())]),
@@ -367,7 +474,7 @@ mod integration_tests {
 
         let input_stream = with_timeout_res(
             mqtt::input_stream(
-                MQTT_FACTORY,
+                MQTT_INPUT_BACKEND,
                 "localhost",
                 Some(mqtt_port),
                 BTreeMap::from([
@@ -491,7 +598,13 @@ mod integration_tests {
 
         let var_topics = BTreeMap::from_iter([("payload".into(), "payload".to_string())]);
         let input_stream = with_timeout_res(
-            mqtt::input_stream(MQTT_FACTORY, "localhost", Some(mqtt_port), var_topics, 0),
+            mqtt::input_stream(
+                MQTT_INPUT_BACKEND,
+                "localhost",
+                Some(mqtt_port),
+                var_topics,
+                0,
+            ),
             5,
             "input_stream_connect",
         )
@@ -681,7 +794,13 @@ echoed = payload
         ]);
 
         let mut input_stream = with_timeout_res(
-            mqtt::input_stream(MQTT_FACTORY, "localhost", Some(mqtt_port), var_topics, 0),
+            mqtt::input_stream(
+                MQTT_INPUT_BACKEND,
+                "localhost",
+                Some(mqtt_port),
+                var_topics,
+                0,
+            ),
             5,
             "input_stream_connect",
         )

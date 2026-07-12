@@ -8,13 +8,11 @@ use tracing::{debug_span, warn};
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::InputAggregation;
 use crate::io::config::{MsgTypeMapping, TopicMapping};
-use crate::io::mqtt::MqttFactory;
+use crate::io::mqtt::MqttInputBackend;
 
 use crate::stream_utils::Fanout;
 use crate::{self as tc, OutputStream, Value};
 use crate::{InputStream, VarName};
-
-const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 #[derive(Debug, Clone)]
 enum InputFactoryKind {
@@ -29,6 +27,7 @@ enum InputFactoryKind {
     Mqtt {
         topics: Option<TopicMapping>,
         port: Option<u16>,
+        backend: MqttInputBackend,
     },
     Redis {
         topics: Option<TopicMapping>,
@@ -99,7 +98,19 @@ impl InputStreamFactory {
     }
 
     pub fn mqtt(topics: Option<TopicMapping>, port: Option<u16>) -> Self {
-        Self::new(InputFactoryKind::Mqtt { topics, port })
+        Self::mqtt_with_backend(topics, port, MqttInputBackend::default())
+    }
+
+    pub fn mqtt_with_backend(
+        topics: Option<TopicMapping>,
+        port: Option<u16>,
+        backend: MqttInputBackend,
+    ) -> Self {
+        Self::new(InputFactoryKind::Mqtt {
+            topics,
+            port,
+            backend,
+        })
     }
 
     pub fn redis(topics: Option<TopicMapping>, port: Option<u16>) -> Self {
@@ -366,7 +377,11 @@ impl InputStreamFactory {
                     anyhow::bail!("ROS support not enabled")
                 }
             }
-            InputFactoryKind::Mqtt { topics, port } => {
+            InputFactoryKind::Mqtt {
+                topics,
+                port,
+                backend,
+            } => {
                 let var_topics: BTreeMap<_, _> = match topics {
                     Some(topics) => Self::filter_cli_topics(topics.clone(), &input_vars)?,
                     None => input_vars
@@ -374,7 +389,7 @@ impl InputStreamFactory {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                tc::io::mqtt::input_stream(MQTT_FACTORY, MQTT_HOSTNAME, *port, var_topics, u32::MAX)
+                tc::io::mqtt::input_stream(*backend, MQTT_HOSTNAME, *port, var_topics, u32::MAX)
                     .await?
             }
             InputFactoryKind::Redis { topics, port } => {
@@ -460,6 +475,17 @@ mod tests {
             error.to_string(),
             "input aggregation requires an independent-event source; file and manual inputs define atomic ticks"
         );
+    }
+
+    #[test]
+    fn mqtt_input_uses_rumqttc_by_default() {
+        assert!(matches!(
+            InputStreamFactory::mqtt(None, None).kind,
+            InputFactoryKind::Mqtt {
+                backend: MqttInputBackend::Rumqttc,
+                ..
+            }
+        ));
     }
 
     #[apply(async_test)]

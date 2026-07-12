@@ -8,7 +8,9 @@ use crate::distributed::distribution_graphs::NodeName;
 use crate::io::OutputHandlerSpec;
 use crate::io::config::deserialisation::{json_to_topic_mapping, json_to_topic_msg_type_mapping};
 use crate::{
-    VarName, distributed::distribution_graphs::LabelledDistributionGraph, io::InputStreamFactory,
+    VarName,
+    distributed::distribution_graphs::LabelledDistributionGraph,
+    io::{InputStreamFactory, mqtt::MqttInputBackend},
     runtime::distributed::SchedulerCommunication,
 };
 
@@ -22,6 +24,7 @@ pub fn input_factory(
     executor: Rc<LocalExecutor<'static>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
+    mqtt_backend: MqttInputBackend,
 ) -> anyhow::Result<InputStreamFactory> {
     Ok(match input_mode {
         InputMode {
@@ -49,7 +52,7 @@ pub fn input_factory(
             })?;
             let topic_mapping = json_to_topic_mapping(&json_string)
                 .context("Input MQTT topic mapping file could not be parsed")?;
-            InputStreamFactory::mqtt(Some(topic_mapping), mqtt_port)
+            InputStreamFactory::mqtt_with_backend(Some(topic_mapping), mqtt_port, mqtt_backend)
         }
         InputMode {
             input_redis_file: Some(input_redis_file),
@@ -64,7 +67,7 @@ pub fn input_factory(
         }
         InputMode {
             mqtt_input: true, ..
-        } => InputStreamFactory::mqtt(None, mqtt_port),
+        } => InputStreamFactory::mqtt_with_backend(None, mqtt_port, mqtt_backend),
         InputMode {
             redis_input: true, ..
         } => InputStreamFactory::redis(None, redis_port),
@@ -122,6 +125,14 @@ impl From<OutputMode> for OutputHandlerSpec {
 }
 
 impl Cli {
+    pub fn mqtt_input_backend(&self) -> MqttInputBackend {
+        if self.mqtt_paho {
+            MqttInputBackend::Paho
+        } else {
+            MqttInputBackend::default()
+        }
+    }
+
     pub fn scheduler_communication(&self) -> SchedulerCommunication {
         match self.scheduling_mode {
             SchedulingType::Mock => SchedulerCommunication::Null,
@@ -532,6 +543,42 @@ mod tests {
             cli.scheduler_communication(),
             SchedulerCommunication::Null
         ));
+    }
+
+    #[test]
+    fn mqtt_input_backend_defaults_to_rumqttc() {
+        let cli = Cli::parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--mqtt-input",
+            "--output-stdout",
+        ]);
+        assert_eq!(cli.mqtt_input_backend(), MqttInputBackend::Rumqttc);
+    }
+
+    #[test]
+    fn mqtt_paho_flag_selects_paho_input_backend() {
+        let cli = Cli::parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--mqtt-input",
+            "--output-stdout",
+            "--mqtt-paho",
+        ]);
+        assert_eq!(cli.mqtt_input_backend(), MqttInputBackend::Paho);
+    }
+
+    #[test]
+    fn mqtt_input_backend_flags_conflict() {
+        let result = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--mqtt-input",
+            "--output-stdout",
+            "--mqtt-paho",
+            "--mqtt-rumqttc",
+        ]);
+        assert!(result.is_err());
     }
 
     #[test]

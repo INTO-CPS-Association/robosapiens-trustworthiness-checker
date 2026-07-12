@@ -12,7 +12,7 @@ mod integration_tests {
     use tracing::{info, warn};
     use trustworthiness_checker::core::Runtime;
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
-    use trustworthiness_checker::io::mqtt::MqttFactory;
+    use trustworthiness_checker::io::mqtt::{MqttFactory, MqttInputBackend};
     use trustworthiness_checker::{OutputStream, dsrv_fixtures::*};
     use trustworthiness_checker::{Specification, Value};
     use winnow::Parser;
@@ -28,6 +28,7 @@ mod integration_tests {
     };
 
     const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
+    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Paho;
 
     fn generate_test_publisher_tasks(
         executor: Rc<LocalExecutor<'static>>,
@@ -169,7 +170,7 @@ mod integration_tests {
         let mqtt_host = "localhost";
         let input_stream_1 = with_timeout_res(
             mqtt::input_stream(
-                MQTT_FACTORY,
+                MQTT_INPUT_BACKEND,
                 mqtt_host,
                 Some(mqtt_port),
                 var_in_topics_1.iter().cloned().collect(),
@@ -198,7 +199,7 @@ mod integration_tests {
 
         let input_stream_2 = with_timeout_res(
             mqtt::input_stream(
-                MQTT_FACTORY,
+                MQTT_INPUT_BACKEND,
                 mqtt_host,
                 Some(mqtt_port),
                 var_in_topics_2.iter().cloned().collect(),
@@ -306,10 +307,15 @@ mod integration_tests {
             .collect();
         warn!(?var_topics1, "Var topics 1");
 
-        let input_stream_1 =
-            mqtt::input_stream(MQTT_FACTORY, mqtt_host, Some(mqtt_port), var_topics1, 0)
-                .await
-                .expect("Failed to connect MQTT input stream 1");
+        let input_stream_1 = mqtt::input_stream(
+            MQTT_INPUT_BACKEND,
+            mqtt_host,
+            Some(mqtt_port),
+            var_topics1,
+            0,
+        )
+        .await
+        .expect("Failed to connect MQTT input stream 1");
 
         let var_topics_2 = local_spec2
             .input_vars()
@@ -318,10 +324,15 @@ mod integration_tests {
             .collect();
         warn!(?var_topics_2, "Var topics 2");
 
-        let input_stream_2 =
-            mqtt::input_stream(MQTT_FACTORY, mqtt_host, Some(mqtt_port), var_topics_2, 0)
-                .await
-                .expect("Failed to connect MQTT input stream 2");
+        let input_stream_2 = mqtt::input_stream(
+            MQTT_INPUT_BACKEND,
+            mqtt_host,
+            Some(mqtt_port),
+            var_topics_2,
+            0,
+        )
+        .await
+        .expect("Failed to connect MQTT input stream 2");
 
         let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
             .output_vars()
@@ -448,7 +459,7 @@ mod integration_tests {
         let mqtt_host = "localhost";
 
         let input_stream_1 = mqtt::input_stream(
-            MQTT_FACTORY,
+            MQTT_INPUT_BACKEND,
             mqtt_host,
             Some(mqtt_port),
             local_spec1
@@ -462,7 +473,7 @@ mod integration_tests {
         .expect("Failed to connect MQTT input stream 1");
 
         let input_stream_2 = mqtt::input_stream(
-            MQTT_FACTORY,
+            MQTT_INPUT_BACKEND,
             mqtt_host,
             Some(mqtt_port),
             local_spec2
