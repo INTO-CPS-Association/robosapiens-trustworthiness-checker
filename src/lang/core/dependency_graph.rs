@@ -235,9 +235,10 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
                 m.iter()
                     .for_each(|(_, v)| deps_impl(v, steps, map, current_node, current_idx));
             }
-            SExpr::Dynamic(sexpr, _)
-            | SExpr::RestrictedDynamic(sexpr, _, _)
-            | SExpr::Not(sexpr)
+            SExpr::Dynamic(runtime) | SExpr::Defer(runtime) => {
+                deps_impl(&runtime.source, steps, map, current_node, current_idx)
+            }
+            SExpr::Not(sexpr)
             | SExpr::Lambda(_, sexpr)
             | SExpr::Fix(sexpr)
             | SExpr::LHead(sexpr)
@@ -249,7 +250,6 @@ fn sexpr_dependencies(sexpr: &SExpr, root_name: &Node) -> DepGraph {
             | SExpr::LLen(sexpr)
             | SExpr::IsDefined(sexpr)
             | SExpr::When(sexpr)
-            | SExpr::Defer(sexpr, _, _)
             | SExpr::Sin(sexpr)
             | SExpr::Cos(sexpr)
             | SExpr::Tan(sexpr)

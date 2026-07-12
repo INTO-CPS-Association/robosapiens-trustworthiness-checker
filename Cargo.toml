@@ -92,6 +92,11 @@ codegen-units = 1
 opt-level = 3
 panic = "abort"
 
+[profile.bench-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 [features]
 ros = ["dep:r2r", "tc-testutils/ros"]
 testcontainers = ["tc-testutils/testcontainers", "async-compat"]

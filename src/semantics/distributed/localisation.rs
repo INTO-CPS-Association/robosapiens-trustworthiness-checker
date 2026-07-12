@@ -70,22 +70,16 @@ fn replace_var(var: &VarName, var_expr: &SpannedExpr, repl_expr: &SpannedExpr) -
             SExpr::SIndex(Box::new(replace_var(var, var_expr, sexpr)), *idx)
         }
         SExpr::Val(value) => SExpr::Val(value.clone()),
-        SExpr::Dynamic(sexpr, stream_type_ascription) => SExpr::Dynamic(
-            Box::new(replace_var(var, var_expr, sexpr)),
-            stream_type_ascription.clone(),
-        ),
-        SExpr::RestrictedDynamic(sexpr, stream_type_ascription, eco_vec) => {
-            SExpr::RestrictedDynamic(
-                Box::new(replace_var(var, var_expr, sexpr)),
-                stream_type_ascription.clone(),
-                eco_vec.clone(),
-            )
+        SExpr::Dynamic(runtime) => {
+            let mut runtime = runtime.clone();
+            runtime.source = Box::new(replace_var(var, var_expr, &runtime.source));
+            SExpr::Dynamic(runtime)
         }
-        SExpr::Defer(sexpr, stream_type_ascription, eco_vec) => SExpr::Defer(
-            Box::new(replace_var(var, var_expr, sexpr)),
-            stream_type_ascription.clone(),
-            eco_vec.clone(),
-        ),
+        SExpr::Defer(runtime) => {
+            let mut runtime = runtime.clone();
+            runtime.source = Box::new(replace_var(var, var_expr, &runtime.source));
+            SExpr::Defer(runtime)
+        }
         SExpr::Update(sexpr, sexpr1) => SExpr::Update(
             Box::new(replace_var(var, var_expr, sexpr)),
             Box::new(replace_var(var, var_expr, sexpr1)),
@@ -300,37 +294,26 @@ fn replace_aux_refs(
             *idx,
         ),
         SExpr::Val(value) => SExpr::Val(value.clone()),
-        SExpr::Dynamic(sexpr, stream_type_ascription) => SExpr::Dynamic(
-            Box::new(replace_aux_refs(
-                sexpr,
+        SExpr::Dynamic(runtime) => {
+            let mut runtime = runtime.clone();
+            runtime.source = Box::new(replace_aux_refs(
+                &runtime.source,
                 aux_defs,
                 expanded_aux_defs,
                 visiting,
-            )),
-            stream_type_ascription.clone(),
-        ),
-        SExpr::RestrictedDynamic(sexpr, stream_type_ascription, eco_vec) => {
-            SExpr::RestrictedDynamic(
-                Box::new(replace_aux_refs(
-                    sexpr,
-                    aux_defs,
-                    expanded_aux_defs,
-                    visiting,
-                )),
-                stream_type_ascription.clone(),
-                eco_vec.clone(),
-            )
+            ));
+            SExpr::Dynamic(runtime)
         }
-        SExpr::Defer(sexpr, stream_type_ascription, eco_vec) => SExpr::Defer(
-            Box::new(replace_aux_refs(
-                sexpr,
+        SExpr::Defer(runtime) => {
+            let mut runtime = runtime.clone();
+            runtime.source = Box::new(replace_aux_refs(
+                &runtime.source,
                 aux_defs,
                 expanded_aux_defs,
                 visiting,
-            )),
-            stream_type_ascription.clone(),
-            eco_vec.clone(),
-        ),
+            ));
+            SExpr::Defer(runtime)
+        }
         SExpr::Update(sexpr, sexpr1) => SExpr::Update(
             Box::new(replace_aux_refs(
                 sexpr,

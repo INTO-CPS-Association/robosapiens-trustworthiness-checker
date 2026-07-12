@@ -4,10 +4,48 @@
 
 use super::*;
 use crate::core::{StreamType, StreamTypeAscription};
-use crate::lang::dsrv::ast::{CompBinOp, SBinOp, SExpr, SpannedExpr, StrBinOp};
+use crate::lang::dsrv::ast::{
+    CompBinOp, RuntimeExpr, RuntimeScope, SBinOp, SExpr, SpannedExpr, StrBinOp,
+};
 use crate::{Value, VarName};
 use ecow::{EcoString, EcoVec};
 use std::collections::BTreeMap;
+
+fn validate_runtime_scope<E>(
+    runtime: &RuntimeExpr<E>,
+    ctx: &TypeInfo,
+    errs: &mut SemanticErrors,
+) -> Result<(), ()> {
+    let RuntimeScope::Explicit(vars, _) = &runtime.scope else {
+        return Ok(());
+    };
+    let mut valid = true;
+    let mut seen = std::collections::BTreeSet::new();
+    for var in vars {
+        if !seen.insert(var) {
+            errs.push(SemanticError::InvalidRuntimeScope(
+                format!("runtime scope contains duplicate variable `{var}`"),
+                None,
+            ));
+            valid = false;
+        }
+        if !ctx.contains_key(var) {
+            errs.push(SemanticError::InvalidRuntimeScope(
+                format!("runtime scope contains undeclared variable `{var}`"),
+                None,
+            ));
+            valid = false;
+        }
+        if runtime.scope.owner() == Some(var) {
+            errs.push(SemanticError::InvalidRuntimeScope(
+                format!("runtime scope for `{var}` cannot refer to itself"),
+                None,
+            ));
+            valid = false;
+        }
+    }
+    valid.then_some(()).ok_or(())
+}
 
 impl TypeCheckableHelper<SExprTE> for Value {
     fn type_check_raw(
@@ -1785,7 +1823,10 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
             }
             SExpr::SIndex(inner, idx) => (inner.as_ref(), *idx).type_check_raw(expected, ctx, errs),
             SExpr::Var(id) => id.type_check_raw(expected, ctx, errs),
-            SExpr::Dynamic(e, type_ascription) => {
+            SExpr::Dynamic(runtime) => {
+                validate_runtime_scope(runtime, ctx, errs)?;
+                let e = &runtime.source;
+                let type_ascription = &runtime.result_type;
                 let e_check = e.type_check_raw(None, ctx, errs)?;
 
                 // Ascriptions are required for defers in strictly-typed expressions
@@ -1817,123 +1858,36 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
 
                 // Use the type ascription to determine the output type
                 match &type_ascription {
-                    StreamType::Int => Ok(SExprTE::Int(SExprInt::Dynamic(
-                        Box::new(e_str),
-                        ctx.clone(),
-                    ))),
-                    StreamType::Float => Ok(SExprTE::Float(SExprFloat::Dynamic(
-                        Box::new(e_str),
-                        ctx.clone(),
-                    ))),
-                    StreamType::Str => Ok(SExprTE::Str(SExprStr::Dynamic(
-                        Box::new(e_str),
-                        ctx.clone(),
-                    ))),
-                    StreamType::Bool => Ok(SExprTE::Bool(SExprBool::Dynamic(
-                        Box::new(e_str),
-                        ctx.clone(),
-                    ))),
-                    StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::Dynamic(
-                        Box::new(e_str),
-                        ctx.clone(),
-                    ))),
-                    StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
-                        element_type: TCType::from_stream_type(inner),
-                        kind: TypedListExprKind::Dynamic(Box::new(e_str), ctx.clone()),
-                    })),
-                    StreamType::Map(inner) => Ok(SExprTE::Map(TypedMapExpr {
-                        value_type: TCType::from_stream_type(inner),
-                        kind: TypedMapExprKind::Dynamic(Box::new(e_str), ctx.clone()),
-                    })),
-                    StreamType::Struct(fields, allow_extra_fields) => {
-                        Ok(SExprTE::Struct(TypedStructExpr {
-                            typ_map: fields
-                                .iter()
-                                .map(|(n, t)| (n.clone(), TCType::from_stream_type(t)))
-                                .collect(),
-                            allow_extra_fields: *allow_extra_fields,
-                            kind: TypedStructExprKind::Dynamic(Box::new(e_str), ctx.clone()),
-                        }))
-                    }
-                    StreamType::Tuple(_) => {
-                        errs.push(SemanticError::UnsupportedExpression(
-                            "dynamic cannot produce a tuple stream".into(),
-                            None,
-                        ));
-                        Err(())
-                    }
-                    StreamType::Any => Ok(SExprTE::Any(SExprAny::Expr(SExpr::Val(Value::Unit)))),
-                    StreamType::Function(_, _) => {
-                        errs.push(SemanticError::UnsupportedExpression(
-                            "dynamic cannot produce a function stream".into(),
-                            None,
-                        ));
-                        Err(())
-                    }
-                }
-            }
-            SExpr::RestrictedDynamic(e, type_ascription, vs) => {
-                let e_check = e.type_check_raw(None, ctx, errs)?;
-
-                // Inner stream type must be Str
-                let e_str = match e_check {
-                    SExprTE::Str(e_str) => e_str,
-                    ty => {
-                        errs.push(SemanticError::type_error(
-                            TypeErrorKind::ExpectedDynamicString,
-                            format!(
-                                "Expected RestrictedDynamic to be applied to a Str, got {}",
-                                ty.display_with_type()
-                            ),
-                        ));
-                        return Err(());
-                    }
-                };
-
-                // Verify type ascription if provided - RestrictedDynamic only supports Str output
-                let type_ascription = match type_ascription {
-                    StreamTypeAscription::Ascribed(ta) => ta,
-                    StreamTypeAscription::Unascribed => {
-                        errs.push(SemanticError::MissingTypeAscription(
-                            "Type ascription required for dynamic".into(),
-                            None,
-                        ));
-                        return Err(());
-                    }
-                };
-
-                // Use the type ascription to determine the output type
-                match &type_ascription {
                     StreamType::Int => Ok(SExprTE::Int(SExprInt::RestrictedDynamic(
                         Box::new(e_str),
-                        vs.clone(),
+                        runtime.scope.clone(),
                         ctx.clone(),
                     ))),
                     StreamType::Float => Ok(SExprTE::Float(SExprFloat::RestrictedDynamic(
                         Box::new(e_str),
-                        vs.clone(),
+                        runtime.scope.clone(),
                         ctx.clone(),
                     ))),
                     StreamType::Str => Ok(SExprTE::Str(SExprStr::RestrictedDynamic(
                         Box::new(e_str),
-                        vs.clone(),
+                        runtime.scope.clone(),
                         ctx.clone(),
                     ))),
                     StreamType::Bool => Ok(SExprTE::Bool(SExprBool::RestrictedDynamic(
                         Box::new(e_str),
-                        vs.clone(),
+                        runtime.scope.clone(),
                         ctx.clone(),
                     ))),
                     StreamType::Unit => Ok(SExprTE::Unit(SExprUnit::RestrictedDynamic(
                         Box::new(e_str),
-                        vs.clone(),
+                        runtime.scope.clone(),
                         ctx.clone(),
                     ))),
                     StreamType::List(inner) => Ok(SExprTE::List(TypedListExpr {
                         element_type: TCType::from_stream_type(inner),
                         kind: TypedListExprKind::RestrictedDynamic(
                             Box::new(e_str),
-                            vs.clone(),
+                            runtime.scope.clone(),
                             ctx.clone(),
                         ),
                     })),
@@ -1941,7 +1895,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                         value_type: TCType::from_stream_type(inner),
                         kind: TypedMapExprKind::RestrictedDynamic(
                             Box::new(e_str),
-                            vs.clone(),
+                            runtime.scope.clone(),
                             ctx.clone(),
                         ),
                     })),
@@ -1954,7 +1908,7 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                             allow_extra_fields: *allow_extra_fields,
                             kind: TypedStructExprKind::RestrictedDynamic(
                                 Box::new(e_str),
-                                vs.clone(),
+                                runtime.scope.clone(),
                                 ctx.clone(),
                             ),
                         }))
@@ -1976,7 +1930,14 @@ impl TypeCheckableHelper<SExprTE> for SExpr {
                     }
                 }
             }
-            SExpr::Defer(e, type_ascription, vs) => {
+            SExpr::Defer(runtime) => {
+                validate_runtime_scope(runtime, ctx, errs)?;
+                let e = &runtime.source;
+                let type_ascription = &runtime.result_type;
+                let vs = runtime
+                    .scope
+                    .resolve(ctx)
+                    .unwrap_or_else(|| ctx.keys().cloned().collect());
                 let e_check = e.type_check_raw(None, ctx, errs)?;
 
                 // Ascriptions are required for defer in strictly-typed expressions
@@ -3628,8 +3589,9 @@ mod tests {
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Int(SExprInt::BinOp(
             Box::new(SExprInt::Val(PartialStreamValue::Known(1))),
-            Box::new(SExprInt::Dynamic(
+            Box::new(SExprInt::RestrictedDynamic(
                 Box::new(SExprStr::Var("x".into())),
+                RuntimeScope::Automatic(None),
                 expected_ctx.clone(),
             )),
             IntBinOp::Add,
@@ -3654,8 +3616,9 @@ mod tests {
         expected_ctx.insert("x".into(), StreamType::Str);
         let expected = Ok(SExprTE::Bool(SExprBool::BinOp(
             Box::new(SExprBool::Val(PartialStreamValue::Known(true))),
-            Box::new(SExprBool::Dynamic(
+            Box::new(SExprBool::RestrictedDynamic(
                 Box::new(SExprStr::Var("x".into())),
+                RuntimeScope::Automatic(None),
                 expected_ctx.clone(),
             )),
             BoolBinOp::And,
@@ -3702,20 +3665,22 @@ mod tests {
             Box::new(SExprV::RestrictedDynamic(
                 Box::new(SExprV::Var("x".into())),
                 StreamTypeAscription::Ascribed(StreamType::Str),
-                EcoVec::from(vec!["x".into(), "y".into()]),
+                EcoVec::from(vec!["x".into(), "y".into()]).into(),
             )),
             SBinOp::SOp(StrBinOp::Concat),
         );
         let mut ctx = TypeInfo::new();
         ctx.insert("x".into(), StreamType::Str);
+        ctx.insert("y".into(), StreamType::Str);
         let result = expr.type_check(&mut ctx);
         let mut expected_ctx = TypeInfo::new();
         expected_ctx.insert("x".into(), StreamType::Str);
+        expected_ctx.insert("y".into(), StreamType::Str);
         let expected = Ok(SExprTE::Str(SExprStr::BinOp(
             Box::new(SExprStr::Val(PartialStreamValue::Known("hello".into()))),
             Box::new(SExprStr::RestrictedDynamic(
                 Box::new(SExprStr::Var("x".into())),
-                EcoVec::from(vec!["x".into(), "y".into()]),
+                EcoVec::from(vec!["x".into(), "y".into()]).into(),
                 expected_ctx.clone(),
             )),
             StrBinOp::Concat,
@@ -4042,7 +4007,7 @@ mod tests {
                     let env_var: VarName = env_name.as_str().into();
                     let typed_dyn = SExprTE::Int(SExprInt::RestrictedDynamic(
                         Box::new(SExprStr::Var("s".into())),
-                        eco_vec![env_var],
+                        eco_vec![env_var].into(),
                         BTreeMap::new(),
                     ));
 

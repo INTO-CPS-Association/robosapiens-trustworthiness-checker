@@ -10,6 +10,100 @@ use std::{
     fmt::{Debug, Display},
 };
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum RuntimeScope {
+    Automatic(Option<VarName>),
+    Explicit(EcoVec<VarName>, Option<VarName>),
+}
+
+impl RuntimeScope {
+    pub fn explicit(vars: EcoVec<VarName>) -> Self {
+        Self::Explicit(vars, None)
+    }
+
+    pub fn explicit_vars(&self) -> Option<&EcoVec<VarName>> {
+        match self {
+            Self::Automatic(_) => None,
+            Self::Explicit(vars, _) => Some(vars),
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &VarName> {
+        self.explicit_vars().into_iter().flatten()
+    }
+
+    pub fn owner(&self) -> Option<&VarName> {
+        match self {
+            Self::Automatic(owner) | Self::Explicit(_, owner) => owner.as_ref(),
+        }
+    }
+
+    pub fn resolve<T>(&self, vars: &BTreeMap<VarName, T>) -> Option<EcoVec<VarName>> {
+        match self {
+            Self::Automatic(None) => None,
+            Self::Automatic(Some(owner)) => {
+                Some(vars.keys().filter(|var| *var != owner).cloned().collect())
+            }
+            Self::Explicit(vars, _) => Some(vars.clone()),
+        }
+    }
+}
+
+impl From<EcoVec<VarName>> for RuntimeScope {
+    fn from(vars: EcoVec<VarName>) -> Self {
+        Self::Explicit(vars, None)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct RuntimeExpr<E> {
+    pub source: Box<E>,
+    pub result_type: StreamTypeAscription,
+    pub scope: RuntimeScope,
+}
+
+impl<E> RuntimeExpr<E> {
+    pub fn automatic(source: Box<E>, result_type: StreamTypeAscription) -> Self {
+        Self {
+            source,
+            result_type,
+            scope: RuntimeScope::Automatic(None),
+        }
+    }
+
+    pub fn explicit(
+        source: Box<E>,
+        result_type: StreamTypeAscription,
+        vars: EcoVec<VarName>,
+    ) -> Self {
+        Self {
+            source,
+            result_type,
+            scope: RuntimeScope::Explicit(vars, None),
+        }
+    }
+}
+
+impl RuntimeExpr<SpannedExpr> {
+    fn fmt_with_name(&self, name: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let result_type = match &self.result_type {
+            StreamTypeAscription::Unascribed => String::new(),
+            StreamTypeAscription::Ascribed(result_type) => format!(": {result_type}"),
+        };
+        match &self.scope {
+            RuntimeScope::Automatic(_) => write!(f, "{name}({}{result_type})", self.source),
+            RuntimeScope::Explicit(vars, _) => {
+                let vars = vars
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{name}({}{result_type}, {{{vars}}})", self.source)
+            }
+        }
+    }
+}
+
 use crate::lang::dsrv::span::{Span, Spanned};
 
 // Numerical Binary Operations
@@ -227,10 +321,9 @@ pub enum SExpr {
     Var(VarName),
 
     // Dynamic, continuously updatable properties
-    Dynamic(Box<SpannedExpr>, StreamTypeAscription),
-    RestrictedDynamic(Box<SpannedExpr>, StreamTypeAscription, EcoVec<VarName>),
+    Dynamic(RuntimeExpr<SpannedExpr>),
     // Deferred properties
-    Defer(Box<SpannedExpr>, StreamTypeAscription, EcoVec<VarName>),
+    Defer(RuntimeExpr<SpannedExpr>),
     // Update between properties
     Update(Box<SpannedExpr>, Box<SpannedExpr>),
     // Default value for properties (replaces Deferred with an alternative
@@ -331,9 +424,7 @@ impl SExpr {
                 }
                 inputs
             }
-            Dynamic(e, _) => e.inputs(),
-            RestrictedDynamic(_, _, vs) => vs.iter().cloned().collect(),
-            Defer(e, _, _) => e.inputs(),
+            Dynamic(runtime) | Defer(runtime) => runtime.source.inputs(),
             Update(e1, e2) => {
                 let mut inputs = e1.inputs();
                 inputs.extend(e2.inputs());
@@ -418,152 +509,124 @@ pub struct UntypedDsrvSpecification {
 }
 
 impl UntypedDsrvSpecification {
-    // NOTE: This is a hack that ensures that when we create subcontexts for usage in DUPs,
-    // the subcontexts do not refer to the lhs of assignments.
-    // I.e., if we have an assignment `z = dynamic(s)` then the subcontext provided for
-    // `dynamic(s)` does not allow access to `z`.
-    // This is necessary in order to allow the clock to advance correctly.
-    // This is an incomplete solution as it unnecessarily restricts the DUP `s = "w[1]"`
-    // which should be legal.
-    //
-    // TODO: Get rid of this hack. What we need to do is:
-    // 1. Introduce dependency graphs as a general language feature that the contexts have access to
-    //    (have them as properties inside the Contexts)
-    // 2. When creating subcontexts, only allow variables that do not introduce
-    // zero-weight cycles.
-    //    2.5. Given the specification `y = dynamic(s); x = dynamic(s)`, this also needs to disallow
-    //    the `dynamic(s)` subcontext for `y` to access `x`, and disallow the
-    //    the `dynamic(s)` subcontext for `x` to access `y`.
-    // 3. Step 2. may require more information than just a dependency graph provides,
-    // as it might need information about subexpressions. E.g., something like
-    // `z = dynamic(s)` should disallow the context in `dynamic(s)` to access `z`,
-    // but something like `z = (dynamic(s))[1]` should allow the subcontext of `dynamic(s)`
-    // to access `z`, because the subcontext is delayed by the SIndex.
-    // 3.5. We discussed whether this should be in statements, live in Context, etc. Might require
-    //   a lot of thought.
-    // 4. Profit - this hack is no longer needed and we have a more correct solution
-    fn fix_dynamic(
-        input_vars: &BTreeSet<VarName>,
-        output_vars: &BTreeSet<VarName>,
+    /// Records which stream contains each runtime expression without rewriting
+    /// its declared scope. Scope resolution and cycle checks belong to semantic
+    /// validation, where the complete dependency graph is available.
+    fn annotate_runtime_owners(
+        _input_vars: &BTreeSet<VarName>,
+        _output_vars: &BTreeSet<VarName>,
         exprs: &BTreeMap<VarName, SpannedExpr>,
     ) -> BTreeMap<VarName, SpannedExpr> {
-        // Helper function to do the changes...
-        fn traverse_expr(expr: SpannedExpr, vars: &EcoVec<VarName>) -> SpannedExpr {
+        fn traverse_expr(expr: SpannedExpr, owner: &VarName) -> SpannedExpr {
             let span = expr.span; // Store the original span to reuse in the output expression
             let new_kind = match expr.node {
-                // March to node in the span and do the necessary changes
-                // Transform Dynamic into RestrictedDynamic without the lhs of the assignment
-                SExpr::Dynamic(sexpr, sta) => SExpr::RestrictedDynamic(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    sta,
-                    vars.clone(),
-                ),
-                SExpr::RestrictedDynamic(sexpr, sta, eco_vec) => {
-                    // Cannot contain anything that is not inside `vars`
-                    let new_restricted = eco_vec
-                        .iter()
-                        .filter(|&var| vars.contains(var))
-                        .cloned()
-                        .collect();
-                    SExpr::RestrictedDynamic(
-                        Box::new(traverse_expr(*sexpr, vars)),
-                        sta,
-                        new_restricted,
-                    )
+                SExpr::Dynamic(mut runtime) => {
+                    runtime.source = Box::new(traverse_expr(*runtime.source, owner));
+                    if matches!(runtime.scope, RuntimeScope::Automatic(_)) {
+                        runtime.scope = RuntimeScope::Automatic(Some(owner.clone()));
+                    } else if let RuntimeScope::Explicit(vars, _) = runtime.scope {
+                        runtime.scope = RuntimeScope::Explicit(vars, Some(owner.clone()));
+                    }
+                    SExpr::Dynamic(runtime)
                 }
-                SExpr::Defer(sexpr, sta, _) => {
-                    // Disallow Defer to use the lhs of the assignment
-                    SExpr::Defer(Box::new(traverse_expr(*sexpr, vars)), sta, vars.clone())
+                SExpr::Defer(mut runtime) => {
+                    runtime.source = Box::new(traverse_expr(*runtime.source, owner));
+                    if matches!(runtime.scope, RuntimeScope::Automatic(_)) {
+                        runtime.scope = RuntimeScope::Automatic(Some(owner.clone()));
+                    } else if let RuntimeScope::Explicit(vars, _) = runtime.scope {
+                        runtime.scope = RuntimeScope::Explicit(vars, Some(owner.clone()));
+                    }
+                    SExpr::Defer(runtime)
                 }
                 SExpr::Var(v) => SExpr::Var(v.clone()),
                 SExpr::Val(v) => SExpr::Val(v.clone()),
-                SExpr::When(sexpr) => SExpr::When(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::Not(sexpr) => SExpr::Not(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::When(sexpr) => SExpr::When(Box::new(traverse_expr(*sexpr, owner))),
+                SExpr::Not(sexpr) => SExpr::Not(Box::new(traverse_expr(*sexpr, owner))),
                 SExpr::Lambda(params, body) => {
-                    SExpr::Lambda(params, Box::new(traverse_expr(*body, vars)))
+                    SExpr::Lambda(params, Box::new(traverse_expr(*body, owner)))
                 }
                 SExpr::Apply(func, args) => {
                     let new_args = args
                         .into_iter()
-                        .map(|arg| traverse_expr(arg, vars))
+                        .map(|arg| traverse_expr(arg, owner))
                         .collect();
-                    SExpr::Apply(Box::new(traverse_expr(*func, vars)), new_args)
+                    SExpr::Apply(Box::new(traverse_expr(*func, owner)), new_args)
                 }
-                SExpr::Fix(func) => SExpr::Fix(Box::new(traverse_expr(*func, vars))),
+                SExpr::Fix(func) => SExpr::Fix(Box::new(traverse_expr(*func, owner))),
                 SExpr::Partial(func, args) => {
                     let new_args = args
                         .into_iter()
-                        .map(|arg| traverse_expr(arg, vars))
+                        .map(|arg| traverse_expr(arg, owner))
                         .collect();
-                    SExpr::Partial(Box::new(traverse_expr(*func, vars)), new_args)
+                    SExpr::Partial(Box::new(traverse_expr(*func, owner)), new_args)
                 }
-                SExpr::SIndex(sexpr, i) => SExpr::SIndex(Box::new(traverse_expr(*sexpr, vars)), i),
-                SExpr::Sin(sexpr) => SExpr::Sin(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::Cos(sexpr) => SExpr::Cos(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::Tan(sexpr) => SExpr::Tan(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::Abs(sexpr) => SExpr::Abs(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::SIndex(sexpr, i) => SExpr::SIndex(Box::new(traverse_expr(*sexpr, owner)), i),
+                SExpr::Sin(sexpr) => SExpr::Sin(Box::new(traverse_expr(*sexpr, owner))),
+                SExpr::Cos(sexpr) => SExpr::Cos(Box::new(traverse_expr(*sexpr, owner))),
+                SExpr::Tan(sexpr) => SExpr::Tan(Box::new(traverse_expr(*sexpr, owner))),
+                SExpr::Abs(sexpr) => SExpr::Abs(Box::new(traverse_expr(*sexpr, owner))),
                 SExpr::MonitoredAt(v, n) => SExpr::MonitoredAt(v, n),
                 SExpr::Dist(v, u) => SExpr::Dist(v, u),
-                SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::LHead(sexpr) => SExpr::LHead(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::LLen(sexpr) => SExpr::LLen(Box::new(traverse_expr(*sexpr, vars))),
-                SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(traverse_expr(*sexpr, vars))),
+                SExpr::LTail(sexpr) => SExpr::LTail(Box::new(traverse_expr(*sexpr, owner))),
+                SExpr::LHead(sexpr) => SExpr::LHead(Box::new(traverse_expr(*sexpr, owner))),
+                SExpr::LLen(sexpr) => SExpr::LLen(Box::new(traverse_expr(*sexpr, owner))),
+                SExpr::IsDefined(sexpr) => SExpr::IsDefined(Box::new(traverse_expr(*sexpr, owner))),
                 SExpr::BinOp(sexpr, sexpr1, sbin_op) => SExpr::BinOp(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr, owner)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
                     sbin_op.clone(),
                 ),
                 SExpr::Latch(sexpr1, sexpr2) => SExpr::Latch(
-                    Box::new(traverse_expr(*sexpr1, vars)),
-                    Box::new(traverse_expr(*sexpr2, vars)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
+                    Box::new(traverse_expr(*sexpr2, owner)),
                 ),
                 SExpr::Init(sexpr1, sexpr2) => SExpr::Init(
-                    Box::new(traverse_expr(*sexpr1, vars)),
-                    Box::new(traverse_expr(*sexpr2, vars)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
+                    Box::new(traverse_expr(*sexpr2, owner)),
                 ),
                 SExpr::LIndex(sexpr, sexpr1) => SExpr::LIndex(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr, owner)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
                 ),
                 SExpr::LAppend(sexpr, sexpr1) => SExpr::LAppend(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr, owner)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
                 ),
                 SExpr::LConcat(sexpr, sexpr1) => SExpr::LConcat(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr, owner)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
                 ),
                 SExpr::LMap(func, list) => SExpr::LMap(
-                    Box::new(traverse_expr(*func, vars)),
-                    Box::new(traverse_expr(*list, vars)),
+                    Box::new(traverse_expr(*func, owner)),
+                    Box::new(traverse_expr(*list, owner)),
                 ),
                 SExpr::LFilter(func, list) => SExpr::LFilter(
-                    Box::new(traverse_expr(*func, vars)),
-                    Box::new(traverse_expr(*list, vars)),
+                    Box::new(traverse_expr(*func, owner)),
+                    Box::new(traverse_expr(*list, owner)),
                 ),
                 SExpr::LFold(func, init, list) => SExpr::LFold(
-                    Box::new(traverse_expr(*func, vars)),
-                    Box::new(traverse_expr(*init, vars)),
-                    Box::new(traverse_expr(*list, vars)),
+                    Box::new(traverse_expr(*func, owner)),
+                    Box::new(traverse_expr(*init, owner)),
+                    Box::new(traverse_expr(*list, owner)),
                 ),
                 SExpr::Update(sexpr, sexpr1) => SExpr::Update(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr, owner)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
                 ),
                 SExpr::Default(sexpr, sexpr1) => SExpr::Default(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    Box::new(traverse_expr(*sexpr1, vars)),
+                    Box::new(traverse_expr(*sexpr, owner)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
                 ),
                 SExpr::If(sexpr, sexpr1, sexpr2) => SExpr::If(
-                    Box::new(traverse_expr(*sexpr, vars)),
-                    Box::new(traverse_expr(*sexpr1, vars)),
-                    Box::new(traverse_expr(*sexpr2, vars)),
+                    Box::new(traverse_expr(*sexpr, owner)),
+                    Box::new(traverse_expr(*sexpr1, owner)),
+                    Box::new(traverse_expr(*sexpr2, owner)),
                 ),
                 SExpr::List(vec) => {
                     //Added recursive traversal for lists.
                     let new_vec = vec
                         .into_iter()
-                        .map(|sexpr| traverse_expr(sexpr, vars))
+                        .map(|sexpr| traverse_expr(sexpr, owner))
                         .collect();
 
                     SExpr::List(new_vec)
@@ -571,7 +634,7 @@ impl UntypedDsrvSpecification {
                 SExpr::Tuple(vec) => {
                     let new_vec = vec
                         .into_iter()
-                        .map(|sexpr| traverse_expr(sexpr, vars))
+                        .map(|sexpr| traverse_expr(sexpr, owner))
                         .collect();
 
                     SExpr::Tuple(new_vec)
@@ -579,35 +642,33 @@ impl UntypedDsrvSpecification {
                 SExpr::Map(map) => {
                     let new_map = map
                         .into_iter()
-                        .map(|(k, v)| (k, traverse_expr(v, vars)))
+                        .map(|(k, v)| (k, traverse_expr(v, owner)))
                         .collect();
                     SExpr::Map(new_map)
                 }
                 SExpr::Struct(map) => {
-                    let m = map.clone(); // TODO: Delete when no
-                    // longer cloning and just iter() instead of into_iter()...
-                    m.into_iter().for_each(|(_, v)| {
-                        traverse_expr(v, vars);
-                    });
+                    let map = map
+                        .into_iter()
+                        .map(|(key, value)| (key, traverse_expr(value, owner)))
+                        .collect();
                     SExpr::Struct(map)
                 }
                 SExpr::ObjectLiteral(map) => {
-                    let m = map.clone(); // TODO: Delete when no
-                    // longer cloning and just iter() instead of into_iter()...
-                    m.into_iter().for_each(|(_, v)| {
-                        traverse_expr(v, vars);
-                    });
+                    let map = map
+                        .into_iter()
+                        .map(|(key, value)| (key, traverse_expr(value, owner)))
+                        .collect();
                     SExpr::ObjectLiteral(map)
                 }
-                SExpr::MGet(map, k) => SExpr::MGet(Box::new(traverse_expr(*map.clone(), vars)), k),
-                SExpr::SGet(st, k) => SExpr::SGet(Box::new(traverse_expr(*st.clone(), vars)), k),
+                SExpr::MGet(map, k) => SExpr::MGet(Box::new(traverse_expr(*map.clone(), owner)), k),
+                SExpr::SGet(st, k) => SExpr::SGet(Box::new(traverse_expr(*st.clone(), owner)), k),
                 SExpr::MInsert(map, k, v) => SExpr::MInsert(
-                    Box::new(traverse_expr(*map, vars)),
+                    Box::new(traverse_expr(*map, owner)),
                     k,
-                    Box::new(traverse_expr(*v, vars)),
+                    Box::new(traverse_expr(*v, owner)),
                 ),
-                SExpr::MRemove(map, k) => SExpr::MRemove(Box::new(traverse_expr(*map, vars)), k),
-                SExpr::MHasKey(map, k) => SExpr::MHasKey(Box::new(traverse_expr(*map, vars)), k),
+                SExpr::MRemove(map, k) => SExpr::MRemove(Box::new(traverse_expr(*map, owner)), k),
+                SExpr::MHasKey(map, k) => SExpr::MHasKey(Box::new(traverse_expr(*map, owner)), k),
             };
             Spanned {
                 node: new_kind,
@@ -615,18 +676,9 @@ impl UntypedDsrvSpecification {
             }
         }
 
-        let vars: EcoVec<VarName> = input_vars
-            .iter()
-            .cloned()
-            .chain(output_vars.iter().cloned())
-            .collect();
-
         exprs
             .iter()
-            .map(|(name, expr)| {
-                let vars: EcoVec<VarName> = vars.iter().filter(|&n| name != n).cloned().collect();
-                (name.clone(), traverse_expr(expr.clone(), &vars))
-            })
+            .map(|(name, expr)| (name.clone(), traverse_expr(expr.clone(), name)))
             .collect()
     }
 
@@ -654,7 +706,7 @@ impl UntypedDsrvSpecification {
             .into_iter()
             .map(|(name, expr)| (name, expr.into()))
             .collect();
-        let exprs = Self::fix_dynamic(&input_vars, &stream_vars, &exprs);
+        let exprs = Self::annotate_runtime_owners(&input_vars, &stream_vars, &exprs);
         UntypedDsrvSpecification {
             input_vars,
             output_vars,
@@ -773,27 +825,8 @@ impl Display for SpannedExpr {
             Dist(u, v) => {
                 write!(f, "dist({}, {})", u, v)
             }
-            Dynamic(e, sta) => match sta {
-                StreamTypeAscription::Unascribed => write!(f, "dynamic({})", e),
-                StreamTypeAscription::Ascribed(st) => write!(f, "dynamic({}: {})", e, st),
-            },
-            RestrictedDynamic(e, sta, vs) => {
-                let env = vs
-                    .iter()
-                    .map(|v| format!("{}", v))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                match sta {
-                    StreamTypeAscription::Unascribed => write!(f, "dynamic({}, {{{}}})", e, env,),
-                    StreamTypeAscription::Ascribed(sta) => {
-                        write!(f, "dynamic({}: {}, {{{}}})", e, sta, env)
-                    }
-                }
-            }
-            Defer(e, sta, _) => match sta {
-                StreamTypeAscription::Unascribed => write!(f, "defer({})", e),
-                StreamTypeAscription::Ascribed(sta) => write!(f, "defer({}: {})", e, sta),
-            },
+            Dynamic(runtime) => runtime.fmt_with_name("dynamic", f),
+            Defer(runtime) => runtime.fmt_with_name("defer", f),
             Update(e1, e2) => write!(f, "update({}, {})", e1, e2),
             Default(e, v) => write!(f, "default({}, {})", e, v),
             IsDefined(sexpr) => write!(f, "is_defined({})", sexpr),
@@ -1183,10 +1216,10 @@ mod tests {
     use proptest::prelude::*;
     use tracing::info;
 
-    use super::VarName;
     use super::generation::{
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
+    use super::{RuntimeExpr, RuntimeScope, SExpr as Expr, UntypedDsrvSpecification, VarName};
     use crate::core::{StreamType, StreamTypeAscription};
     use crate::dsrv_fixtures::{
         spec_simple_add_aux_monitor, spec_simple_add_aux_typed_monitor, spec_simple_add_monitor,
@@ -1198,6 +1231,60 @@ mod tests {
     use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
     use crate::lang::dsrv::span::strip_span;
     use ecow::{EcoVec, eco_vec};
+
+    #[test]
+    fn nested_runtime_expressions_are_annotated_with_their_owner() {
+        let owner = VarName::new("z");
+        let dynamic = Expr::Dynamic(RuntimeExpr::automatic(
+            Box::new(Expr::Var("source".into()).into()),
+            StreamTypeAscription::Ascribed(StreamType::Int),
+        ))
+        .into();
+        let defer = Expr::Defer(RuntimeExpr::explicit(
+            Box::new(Expr::Var("source".into()).into()),
+            StreamTypeAscription::Ascribed(StreamType::Int),
+            eco_vec!["source".into()],
+        ))
+        .into();
+        let expressions = BTreeMap::from([(
+            owner.clone(),
+            Expr::Tuple(
+                vec![
+                    Expr::Struct(BTreeMap::from([("dynamic".into(), dynamic)])).into(),
+                    Expr::ObjectLiteral(BTreeMap::from([("defer".into(), defer)])).into(),
+                ]
+                .into(),
+            )
+            .into(),
+        )]);
+
+        let annotated = UntypedDsrvSpecification::annotate_runtime_owners(
+            &BTreeSet::new(),
+            &BTreeSet::from([owner.clone()]),
+            &expressions,
+        );
+        let Expr::Tuple(containers) = &annotated[&owner].node else {
+            panic!("expected tuple containing nested runtime expressions");
+        };
+        let Expr::Struct(fields) = &containers[0].node else {
+            panic!("expected struct container");
+        };
+        let Expr::Dynamic(runtime) = &fields["dynamic"].node else {
+            panic!("expected dynamic expression");
+        };
+        assert_eq!(runtime.scope, RuntimeScope::Automatic(Some(owner.clone())));
+
+        let Expr::ObjectLiteral(fields) = &containers[1].node else {
+            panic!("expected object-literal container");
+        };
+        let Expr::Defer(runtime) = &fields["defer"].node else {
+            panic!("expected defer expression");
+        };
+        assert_eq!(
+            runtime.scope,
+            RuntimeScope::Explicit(eco_vec!["source".into()], Some(owner))
+        );
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
@@ -1328,6 +1415,11 @@ mod tests {
             Box::new(SExpr::Var("x".into())),
             StreamTypeAscription::Ascribed(StreamType::Int),
             EcoVec::new(),
+        ));
+        assert_display_roundtrips_both_parsers(&SExpr::Defer(
+            Box::new(SExpr::Var("x".into())),
+            StreamTypeAscription::Ascribed(StreamType::Int),
+            eco_vec!["x".into(), "y".into()],
         ));
     }
 

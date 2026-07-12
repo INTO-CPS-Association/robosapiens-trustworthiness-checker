@@ -43,6 +43,8 @@ pub trait StreamContext: 'static {
 
     fn restricted_subcontext(&self, vs: EcoVec<VarName>, history_length: usize) -> Self;
 
+    fn subcontext_excluding(&self, var: &VarName, history_length: usize) -> Self;
+
     /// Advance the clock used by the context by one step, letting all
     /// streams to progress (blocking)
     async fn tick(&mut self);

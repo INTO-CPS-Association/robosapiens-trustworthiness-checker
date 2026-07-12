@@ -6,7 +6,9 @@ use contracts::requires;
 use ecow::{EcoString, EcoVec};
 use itertools::Itertools;
 
-use super::ast::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, SExpr, SpannedExpr, StrBinOp};
+use super::ast::{
+    BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, RuntimeScope, SExpr, SpannedExpr, StrBinOp,
+};
 use crate::core::{PartialStreamValue, StreamType};
 use crate::{Specification, Value, VarName};
 use std::collections::{BTreeMap, BTreeSet};
@@ -220,7 +222,7 @@ pub enum SExprBool {
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -258,7 +260,7 @@ pub enum SExprInt {
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
 
     // List operations producing Int
     LLen(TypedListExpr),
@@ -309,7 +311,7 @@ pub enum SExprFloat {
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
 
     // List element extraction producing Float
     LHeadList(TypedListExpr),
@@ -350,7 +352,7 @@ pub enum SExprUnit {
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
 
     // List element extraction producing Unit
     LHeadList(TypedListExpr),
@@ -392,7 +394,7 @@ pub enum SExprStr {
     // Deferred and dynamic expressions
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
 
     // List element extraction producing Str
     LHeadList(TypedListExpr),
@@ -415,7 +417,7 @@ pub enum TypedListExprKind {
     Init(Box<TypedListExpr>, Box<TypedListExpr>),
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
     Literal(Vec<SExprTE>),
     LTail(Box<TypedListExpr>),
     LConcat(Box<TypedListExpr>, Box<TypedListExpr>),
@@ -587,7 +589,7 @@ pub enum TypedMapExprKind {
     SIndex(Box<TypedMapExpr>, u64),
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
     MInsert(Box<TypedMapExpr>, EcoString, Box<SExprTE>),
     MRemove(Box<TypedMapExpr>, EcoString),
     MGetMap(Box<TypedMapExpr>, EcoString),
@@ -682,7 +684,7 @@ pub enum TypedStructExprKind {
     SIndex(Box<TypedStructExpr>, u64),
     Defer(Box<SExprStr>, TypeInfo, EcoVec<VarName>),
     Dynamic(Box<SExprStr>, TypeInfo),
-    RestrictedDynamic(Box<SExprStr>, EcoVec<VarName>, TypeInfo),
+    RestrictedDynamic(Box<SExprStr>, RuntimeScope, TypeInfo),
     SUpdate(Box<TypedStructExpr>, EcoString, Box<SExprTE>),
     SGet(Box<TypedStructExpr>, EcoString),
     MGetMap(Box<TypedMapExpr>, EcoString),

@@ -12,6 +12,7 @@ use trustworthiness_checker::io::file::FileInputProvider;
 use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::lang::core::parser::SpecParser;
+use trustworthiness_checker::lang::dsrv::ast::RuntimeExpr;
 use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
@@ -1272,39 +1273,37 @@ s = latch(Struct("id": 1), Struct("id": 2))
     let mut ctx = BTreeMap::new();
     for (expr, expected) in [
         (
-            SExpr::Dynamic(
+            SExpr::Dynamic(RuntimeExpr::automatic(
                 Box::new(SExpr::Val(Value::Str("Map(\"x\": 1)".into())).into()),
                 StreamTypeAscription::Ascribed(StreamType::Map(Box::new(StreamType::Int))),
-            ),
+            )),
             StreamType::Map(Box::new(StreamType::Int)),
         ),
         (
-            SExpr::Dynamic(
+            SExpr::Dynamic(RuntimeExpr::automatic(
                 Box::new(SExpr::Val(Value::Str("Struct(\"id\": 1)".into())).into()),
                 StreamTypeAscription::Ascribed(StreamType::Struct(
                     vec![("id".into(), StreamType::Int)].into(),
                     false,
                 )),
-            ),
+            )),
             StreamType::Struct(vec![("id".into(), StreamType::Int)].into(), false),
         ),
         (
-            SExpr::Defer(
+            SExpr::Defer(RuntimeExpr::automatic(
                 Box::new(SExpr::Val(Value::Str("Map(\"x\": 1)".into())).into()),
                 StreamTypeAscription::Ascribed(StreamType::Map(Box::new(StreamType::Int))),
-                vec![].into(),
-            ),
+            )),
             StreamType::Map(Box::new(StreamType::Int)),
         ),
         (
-            SExpr::Defer(
+            SExpr::Defer(RuntimeExpr::automatic(
                 Box::new(SExpr::Val(Value::Str("Struct(\"id\": 1)".into())).into()),
                 StreamTypeAscription::Ascribed(StreamType::Struct(
                     vec![("id".into(), StreamType::Int)].into(),
                     false,
                 )),
-                vec![].into(),
-            ),
+            )),
             StreamType::Struct(vec![("id".into(), StreamType::Int)].into(), false),
         ),
     ] {

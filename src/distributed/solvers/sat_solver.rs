@@ -432,9 +432,6 @@ fn collect_monitored_streams(
         | SExpr::Lambda(_, e)
         | SExpr::Fix(e)
         | SExpr::SIndex(e, _)
-        | SExpr::Dynamic(e, _)
-        | SExpr::RestrictedDynamic(e, _, _)
-        | SExpr::Defer(e, _, _)
         | SExpr::IsDefined(e)
         | SExpr::When(e)
         | SExpr::LHead(e)
@@ -448,6 +445,9 @@ fn collect_monitored_streams(
         | SExpr::Cos(e)
         | SExpr::Tan(e)
         | SExpr::Abs(e) => collect_monitored_streams(*e, spec, streams),
+        SExpr::Dynamic(runtime) | SExpr::Defer(runtime) => {
+            collect_monitored_streams(*runtime.source, spec, streams)
+        }
         SExpr::Update(lhs, rhs)
         | SExpr::Default(lhs, rhs)
         | SExpr::Latch(lhs, rhs)

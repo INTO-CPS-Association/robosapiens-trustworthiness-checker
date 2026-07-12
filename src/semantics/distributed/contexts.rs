@@ -228,6 +228,20 @@ where
             .build()
     }
 
+    fn subcontext_excluding(&self, var: &VarName, history_length: usize) -> Self {
+        self.builder
+            .partial_clone()
+            .context(self.ctx.subcontext_excluding(var, history_length))
+            .graph_stream(
+                self.graph_manager
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .subscribe(),
+            )
+            .build()
+    }
+
     async fn tick(&mut self) {
         join!(
             self.ctx.tick(),

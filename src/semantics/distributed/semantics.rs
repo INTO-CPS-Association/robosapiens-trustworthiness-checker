@@ -71,17 +71,13 @@ where
                 panic!("function application requires typed DSRV semantics")
             }
             SExpr::Var(v) => mc::var::<AC>(ctx, v),
-            SExpr::Dynamic(e, _) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<AC, Parser>(ctx, e, None, 10)
+            SExpr::Dynamic(runtime) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*runtime.source, ctx);
+                mc::dynamic::<AC, Parser>(ctx, e, runtime.scope, 10)
             }
-            SExpr::RestrictedDynamic(e, _, vs) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<AC, Parser>(ctx, e, Some(vs), 10)
-            }
-            SExpr::Defer(e, _, vs) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::defer::<AC, Parser>(ctx, e, vs, 10)
+            SExpr::Defer(runtime) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*runtime.source, ctx);
+                mc::defer::<AC, Parser>(ctx, e, runtime.scope, 10)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);

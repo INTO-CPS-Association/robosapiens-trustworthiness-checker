@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::collections::BTreeMap;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dsrv::ast::{SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp, SpannedExpr, VarOrNodeName};
+use crate::lang::dsrv::ast::{RuntimeExpr, SExpr, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp, SpannedExpr, VarOrNodeName};
 use crate::core::{Value, VarName, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::span::{Spanned, Span};
 
@@ -195,25 +195,29 @@ ContainerExpr: SpannedExpr = {
 
 SpecialKeywords: SpannedExpr = {
   <l:@L> "dynamic" "(" <e: BoxNode<Expr>> "," <vs: VarSet> ")" <r:@R> =>
-       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Unascribed, vs), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::explicit(e, StreamTypeAscription::Unascribed, vs)), span: Span::new(l as u32, r as u32)},
   <l:@L> "dynamic" "(" <e: BoxNode<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
-       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Ascribed(t), vs), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::explicit(e, StreamTypeAscription::Ascribed(t), vs)), span: Span::new(l as u32, r as u32)},
   <l:@L> "dynamic" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
-       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Unascribed), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::automatic(e, StreamTypeAscription::Unascribed)), span: Span::new(l as u32, r as u32)},
   <l:@L> "dynamic" "(" <e: BoxNode<Expr>> <t: TypeAnno> ")" <r:@R> =>
-       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::automatic(e, StreamTypeAscription::Ascribed(t))), span: Span::new(l as u32, r as u32)},
   <l:@L> "eval" "(" <e: BoxNode<Expr>> "," <vs: VarSet> ")" <r:@R> =>
-       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Unascribed, vs), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::explicit(e, StreamTypeAscription::Unascribed, vs)), span: Span::new(l as u32, r as u32)},
   <l:@L> "eval" "(" <e: BoxNode<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
-       Spanned { node: SExpr::RestrictedDynamic(e, StreamTypeAscription::Ascribed(t), vs), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::explicit(e, StreamTypeAscription::Ascribed(t), vs)), span: Span::new(l as u32, r as u32)},
   <l:@L> "eval" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
-       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Unascribed), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::automatic(e, StreamTypeAscription::Unascribed)), span: Span::new(l as u32, r as u32)},
   <l:@L> "eval" "(" <e: BoxNode<Expr>> <t: TypeAnno> ")" <r:@R> =>
-       Spanned { node: SExpr::Dynamic(e, StreamTypeAscription::Ascribed(t)), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Dynamic(RuntimeExpr::automatic(e, StreamTypeAscription::Ascribed(t))), span: Span::new(l as u32, r as u32)},
+  <l:@L> "defer" "(" <e: BoxNode<Expr>> "," <vs: VarSet> ")" <r:@R> =>
+       Spanned { node: SExpr::Defer(RuntimeExpr::explicit(e, StreamTypeAscription::Unascribed, vs)), span: Span::new(l as u32, r as u32)},
+  <l:@L> "defer" "(" <e: BoxNode<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+       Spanned { node: SExpr::Defer(RuntimeExpr::explicit(e, StreamTypeAscription::Ascribed(t), vs)), span: Span::new(l as u32, r as u32)},
   <l:@L> "defer" "(" <e: BoxNode<Expr>> ")" <r:@R> =>
-       Spanned { node: SExpr::Defer(e, StreamTypeAscription::Unascribed, EcoVec::new()), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Defer(RuntimeExpr::automatic(e, StreamTypeAscription::Unascribed)), span: Span::new(l as u32, r as u32)},
   <l:@L> "defer" "(" <e: BoxNode<Expr>> <t: TypeAnno> ")" <r:@R> =>
-       Spanned { node: SExpr::Defer(e, StreamTypeAscription::Ascribed(t), EcoVec::new()), span: Span::new(l as u32, r as u32)},
+       Spanned { node: SExpr::Defer(RuntimeExpr::automatic(e, StreamTypeAscription::Ascribed(t))), span: Span::new(l as u32, r as u32)},
   <l:@L> "update" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>
        Spanned { node: SExpr::Update(e1, e2), span: Span::new(l as u32, r as u32)},
   <l:@L> "default" "(" <e1: BoxNode<Expr>> "," <e2: BoxNode<Expr>> ")" <r:@R> =>

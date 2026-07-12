@@ -201,4 +201,47 @@ mod tests {
             errors
         );
     }
+
+    #[test]
+    fn explicit_runtime_scopes_reject_duplicates_unknown_variables_and_self_references() {
+        for expression in [
+            "dynamic(source: Int, {x, x})",
+            "defer(source: Int, {x, x})",
+            "dynamic(source: Int, {missing})",
+            "defer(source: Int, {missing})",
+            "dynamic(source: Int, {z})",
+            "defer(source: Int, {z})",
+        ] {
+            let document = format!("in x: Int\nin source: Str\nout z: Int\nz = {expression}");
+            let mut combinator_source = document.as_str();
+            let mut lalr_source = document.as_str();
+            let specs = [
+                dsrv_specification(&mut combinator_source)
+                    .expect("combinator scope validation case should parse"),
+                LALRParser::parse(&mut lalr_source)
+                    .expect("LALR scope validation case should parse"),
+            ];
+            for spec in specs {
+                let errors =
+                    type_check(spec).expect_err("invalid runtime scope should be rejected");
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| matches!(error, SemanticError::InvalidRuntimeScope(_, _))),
+                    "expected a scope error for `{expression}`, got {errors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_defer_scope_type_checks_with_both_parsers() {
+        let document = "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int, {x, source})";
+        let mut source = document;
+        type_check(dsrv_specification(&mut source).unwrap())
+            .expect("combinator parser explicit defer should type-check");
+        let mut source = document;
+        type_check(LALRParser::parse(&mut source).unwrap())
+            .expect("LALR parser explicit defer should type-check");
+    }
 }

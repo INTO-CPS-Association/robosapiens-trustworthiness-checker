@@ -1184,6 +1184,17 @@ where
         self.subcontext_common(vs)
     }
 
+    fn subcontext_excluding(&self, excluded: &VarName, _history_length: usize) -> Self {
+        let vars = self
+            .var_managers
+            .borrow()
+            .keys()
+            .filter(|var| *var != excluded)
+            .cloned()
+            .collect();
+        self.subcontext_common(vars)
+    }
+
     async fn tick(&mut self) {
         // Tick is just a less informative version of forward_values but
         // the DUPs interface dictates that we need this

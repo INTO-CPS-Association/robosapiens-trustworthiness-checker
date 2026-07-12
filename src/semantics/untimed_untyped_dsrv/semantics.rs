@@ -132,11 +132,14 @@ fn subst_expr(expr: SpannedExpr, env: &UntypedFunctionEnv) -> SpannedExpr {
         SExpr::Cos(e) => SExpr::Cos(Box::new(subst_expr(*e, env))),
         SExpr::Tan(e) => SExpr::Tan(Box::new(subst_expr(*e, env))),
         SExpr::Abs(e) => SExpr::Abs(Box::new(subst_expr(*e, env))),
-        SExpr::Dynamic(e, t) => SExpr::Dynamic(Box::new(subst_expr(*e, env)), t),
-        SExpr::RestrictedDynamic(e, t, vs) => {
-            SExpr::RestrictedDynamic(Box::new(subst_expr(*e, env)), t, vs)
+        SExpr::Dynamic(mut runtime) => {
+            runtime.source = Box::new(subst_expr(*runtime.source, env));
+            SExpr::Dynamic(runtime)
         }
-        SExpr::Defer(e, t, vs) => SExpr::Defer(Box::new(subst_expr(*e, env)), t, vs),
+        SExpr::Defer(mut runtime) => {
+            runtime.source = Box::new(subst_expr(*runtime.source, env));
+            SExpr::Defer(runtime)
+        }
         SExpr::MonitoredAt(v, n) => SExpr::MonitoredAt(v, n),
         SExpr::Dist(a, b) => SExpr::Dist(a, b),
     };
@@ -565,17 +568,13 @@ where
                 debug!("Accessing variable: {:?}", v);
                 mc::var::<AC>(ctx, v)
             }
-            SExpr::Dynamic(e, _) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<AC, Parser>(ctx, e, None, 1)
+            SExpr::Dynamic(runtime) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*runtime.source, ctx);
+                mc::dynamic::<AC, Parser>(ctx, e, runtime.scope, 1)
             }
-            SExpr::RestrictedDynamic(e, _, vs) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::dynamic::<AC, Parser>(ctx, e, Some(vs), 1)
-            }
-            SExpr::Defer(e, _, vs) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                mc::defer::<AC, Parser>(ctx, e, vs, 1)
+            SExpr::Defer(runtime) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*runtime.source, ctx);
+                mc::defer::<AC, Parser>(ctx, e, runtime.scope, 1)
             }
             SExpr::Update(e1, e2) => {
                 let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);

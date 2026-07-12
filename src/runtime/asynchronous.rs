@@ -799,6 +799,17 @@ where
             .build()
     }
 
+    fn subcontext_excluding(&self, excluded: &VarName, history_length: usize) -> Self {
+        self.restricted_subcontext(
+            self.var_names
+                .iter()
+                .filter(|var| *var != excluded)
+                .cloned()
+                .collect(),
+            history_length,
+        )
+    }
+
     async fn tick(&mut self) {
         debug!(
             "Context[id={}]: Ticking context with {} var managers",

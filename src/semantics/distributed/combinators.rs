@@ -95,7 +95,12 @@ mod tests {
         let res_stream = crate::semantics::untimed_untyped_dsrv::combinators::dynamic::<
             TestDistConfig,
             LALRParser,
-        >(&ctx, e, None, 10);
+        >(
+            &ctx,
+            e,
+            crate::lang::dsrv::ast::RuntimeScope::Automatic(None),
+            10,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         assert_eq!(res, exp);

@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use ecow::EcoString;
 use ecow::EcoVec;
-use ecow::eco_vec;
 use tracing::debug;
 use winnow::Parser;
 use winnow::Result;
@@ -347,7 +346,7 @@ fn defer(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Defer(Box::new(e), ascription, eco_vec![]),
+        SExpr::Defer(RuntimeExpr::automatic(Box::new(e), ascription)),
     ))
 }
 
@@ -509,7 +508,7 @@ fn dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Dynamic(Box::new(e), type_ascription),
+        SExpr::Dynamic(RuntimeExpr::automatic(Box::new(e), type_ascription)),
     ))
 }
 
@@ -518,7 +517,7 @@ fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     let expr = alt((
         seq!((
             _: whitespace,
-            _: alt(("dynamic", "eval")),
+            alt(("dynamic", "eval", "defer")),
             _: loop_ms_or_lb_or_lc,
             _: '(',
             _: loop_ms_or_lb_or_lc,
@@ -530,12 +529,18 @@ fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
-        .map(|(e, var_set)| {
-            SExpr::RestrictedDynamic(Box::new(e), StreamTypeAscription::Unascribed, var_set)
+        .map(|(keyword, e, var_set)| {
+            let runtime =
+                RuntimeExpr::explicit(Box::new(e), StreamTypeAscription::Unascribed, var_set);
+            if keyword == "defer" {
+                SExpr::Defer(runtime)
+            } else {
+                SExpr::Dynamic(runtime)
+            }
         }),
         seq!((
             _: whitespace,
-            _: alt(("dynamic", "eval")),
+            alt(("dynamic", "eval", "defer")),
             _: loop_ms_or_lb_or_lc,
             _: '(',
             _: loop_ms_or_lb_or_lc,
@@ -548,8 +553,14 @@ fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
             _: loop_ms_or_lb_or_lc,
             _: ')',
         ))
-        .map(|(e, st, var_set)| {
-            SExpr::RestrictedDynamic(Box::new(e), StreamTypeAscription::Ascribed(st), var_set)
+        .map(|(keyword, e, st, var_set)| {
+            let runtime =
+                RuntimeExpr::explicit(Box::new(e), StreamTypeAscription::Ascribed(st), var_set);
+            if keyword == "defer" {
+                SExpr::Defer(runtime)
+            } else {
+                SExpr::Dynamic(runtime)
+            }
         }),
     ))
     .parse_next(s)?;
@@ -1901,10 +1912,9 @@ mod tests {
                 ),
                 (
                     "w".into(),
-                    SExpr::RestrictedDynamic(
+                    SExpr::Dynamic(
                         Box::new(SExpr::Var("s".into())),
                         StreamTypeAscription::Unascribed,
-                        eco_vec!["x".into(), "y".into(), "s".into(), "z".into()],
                     ),
                 ),
             ]),

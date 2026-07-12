@@ -8,7 +8,7 @@ use crate::core::{StreamType, StreamTypeAscription, Value, VarName};
 
 use crate::{
     SExpr,
-    lang::dsrv::ast::{SBinOp, SpannedExpr},
+    lang::dsrv::ast::{RuntimeExpr, RuntimeScope, SBinOp, SpannedExpr},
 };
 
 // Span struct designed by IWANABETHATGUY in the l-lang repository at https://github.com/IWANABETHATGUY/l-lang/blob/master/crates/parser/src/span.rs
@@ -158,21 +158,26 @@ impl SpannedExpr {
     where
         E: Into<SpannedExpr>,
     {
-        SExpr::Dynamic(Box::new((*e).into()), t).into()
+        SExpr::Dynamic(RuntimeExpr::automatic(Box::new((*e).into()), t)).into()
     }
 
     pub fn RestrictedDynamic<E>(e: Box<E>, t: StreamTypeAscription, vs: EcoVec<VarName>) -> Self
     where
         E: Into<SpannedExpr>,
     {
-        SExpr::RestrictedDynamic(Box::new((*e).into()), t, vs).into()
+        SExpr::Dynamic(RuntimeExpr::explicit(Box::new((*e).into()), t, vs)).into()
     }
 
     pub fn Defer<E>(e: Box<E>, t: StreamTypeAscription, vs: EcoVec<VarName>) -> Self
     where
         E: Into<SpannedExpr>,
     {
-        SExpr::Defer(Box::new((*e).into()), t, vs).into()
+        SExpr::Defer(if vs.is_empty() {
+            RuntimeExpr::automatic(Box::new((*e).into()), t)
+        } else {
+            RuntimeExpr::explicit(Box::new((*e).into()), t, vs)
+        })
+        .into()
     }
 
     pub fn Default<L, R>(l: Box<L>, r: Box<R>) -> Self
@@ -415,11 +420,25 @@ pub fn strip_span(e: &Spanned<SExpr>) -> String {
         SExpr::BinOp(l, r, op) => format!("BinOp({}, {}, {:?})", strip_span(l), strip_span(r), op,),
 
         SExpr::SIndex(e, idx) => format!("SIndex({}, {})", strip_span(e), idx),
-        SExpr::Dynamic(e, t) => format!("Dynamic({}, {:?})", strip_span(e), t),
-        SExpr::RestrictedDynamic(e, t, vs) => {
-            format!("RestrictedDynamic({}, {:?}, {:?})", strip_span(e), t, vs)
-        }
-        SExpr::Defer(e, t, vs) => format!("Defer({}, {:?}, {:?})", strip_span(e), t, vs),
+        SExpr::Dynamic(runtime) => match &runtime.scope {
+            RuntimeScope::Automatic(_) => format!(
+                "Dynamic({}, {:?})",
+                strip_span(&runtime.source),
+                runtime.result_type
+            ),
+            RuntimeScope::Explicit(vars, _) => format!(
+                "RestrictedDynamic({}, {:?}, {:?})",
+                strip_span(&runtime.source),
+                runtime.result_type,
+                vars
+            ),
+        },
+        SExpr::Defer(runtime) => format!(
+            "Defer({}, {:?}, {:?})",
+            strip_span(&runtime.source),
+            runtime.result_type,
+            runtime.scope.explicit_vars().cloned().unwrap_or_default()
+        ),
         SExpr::Update(l, r) => format!("Update({}, {})", strip_span(l), strip_span(r)),
         SExpr::Default(l, r) => format!("Default({}, {})", strip_span(l), strip_span(r)),
         SExpr::IsDefined(e) => format!("IsDefined({})", strip_span(e)),
