@@ -21,7 +21,7 @@ use futures::{
 use std::fmt::Debug;
 use tracing::debug;
 
-fn stream_lift_base<T: StreamData>(
+pub(super) fn stream_lift_base<T: StreamData>(
     mut x_mon: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<T>> {
     Box::pin(stream! {
@@ -455,7 +455,7 @@ where
             match current {
                 PartialStreamValue::Deferred => {
                     // Keep the installed expression on the global timeline while propagating the
-                    // Deferred property value.
+                    // Deferred property value; see the untyped combinator for the semantic example.
                     subcontext.tick().await;
                     if let Some((_, eval_output_stream)) = &mut prev_data {
                         if eval_output_stream.next().await.is_none() {

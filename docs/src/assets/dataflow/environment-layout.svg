@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 335" role="img" aria-labelledby="environment-arrow-title environment-arrow-desc" style="width:100%;max-width:940px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="environment-arrow-title">Mapping inputs and computed streams through environment slots to outputs</title>
+<desc id="environment-arrow-desc">At tick two, input x occupies environment slot zero. Scaled, total, and alert write values to stable slots one through three. For the illustrated monitor output order, alert, total, and scaled project slots three, two, and one. Runtime scheduling may change executor order without changing these slots.</desc>
+<defs>
+  <marker id="environment-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Inputs, environment slots, and output projection (tick 2)</text>
+<text x="35" y="58" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Value source</text>
+<text x="350" y="58" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">shared environment row</text>
+<text x="720" y="58" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">illustrative output row</text>
+<rect x="35" y="75" width="225" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="147" y="101" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">input[0]: x = 8</text>
+<rect x="35" y="130" width="225" height="42" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="147" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">1. scaled -&gt; 16</text>
+<rect x="35" y="185" width="225" height="42" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="147" y="211" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">2. total -&gt; 24</text>
+<rect x="35" y="240" width="225" height="42" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="147" y="266" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">3. alert -&gt; true</text>
+<rect x="350" y="75" width="230" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="465" y="101" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">slot 0: x = 8</text>
+<rect x="350" y="130" width="230" height="42" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="465" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">slot 1: scaled = 16</text>
+<rect x="350" y="185" width="230" height="42" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="465" y="211" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">slot 2: total = 24</text>
+<rect x="350" y="240" width="230" height="42" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="465" y="266" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">slot 3: alert = true</text>
+<rect x="720" y="75" width="175" height="42" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="807" y="101" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output[0]: alert</text>
+<rect x="720" y="157" width="175" height="42" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="807" y="183" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output[1]: total</text>
+<rect x="720" y="240" width="175" height="42" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="807" y="266" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output[2]: scaled</text>
+<line x1="260" y1="96" x2="350" y2="96" stroke="#65758b" stroke-width="1.8" marker-end="url(#environment-arrow)"/>
+<line x1="260" y1="151" x2="350" y2="151" stroke="#65758b" stroke-width="1.8" marker-end="url(#environment-arrow)"/>
+<line x1="260" y1="206" x2="350" y2="206" stroke="#65758b" stroke-width="1.8" marker-end="url(#environment-arrow)"/>
+<line x1="260" y1="261" x2="350" y2="261" stroke="#65758b" stroke-width="1.8" marker-end="url(#environment-arrow)"/>
+<path d="M 580 261 C 640 261, 655 96, 720 96" fill="none" stroke="#8055a3" stroke-width="2" marker-end="url(#environment-arrow)"/>
+<path d="M 580 206 C 640 206, 655 178, 720 178" fill="none" stroke="#b54708" stroke-width="2" marker-end="url(#environment-arrow)"/>
+<path d="M 580 151 C 640 151, 655 261, 720 261" fill="none" stroke="#147d64" stroke-width="2" marker-end="url(#environment-arrow)"/>
+<text x="720" y="310" text-anchor="start" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output EnvironmentIds = [3, 2, 1]</text>
+<text x="35" y="310" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">stable slots; executor order may change independently</text>
+</svg>

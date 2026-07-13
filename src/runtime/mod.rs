@@ -1,5 +1,6 @@
 pub mod asynchronous;
 pub mod builder;
+pub mod dataflow;
 pub mod distributed;
 pub use builder::GeneralRuntimeBuilder;
 pub use builder::RuntimeBuilder;

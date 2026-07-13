@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 230" role="img" aria-labelledby="defer-arrow-title defer-arrow-desc" style="width:100%;max-width:900px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="defer-arrow-title">Deferred definition lifecycle</title>
+<desc id="defer-arrow-desc">Defer propagates Deferred before activation, installs the first source string, ignores later strings, and ticks the installed executor even when the source is NoVal.</desc>
+<defs>
+  <marker id="defer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">defer: pin the first accepted definition</text>
+<rect x="35" y="45" width="140" height="50" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="105" y="75" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">source string</text>
+<rect x="235" y="39" width="320" height="62" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="395" y="68" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">parse -&gt; type/scope check -&gt; bind</text>
+<text x="395" y="86" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">reuse outer EnvironmentLayout</text>
+<rect x="625" y="39" width="210" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="730" y="68" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">PlanExecutor</text>
+<text x="730" y="86" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">fresh persistent state</text>
+<line x1="175" y1="70" x2="235" y2="70" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="555" y1="70" x2="625" y2="70" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<rect x="90" y="145" width="165" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="172" y="174" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Deferred</text>
+<text x="172" y="192" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">no active plan</text>
+<rect x="285" y="145" width="165" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="367" y="174" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x + 1&quot;</text>
+<text x="367" y="192" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">compile; install executor</text>
+<rect x="480" y="145" width="165" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="562" y="174" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x * 2&quot;</text>
+<text x="562" y="192" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">ignore; tick x + 1</text>
+<rect x="675" y="145" width="165" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="757" y="174" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">NoVal</text>
+<text x="757" y="192" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick x + 1; emit result</text>
+<line x1="255" y1="176" x2="285" y2="176" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="450" y1="176" x2="480" y2="176" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="645" y1="176" x2="675" y2="176" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+</svg>

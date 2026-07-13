@@ -453,12 +453,15 @@ where
     Parser: ExprParser<SpannedExpr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
 {
-    let mut func_stream =
-        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx);
-    let mut init_stream =
-        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(init_expr, ctx);
-    let mut list_stream =
-        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(list_expr, ctx);
+    let mut func_stream = mc::stream_lift_base(
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(func_expr, ctx),
+    );
+    let mut init_stream = mc::stream_lift_base(
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(init_expr, ctx),
+    );
+    let mut list_stream = mc::stream_lift_base(
+        <UntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(list_expr, ctx),
+    );
     Box::pin(stream! {
         while let (Some(func_value), Some(init), Some(list_value)) = (func_stream.next().await, init_stream.next().await, list_stream.next().await) {
             match (func_value, init, list_value) {

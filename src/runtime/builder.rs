@@ -29,6 +29,7 @@ use crate::{
     },
     lang::mstlo::MstloSpecification,
     runtime::{
+        dataflow::DataflowRuntimeBuilder,
         mstlo::MstloRuntimeBuilder,
         reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder,
         semi_sync::{SemiSyncContext, SemiSyncRuntimeBuilder},
@@ -1091,6 +1092,19 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                     ValueConfig,
                     UntimedDsrvSemantics<CombExprParser>,
                 >::new())
+            }
+            (RuntimeSpec::Dataflow, Semantics::Untimed, ParserMode::Lalr) => {
+                Box::new(DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new())
+            }
+            (RuntimeSpec::Dataflow, Semantics::TypedUntimed, ParserMode::Lalr) => {
+                Box::new(TypeCheckingBuilder(DataflowRuntimeBuilder::<
+                    TypedDsrvSpecification,
+                >::new()))
+            }
+            (RuntimeSpec::Dataflow, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
+                Box::new(GradualTypeCheckingBuilder(DataflowRuntimeBuilder::<
+                    TypedDsrvSpecification,
+                >::new()))
             }
             (RuntimeSpec::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
                 Box::new(SemiSyncRuntimeBuilder::<

@@ -1207,6 +1207,49 @@ pub mod generation {
                 })
             })
     }
+
+    pub fn arb_dsrv_spec() -> impl Strategy<Value = UntypedDsrvSpecification> {
+        (
+            prop::collection::btree_set("[a-h]", 0..5),
+            prop::collection::btree_set("[i-z]", 0..5),
+        )
+            .prop_flat_map(|(input_set, stream_set)| {
+                let input_vars = input_set
+                    .into_iter()
+                    .map(VarName::from)
+                    .collect::<BTreeSet<_>>();
+                let stream_vars = stream_set
+                    .into_iter()
+                    .map(VarName::from)
+                    .collect::<BTreeSet<_>>();
+                let mut vars = input_vars
+                    .iter()
+                    .chain(&stream_vars)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                // Keep expression generation defined for empty declarations and include an
+                // undeclared name so unavailable-reference handling is exercised routinely.
+                vars.push(VarName::new("unknown"));
+                let expression = prop_oneof![
+                    arb_boolean_sexpr(vars.clone()).boxed(),
+                    arb_int_sexpr(vars.clone()).boxed(),
+                    arb_float_sexpr(vars.clone()).boxed(),
+                    arb_string_sexpr(vars.clone()).boxed(),
+                    arb_mixed_sexpr(vars.clone()).boxed(),
+                ];
+
+                prop::collection::btree_map("[a-z]".prop_map(VarName::from), expression, 0..8)
+                    .prop_map(move |exprs| {
+                        UntypedDsrvSpecification::new(
+                            input_vars.clone(),
+                            stream_vars.clone(),
+                            exprs,
+                            BTreeMap::new(),
+                            Vec::new(),
+                        )
+                    })
+            })
+    }
 }
 
 #[cfg(test)]

@@ -17,6 +17,9 @@ mod gradual;
 mod strict;
 mod types;
 
+#[cfg(test)]
+mod property_tests;
+
 pub use gradual::*;
 pub use strict::*;
 pub use types::*;

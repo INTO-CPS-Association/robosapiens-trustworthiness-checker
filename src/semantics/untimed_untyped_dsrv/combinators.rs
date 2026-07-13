@@ -24,7 +24,7 @@ use tracing::info;
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 
-fn stream_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
+pub(crate) fn stream_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
     Box::pin(stream! {
         let mut last : Option<Value>  = None;
         while let Some(curr) = x_mon.next().await {
@@ -452,9 +452,13 @@ where
             // do not have a `prev_data.eval_output_stream` to evaluate from
             match current {
                 Value::Deferred => {
-                    // Keep the installed expression on the global timeline while propagating the
-                    // Deferred property value. Advance and discard its internal result so its
-                    // temporal state remains aligned.
+                    // A Deferred property controls the value emitted by `dynamic`, but it must not
+                    // pause the already installed expression. DynSRV evaluates the most recently
+                    // supplied property at the current global time. For example, with property
+                    // `x[1]`, inputs x = [1, 2, 3], and property values
+                    // ["x[1]", Deferred, "x[1]"], the final value is 2, not 1: the installed
+                    // expression consumes the middle tick even though `dynamic` emits Deferred.
+                    // Advance and discard that internal result to keep its temporal state aligned.
                     subcontext.tick().await;
                     if let Some(prev_data) = &mut prev_data {
                         if prev_data.eval_output_stream.next().await.is_none() {

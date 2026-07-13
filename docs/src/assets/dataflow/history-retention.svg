@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 885 255" role="img" aria-labelledby="history-arrow-title history-arrow-desc" style="width:100%;max-width:885px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="history-arrow-title">Bounded dataflow history and ownership</title>
+<desc id="history-arrow-desc">A three-entry ring for x indexed by three reads the oldest value before replacing it. Static and recursive delays belong to a PlanExecutor, while a dynamic delay belongs to the currently installed executor.</desc>
+<defs>
+  <marker id="history-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Bounded history ownership</text>
+<text x="35" y="58" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">x[3] before tick 4 push</text>
+<rect x="35" y="78" width="82" height="54" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="76" y="103" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">10</text>
+<text x="76" y="121" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">oldest</text>
+<rect x="127" y="78" width="82" height="54" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="168" y="110" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">20</text>
+<rect x="219" y="78" width="82" height="54" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="260" y="110" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">30</text>
+<rect x="35" y="168" width="110" height="54" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="90" y="193" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">x = 40</text>
+<text x="90" y="211" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">push here</text>
+<rect x="191" y="168" width="110" height="54" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="246" y="193" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">result = 10</text>
+<text x="246" y="211" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">read oldest</text>
+<line x1="90" y1="168" x2="76" y2="132" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
+<line x1="76" y1="132" x2="246" y2="168" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
+<line x1="340" y1="48" x2="340" y2="232" stroke="#a8b3bf" stroke-width="1"/>
+<text x="375" y="58" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Plan state</text>
+<rect x="375" y="78" width="175" height="54" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="462" y="103" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">PlanExecutor</text>
+<text x="462" y="121" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">owns DataflowState</text>
+<rect x="600" y="60" width="250" height="48" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="725" y="82" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Delay x[3]</text>
+<text x="725" y="100" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">ring capacity 3</text>
+<rect x="600" y="118" width="250" height="48" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="725" y="140" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Recursive z[2]</text>
+<text x="725" y="158" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">commit after output</text>
+<rect x="375" y="178" width="175" height="54" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="462" y="203" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DynamicState</text>
+<text x="462" y="221" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active executor</text>
+<rect x="600" y="180" width="250" height="48" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="725" y="202" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Delay x[2]</text>
+<text x="725" y="220" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">installation lifetime</text>
+<line x1="550" y1="105" x2="600" y2="84" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
+<line x1="550" y1="105" x2="600" y2="142" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
+<line x1="550" y1="205" x2="600" y2="204" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
+</svg>

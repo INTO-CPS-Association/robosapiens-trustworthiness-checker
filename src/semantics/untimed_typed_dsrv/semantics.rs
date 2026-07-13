@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::combinators as mc;
+use crate::VarName;
 use crate::core::OutputStream;
 use crate::core::PartialStreamValue;
 use crate::core::RuntimeFunction;
@@ -235,20 +236,37 @@ where
     AC: AsyncConfig<Val = Value, Expr = SExprTE>,
     Parser: ExprParser<SpannedExpr> + 'static,
 {
-    match (func.body.as_ref(), &func.recursive_name) {
-        (SExprTE::Any(SExprAny::Var(v)), Some(name)) if v == name => ctx.var(v).unwrap(),
-        _ => {
-            let source = function_source(&func);
-            let callable_func = func.clone();
-            let callable_ctx = ctx.subcontext(0);
-            let runtime_function = RuntimeFunction::native(source, move |args| {
-                let body = function_body_with_value_args(&callable_func, args)?;
-                Ok(<TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<
-                    AC,
-                >>::to_async_stream(body, &callable_ctx))
-            });
-            uc::val(Value::Function(runtime_function))
-        }
+    if let Some(var) = typed_function_var(&func) {
+        return ctx.var(var).unwrap();
+    }
+
+    let source = function_source(&func);
+    let callable_func = func.clone();
+    let callable_ctx = ctx.subcontext(0);
+    let runtime_function = RuntimeFunction::native(source, move |args| {
+        let body = function_body_with_value_args(&callable_func, args)?;
+        Ok(<TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<
+            AC,
+        >>::to_async_stream(body, &callable_ctx))
+    });
+    uc::val(Value::Function(runtime_function))
+}
+
+fn typed_function_var(func: &TypedFunctionExpr) -> Option<&VarName> {
+    if func.recursive_name.is_some() {
+        return None;
+    }
+    let SExprTE::Any(SExprAny::Var(var)) = func.body.as_ref() else {
+        return None;
+    };
+    if func
+        .params
+        .iter()
+        .all(|(name, _)| name.name().starts_with('$') || name.name().starts_with("_f"))
+    {
+        Some(var)
+    } else {
+        None
     }
 }
 
@@ -370,13 +388,9 @@ fn subst_te(expr: SExprTE, env: &FunctionEnv) -> SExprTE {
         SExprTE::Struct(e) => SExprTE::Struct(subst_struct(e, env)),
         SExprTE::Tuple(e) => SExprTE::Tuple(subst_tuple(e, env)),
         SExprTE::Function(e) => {
-            if let (SExprTE::Any(SExprAny::Var(v)), Some(name)) =
-                (e.body.as_ref(), &e.recursive_name)
-            {
-                if v == name {
-                    if let Some(replacement) = env_expr(env, v) {
-                        return replacement.clone();
-                    }
+            if let Some(var) = typed_function_var(&e) {
+                if let Some(replacement) = env_expr(env, var) {
+                    return replacement.clone();
                 }
             }
             SExprTE::Function(subst_function(e, env))
@@ -922,10 +936,10 @@ where
 {
     let func = *fold.func;
     let mut init_stream =
-        <TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<AC>>::to_async_stream(
-            *fold.init, ctx,
-        );
-    let mut list_stream = eval_typed_list::<AC, Parser>(*fold.list, ctx);
+        uc::stream_lift_base(<TypedUntimedDsrvSemantics<Parser> as MonitoringSemantics<
+            AC,
+        >>::to_async_stream(*fold.init, ctx));
+    let mut list_stream = mc::stream_lift_base(eval_typed_list::<AC, Parser>(*fold.list, ctx));
     let ctx = ctx.subcontext(0);
     Box::pin(stream! {
         loop {

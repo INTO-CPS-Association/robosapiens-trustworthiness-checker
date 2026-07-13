@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 270" role="img" aria-labelledby="pipeline-arrow-title pipeline-arrow-desc" style="width:100%;max-width:920px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="pipeline-arrow-title">Dataflow monitor compilation and evaluation pipeline</title>
+<desc id="pipeline-arrow-desc">A specification becomes a LoweredProgram whose dependency graph orders plans before into_monitor lays out slots, binds references, and creates a DataflowMonitor. Every tick loads an input row, extends an environment through ordered executors, and projects an output row.</desc>
+<defs>
+  <marker id="pipeline-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Compile once</text>
+<rect x="25" y="48" width="135" height="62" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="92" y="77" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DSRV spec</text>
+<text x="92" y="95" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">typed or untyped</text>
+<rect x="205" y="48" width="145" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="277" y="77" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">LoweredProgram</text>
+<text x="277" y="95" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">plans + free vars</text>
+<rect x="395" y="48" width="165" height="62" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="477" y="77" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DepGraph order</text>
+<text x="477" y="95" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">dependencies first</text>
+<rect x="605" y="48" width="145" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="677" y="77" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">into_monitor</text>
+<text x="677" y="95" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">layout + bind</text>
+<rect x="780" y="48" width="130" height="62" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="845" y="77" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DataflowMonitor</text>
+<text x="845" y="95" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">executors</text>
+<line x1="160" y1="79" x2="205" y2="79" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<line x1="350" y1="79" x2="395" y2="79" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<line x1="560" y1="79" x2="605" y2="79" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<line x1="750" y1="79" x2="780" y2="79" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<line x1="25" y1="137" x2="895" y2="137" stroke="#a8b3bf" stroke-width="1"/>
+<text x="24" y="165" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Evaluate every tick</text>
+<rect x="55" y="185" width="135" height="62" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="122" y="214" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">input row</text>
+<text x="122" y="232" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">one logical tick</text>
+<rect x="250" y="185" width="170" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="335" y="214" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">environment row</text>
+<text x="335" y="232" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">inputs, then results</text>
+<rect x="480" y="185" width="180" height="62" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="570" y="214" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">PlanExecutor x N</text>
+<text x="570" y="232" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">dependency order</text>
+<rect x="720" y="185" width="150" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="795" y="214" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output row</text>
+<text x="795" y="232" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">project slots</text>
+<line x1="190" y1="216" x2="250" y2="216" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<line x1="420" y1="216" x2="480" y2="216" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<line x1="660" y1="216" x2="720" y2="216" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<line x1="845" y1="110" x2="570" y2="185" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)" stroke-dasharray="5 4"/>
+<text x="725" y="151" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">owns and reuses</text>
+</svg>

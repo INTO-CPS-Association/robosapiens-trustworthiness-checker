@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 115" role="img" aria-labelledby="example-arrow-title example-arrow-desc" style="width:100%;max-width:800px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="example-arrow-title">Stream dependencies in the running example</title>
+<desc id="example-arrow-desc">Input x flows through scaled, total, and alert on one tick. Total also reads its own previous-tick output.</desc>
+<defs>
+  <marker id="example-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Running example: stream dependencies</text>
+<rect x="55" y="48" width="120" height="44" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="115" y="75" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">x</text>
+<rect x="245" y="48" width="120" height="44" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="305" y="75" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">scaled</text>
+<rect x="435" y="48" width="120" height="44" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="495" y="75" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">total</text>
+<rect x="625" y="48" width="120" height="44" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="685" y="75" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">alert</text>
+<line x1="175" y1="70" x2="245" y2="70" stroke="#65758b" stroke-width="1.8" marker-end="url(#example-arrow)"/>
+<line x1="365" y1="70" x2="435" y2="70" stroke="#65758b" stroke-width="1.8" marker-end="url(#example-arrow)"/>
+<line x1="555" y1="70" x2="625" y2="70" stroke="#65758b" stroke-width="1.8" marker-end="url(#example-arrow)"/>
+<path d="M 495 48 C 495 10, 555 10, 555 48" fill="none" stroke="#b54708" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#example-arrow)"/>
+<text x="525" y="14" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">previous tick</text>
+</svg>

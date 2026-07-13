@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 255" role="img" aria-labelledby="function-call-arrow-title function-call-arrow-desc" style="width:100%;max-width:900px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="function-call-arrow-title">Function call frame lifecycle</title>
+<desc id="function-call-arrow-desc">Evaluating a function node snapshots captures. Each invocation fills a pooled resettable frame, evaluates the shared body plan, and returns the frame to the pool.</desc>
+<defs>
+  <marker id="function-call-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Function evaluation and calls</text>
+<rect x="35" y="62" width="160" height="62" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="115" y="91" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Function node</text>
+<text x="115" y="109" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">current tick</text>
+<rect x="260" y="55" width="205" height="76" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="362" y="91" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">call template</text>
+<text x="362" y="109" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">[capture values | params]</text>
+<line x1="195" y1="93" x2="260" y2="93" stroke="#65758b" stroke-width="1.8" marker-end="url(#function-call-arrow)"/>
+<text x="228" y="80" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">snapshot</text>
+<rect x="535" y="48" width="220" height="90" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="645" y="91" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">pooled call frame</text>
+<text x="645" y="109" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">fill args; reset executor</text>
+<line x1="465" y1="93" x2="535" y2="93" stroke="#65758b" stroke-width="1.8" marker-end="url(#function-call-arrow)"/>
+<rect x="535" y="170" width="220" height="62" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="645" y="199" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">shared body plan</text>
+<text x="645" y="217" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">evaluate one value</text>
+<line x1="645" y1="138" x2="645" y2="170" stroke="#65758b" stroke-width="1.8" marker-end="url(#function-call-arrow)"/>
+<text x="790" y="91" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">return frame to pool</text>
+<path d="M 755 201 C 850 201, 850 93, 755 93" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#function-call-arrow)"/>
+<text x="300" y="214" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">Apply / map / filter / fold create isolated invocations</text>
+</svg>

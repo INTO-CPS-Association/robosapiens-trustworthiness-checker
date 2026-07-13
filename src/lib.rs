@@ -7,6 +7,7 @@ pub use core::{
 };
 pub(crate) use core::{InputTickStream, into_tick_stream};
 pub mod cli;
+pub mod dataflow;
 pub mod io;
 pub use io::file::parse_file;
 pub mod lang;

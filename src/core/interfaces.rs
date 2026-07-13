@@ -27,6 +27,7 @@ pub enum Semantics {
 pub enum RuntimeSpec {
     #[default]
     Async,
+    Dataflow,
     Distributed,
     SemiSync,
     ReconfSemiSync,

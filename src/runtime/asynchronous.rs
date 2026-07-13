@@ -519,7 +519,7 @@ pub struct Context<AC: AsyncConfig> {
     builder: ContextBuilder<AC>,
 }
 
-/// Concrete builder for Context<Val>
+/// Concrete builder for `Context<Val>`.
 // Builders come with a bit of boilerplate, but the abstract builder
 // allow us to change the type of context with is being constructed
 // without having to duplicate the code of the constructor,
@@ -1141,7 +1141,7 @@ where
                 let expr = model.var_expr(&var).unwrap_or_else(|| {
                     panic!("Failed to find expression for var {}", var.name().as_str())
                 });
-                let stream = S::to_async_stream(expr, &context);
+                let stream = S::to_async_stream_for_var(&var, expr, &context);
                 if tx.send(stream).is_err() {
                     warn!(?var, "Failed to send stream for var to requester");
                 }

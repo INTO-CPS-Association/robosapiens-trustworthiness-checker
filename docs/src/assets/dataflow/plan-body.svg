@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 220" role="img" aria-labelledby="plan-arrow-title plan-arrow-desc" style="width:100%;max-width:760px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="plan-arrow-title">Operation order in the total plan body</title>
+<desc id="plan-arrow-desc">RecursiveSIndex and the scaled environment operand feed Default and Add. The completed output is committed back to the recursive delay after the forward pass.</desc>
+<defs>
+  <marker id="plan-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Bound PlanBody for total</text>
+<rect x="40" y="60" width="145" height="38" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="112" y="84" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">RecursiveSIndex</text>
+<rect x="230" y="60" width="125" height="38" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="292" y="84" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Default</text>
+<rect x="230" y="120" width="125" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="292" y="144" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">env: scaled</text>
+<rect x="410" y="90" width="105" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="462" y="114" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Add</text>
+<rect x="570" y="90" width="115" height="38" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="627" y="114" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output</text>
+<line x1="185" y1="79" x2="230" y2="79" stroke="#65758b" stroke-width="1.8" marker-end="url(#plan-arrow)"/>
+<line x1="355" y1="79" x2="410" y2="102" stroke="#65758b" stroke-width="1.8" marker-end="url(#plan-arrow)"/>
+<line x1="355" y1="139" x2="410" y2="116" stroke="#65758b" stroke-width="1.8" marker-end="url(#plan-arrow)"/>
+<line x1="515" y1="109" x2="570" y2="109" stroke="#65758b" stroke-width="1.8" marker-end="url(#plan-arrow)"/>
+<path d="M 627 128 C 627 198, 112 198, 112 98" fill="none" stroke="#b54708" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#plan-arrow)"/>
+<text x="365" y="205" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">commit completed output to recursive delay</text>
+</svg>

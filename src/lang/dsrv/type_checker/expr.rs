@@ -222,6 +222,60 @@ impl TypeCheckableHelper<SExprTE> for (SBinOp, &SpannedExpr, &SpannedExpr) {
                     }
                 }
             }
+            (SBinOp::NOp(op), Ok(lhs), Ok(rhs))
+                if matches!(extract_type(&lhs), TCType::Int)
+                    && matches!(extract_type(&rhs), TCType::Int) =>
+            {
+                let lhs = match cast_to_type(lhs, &StreamType::Int) {
+                    SExprTE::Int(e) => e,
+                    _ => unreachable!(),
+                };
+                let rhs = match cast_to_type(rhs, &StreamType::Int) {
+                    SExprTE::Int(e) => e,
+                    _ => unreachable!(),
+                };
+                match op.clone().try_into() {
+                    Ok(op) => Ok(SExprTE::Int(SExprInt::BinOp(
+                        Box::new(lhs),
+                        Box::new(rhs),
+                        op,
+                    ))),
+                    Err(_) => {
+                        errs.push(SemanticError::type_error(
+                            TypeErrorKind::OperatorTypeMismatch,
+                            "Numerical operation not valid on integers".into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
+            (SBinOp::NOp(op), Ok(lhs), Ok(rhs))
+                if matches!(extract_type(&lhs), TCType::Float)
+                    && matches!(extract_type(&rhs), TCType::Float) =>
+            {
+                let lhs = match cast_to_type(lhs, &StreamType::Float) {
+                    SExprTE::Float(e) => e,
+                    _ => unreachable!(),
+                };
+                let rhs = match cast_to_type(rhs, &StreamType::Float) {
+                    SExprTE::Float(e) => e,
+                    _ => unreachable!(),
+                };
+                match op.clone().try_into() {
+                    Ok(op) => Ok(SExprTE::Float(SExprFloat::BinOp(
+                        Box::new(lhs),
+                        Box::new(rhs),
+                        op,
+                    ))),
+                    Err(_) => {
+                        errs.push(SemanticError::type_error(
+                            TypeErrorKind::OperatorTypeMismatch,
+                            "Numerical operation not valid on floats".into(),
+                        ));
+                        Err(())
+                    }
+                }
+            }
 
             // Gradual numeric operations: two dynamic operands stay dynamic and
             // are checked by the runtime untyped operation.
@@ -771,7 +825,7 @@ impl TypeCheckableHelper<SExprTE> for VarName {
                         .collect(),
                     body: Box::new(SExprTE::Any(SExprAny::Var(self.clone()))),
                     return_type: TCType::from_stream_type(ret),
-                    recursive_name: Some(self.clone()),
+                    recursive_name: None,
                 })),
                 StreamType::Any => Ok(SExprTE::Any(SExprAny::Var(self.clone()))),
             },
@@ -1013,7 +1067,7 @@ fn typed_var_for_type(
                 .collect(),
             body: Box::new(SExprTE::Any(SExprAny::Var(name.clone()))),
             return_type: *ret.clone(),
-            recursive_name: Some(name),
+            recursive_name: None,
         })),
         TCType::Any => Ok(SExprTE::Any(SExprAny::Var(name))),
         TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => {

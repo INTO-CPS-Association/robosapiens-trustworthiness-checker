@@ -72,6 +72,14 @@ where
     AC: AsyncConfig,
 {
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<AC::Val>;
+
+    fn to_async_stream_for_var(
+        _var: &VarName,
+        expr: AC::Expr,
+        ctx: &AC::Ctx,
+    ) -> OutputStream<AC::Val> {
+        Self::to_async_stream(expr, ctx)
+    }
 }
 
 pub trait AsyncConfig: Clone + 'static {

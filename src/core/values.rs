@@ -13,11 +13,14 @@ use super::OutputStream;
 
 pub type RuntimeFunctionCallable =
     Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static>;
+pub type RuntimeFunctionValueCallable =
+    Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<Value> + 'static>;
 
 #[derive(Clone)]
 pub struct RuntimeFunction {
     display: EcoString,
     callable: Option<RuntimeFunctionCallable>,
+    value_callable: Option<RuntimeFunctionValueCallable>,
 }
 
 impl RuntimeFunction {
@@ -25,6 +28,7 @@ impl RuntimeFunction {
         Self {
             display: display.into(),
             callable: None,
+            value_callable: None,
         }
     }
 
@@ -35,6 +39,23 @@ impl RuntimeFunction {
         Self {
             display: display.into(),
             callable: Some(Rc::new(callable)),
+            value_callable: None,
+        }
+    }
+
+    pub fn native_value(
+        display: impl Into<EcoString>,
+        callable: impl Fn(EcoVec<Value>) -> anyhow::Result<Value> + 'static,
+    ) -> Self {
+        let callable: RuntimeFunctionValueCallable = Rc::new(callable);
+        let stream_callable = callable.clone();
+        Self {
+            display: display.into(),
+            callable: Some(Rc::new(move |args| {
+                let value = stream_callable(args)?;
+                Ok(Box::pin(futures::stream::iter(vec![value])) as OutputStream<Value>)
+            })),
+            value_callable: Some(callable),
         }
     }
 
@@ -52,8 +73,22 @@ impl RuntimeFunction {
         callable(args)
     }
 
+    pub fn call_value(&self, args: EcoVec<Value>) -> anyhow::Result<Value> {
+        let Some(callable) = &self.value_callable else {
+            return Err(anyhow!(
+                "Function {} has no direct value callable",
+                self.display
+            ));
+        };
+        callable(args)
+    }
+
+    pub fn has_value_callable(&self) -> bool {
+        self.value_callable.is_some()
+    }
+
     pub fn is_callable(&self) -> bool {
-        self.callable.is_some()
+        self.callable.is_some() || self.value_callable.is_some()
     }
 }
 
@@ -62,6 +97,7 @@ impl Debug for RuntimeFunction {
         f.debug_struct("RuntimeFunction")
             .field("display", &self.display)
             .field("callable", &self.callable.is_some())
+            .field("value_callable", &self.value_callable.is_some())
             .finish()
     }
 }
@@ -98,7 +134,11 @@ pub enum Value {
     NoVal,    // Indicates no value for the current stream step (due to async stream inputs)
 }
 
-impl StreamData for Value {}
+impl StreamData for Value {
+    fn is_no_val(&self) -> bool {
+        matches!(self, Value::NoVal)
+    }
+}
 impl DeferrableStreamData for Value {
     fn is_deferred(&self) -> bool {
         matches!(self, Value::Deferred)
@@ -108,9 +148,6 @@ impl DeferrableStreamData for Value {
     }
     fn no_val_value() -> Self {
         Value::NoVal
-    }
-    fn is_no_val(&self) -> bool {
-        matches!(self, Value::NoVal)
     }
 }
 
@@ -353,7 +390,11 @@ impl Display for Value {
  * streams, or time-stamped values for timed streams. This traits allows
  * for the implementation of runtimes to be agnostic of the types of stream
  * values used. */
-pub trait StreamData: Clone + Debug + 'static {}
+pub trait StreamData: Clone + Debug + 'static {
+    fn is_no_val(&self) -> bool {
+        false
+    }
+}
 
 /* Trait for stream data with a statically known stream type */
 pub trait TypedStreamData: StreamData {
@@ -366,7 +407,6 @@ pub trait DeferrableStreamData: StreamData {
     fn is_deferred(&self) -> bool;
     fn deferred_value() -> Self;
     fn no_val_value() -> Self;
-    fn is_no_val(&self) -> bool;
 }
 
 // Trait defining the allowed types for expression values

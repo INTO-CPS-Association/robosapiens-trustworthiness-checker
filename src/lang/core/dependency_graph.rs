@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use petgraph::algo::toposort;
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::prelude::EdgeIndex;
@@ -19,8 +20,19 @@ pub trait DependencyGraphExpr {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph;
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DependencyGraphRoots {
+    #[default]
+    Outputs,
+    AllStreams,
+}
+
 pub trait DependencyGraphSpec {
-    fn dependency_graph(&self) -> DepGraph;
+    fn dependency_graph_for(&self, roots: DependencyGraphRoots) -> DepGraph;
+
+    fn dependency_graph(&self) -> DepGraph {
+        self.dependency_graph_for(DependencyGraphRoots::Outputs)
+    }
 }
 
 // Interface for resolving dependencies.
@@ -53,6 +65,47 @@ pub struct DepGraph {
 }
 
 impl DepGraph {
+    pub fn from_dependencies<Dependencies>(
+        dependencies: impl IntoIterator<Item = (VarName, Dependencies)>,
+    ) -> Self
+    where
+        Dependencies: IntoIterator<Item = VarName>,
+    {
+        let mut graph = Self::empty_graph();
+        let dependencies = dependencies
+            .into_iter()
+            .map(|(consumer, inputs)| (consumer, inputs.into_iter().collect::<Vec<_>>()))
+            .collect::<BTreeMap<_, _>>();
+        let mut nodes = BTreeMap::new();
+        for name in dependencies.keys().chain(dependencies.values().flatten()) {
+            if !nodes.contains_key(name) {
+                nodes.insert(name.clone(), graph.graph.add_node(name.clone()));
+            }
+        }
+        for (consumer, inputs) in dependencies {
+            for input in inputs {
+                graph.graph.add_edge(nodes[&consumer], nodes[&input], 0);
+            }
+        }
+        graph
+    }
+
+    /// Orders streams after their dependencies. Graph edges point from each consumer to the
+    /// variables it reads, so `toposort` is reversed before input-only nodes are discarded.
+    pub fn topological_streams(
+        &self,
+        stream_vars: &BTreeSet<VarName>,
+    ) -> Result<Vec<VarName>, VarName> {
+        let mut ordered =
+            toposort(&self.graph, None).map_err(|cycle| self.graph[cycle.node_id()].clone())?;
+        ordered.reverse();
+        Ok(ordered
+            .into_iter()
+            .map(|node| self.graph[node].clone())
+            .filter(|name| stream_vars.contains(name))
+            .collect())
+    }
+
     pub fn from_sexprs<Expr>(exprs: BTreeMap<VarName, Expr>) -> Self
     where
         Expr: DependencyGraphExpr,
@@ -86,6 +139,33 @@ impl DepGraph {
         AC::Spec: DependencyGraphSpec,
     {
         spec.dependency_graph()
+    }
+
+    pub fn longest_time_dependency(&self, name: &VarName) -> u64 {
+        let node = self
+            .graph
+            .node_indices()
+            .find(|i| self.graph[*i] == *name)
+            .unwrap_or_default();
+        self.graph
+            .edges_directed(node, petgraph::Direction::Incoming)
+            .map(|edge| edge.weight().clone())
+            .max()
+            .unwrap_or_default()
+    }
+
+    pub fn longest_time_dependencies(&self) -> BTreeMap<VarName, u64> {
+        let mut map = BTreeMap::new();
+        for (node, name) in self.graph.node_references() {
+            let longest_dep = self
+                .graph
+                .edges_directed(node, petgraph::Direction::Incoming)
+                .map(|edge| edge.weight().clone())
+                .max()
+                .unwrap_or_default();
+            map.insert(name.clone(), longest_dep);
+        }
+        map
     }
 
     #[allow(dead_code)]
@@ -870,9 +950,12 @@ impl DependencyGraphExpr for SExprTE {
 }
 
 impl DependencyGraphSpec for UntypedDsrvSpecification {
-    fn dependency_graph(&self) -> DepGraph {
-        let exprs = self
-            .output_vars()
+    fn dependency_graph_for(&self, roots: DependencyGraphRoots) -> DepGraph {
+        let roots = match roots {
+            DependencyGraphRoots::Outputs => self.output_vars(),
+            DependencyGraphRoots::AllStreams => self.stream_vars(),
+        };
+        let exprs = roots
             .into_iter()
             .filter_map(|var| self.var_expr(&var).map(|expr| (var.clone(), expr.clone())))
             .collect();
@@ -881,9 +964,12 @@ impl DependencyGraphSpec for UntypedDsrvSpecification {
 }
 
 impl DependencyGraphSpec for TypedDsrvSpecification {
-    fn dependency_graph(&self) -> DepGraph {
-        let exprs = self
-            .output_vars()
+    fn dependency_graph_for(&self, roots: DependencyGraphRoots) -> DepGraph {
+        let roots = match roots {
+            DependencyGraphRoots::Outputs => self.output_vars(),
+            DependencyGraphRoots::AllStreams => self.stream_vars(),
+        };
+        let exprs = roots
             .into_iter()
             .filter_map(|var| self.var_expr(&var).map(|expr| (var.clone(), expr.clone())))
             .collect();
@@ -908,32 +994,11 @@ where
     }
 
     fn longest_time_dependency(&self, name: &VarName) -> u64 {
-        // Default = 0 if no dependencies is correct
-
-        let node = self
-            .graph
-            .node_indices()
-            .find(|i| self.graph[*i] == *name)
-            .unwrap_or_default();
-        self.graph
-            .edges_directed(node, petgraph::Direction::Incoming)
-            .map(|edge| edge.weight().clone())
-            .max()
-            .unwrap_or_default()
+        DepGraph::longest_time_dependency(self, name)
     }
 
     fn longest_time_dependencies(&self) -> BTreeMap<VarName, u64> {
-        let mut map = BTreeMap::new();
-        for (node, name) in self.graph.node_references() {
-            let longest_dep = self
-                .graph
-                .edges_directed(node, petgraph::Direction::Incoming)
-                .map(|edge| edge.weight().clone())
-                .max()
-                .unwrap_or_default();
-            map.insert(name.clone(), longest_dep);
-        }
-        map
+        DepGraph::longest_time_dependencies(self)
     }
 }
 
@@ -1336,5 +1401,17 @@ mod tests {
         let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"z".into()), 1);
+    }
+
+    #[test]
+    fn auxiliary_roots_are_included_only_when_requested() {
+        let mut source = "in x\nout z\naux history\nz = x\nhistory = x[3]";
+        let spec = test_parser(&mut source).unwrap();
+
+        let output_only = spec.dependency_graph();
+        let with_aux = spec.dependency_graph_for(DependencyGraphRoots::AllStreams);
+
+        assert_eq!(output_only.longest_time_dependency(&"x".into()), 0);
+        assert_eq!(with_aux.longest_time_dependency(&"x".into()), 3);
     }
 }

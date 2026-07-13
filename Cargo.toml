@@ -101,6 +101,7 @@ codegen-units = 16
 ros = ["dep:r2r", "tc-testutils/ros"]
 testcontainers = ["tc-testutils/testcontainers", "async-compat"]
 span-tracing = []
+extended-proptests = []
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_smol", "html_reports"] }
@@ -110,6 +111,10 @@ tc-testutils = { path = "libs/tc-testutils" }
 
 [[bench]]
 name = "simple_add"
+harness = false
+
+[[bench]]
+name = "dataflow_semantics"
 harness = false
 
 # [[bench]]

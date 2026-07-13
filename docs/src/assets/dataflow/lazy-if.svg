@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 325" role="img" aria-labelledby="if-arrow-title if-arrow-desc" style="width:100%;max-width:920px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="if-arrow-title">Lazy if branch execution</title>
+<desc id="if-arrow-desc">Both nested PlanBody states and lifted outputs advance on every tick. Selection remains lazy with respect to errors.</desc>
+<defs>
+  <marker id="if-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Lazy branch selection and state ownership</text>
+<rect x="35" y="112" width="140" height="48" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="105" y="134" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">condition</text>
+<text x="105" y="152" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">outer plan operand</text>
+<rect x="245" y="105" width="145" height="62" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="317" y="134" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluate branches</text>
+<text x="317" y="152" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance both states</text>
+<line x1="175" y1="136" x2="245" y2="136" stroke="#65758b" stroke-width="1.8" marker-end="url(#if-arrow)"/>
+<rect x="480" y="48" width="180" height="70" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="570" y="81" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">then PlanBody</text>
+<text x="570" y="99" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">then DataflowState</text>
+<rect x="480" y="190" width="180" height="70" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="570" y="223" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">else PlanBody</text>
+<text x="570" y="241" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">else DataflowState</text>
+<line x1="390" y1="125" x2="480" y2="83" stroke="#65758b" stroke-width="1.8" marker-end="url(#if-arrow)"/>
+<line x1="390" y1="147" x2="480" y2="225" stroke="#65758b" stroke-width="1.8" marker-end="url(#if-arrow)"/>
+<text x="420" y="92" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance</text>
+<text x="420" y="205" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance</text>
+<rect x="735" y="105" width="140" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="805" y="134" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">select result</text>
+<text x="805" y="152" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">suppress other error</text>
+<line x1="660" y1="83" x2="735" y2="125" stroke="#65758b" stroke-width="1.8" marker-end="url(#if-arrow)"/>
+<line x1="660" y1="225" x2="735" y2="147" stroke="#65758b" stroke-width="1.8" marker-end="url(#if-arrow)"/>
+<path d="M 317 167 L 317 287 L 805 287 L 805 167" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#if-arrow)"/>
+<text x="545" y="305" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">NoVal / Deferred: advance both states, return condition value</text>
+</svg>
