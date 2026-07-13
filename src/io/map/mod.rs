@@ -1,2 +1,2 @@
-pub mod input_provider;
-pub use input_provider::MapInputProvider;
+mod input_stream;
+pub use input_stream::input_stream;

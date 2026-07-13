@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use crate::InputStream;
 use crate::UntypedDsrvSpecification;
 use crate::Value;
 use crate::VarName;
@@ -12,12 +13,9 @@ use crate::core::OutputHandler;
 use crate::core::Runtime;
 use crate::core::RuntimeSpec;
 use crate::core::Semantics;
-use crate::io::InputProviderBuilder;
-use crate::io::builders::InputProviderSpec;
-use crate::io::builders::OutputHandlerBuilder;
-use crate::io::builders::output_handler_builder::OutputHandlerSpec;
-use crate::io::map::MapInputProvider;
-use crate::io::testing::null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
+use crate::io::InputStreamFactory;
+use crate::io::testing::{LimitedNullOutputHandler, NullOutputHandler};
+use crate::io::{OutputHandlerBuilder, OutputHandlerSpec};
 use crate::lang::dsrv::lalr_parser::LALRParser;
 use crate::lang::dsrv::type_checker::TypedDsrvSpecification;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
@@ -39,7 +37,7 @@ pub async fn monitor_runtime_outputs(
     semantics: Semantics,
     executor: Rc<LocalExecutor<'static>>,
     spec: UntypedDsrvSpecification,
-    input_provider: MapInputProvider,
+    input_stream: InputStream<Value>,
     output_limit: Option<usize>,
 ) {
     let output_handler: Box<dyn OutputHandler<Val = Value>> = match output_limit {
@@ -60,7 +58,7 @@ pub async fn monitor_runtime_outputs(
         .executor(executor)
         .model(spec)
         .output(output_handler)
-        .input(Box::new(input_provider))
+        .input(input_stream)
         .build()
         .await;
     monitor.run().await.expect("Error running monitor");
@@ -69,7 +67,7 @@ pub async fn monitor_runtime_outputs(
 pub async fn monitor_outputs_untyped_async_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: UntypedDsrvSpecification,
-    input_provider: MapInputProvider,
+    input_stream: InputStream<Value>,
     limit: usize,
 ) {
     monitor_runtime_outputs(
@@ -77,7 +75,7 @@ pub async fn monitor_outputs_untyped_async_limited(
         Semantics::Untimed,
         executor,
         spec,
-        input_provider,
+        input_stream,
         Some(limit),
     )
     .await;
@@ -86,7 +84,7 @@ pub async fn monitor_outputs_untyped_async_limited(
 pub async fn monitor_outputs_untyped_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: UntypedDsrvSpecification,
-    input_provider_builder: InputProviderBuilder,
+    input_factory: InputStreamFactory,
     output_handler_builder: OutputHandlerBuilder,
     use_context_transfer: bool,
 ) {
@@ -97,7 +95,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
     > = ReconfSemiSyncRuntimeBuilder::new()
         .executor(executor)
         .model(spec)
-        .input_builder(input_provider_builder)
+        .input_factory(input_factory)
         .output_builder(output_handler_builder)
         .reconf_topic(RECONF_TOPIC.into())
         .use_context_transfer(use_context_transfer);
@@ -108,14 +106,14 @@ pub async fn monitor_outputs_untyped_reconf_limited(
 pub async fn monitor_outputs_untyped_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: UntypedDsrvSpecification,
-    input_values: MapInputProvider,
+    input_stream: InputStream<Value>,
 ) {
     monitor_runtime_outputs(
         RuntimeSpec::Async,
         Semantics::Untimed,
         executor,
         spec,
-        input_values,
+        input_stream,
         None,
     )
     .await;
@@ -124,14 +122,14 @@ pub async fn monitor_outputs_untyped_async(
 pub async fn monitor_outputs_untyped_little(
     executor: Rc<LocalExecutor<'static>>,
     spec: UntypedDsrvSpecification,
-    input_provider: MapInputProvider,
+    input_stream: InputStream<Value>,
 ) {
     monitor_runtime_outputs(
         RuntimeSpec::SemiSync,
         Semantics::Untimed,
         executor,
         spec,
-        input_provider,
+        input_stream,
         None,
     )
     .await;
@@ -140,7 +138,7 @@ pub async fn monitor_outputs_untyped_little(
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: TypedDsrvSpecification,
-    input_provider: MapInputProvider,
+    input_stream: InputStream<Value>,
 ) {
     // Currently cannot be deduplicated since it includes the type
     // checking
@@ -154,36 +152,31 @@ pub async fn monitor_outputs_typed_async(
     >::new()
     .executor(executor.clone())
     .model(spec.clone())
-    .input(Box::new(input_provider))
+    .input(input_stream)
     .output(output_handler)
     .build()
     .await;
     async_monitor.run().await.expect("Error running monitor");
 }
 
-pub fn input_builder_dsrv_paper_bench(
-    spec: UntypedDsrvSpecification,
+pub fn input_factory_dsrv_paper_bench(
     var_names: BTreeSet<VarName>,
-    ex: Rc<LocalExecutor<'static>>,
-) -> (InputProviderBuilder, BTreeMap<VarName, FanoutSender<Value>>) {
+) -> (InputStreamFactory, BTreeMap<VarName, FanoutSender<Value>>) {
     let mut tx_fans: BTreeMap<VarName, FanoutSender<Value>> = BTreeMap::new();
-    let mut inp_fans: BTreeMap<VarName, Rc<Fanout<Value>>> = BTreeMap::new();
+    let mut fanouts: BTreeMap<VarName, Rc<Fanout<Value>>> = BTreeMap::new();
 
     for name in var_names {
         let (tx, fan) = Fanout::new();
-        inp_fans.insert(name.clone(), fan);
+        fanouts.insert(name.clone(), fan);
         tx_fans.insert(name, tx);
     }
     let (tx_r, fr) = Fanout::new();
-    inp_fans.insert(RECONF_TOPIC.into(), fr);
+    fanouts.insert(RECONF_TOPIC.into(), fr);
     tx_fans.insert(RECONF_TOPIC.into(), tx_r);
 
-    let input_spec = InputProviderSpec::Manual(inp_fans);
-    let input_builder = InputProviderBuilder::new(input_spec)
-        .model(spec.clone())
-        .executor(ex.clone());
+    let input_factory = crate::io::testing::input_factory(fanouts);
 
-    (input_builder, tx_fans)
+    (input_factory, tx_fans)
 }
 
 pub fn output_builder_dsrv_paper_bench(

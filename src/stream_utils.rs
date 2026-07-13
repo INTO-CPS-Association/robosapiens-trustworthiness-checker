@@ -142,7 +142,7 @@ where
 /// dropped) are pruned automatically.
 ///
 /// Created via [`Fanout::new`], which returns a `(FanoutSender<T>, Rc<Fanout<T>>)`
-/// pair.  Each call to [`subscribe`] on the `Fanout` returns a
+/// pair. Each call to [`Fanout::subscribe`] returns a
 /// `bounded::Receiver` that will receive a clone of every subsequent value
 /// sent through the sender.
 ///
@@ -156,8 +156,8 @@ pub struct Fanout<T> {
     any_events: Cell<u64>,
 }
 
-/// The sending half of a [`Fanout`].  Each call to [`send`] distributes a
-/// value to every live subscriber.
+/// The sending half of a [`Fanout`]. Each call to [`FanoutSender::send`]
+/// distributes a value to every live subscriber.
 ///
 /// Dropping the sender signals end-of-stream: all subscriber senders are
 /// dropped and their receivers will return `None`.
@@ -170,7 +170,7 @@ impl<T: Clone + 'static> Fanout<T> {
     const SUB_CAPACITY: usize = 1024;
 
     /// Create a new fan-out channel.  Returns a sender for pushing values
-    /// and an `Rc<Fanout<T>>` used to create subscribers via [`subscribe`].
+    /// and an `Rc<Fanout<T>>` used to create subscribers via [`Fanout::subscribe`].
     pub fn new() -> (FanoutSender<T>, Rc<Self>) {
         let fanout = Rc::new(Self {
             subs: RefCell::new(Vec::new()),

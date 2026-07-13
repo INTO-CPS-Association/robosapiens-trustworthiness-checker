@@ -12,7 +12,7 @@ use smol::LocalExecutor;
 use trustworthiness_checker::dsrv_fixtures::spec_deferred_and;
 use trustworthiness_checker::dsrv_fixtures::spec_direct_and;
 use trustworthiness_checker::dsrv_fixtures::{
-    input_streams_paper_benchmark, input_streams_paper_benchmark_direct,
+    direct_paper_benchmark_input_stream, paper_benchmark_input_stream,
 };
 
 #[global_allocator]
@@ -56,7 +56,7 @@ fn from_elem(c: &mut Criterion) {
     let percents = vec![0, 25, 50, 75, 100];
 
     for size in sizes.iter() {
-        let input_stream_fn = || input_streams_paper_benchmark_direct(*size);
+        let input_stream_fn = || direct_paper_benchmark_input_stream(*size);
         group.bench_with_input(
             BenchmarkId::new("dyn_paper_direct", size),
             &(&spec_direct),
@@ -74,7 +74,7 @@ fn from_elem(c: &mut Criterion) {
     }
 
     for (size, percent) in sizes.into_iter().cartesian_product(percents) {
-        let input_stream_fn = || input_streams_paper_benchmark(percent, size);
+        let input_stream_fn = || paper_benchmark_input_stream(percent, size);
         group.bench_with_input(
             BenchmarkId::new(format!("dyn_paper_{}", percent), size),
             &(&spec),

@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use std::{rc::Rc, time::Duration};
 use unsync::spsc::Sender as SpscSender;
 
-use trustworthiness_checker::OutputStream;
+use trustworthiness_checker::{InputEvent, InputStream, OutputStream, VarName};
 
 pub type TickSender = SpscSender<()>;
 
@@ -79,7 +79,7 @@ where
 }
 
 // For each (x, y) pair, produces [x, NoVal, NoVal, y]
-// Useful for testing e.g., InputProviders that cannot handle simultaneous inputs
+// Useful for testing e.g., input streams that cannot handle simultaneous inputs
 pub fn interleave_with_constant<Iter, ValueType>(
     values: Iter,
     constant: ValueType,
@@ -124,6 +124,51 @@ pub async fn receive_values_serially<ValueType>(
         y_vals.push(y_val?.expect("y_sub_stream ended"));
     }
     Ok((x_vals, y_vals))
+}
+
+/// Releases alternating x/y publishers and checks the native input events.
+pub async fn expect_events_serially<V>(
+    x_tick: &mut TickSender,
+    y_tick: &mut TickSender,
+    input: &mut InputStream<V>,
+    xs: impl IntoIterator<Item = V>,
+    ys: impl IntoIterator<Item = V>,
+) -> anyhow::Result<()>
+where
+    V: std::fmt::Debug + PartialEq,
+{
+    for (x, y) in xs.into_iter().zip(ys) {
+        expect_event(x_tick, input, VarName::new("x"), x).await?;
+        expect_event(y_tick, input, VarName::new("y"), y).await?;
+    }
+    Ok(())
+}
+
+async fn expect_event<V>(
+    tick: &mut TickSender,
+    input: &mut InputStream<V>,
+    var: VarName,
+    value: V,
+) -> anyhow::Result<()>
+where
+    V: std::fmt::Debug + PartialEq,
+{
+    with_timeout_res(tick.send(()), 3, "publisher tick").await?;
+    let batch = with_timeout(input.next(), 3, "native input event")
+        .await?
+        .ok_or_else(|| anyhow!("native input event stream ended"))??;
+    let expected = [InputEvent::new(var, value)];
+    let mut ticks = batch.ticks();
+    let matches_expected = matches!(
+        (ticks.next(), ticks.next()),
+        (Some(actual), None) if actual == expected
+    );
+    if !matches_expected {
+        return Err(anyhow!(
+            "unexpected native input batch: expected {expected:?}, got {batch:?}"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

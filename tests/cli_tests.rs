@@ -622,6 +622,64 @@ mod integration_tests {
         );
     }
 
+    #[apply(async_test)]
+    async fn test_mstlo_runtime_selector_is_rejected() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--runtime",
+            "mstlo",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            !output.status.success(),
+            "CLI should reject the unsupported MSTLO runtime selector"
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("invalid value 'mstlo'"),
+            "Expected an invalid runtime error, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked at"),
+            "Invalid runtime selection should not panic: {stderr}"
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_file_input_is_rejected_cleanly_for_reconfiguration() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--runtime",
+            "reconf-semi-sync",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            !output.status.success(),
+            "CLI should reject file input for a reconfigurable runtime"
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("file input cannot be used by a reconfigurable runtime"),
+            "Expected an incompatible input error, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked at"),
+            "Incompatible input should return an error rather than panic: {stderr}"
+        );
+    }
+
     /// Test error handling for malformed input
     #[apply(async_test)]
     async fn test_malformed_input() {
@@ -1392,51 +1450,6 @@ mod integration_tests {
             "--output-stdout",
             "--redis-port",
             "6380",
-        ])
-        .await
-        .expect("Failed to run CLI");
-
-        assert!(
-            output.status.success(),
-            "CLI command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[apply(async_test)]
-    async fn test_no_context_transfer_arg(_executor: Rc<LocalExecutor>) {
-        // Tests that the TC runs with --no-context-transfer argument
-        let output = run_cli(&[
-            &fixture_path("simple_add_typed.dsrv"),
-            "--input-file",
-            &fixture_path("simple_add_typed.input"),
-            "--output-stdout",
-            "--runtime",
-            "reconf-semi-sync",
-            "--no-context-transfer",
-        ])
-        .await
-        .expect("Failed to run CLI");
-
-        assert!(
-            output.status.success(),
-            "CLI command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[apply(async_test)]
-    async fn test_reconf_topic_arg(_executor: Rc<LocalExecutor>) {
-        // Tests that the TC runs with --reconf-topic argument
-        let output = run_cli(&[
-            &fixture_path("simple_add_typed.dsrv"),
-            "--input-file",
-            &fixture_path("simple_add_typed.input"),
-            "--output-stdout",
-            "--runtime",
-            "reconf-semi-sync",
-            "--reconf-topic",
-            "/reconf",
         ])
         .await
         .expect("Failed to run CLI");

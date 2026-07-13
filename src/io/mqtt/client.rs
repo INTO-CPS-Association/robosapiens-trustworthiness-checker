@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 /* An interface for creating the MQTT client that can be used
  * across all whole application (i.e. sharing it between the input
- * provider and the output handler). */
+ * input stream and the output handler). */
 
 #[derive(Clone, Debug)]
 pub enum MqttFactory {
@@ -50,6 +50,10 @@ pub trait MqttClient: Send + Sync {
     async fn reconnect(&self) -> anyhow::Result<()>;
 
     async fn disconnect(&self) -> anyhow::Result<()>;
+
+    fn set_raw_message_callback(&self, cb: Box<dyn FnMut(&str, &[u8]) + Send>);
+
+    fn remove_raw_message_callback(&self);
 
     // TODO: Rewrite into taking str and iterators
     async fn subscribe(&self, topic: &String, qos: i32) -> anyhow::Result<()>;
@@ -115,6 +119,18 @@ impl MqttClient for PahoClient {
             Ok(_) => Ok(()),
             Err(e) => Err(anyhow!("{}", e)),
         }
+    }
+
+    fn set_raw_message_callback(&self, mut cb: Box<dyn FnMut(&str, &[u8]) + Send>) {
+        self.client.set_message_callback(move |_, message| {
+            if let Some(message) = message {
+                cb(message.topic(), message.payload());
+            }
+        });
+    }
+
+    fn remove_raw_message_callback(&self) {
+        self.client.remove_message_callback();
     }
 
     async fn subscribe(&self, topic: &String, qos: i32) -> anyhow::Result<()> {

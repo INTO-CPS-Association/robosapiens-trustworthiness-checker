@@ -10,11 +10,9 @@ mod integration_tests {
     use std::vec;
     use tc_testutils::mqtt::dummy_stream_mqtt_publisher;
     use tc_testutils::streams::{
-        TickSender, interleave_with_constant, receive_values_serially, tick_stream, with_timeout,
-        with_timeout_res,
+        TickSender, expect_events_serially, tick_stream, with_timeout, with_timeout_res,
     };
-    use tracing::{error, info};
-    use trustworthiness_checker::InputProvider;
+    use tracing::info;
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::core::{RuntimeSpec, Semantics};
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
@@ -30,13 +28,13 @@ mod integration_tests {
     use std::{collections::BTreeMap, rc::Rc};
     use tc_testutils::mqtt::{get_mqtt_outputs, start_mqtt};
 
-    use trustworthiness_checker::dsrv_fixtures::{TestRuntime, input_streams1};
+    use trustworthiness_checker::dsrv_fixtures::{TestRuntime, integer_pair_input_stream};
     use trustworthiness_checker::{
         UntypedDsrvSpecification, Value, VarName,
         core::Runtime,
-        dsrv_fixtures::{input_streams_float, spec_simple_add_monitor_typed_float},
+        dsrv_fixtures::{float_pair_input_stream, spec_simple_add_monitor_typed_float},
         dsrv_specification,
-        io::mqtt::{MqttInputProvider, MqttOutputHandler},
+        io::mqtt::{self, MqttOutputHandler},
         runtime::RuntimeBuilder,
     };
 
@@ -137,7 +135,7 @@ mod integration_tests {
             .await
             .expect("Failed to get host port for MQTT server");
 
-        let input_streams = input_streams1();
+        let input_stream = integer_pair_input_stream();
         let mqtt_host = "localhost";
         let mqtt_topic = BTreeMap::from_iter(vec![("z".into(), Z_TOPIC.into())]);
 
@@ -161,13 +159,8 @@ mod integration_tests {
         .unwrap();
         output_handler.connect().await.unwrap();
         let output_handler = Box::new(output_handler);
-        let async_monitor: TestRuntime = TestRuntime::new(
-            executor.clone(),
-            spec.clone(),
-            Box::new(input_streams),
-            output_handler,
-        )
-        .await;
+        let async_monitor: TestRuntime =
+            TestRuntime::new(executor.clone(), spec.clone(), input_stream, output_handler).await;
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
         let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
@@ -187,7 +180,7 @@ mod integration_tests {
             .await
             .expect("Failed to get host port for MQTT server");
 
-        let input_streams = input_streams_float();
+        let input_stream = float_pair_input_stream();
         let mqtt_host = "localhost";
         let mqtt_topics = BTreeMap::from_iter(vec![("z".into(), Z_TOPIC.into())]);
 
@@ -215,13 +208,8 @@ mod integration_tests {
         .unwrap();
         output_handler.connect().await.unwrap();
         let output_handler = Box::new(output_handler);
-        let async_monitor: TestRuntime = TestRuntime::new(
-            executor.clone(),
-            spec.clone(),
-            Box::new(input_streams),
-            output_handler,
-        )
-        .await;
+        let async_monitor: TestRuntime =
+            TestRuntime::new(executor.clone(), spec.clone(), input_stream, output_handler).await;
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
         let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
@@ -243,8 +231,6 @@ mod integration_tests {
     ) -> anyhow::Result<()> {
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
-        let stream_len = xs.len();
-
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let var_topics = BTreeMap::from_iter([
@@ -252,50 +238,15 @@ mod integration_tests {
             ("y".into(), Y_TOPIC.to_string()),
         ]);
 
-        // Create the MQTT input provider
-        let mut input_provider = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            "localhost",
-            Some(mqtt_port),
-            var_topics,
-            0,
-        );
-        with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
-
-        let x_stream = input_provider
-            .var_stream(&"x".into())
-            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
-        let y_stream = input_provider
-            .var_stream(&"y".into())
-            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
-
-        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
-        // behavior.
-        let mut input_provider_stream = input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
-                    return res;
-                }
-            }
-            Ok(())
-        });
-        executor.spawn(input_provider_future).detach();
-
+        let mut input_stream = with_timeout_res(
+            mqtt::input_stream(MQTT_FACTORY, "localhost", Some(mqtt_port), var_topics, 0),
+            5,
+            "input_stream_connect",
+        )
+        .await?;
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
-
-        let (x_vals, y_vals) =
-            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
-                .await?;
-
-        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
-        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
-        info!(?x_vals, ?y_vals, "Received values");
-        assert_eq!(x_vals, exp_x_vals);
-        assert_eq!(y_vals, exp_y_vals);
+        expect_events_serially(&mut x_tick, &mut y_tick, &mut input_stream, xs, ys).await?;
 
         // Final ticks to let them complete
         x_tick.send(()).await?;
@@ -318,15 +269,18 @@ mod integration_tests {
 
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
-        let mut input_provider = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            "localhost",
-            Some(mqtt_port),
-            BTreeMap::from([(VarName::new("x"), MSTLO_IN_TOPIC.to_string())]),
-            0,
-        );
-        with_timeout_res(input_provider.connect(), 5, "mstlo_input_connect").await?;
+        let input_stream = with_timeout_res(
+            mqtt::input_stream(
+                MQTT_FACTORY,
+                "localhost",
+                Some(mqtt_port),
+                BTreeMap::from([(VarName::new("x"), MSTLO_IN_TOPIC.to_string())]),
+                0,
+            ),
+            5,
+            "mstlo_input_connect",
+        )
+        .await?;
 
         let mut output_handler = MqttOutputHandler::new(
             executor.clone(),
@@ -354,13 +308,13 @@ mod integration_tests {
             VarName::new("robustness"),
             mstlo::FormulaDefinition::GreaterThan("x", 5.0),
         );
-        let runtime = MstloRuntimeBuilder::new()
+        let (input_stream, input_controller) =
+            trustworthiness_checker::io::controlled(input_stream);
+        let builder = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
-            .input(Box::new(input_provider))
-            .output(Box::new(output_handler))
-            .build()
-            .await;
+            .input(input_stream);
+        let runtime = builder.output(Box::new(output_handler)).build().await;
         let runtime_task = executor.spawn(runtime.run());
 
         let values = vec![mstlo_mqtt_input(0, 7.0), mstlo_mqtt_input(10, 4.0)];
@@ -380,13 +334,14 @@ mod integration_tests {
         let mut outputs = outputs;
 
         tick.send(()).await?;
+        input_controller.advance().await?;
         let first = with_timeout(outputs.next(), 5, "first mstlo mqtt output")
             .await?
             .expect("first MSTLO MQTT output");
         assert_eq!(mstlo_output_tuple(&first), (0, 2.0));
 
-        smol::Timer::after(std::time::Duration::from_millis(100)).await;
         tick.send(()).await?;
+        input_controller.advance().await?;
         let second = with_timeout(outputs.next(), 5, "second mstlo mqtt output")
             .await?
             .expect("second MSTLO MQTT output");
@@ -410,18 +365,21 @@ mod integration_tests {
 
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
-        let mut input_provider = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            "localhost",
-            Some(mqtt_port),
-            BTreeMap::from([
-                (VarName::new("x"), MSTLO_X_TOPIC.to_string()),
-                (VarName::new("y"), MSTLO_Y_TOPIC.to_string()),
-            ]),
-            0,
-        );
-        with_timeout_res(input_provider.connect(), 5, "mstlo_multi_input_connect").await?;
+        let input_stream = with_timeout_res(
+            mqtt::input_stream(
+                MQTT_FACTORY,
+                "localhost",
+                Some(mqtt_port),
+                BTreeMap::from([
+                    (VarName::new("x"), MSTLO_X_TOPIC.to_string()),
+                    (VarName::new("y"), MSTLO_Y_TOPIC.to_string()),
+                ]),
+                0,
+            ),
+            5,
+            "mstlo_multi_input_connect",
+        )
+        .await?;
 
         let mut output_handler = MqttOutputHandler::new(
             executor.clone(),
@@ -471,7 +429,7 @@ mod integration_tests {
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
-            .input(Box::new(input_provider))
+            .input(input_stream)
             .output(Box::new(output_handler))
             .build()
             .await;
@@ -532,15 +490,12 @@ mod integration_tests {
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let var_topics = BTreeMap::from_iter([("payload".into(), "payload".to_string())]);
-        let mut input_provider = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            "localhost",
-            Some(mqtt_port),
-            var_topics,
-            0,
-        );
-        with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
+        let input_stream = with_timeout_res(
+            mqtt::input_stream(MQTT_FACTORY, "localhost", Some(mqtt_port), var_topics, 0),
+            5,
+            "input_stream_connect",
+        )
+        .await?;
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -551,7 +506,7 @@ mod integration_tests {
         let monitor: Box<dyn Runtime> = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec)
-            .input(Box::new(input_provider))
+            .input(input_stream)
             .output(output_handler)
             .runtime(RuntimeSpec::Async)
             .semantics(semantics)
@@ -718,8 +673,6 @@ echoed = payload
     ) -> anyhow::Result<()> {
         let xs = vec![Value::Float(1.3), Value::Float(3.4)];
         let ys = vec![Value::Float(2.4), Value::Float(4.3)];
-        let stream_len = xs.len();
-
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let var_topics = BTreeMap::from_iter([
@@ -727,50 +680,15 @@ echoed = payload
             ("y".into(), Y_TOPIC.to_string()),
         ]);
 
-        // Create the MQTT input provider
-        let mut input_provider = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            "localhost",
-            Some(mqtt_port),
-            var_topics,
-            0,
-        );
-        with_timeout_res(input_provider.connect(), 5, "input_provider_connect").await?;
-
-        let x_stream = input_provider
-            .var_stream(&"x".into())
-            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
-        let y_stream = input_provider
-            .var_stream(&"y".into())
-            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
-
-        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
-        // behavior.
-        let mut input_provider_stream = input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
-                    return res;
-                }
-            }
-            Ok(())
-        });
-        executor.spawn(input_provider_future).detach();
-
+        let mut input_stream = with_timeout_res(
+            mqtt::input_stream(MQTT_FACTORY, "localhost", Some(mqtt_port), var_topics, 0),
+            5,
+            "input_stream_connect",
+        )
+        .await?;
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
-
-        let (x_vals, y_vals) =
-            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
-                .await?;
-
-        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
-        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
-        info!(?x_vals, ?y_vals, "Received values");
-        assert_eq!(x_vals, exp_x_vals);
-        assert_eq!(y_vals, exp_y_vals);
+        expect_events_serially(&mut x_tick, &mut y_tick, &mut input_stream, xs, ys).await?;
 
         // Final ticks to let them complete
         x_tick.send(()).await?;
@@ -805,9 +723,7 @@ mod reconf_tests {
     use trustworthiness_checker::core::values::Value;
     use trustworthiness_checker::dsrv_fixtures::*;
     use trustworthiness_checker::dsrv_specification;
-    use trustworthiness_checker::io::builders::{
-        InputProviderBuilder, InputProviderSpec, OutputHandlerBuilder,
-    };
+    use trustworthiness_checker::io::{InputStreamFactory, OutputHandlerBuilder};
     use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
     use trustworthiness_checker::runtime::RuntimeBuilder;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
@@ -889,15 +805,14 @@ mod reconf_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::Mqtt(Some(BTreeMap::from([
-            (X_TOPIC.into(), X_TOPIC.into()),
-            (Y_TOPIC.into(), Y_TOPIC.into()),
-        ])));
-        let input_builder = InputProviderBuilder::new(input_spec)
-            .model(spec.clone())
-            .executor(executor.clone())
-            .mqtt_port(Some(mqtt_port));
+        // Input stream is MQTT server:
+        let input_factory = InputStreamFactory::mqtt(
+            Some(BTreeMap::from([
+                (X_TOPIC.into(), X_TOPIC.into()),
+                (Y_TOPIC.into(), Y_TOPIC.into()),
+            ])),
+            Some(mqtt_port),
+        );
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -920,7 +835,7 @@ mod reconf_tests {
             TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
-                .input_builder(input_builder)
+                .input_factory(input_factory)
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -1035,15 +950,14 @@ mod reconf_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::Mqtt(Some(BTreeMap::from([
-            (X_TOPIC.into(), X_TOPIC.into()),
-            (Y_TOPIC.into(), Y_TOPIC.into()),
-        ])));
-        let input_builder = InputProviderBuilder::new(input_spec)
-            .model(spec.clone())
-            .executor(executor.clone())
-            .mqtt_port(Some(mqtt_port));
+        // Input stream is MQTT server:
+        let input_factory = InputStreamFactory::mqtt(
+            Some(BTreeMap::from([
+                (X_TOPIC.into(), X_TOPIC.into()),
+                (Y_TOPIC.into(), Y_TOPIC.into()),
+            ])),
+            Some(mqtt_port),
+        );
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -1066,7 +980,7 @@ mod reconf_tests {
             TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
-                .input_builder(input_builder)
+                .input_factory(input_factory)
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -1273,15 +1187,14 @@ mod reconf_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        // InputProvider is MQTT server:
-        let input_spec = InputProviderSpec::Mqtt(Some(BTreeMap::from([
-            (X_TOPIC.into(), X_TOPIC.into()),
-            (Y_TOPIC.into(), Y_TOPIC.into()),
-        ])));
-        let input_builder = InputProviderBuilder::new(input_spec)
-            .model(spec.clone())
-            .executor(executor.clone())
-            .mqtt_port(Some(mqtt_port));
+        // Input stream is MQTT server:
+        let input_factory = InputStreamFactory::mqtt(
+            Some(BTreeMap::from([
+                (X_TOPIC.into(), X_TOPIC.into()),
+                (Y_TOPIC.into(), Y_TOPIC.into()),
+            ])),
+            Some(mqtt_port),
+        );
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -1304,7 +1217,7 @@ mod reconf_tests {
             TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
-                .input_builder(input_builder)
+                .input_factory(input_factory)
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -1483,14 +1396,12 @@ mod reconf_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        // InputProvider is MQTT server:
+        // Input stream is MQTT server:
         // NOTE: No way of giving new Y_TOPIC after reconf - defaults to /y
-        let input_spec =
-            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
-        let input_builder = InputProviderBuilder::new(input_spec)
-            .model(spec.clone())
-            .executor(executor.clone())
-            .mqtt_port(Some(mqtt_port));
+        let input_factory = InputStreamFactory::mqtt(
+            Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])),
+            Some(mqtt_port),
+        );
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
@@ -1513,7 +1424,7 @@ mod reconf_tests {
             TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
-                .input_builder(input_builder)
+                .input_factory(input_factory)
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -1682,13 +1593,11 @@ mod reconf_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        // InputProvider is MQTT server:
-        let input_spec =
-            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
-        let input_builder = InputProviderBuilder::new(input_spec)
-            .model(spec.clone())
-            .executor(executor.clone())
-            .mqtt_port(Some(mqtt_port));
+        // Input stream is MQTT server:
+        let input_factory = InputStreamFactory::mqtt(
+            Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])),
+            Some(mqtt_port),
+        );
 
         let ((mut x_tick, x_publisher_task), (_, _)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), vec![], mqtt_port);
@@ -1711,7 +1620,7 @@ mod reconf_tests {
             TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
-                .input_builder(input_builder)
+                .input_factory(input_factory)
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -1860,13 +1769,11 @@ mod reconf_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        // InputProvider is MQTT server:
-        let input_spec =
-            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
-        let input_builder = InputProviderBuilder::new(input_spec)
-            .model(spec.clone())
-            .executor(executor.clone())
-            .mqtt_port(Some(mqtt_port));
+        // Input stream is MQTT server:
+        let input_factory = InputStreamFactory::mqtt(
+            Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])),
+            Some(mqtt_port),
+        );
 
         let ((mut x_tick, x_publisher_task), (_, _)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), vec![], mqtt_port);
@@ -1890,7 +1797,7 @@ mod reconf_tests {
             TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
-                .input_builder(input_builder)
+                .input_factory(input_factory)
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -2036,13 +1943,11 @@ mod reconf_tests {
         .await
         .expect("Failed to get host port for MQTT server");
 
-        // InputProvider is MQTT server:
-        let input_spec =
-            InputProviderSpec::Mqtt(Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])));
-        let input_builder = InputProviderBuilder::new(input_spec)
-            .model(spec.clone())
-            .executor(executor.clone())
-            .mqtt_port(Some(mqtt_port));
+        // Input stream is MQTT server:
+        let input_factory = InputStreamFactory::mqtt(
+            Some(BTreeMap::from([(X_TOPIC.into(), X_TOPIC.into())])),
+            Some(mqtt_port),
+        );
 
         let ((mut x_tick, x_publisher_task), (_, _)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), vec![], mqtt_port);
@@ -2065,7 +1970,7 @@ mod reconf_tests {
             TestRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec.clone())
-                .input_builder(input_builder)
+                .input_factory(input_factory)
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );

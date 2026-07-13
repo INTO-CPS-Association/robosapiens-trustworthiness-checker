@@ -1,9 +1,7 @@
-pub mod input_provider;
-pub use input_provider::MqttInputProvider;
-pub mod client;
+mod input_stream;
+pub use input_stream::input_stream;
+mod client;
 pub use client::{MqttClient, MqttFactory, MqttMessage};
-pub mod output_handler;
+mod output_handler;
 pub use output_handler::MqttOutputHandler;
 pub mod dist_graph_provider;
-
-pub(crate) mod common_input_provider;

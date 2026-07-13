@@ -9,7 +9,7 @@ use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
-use trustworthiness_checker::dsrv_fixtures::input_streams_simple_add;
+use trustworthiness_checker::dsrv_fixtures::simple_add_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor_typed;
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
@@ -55,7 +55,7 @@ fn from_elem(c: &mut Criterion) {
     let spec_typed = type_check(spec_typed.clone()).expect("Type check failed");
 
     for size in sizes {
-        let input_stream_fn = || input_streams_simple_add(size);
+        let input_stream_fn = || simple_add_input_stream(size);
         group.bench_with_input(
             BenchmarkId::new("simple_add_untyped_async", size),
             &(&spec),

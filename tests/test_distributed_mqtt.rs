@@ -23,7 +23,7 @@ mod integration_tests {
 
     use trustworthiness_checker::{
         VarName, dsrv_specification,
-        io::mqtt::{MqttInputProvider, MqttOutputHandler},
+        io::mqtt::{self, MqttOutputHandler},
         semantics::distributed::localisation::Localisable,
     };
 
@@ -167,17 +167,19 @@ mod integration_tests {
             .await
             .expect("Failed to get host port for MQTT server");
         let mqtt_host = "localhost";
-        let mut input_provider_1 = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            mqtt_host,
-            Some(mqtt_port),
-            var_in_topics_1.iter().cloned().collect(),
-            0,
-        );
-        with_timeout_res(input_provider_1.connect(), 10, "input_provider_1.connect()")
-            .await
-            .expect("Failed to connect to MQTT with input provider 1");
+        let input_stream_1 = with_timeout_res(
+            mqtt::input_stream(
+                MQTT_FACTORY,
+                mqtt_host,
+                Some(mqtt_port),
+                var_in_topics_1.iter().cloned().collect(),
+                0,
+            ),
+            10,
+            "input_stream_1_connect",
+        )
+        .await
+        .expect("Failed to connect MQTT input stream 1");
 
         let mut output_handler_1 = MqttOutputHandler::new(
             executor.clone(),
@@ -194,17 +196,19 @@ mod integration_tests {
             .await
             .expect("Failed to connect output handler 1");
 
-        let mut input_provider_2 = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            mqtt_host,
-            Some(mqtt_port),
-            var_in_topics_2.iter().cloned().collect(),
-            0,
-        );
-        with_timeout_res(input_provider_2.connect(), 10, "input_provider_2.connect()")
-            .await
-            .expect("Failed to connect to MQTT with input provider 2");
+        let input_stream_2 = with_timeout_res(
+            mqtt::input_stream(
+                MQTT_FACTORY,
+                mqtt_host,
+                Some(mqtt_port),
+                var_in_topics_2.iter().cloned().collect(),
+                0,
+            ),
+            10,
+            "input_stream_2_connect",
+        )
+        .await
+        .expect("Failed to connect MQTT input stream 2");
 
         let mut output_handler_2 = MqttOutputHandler::new(
             executor.clone(),
@@ -224,7 +228,7 @@ mod integration_tests {
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
-            Box::new(input_provider_1),
+            input_stream_1,
             Box::new(output_handler_1),
         )
         .await;
@@ -233,7 +237,7 @@ mod integration_tests {
         let runner_2: TestRuntime = TestRuntime::new(
             executor.clone(),
             model2.clone(),
-            Box::new(input_provider_2),
+            input_stream_2,
             Box::new(output_handler_2),
         )
         .await;
@@ -302,18 +306,10 @@ mod integration_tests {
             .collect();
         warn!(?var_topics1, "Var topics 1");
 
-        let mut input_provider_1 = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            mqtt_host,
-            Some(mqtt_port),
-            var_topics1,
-            0,
-        );
-        input_provider_1
-            .connect()
-            .await
-            .expect("Failed to connect to MQTT with input provider 1");
+        let input_stream_1 =
+            mqtt::input_stream(MQTT_FACTORY, mqtt_host, Some(mqtt_port), var_topics1, 0)
+                .await
+                .expect("Failed to connect MQTT input stream 1");
 
         let var_topics_2 = local_spec2
             .input_vars()
@@ -322,18 +318,10 @@ mod integration_tests {
             .collect();
         warn!(?var_topics_2, "Var topics 2");
 
-        let mut input_provider_2 = MqttInputProvider::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            mqtt_host,
-            Some(mqtt_port),
-            var_topics_2,
-            0,
-        );
-        input_provider_2
-            .connect()
-            .await
-            .expect("Failed to connect to MQTT with input provider 2");
+        let input_stream_2 =
+            mqtt::input_stream(MQTT_FACTORY, mqtt_host, Some(mqtt_port), var_topics_2, 0)
+                .await
+                .expect("Failed to connect MQTT input stream 2");
 
         let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
             .output_vars()
@@ -381,7 +369,7 @@ mod integration_tests {
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
-            Box::new(input_provider_1),
+            input_stream_1,
             Box::new(output_handler_1),
         )
         .await;
@@ -389,7 +377,7 @@ mod integration_tests {
         let runner_2: TestRuntime = TestRuntime::new(
             executor.clone(),
             model2.clone(),
-            Box::new(input_provider_2),
+            input_stream_2,
             Box::new(output_handler_2),
         )
         .await;
@@ -459,8 +447,7 @@ mod integration_tests {
             .expect("Failed to get host port for MQTT server");
         let mqtt_host = "localhost";
 
-        let mut input_provider_1 = MqttInputProvider::new(
-            executor.clone(),
+        let input_stream_1 = mqtt::input_stream(
             MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
@@ -470,14 +457,11 @@ mod integration_tests {
                 .map(|v| (v.clone(), v.into()))
                 .collect(),
             0,
-        );
-        input_provider_1
-            .connect()
-            .await
-            .expect("Failed to connect to MQTT with input provider 1");
+        )
+        .await
+        .expect("Failed to connect MQTT input stream 1");
 
-        let mut input_provider_2 = MqttInputProvider::new(
-            executor.clone(),
+        let input_stream_2 = mqtt::input_stream(
             MQTT_FACTORY,
             mqtt_host,
             Some(mqtt_port),
@@ -487,11 +471,9 @@ mod integration_tests {
                 .map(|v| (v.clone(), v.into()))
                 .collect(),
             0,
-        );
-        input_provider_2
-            .connect()
-            .await
-            .expect("Failed to connect to MQTT with input provider 2");
+        )
+        .await
+        .expect("Failed to connect MQTT input stream 2");
 
         let var_out_topics_1: BTreeMap<VarName, String> = local_spec1
             .output_vars()
@@ -535,7 +517,7 @@ mod integration_tests {
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
-            Box::new(input_provider_1),
+            input_stream_1,
             Box::new(output_handler_1),
         )
         .await;
@@ -543,7 +525,7 @@ mod integration_tests {
         let runner_2: TestRuntime = TestRuntime::new(
             executor.clone(),
             model2.clone(),
-            Box::new(input_provider_2),
+            input_stream_2,
             Box::new(output_handler_2),
         )
         .await;

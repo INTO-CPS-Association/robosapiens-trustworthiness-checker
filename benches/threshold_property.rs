@@ -11,10 +11,10 @@ use mstlo::{
 };
 use smol::LocalExecutor;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
-use trustworthiness_checker::io::map::MapInputProvider;
 use trustworthiness_checker::io::testing::NullOutputHandler;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
+use trustworthiness_checker::{InputStream, io::map};
 use trustworthiness_checker::{UntypedDsrvSpecification, Value, VarName, dsrv_specification};
 
 #[global_allocator]
@@ -66,25 +66,25 @@ fn mstlo_threshold_formula() -> FormulaDefinition {
     parse_stl("x > 3").expect("MSTLO threshold benchmark formula should parse")
 }
 
-fn dsrv_input(size: usize) -> MapInputProvider {
+fn dsrv_input(size: usize) -> InputStream<Value> {
     let values = (0..size)
         .map(|idx| Value::Float(if idx % 8 == 3 { 2.0 } else { 5.0 }))
         .collect::<Vec<_>>();
-    MapInputProvider::new(BTreeMap::from([(VarName::new("x"), values)]))
+    map::input_stream(BTreeMap::from([(VarName::new("x"), values)]))
 }
 
 fn timed_value(time_ms: i64, value: f64) -> Value {
     Value::List(vec![Value::Int(time_ms), Value::Float(value)].into())
 }
 
-fn mstlo_input(size: usize) -> MapInputProvider {
+fn mstlo_input(size: usize) -> InputStream<Value> {
     let values = (0..size)
         .map(|idx| {
             let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
             timed_value((idx as i64) * 1000, value)
         })
         .collect::<Vec<_>>();
-    MapInputProvider::new(BTreeMap::from([(VarName::new("x"), values)]))
+    map::input_stream(BTreeMap::from([(VarName::new("x"), values)]))
 }
 
 fn timed_map_value(time_ms: i64, value: f64) -> Value {
@@ -94,14 +94,14 @@ fn timed_map_value(time_ms: i64, value: f64) -> Value {
     ]))
 }
 
-fn mstlo_map_input(size: usize) -> MapInputProvider {
+fn mstlo_map_input(size: usize) -> InputStream<Value> {
     let values = (0..size)
         .map(|idx| {
             let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
             timed_map_value((idx as i64) * 1000, value)
         })
         .collect::<Vec<_>>();
-    MapInputProvider::new(BTreeMap::from([(VarName::new("x"), values)]))
+    map::input_stream(BTreeMap::from([(VarName::new("x"), values)]))
 }
 
 fn mstlo_direct_input(size: usize) -> Vec<Step<f64>> {
@@ -125,7 +125,7 @@ fn mstlo_value_input(size: usize) -> Vec<Value> {
 async fn run_dsrv_with_semantics(
     executor: Rc<LocalExecutor<'static>>,
     spec: UntypedDsrvSpecification,
-    input: MapInputProvider,
+    input: InputStream<Value>,
     runtime_spec: RuntimeSpec,
     semantics: Semantics,
 ) {
@@ -137,7 +137,7 @@ async fn run_dsrv_with_semantics(
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
         .model(spec)
-        .input(Box::new(input))
+        .input(input)
         .output(output)
         .runtime(runtime_spec)
         .semantics(semantics)
@@ -153,7 +153,7 @@ async fn run_dsrv_with_semantics(
 async fn run_dsrv(
     executor: Rc<LocalExecutor<'static>>,
     spec: UntypedDsrvSpecification,
-    input: MapInputProvider,
+    input: InputStream<Value>,
     runtime_spec: RuntimeSpec,
 ) {
     run_dsrv_with_semantics(
@@ -169,7 +169,7 @@ async fn run_dsrv(
 async fn run_mstlo(
     executor: Rc<LocalExecutor<'static>>,
     spec: MstloSpecification,
-    input: MapInputProvider,
+    input: InputStream<Value>,
     semantics: Semantics,
 ) {
     let output = Box::new(NullOutputHandler::new(executor.clone(), spec.output_vars()));
@@ -177,7 +177,7 @@ async fn run_mstlo(
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
         .model(spec)
-        .input(Box::new(input))
+        .input(input)
         .output(output)
         .semantics(semantics)
         .build()

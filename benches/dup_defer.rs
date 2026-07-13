@@ -7,7 +7,7 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
-use trustworthiness_checker::dsrv_fixtures::input_streams_add_defer;
+use trustworthiness_checker::dsrv_fixtures::add_defer_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
 
 #[global_allocator]
@@ -48,7 +48,7 @@ fn from_elem(c: &mut Criterion) {
     let spec = trustworthiness_checker::dsrv_specification(&mut spec_add_defer()).unwrap();
 
     for size in sizes {
-        let input_stream_fn = || input_streams_add_defer(size);
+        let input_stream_fn = || add_defer_input_stream(size);
         group.bench_with_input(
             BenchmarkId::new("dup_defer_untyped_async", size),
             &(&spec),

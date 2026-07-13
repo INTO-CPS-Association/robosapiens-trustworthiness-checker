@@ -7,7 +7,7 @@ use macro_rules_attribute::apply;
 use petgraph::graph::DiGraph;
 use smol::{LocalExecutor, stream::StreamExt};
 use trustworthiness_checker::VarName;
-use trustworthiness_checker::io::map::MapInputProvider;
+use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
     OutputStream, Value,
     core::Runtime,
@@ -28,7 +28,7 @@ type TestDistRuntimeBuilder = DistAsyncRuntimeBuilder<TestDistConfig, TestDistSe
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     let x = vec![1.into(), 2.into(), 3.into()];
-    let input_handler = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
+    let input_handler = map::input_stream(BTreeMap::from([("x".into(), x)]));
 
     let mut graph = DiGraph::new();
     let a = graph.add_node("A".into());
@@ -73,7 +73,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(Box::new(input_handler))
+        .input(input_handler)
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -115,7 +115,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
 #[apply(async_test)]
 async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     let x = vec![1.into(), 2.into(), 3.into()];
-    let input_handler = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
+    let input_handler = map::input_stream(BTreeMap::from([("x".into(), x)]));
 
     let mut graph = DiGraph::new();
     let a = graph.add_node("A".into());
@@ -160,7 +160,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(Box::new(input_handler))
+        .input(input_handler)
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -202,7 +202,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
 #[apply(async_test)]
 async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     let x = vec![1.into(), 2.into(), 3.into()];
-    let input_handler = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
+    let input_handler = map::input_stream(BTreeMap::from([("x".into(), x)]));
 
     let mut graph = DiGraph::new();
     let a = graph.add_node("A".into());
@@ -247,7 +247,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(Box::new(input_handler))
+        .input(input_handler)
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -289,7 +289,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
 #[apply(async_test)]
 async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     let x = vec![1.into(), 2.into(), 3.into()];
-    let input_handler = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
+    let input_handler = map::input_stream(BTreeMap::from([("x".into(), x)]));
 
     let mut graph = DiGraph::new();
     let a = graph.add_node("A".into());
@@ -334,7 +334,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(Box::new(input_handler))
+        .input(input_handler)
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -376,7 +376,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
 #[apply(async_test)]
 async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     let x = vec![1.into(), 2.into(), 3.into()];
-    let input_handler = MapInputProvider::new(BTreeMap::from([("x".into(), x)]));
+    let input_handler = map::input_stream(BTreeMap::from([("x".into(), x)]));
 
     let mut graph = DiGraph::new();
     let a = graph.add_node("A".into());
@@ -421,7 +421,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(Box::new(input_handler))
+        .input(input_handler)
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)

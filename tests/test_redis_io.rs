@@ -1,6 +1,6 @@
-//! Integration tests for Redis input provider functionality.
+//! Integration tests for Redis input streams.
 //!
-//! These tests verify that the RedisInputProvider works correctly with:
+//! These tests verify that Redis input works correctly with:
 //! - Redis pub/sub messaging
 //! - Monitor runtime integration
 //! - Multiple channel subscriptions
@@ -29,18 +29,16 @@ mod integration_tests {
     use tc_testutils::redis::dummy_redis_stream_sender;
     use tc_testutils::redis::{dummy_redis_receiver, dummy_redis_sender, start_redis};
     use tc_testutils::streams::TickSender;
-    use tc_testutils::streams::interleave_with_constant;
-    use tc_testutils::streams::receive_values_serially;
+    use tc_testutils::streams::expect_events_serially;
     use tc_testutils::streams::tick_stream;
     use tc_testutils::streams::with_timeout_res;
-    use tracing::error;
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
-        InputProvider, OutputStream, Value, VarName,
+        OutputStream, Value, VarName,
         core::OutputHandler,
         core::REDIS_HOSTNAME,
-        io::redis::{input_provider::RedisInputProvider, output_handler::RedisOutputHandler},
+        io::redis::{self as tc_redis, RedisOutputHandler},
     };
 
     const X_TOPIC: &str = "x";
@@ -140,15 +138,13 @@ mod integration_tests {
         Ok(())
     }
 
-    /// Tests RedisInputProvider using integer values.
+    /// Tests Redis input using integer values.
     #[apply(async_test)]
     async fn test_add_monitor_redis_input(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
-        let stream_len = xs.len();
-
         let redis = start_redis().await;
         let redis_port = redis
             .get_host_port_ipv4(6379)
@@ -160,45 +156,12 @@ mod integration_tests {
             ("y".into(), Y_TOPIC.to_string()),
         ]);
 
-        // Create the MQTT input provider
-        let mut input_provider =
-            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
-                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
-        input_provider.connect().await?;
-
-        let x_stream = input_provider
-            .var_stream(&"x".into())
-            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
-        let y_stream = input_provider
-            .var_stream(&"y".into())
-            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
-
-        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
-        // behavior.
-        let mut input_provider_stream = input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
-                    return res;
-                }
-            }
-            Ok(())
-        });
-        executor.spawn(input_provider_future).detach();
+        let mut input_stream =
+            tc_redis::input_stream(REDIS_HOSTNAME, Some(redis_port), var_topics).await?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
-
-        let (x_vals, y_vals) =
-            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
-                .await?;
-
-        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
-        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
-        info!(?x_vals, ?y_vals, "Received values");
-        assert_eq!(x_vals, exp_x_vals);
-        assert_eq!(y_vals, exp_y_vals);
+        expect_events_serially(&mut x_tick, &mut y_tick, &mut input_stream, xs, ys).await?;
 
         // Final ticks to let them complete
         x_tick.send(()).await?;
@@ -212,8 +175,8 @@ mod integration_tests {
         Ok(())
     }
 
-    /// Tests RedisInputProvider using float values.
-    /// Similar to the integer test, but uses float values to verify that the RedisInputProvider
+    /// Tests Redis input using float values.
+    /// Similar to the integer test, but uses float values to verify that the input stream
     /// correctly handles different data types.
     #[apply(async_test)]
     async fn test_add_monitor_redis_input_float(
@@ -221,8 +184,6 @@ mod integration_tests {
     ) -> anyhow::Result<()> {
         let xs = vec![Value::Float(1.5), Value::Float(2.5)];
         let ys = vec![Value::Float(3.5), Value::Float(4.5)];
-        let stream_len = xs.len();
-
         let redis = start_redis().await;
         let redis_port = redis
             .get_host_port_ipv4(6379)
@@ -234,45 +195,12 @@ mod integration_tests {
             ("y".into(), Y_TOPIC.to_string()),
         ]);
 
-        // Create the MQTT input provider
-        let mut input_provider =
-            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
-                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
-        input_provider.connect().await?;
-
-        let x_stream = input_provider
-            .var_stream(&"x".into())
-            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
-        let y_stream = input_provider
-            .var_stream(&"y".into())
-            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
-
-        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
-        // behavior.
-        let mut input_provider_stream = input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
-                    return res;
-                }
-            }
-            Ok(())
-        });
-        executor.spawn(input_provider_future).detach();
+        let mut input_stream =
+            tc_redis::input_stream(REDIS_HOSTNAME, Some(redis_port), var_topics).await?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
-
-        let (x_vals, y_vals) =
-            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
-                .await?;
-
-        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
-        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
-        info!(?x_vals, ?y_vals, "Received values");
-        assert_eq!(x_vals, exp_x_vals);
-        assert_eq!(y_vals, exp_y_vals);
+        expect_events_serially(&mut x_tick, &mut y_tick, &mut input_stream, xs, ys).await?;
 
         // Final ticks to let them complete
         x_tick.send(()).await?;
@@ -292,8 +220,6 @@ mod integration_tests {
     ) -> anyhow::Result<()> {
         let xs = vec![Value::Int(42), Value::Int(69)];
         let ys = vec![Value::Str("Hello".into()), Value::Str("World".into())];
-        let stream_len = xs.len();
-
         let redis = start_redis().await;
         let redis_port = redis
             .get_host_port_ipv4(6379)
@@ -305,45 +231,12 @@ mod integration_tests {
             ("y".into(), Y_TOPIC.to_string()),
         ]);
 
-        // Create the MQTT input provider
-        let mut input_provider =
-            RedisInputProvider::new(REDIS_HOSTNAME, Some(redis_port), var_topics)
-                .map_err(|e| anyhow::anyhow!("Failed to create Redis input provider: {}", e))?;
-        input_provider.connect().await?;
-
-        let x_stream = input_provider
-            .var_stream(&"x".into())
-            .ok_or_else(|| anyhow::anyhow!("x stream unavailable"))?;
-        let y_stream = input_provider
-            .var_stream(&"y".into())
-            .ok_or_else(|| anyhow::anyhow!("y stream unavailable"))?;
-
-        // Note: Test should be refactored to use control_stream instead of spawning with old `run`
-        // behavior.
-        let mut input_provider_stream = input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!("Input provider stream returned error: {:?}", res);
-                    return res;
-                }
-            }
-            Ok(())
-        });
-        executor.spawn(input_provider_future).detach();
+        let mut input_stream =
+            tc_redis::input_stream(REDIS_HOSTNAME, Some(redis_port), var_topics).await?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), redis_port, xs.clone(), ys.clone());
-
-        let (x_vals, y_vals) =
-            receive_values_serially(&mut x_tick, &mut y_tick, x_stream, y_stream, stream_len)
-                .await?;
-
-        let exp_iter = xs.clone().into_iter().zip(ys.clone().into_iter());
-        let (exp_x_vals, exp_y_vals) = interleave_with_constant(exp_iter, Value::NoVal);
-        info!(?x_vals, ?y_vals, "Received values");
-        assert_eq!(x_vals, exp_x_vals);
-        assert_eq!(y_vals, exp_y_vals);
+        expect_events_serially(&mut x_tick, &mut y_tick, &mut input_stream, xs, ys).await?;
 
         // Final ticks to let them complete
         x_tick.send(()).await?;

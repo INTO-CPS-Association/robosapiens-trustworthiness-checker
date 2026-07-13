@@ -1,4 +1,4 @@
-pub mod file_handling;
+mod file_handling;
 pub use file_handling::parse_file;
-pub mod input_provider;
-pub use input_provider::{FileInputProvider, UntimedInputFileData, input_data_for_vars};
+mod input_stream;
+pub use input_stream::{UntimedInputFileData, input_stream};

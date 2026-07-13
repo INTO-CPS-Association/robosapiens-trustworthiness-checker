@@ -1,13 +1,15 @@
 use anyhow::Context;
+use smol::LocalExecutor;
+use std::rc::Rc;
 use tracing::{debug, info};
 
 use crate::cli::args::{Cli, OutputMode};
 use crate::distributed::distribution_graphs::NodeName;
-use crate::io::builders::output_handler_builder::OutputHandlerSpec;
+use crate::io::OutputHandlerSpec;
 use crate::io::config::deserialisation::{json_to_topic_mapping, json_to_topic_msg_type_mapping};
 use crate::{
-    VarName, distributed::distribution_graphs::LabelledDistributionGraph,
-    io::builders::InputProviderSpec, runtime::distributed::SchedulerCommunication,
+    VarName, distributed::distribution_graphs::LabelledDistributionGraph, io::InputStreamFactory,
+    runtime::distributed::SchedulerCommunication,
 };
 
 use super::args::DistributionMode as CliDistributionMode;
@@ -15,53 +17,59 @@ use super::args::{DistributionMode, DistributionSolver, InputMode, SchedulingTyp
 use crate::core::interfaces::RuntimeSpec;
 use crate::runtime::builder::DistributionMode as BuilderDistributionMode;
 
-impl From<InputMode> for InputProviderSpec {
-    fn from(input_mode: InputMode) -> Self {
-        match input_mode {
-            InputMode {
-                input_file: Some(input_file),
-                ..
-            } => InputProviderSpec::File(input_file),
-            InputMode {
-                input_ros_file: Some(input_ros_file),
-                ..
-            } => {
-                let json_string = std::fs::read_to_string(&input_ros_file)
-                    .expect("Input mapping file could not be read");
-                let (ros_topic_mapping, ros_msg_type_mapping) =
-                    json_to_topic_msg_type_mapping(json_string.as_str())
-                        .expect("Invalid input mapping file");
-                InputProviderSpec::Ros(ros_topic_mapping, ros_msg_type_mapping)
-            }
-            InputMode {
-                input_mqtt_file: Some(input_mqtt_file),
-                ..
-            } => {
-                let json_string = std::fs::read_to_string(&input_mqtt_file)
-                    .expect("Input MQTT topic mapping file could not be read");
-                let topic_mapping = json_to_topic_mapping(&json_string)
-                    .expect("Input MQTT topic mapping file could not be parsed");
-                InputProviderSpec::Mqtt(Some(topic_mapping))
-            }
-            InputMode {
-                input_redis_file: Some(input_redis_file),
-                ..
-            } => {
-                let json_string = std::fs::read_to_string(&input_redis_file)
-                    .expect("Input Redis topic mapping file could not be read");
-                let topic_mapping = json_to_topic_mapping(&json_string)
-                    .expect("Input Redis topic mapping file could not be parsed");
-                InputProviderSpec::Redis(Some(topic_mapping))
-            }
-            InputMode {
-                mqtt_input: true, ..
-            } => InputProviderSpec::Mqtt(None),
-            InputMode {
-                redis_input: true, ..
-            } => InputProviderSpec::Redis(None),
-            _ => panic!("Invalid input provider specification"),
+pub fn input_factory(
+    input_mode: InputMode,
+    executor: Rc<LocalExecutor<'static>>,
+    mqtt_port: Option<u16>,
+    redis_port: Option<u16>,
+) -> anyhow::Result<InputStreamFactory> {
+    Ok(match input_mode {
+        InputMode {
+            input_file: Some(input_file),
+            ..
+        } => InputStreamFactory::file(input_file),
+        InputMode {
+            input_ros_file: Some(input_ros_file),
+            ..
+        } => {
+            let json_string = std::fs::read_to_string(&input_ros_file).with_context(|| {
+                format!("Input mapping file {input_ros_file:?} could not be read")
+            })?;
+            let (ros_topic_mapping, ros_msg_type_mapping) =
+                json_to_topic_msg_type_mapping(json_string.as_str())
+                    .context("Invalid input mapping file")?;
+            InputStreamFactory::ros(ros_topic_mapping, ros_msg_type_mapping, executor)
         }
-    }
+        InputMode {
+            input_mqtt_file: Some(input_mqtt_file),
+            ..
+        } => {
+            let json_string = std::fs::read_to_string(&input_mqtt_file).with_context(|| {
+                format!("Input MQTT topic mapping file {input_mqtt_file:?} could not be read")
+            })?;
+            let topic_mapping = json_to_topic_mapping(&json_string)
+                .context("Input MQTT topic mapping file could not be parsed")?;
+            InputStreamFactory::mqtt(Some(topic_mapping), mqtt_port)
+        }
+        InputMode {
+            input_redis_file: Some(input_redis_file),
+            ..
+        } => {
+            let json_string = std::fs::read_to_string(&input_redis_file).with_context(|| {
+                format!("Input Redis topic mapping file {input_redis_file:?} could not be read")
+            })?;
+            let topic_mapping = json_to_topic_mapping(&json_string)
+                .context("Input Redis topic mapping file could not be parsed")?;
+            InputStreamFactory::redis(Some(topic_mapping), redis_port)
+        }
+        InputMode {
+            mqtt_input: true, ..
+        } => InputStreamFactory::mqtt(None, mqtt_port),
+        InputMode {
+            redis_input: true, ..
+        } => InputStreamFactory::redis(None, redis_port),
+        _ => anyhow::bail!("Invalid input stream specification"),
+    })
 }
 
 impl From<OutputMode> for OutputHandlerSpec {
@@ -570,6 +578,24 @@ mod tests {
                 reconf_topic: "custom_reconfig_topic".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn reconfiguration_arguments_are_parsed_without_starting_a_transport() {
+        let cli = Cli::parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--mqtt-input",
+            "--output-stdout",
+            "--runtime",
+            "reconf-semi-sync",
+            "--reconf-topic",
+            "/reconf",
+            "--no-context-transfer",
+        ]);
+
+        assert_eq!(cli.reconf_topic, "/reconf");
+        assert!(cli.no_context_transfer);
     }
 
     #[cfg(feature = "ros")]

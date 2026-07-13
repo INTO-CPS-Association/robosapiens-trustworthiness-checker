@@ -11,7 +11,6 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use crate::utils::cancellation_token::CancellationToken;
-use anyhow::anyhow;
 use async_cell::unsync::AsyncCell;
 use async_stream::stream;
 use async_trait::async_trait;
@@ -23,20 +22,23 @@ use futures::future::join_all;
 use futures::{FutureExt, StreamExt, join, select};
 use smol::LocalExecutor;
 use strum_macros::Display;
+use tracing::Level;
 use tracing::debug;
 use tracing::info;
 use tracing::instrument;
 use tracing::warn;
-use tracing::{Level, error};
 
-use crate::core::InputProvider;
+use crate::core::DeferrableStreamData;
 use crate::core::OutputHandler;
 use crate::core::Runtime;
 use crate::core::Specification;
-use crate::core::{OutputStream, StreamData, VarName};
+use crate::core::{InputStream, OutputStream, StreamData, VarName};
 use crate::runtime::builder::RuntimeBuilder;
 use crate::semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext};
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
+
+mod input_fanout;
+use input_fanout::fan_out_input;
 
 /// Track the stage of a variable's lifecycle
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
@@ -105,7 +107,7 @@ pub struct VarManager<V: StreamData> {
     /// Cancellation token to stop the VarManager when output streams are dropped
     cancellation_token: CancellationToken,
     /// Whether this variable's input stream should still be consumed when there are no subscribers.
-    /// This is needed for source input streams from live providers whose control path expects each
+    /// This is needed for input streams from live transports whose control path expects each
     /// claimed stream to be drained, but should not be used for computed streams because it would
     /// force otherwise-unused monitor expressions to be evaluated.
     drain_when_unsubscribed: bool,
@@ -458,6 +460,20 @@ fn store_history<V: StreamData>(
     })
 }
 
+fn lift_no_val<V: DeferrableStreamData>(mut input: OutputStream<V>) -> OutputStream<V> {
+    Box::pin(stream! {
+        let mut last = None;
+        while let Some(current) = input.next().await {
+            if current.is_no_val() {
+                yield last.clone().unwrap_or(current);
+            } else {
+                last = Some(current.clone());
+                yield current;
+            }
+        }
+    })
+}
+
 #[derive(Debug)]
 pub struct ContextId {
     id: usize,
@@ -702,6 +718,7 @@ where
 impl<AC> StreamContext for Context<AC>
 where
     AC: AsyncConfig<Ctx = Context<AC>>,
+    AC::Val: DeferrableStreamData,
 {
     type AC = AC;
     type Builder = ContextBuilder<AC>;
@@ -761,7 +778,7 @@ where
         let input_streams: Vec<_> = self
             .var_names
             .iter()
-            .map(|var| self.var(var).unwrap())
+            .map(|var| lift_no_val(self.var(var).unwrap()))
             .collect();
 
         let id_num = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -783,7 +800,7 @@ where
             .iter()
             .filter_map(|var| {
                 if vs.contains(var) {
-                    self.var(var)
+                    self.var(var).map(lift_no_val)
                 } else {
                     None
                 }
@@ -937,7 +954,7 @@ where
     S: MonitoringSemantics<AC>,
 {
     pub executor: Rc<LocalExecutor<'static>>,
-    input_provider: Box<dyn InputProvider<Val = AC::Val>>,
+    input_drive: OutputStream<anyhow::Result<()>>,
     output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
     output_streams: BTreeMap<VarName, OutputStream<AC::Val>>,
     cancellation_token: CancellationToken,
@@ -948,7 +965,7 @@ where
 pub struct AsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<AC::Spec>,
-    pub(super) input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
+    pub(super) input: Option<InputStream<AC::Val>>,
     pub(super) output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
     pub(super) context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     semantics_t: PhantomData<S>,
@@ -976,6 +993,8 @@ pub trait AbstractAsyncRuntimeBuilder<AC: AsyncConfig>: RuntimeBuilder<AC::Spec,
 
 impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractAsyncRuntimeBuilder<AC>
     for AsyncRuntimeBuilder<AC, S>
+where
+    AC::Val: DeferrableStreamData,
 {
     fn context_builder(self, context_builder: <AC::Ctx as StreamContext>::Builder) -> Self {
         Self {
@@ -987,6 +1006,8 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> AbstractAsyncRuntimeBuilder<AC
 
 impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::Val>
     for AsyncRuntimeBuilder<AC, S>
+where
+    AC::Val: DeferrableStreamData,
 {
     type Runtime = AsyncRuntime<AC, S>;
 
@@ -1015,7 +1036,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
         }
     }
 
-    fn input(self, input: Box<dyn InputProvider<Val = AC::Val>>) -> Self {
+    fn input(self, input: InputStream<AC::Val>) -> Self {
         Self {
             input: Some(input),
             ..self
@@ -1041,7 +1062,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
                 model.output_vars()
             );
 
-            let mut input_provider = self.input.expect("Input streams not supplied");
+            let input = self.input.expect("Input streams not supplied");
 
             let output_handler = self.output.expect("Output handler not supplied");
 
@@ -1051,6 +1072,9 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
             debug!("AsyncRuntimeBuilder: Context builder initialized");
 
             let input_vars = model.input_vars().clone();
+            let input_adapter = fan_out_input(input, input_vars.clone().into());
+            let mut adapted_input_streams = input_adapter.streams;
+            let input_drive = input_adapter.drive;
             let output_vars = model.output_vars();
             let computed_vars: Vec<VarName> = model.stream_vars().into_iter().collect();
             let var_names: Vec<VarName> = input_vars
@@ -1060,8 +1084,8 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
                 .collect();
 
             let input_streams = input_vars.iter().map(|var| {
-                input_provider
-                    .var_stream(var)
+                adapted_input_streams
+                    .remove(var)
                     .expect(format!("Input stream not found for {}", var).as_str())
             });
 
@@ -1132,7 +1156,7 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
             debug!("AsyncRuntimeBuilder: Returning runner with cancellation token");
             let runner = AsyncRuntime {
                 executor,
-                input_provider,
+                input_drive,
                 output_handler,
                 output_streams,
                 cancellation_token,
@@ -1147,12 +1171,13 @@ impl<S: MonitoringSemantics<AC>, AC: AsyncConfig> RuntimeBuilder<AC::Spec, AC::V
 impl<AC, S> AsyncRuntime<AC, S>
 where
     AC: AsyncConfig,
+    AC::Val: DeferrableStreamData,
     S: MonitoringSemantics<AC>,
 {
     pub async fn new(
         executor: Rc<LocalExecutor<'static>>,
         model: AC::Spec,
-        input: Box<dyn InputProvider<Val = AC::Val>>,
+        input: InputStream<AC::Val>,
         output: Box<dyn OutputHandler<Val = AC::Val>>,
     ) -> Self {
         AsyncRuntimeBuilder::new()
@@ -1179,47 +1204,33 @@ where
         debug!("AsyncRuntime: Creating futures for input and output handlers");
         let output_fut = self.output_handler.run().fuse();
 
-        // Wrap input provider's run with cancellation support
+        // Wrap input stream's run with cancellation support
         let cancellation_token = self.cancellation_token.clone();
-        let mut input_provider_stream = self.input_provider.control_stream().await;
-        let input_provider_future = Box::pin(async move {
-            while let Some(res) = input_provider_stream.next().await {
-                if res.is_err() {
-                    error!(
-                        "AsyncRuntime: Input provider stream returned error: {:?}",
-                        res
-                    );
-                    return res;
-                } else {
-                    debug!("AsyncRuntime: Received Ok message from input provider");
-                }
+        let mut input_drive = self.input_drive;
+        let input_driver = async move {
+            while let Some(step) = input_drive.next().await {
+                step?;
             }
-            debug!("AsyncRuntime: Input provider control_stream ended");
-            Ok(())
-        });
-
-        let input_fut = Box::pin(async move {
-            futures::select! {
-                result = input_provider_future.fuse() => result,
-                _ = cancellation_token.cancelled().fuse() => {
-                    debug!("AsyncRuntime: Input provider cancelled");
-                    Ok(())
-                }
-            }
-        })
-        .fuse();
-
-        let (output_res, input_res) = join!(output_fut, input_fut);
-        let result = match (output_res, input_res) {
-            (Ok(_), Ok(_)) => Ok(()),
-            (Err(e1), Ok(_)) => Err(anyhow!("OutputHandler failed with error: {}", e1)),
-            (Ok(_), Err(e2)) => Err(anyhow!("InputProvider failed with error: {}", e2)),
-            (Err(e1), Err(e2)) => Err(anyhow!(
-                "Both OutputHandler and InputProvider failed: output={:?}, input={:?}",
-                e1,
-                e2
-            )),
+            debug!("AsyncRuntime: Input stream input_drive ended");
+            Ok::<_, anyhow::Error>(())
         };
+
+        let input_fut = async move {
+            let result = futures::select! {
+                result = input_driver.fuse() => Some(result),
+                _ = cancellation_token.cancelled().fuse() => {
+                    debug!("AsyncRuntime: Input stream cancelled");
+                    None
+                }
+            };
+            if let Some(result) = result {
+                result?;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+
+        let (result, input_result) = join!(output_fut, input_fut);
+        input_result?;
 
         self.cancellation_token.cancel();
         debug!(?result, "AsyncRuntime: Monitor execution completed");
@@ -1229,7 +1240,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{Value, dsrv_fixtures::TestConfig};
+    use crate::{
+        InputStream, Value,
+        dsrv_fixtures::{TestConfig, TestRuntime, spec_simple_add_monitor},
+        io::testing::NullOutputHandler,
+    };
 
     use super::*;
 
@@ -1237,6 +1252,23 @@ mod tests {
     use futures::stream;
     use macro_rules_attribute::apply;
     use std::cell::RefCell;
+
+    fn failing_input() -> InputStream<Value> {
+        Box::pin(futures::stream::iter([Err(anyhow::anyhow!(
+            "input failed"
+        ))]))
+    }
+
+    #[apply(async_test)]
+    async fn runtime_propagates_input_errors(executor: Rc<LocalExecutor<'static>>) {
+        let mut source = spec_simple_add_monitor();
+        let spec = crate::dsrv_specification(&mut source).unwrap();
+        let output = Box::new(NullOutputHandler::new(executor.clone(), spec.output_vars()));
+        let runtime: TestRuntime = TestRuntime::new(executor, spec, failing_input(), output).await;
+
+        let error = runtime.run().await.unwrap_err();
+        assert_eq!(error.to_string(), "input failed");
+    }
 
     #[apply(async_test)]
     async fn test_manage_var_gathering(executor: Rc<LocalExecutor<'static>>) {

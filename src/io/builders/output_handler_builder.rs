@@ -15,21 +15,21 @@ use crate::{Value, VarName, core::OutputHandler};
 
 #[derive(Debug, Clone)]
 pub enum OutputHandlerSpec {
-    /// File input provider
+    /// Standard output
     Stdout,
-    /// ROS topics input provider
+    /// ROS output topics
     Ros(
         /// Topic mapping
         TopicMapping,
         /// Var Msg Type mapping
         MsgTypeMapping,
     ),
-    /// MQTT topics output provider
+    /// MQTT output topics
     Mqtt(
         /// Topics mapping
         Option<TopicMapping>,
     ),
-    /// Redis topics output provider
+    /// Redis output topics
     Redis(
         /// Topic mapping
         Option<TopicMapping>,

@@ -3,8 +3,8 @@ pub(crate) const ROS_SPIN_TIMEOUT: std::time::Duration = std::time::Duration::fr
 
 pub mod dist_graph_provider;
 pub use dist_graph_provider::RosDistGraphProvider;
-pub mod input_provider;
-pub use input_provider::RosInputProvider;
+mod input_stream;
+pub use input_stream::input_stream;
 pub mod ros_topic_stream_mapping;
 pub use ros_topic_stream_mapping::{RosMsgType, RosStreamMapping};
 pub mod output_handler;

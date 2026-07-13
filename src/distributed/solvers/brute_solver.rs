@@ -8,7 +8,7 @@ use smol::{
 use tracing::{debug, info};
 
 use crate::{
-    InputProvider, OutputStream, UntypedDsrvSpecification, Value, VarName,
+    InputStream, OutputStream, UntypedDsrvSpecification, Value, VarName,
     core::Runtime,
     distributed::{
         distribution_graphs::{
@@ -66,7 +66,10 @@ where
             .map(|context| context.snapshot().history)
             .unwrap_or_default();
 
-        let input_provider: Box<dyn InputProvider<Val = Value>> = Box::new(context_input_data);
+        let input_stream: InputStream<Value> = crate::io::file::input_stream(
+            context_input_data,
+            self.input_vars.iter().cloned().collect(),
+        );
         let mut output_handler = ManualOutputHandler::new(
             self.executor.clone(),
             self.dist_constraints.iter().cloned().collect(),
@@ -103,7 +106,7 @@ where
                     .expect("Model must be set on monitor builder")
                     .clone(),
             )
-            .input(input_provider)
+            .input(input_stream)
             .output(Box::new(output_handler));
 
         let executor = self.executor.clone();

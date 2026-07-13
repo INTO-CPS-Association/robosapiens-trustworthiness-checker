@@ -12,11 +12,10 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::cli::adapters::DistributionModeBuilder;
+use trustworthiness_checker::cli::adapters::{DistributionModeBuilder, input_factory};
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
-use trustworthiness_checker::io::InputProviderBuilder;
-use trustworthiness_checker::io::builders::OutputHandlerBuilder;
+use trustworthiness_checker::io::OutputHandlerBuilder;
 use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
@@ -173,18 +172,26 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     info!(
         input_vars = ?localized_model.input_vars(),
-        "Localized model selected for input provider"
+        "Localized model selected for input stream"
     );
 
-    // Create the input provider builder
-    let input_provider_builder = InputProviderBuilder::new(cli.input_mode.clone())
-        .executor(executor.clone())
-        .model(localized_model)
-        .lang(cli.language)
-        .runtime(cli.runtime)
-        .mqtt_port(mqtt_port)
-        .redis_port(redis_port);
-    let builder = builder.input_provider_builder(input_provider_builder);
+    // Configure the input stream factory.
+    let input_factory = input_factory(
+        cli.input_mode.clone(),
+        executor.clone(),
+        mqtt_port,
+        redis_port,
+    )?;
+    let builder = if matches!(cli.runtime, RuntimeSpec::ReconfSemiSync) {
+        builder.input_factory(input_factory)?
+    } else {
+        builder.input(
+            input_factory
+                .open(localized_model.input_vars())
+                .await
+                .context("Input stream could not be built")?,
+        )
+    };
 
     // Create the output handler
     let output_handler_builder = OutputHandlerBuilder::new(cli.output_mode.clone())

@@ -1,7 +1,6 @@
 use crate::core::StreamType;
 use async_trait::async_trait;
 use clap::ValueEnum;
-use futures::StreamExt;
 use futures::future::LocalBoxFuture;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -23,9 +22,10 @@ pub enum Semantics {
 }
 
 /* Enum specifying which runtime is to be used */
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
 pub enum RuntimeSpec {
+    #[default]
     Async,
     Distributed,
     SemiSync,
@@ -33,56 +33,6 @@ pub enum RuntimeSpec {
 }
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
-
-#[async_trait(?Send)]
-pub trait InputProvider {
-    type Val: 'static;
-
-    fn var_stream(&mut self, var: &VarName) -> Option<OutputStream<Self::Val>>;
-
-    fn event_stream(
-        &mut self,
-        vars: &BTreeSet<VarName>,
-    ) -> Option<OutputStream<(VarName, Self::Val)>> {
-        let streams = vars.iter().filter_map(|var| {
-            self.var_stream(var).map(|stream| {
-                let var = var.clone();
-                Box::pin(stream.map(move |value| (var.clone(), value)))
-                    as OutputStream<(VarName, Self::Val)>
-            })
-        });
-        let mut streams = futures::stream::select_all(streams);
-        (!streams.is_empty()).then(|| {
-            Box::pin(async_stream::stream! {
-                while let Some(event) = streams.next().await {
-                    yield event;
-                }
-            }) as OutputStream<(VarName, Self::Val)>
-        })
-    }
-
-    fn batched_event_stream(
-        &mut self,
-        vars: &BTreeSet<VarName>,
-    ) -> Option<OutputStream<Vec<(VarName, Self::Val)>>> {
-        self.event_stream(vars).map(|mut events| {
-            Box::pin(async_stream::stream! {
-                while let Some(event) = events.next().await {
-                    yield vec![event];
-                }
-            }) as OutputStream<Vec<(VarName, Self::Val)>>
-        })
-    }
-
-    fn event_stream_requires_control(&self) -> bool {
-        true
-    }
-
-    /// Returns an OutputStream of Result<()> indicating if the InputProvider has encountered an
-    /// error (Err) or has successfully provided one batch of values (Ok).
-    /// Awaiting the control_stream attempts to progress the InputProvider by one step.
-    async fn control_stream(&mut self) -> OutputStream<anyhow::Result<()>>;
-}
 
 pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     type Expr;

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ecow::EcoVec;
 use smol::LocalExecutor;
 
-use crate::{OutputStream, Specification, VarName, core::StreamData};
+use crate::{OutputStream, Specification, VarName, core::DeferrableStreamData};
 
 /// Abstract builder of contexts
 pub trait AbstractContextBuilder {
@@ -75,7 +75,7 @@ where
 }
 
 pub trait AsyncConfig: Clone + 'static {
-    type Val: StreamData;
+    type Val: DeferrableStreamData;
     type Expr: Clone;
     type Ctx: StreamContext<AC = Self>;
     type Spec: Specification<Expr = Self::Expr>;

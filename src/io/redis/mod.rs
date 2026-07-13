@@ -1,4 +1,4 @@
-pub mod input_provider;
-pub mod output_handler;
-pub use input_provider::RedisInputProvider;
+mod input_stream;
+mod output_handler;
+pub use input_stream::input_stream;
 pub use output_handler::RedisOutputHandler;

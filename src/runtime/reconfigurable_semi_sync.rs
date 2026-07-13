@@ -1,13 +1,8 @@
 use crate::{
-    OutputStream, Value, VarName,
-    core::{DeferrableStreamData, InputProvider, OutputHandler, Runtime, Specification},
+    InputStream, InputTickStream, Value, VarName,
+    core::{DeferrableStreamData, OutputHandler, Runtime, Specification},
     io::{
-        InputProviderBuilder, MsgTypeMapping, TopicMapping,
-        builders::{
-            InputProviderSpec, OutputHandlerBuilder, output_handler_builder::OutputHandlerSpec,
-        },
-        map::MapInputProvider,
-        testing::ManualInputProvider,
+        InputStreamFactory, MsgTypeMapping, OutputHandlerBuilder, OutputHandlerSpec, TopicMapping,
     },
     lang::core::{DependencyGraphExpr, DependencyGraphSpec, parser::SpecParser},
     runtime::{
@@ -16,14 +11,10 @@ use crate::{
     },
     semantics::{AsyncConfig, MonitoringSemantics, StreamContext},
 };
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use async_stream::try_stream;
 use async_trait::async_trait;
-use futures::{
-    FutureExt, StreamExt,
-    future::{LocalBoxFuture, join_all},
-    stream::LocalBoxStream,
-};
+use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::LocalBoxStream};
 use serde::Deserialize;
 use smol::LocalExecutor;
 use std::{
@@ -32,14 +23,13 @@ use std::{
     rc::Rc,
 };
 use tracing::{debug, error, info, warn};
-use unsync::spsc::Sender as SpscSender;
 
-// TODO: Because InputProviderBuilder is hardcoded to Value, this also needs to be in some places
+// TODO: Because InputStreamFactory is hardcoded to Value, this also needs to be in some places
 
 #[derive(Deserialize, Clone, Debug)]
 struct ReconfInput {
     spec: String,
-    // TODO: Certain InputProviders are type-strong (e.g. Ros). These must know the types of Inputs
+    // TODO: Certain input transports are type-strong (e.g. ROS). These must know the types of Inputs
     // and Outputs. When type checking becomes more stable for the language, we
     // should use that instead of a variable here, and simply enforce that the spec is typed.
     type_info: MsgTypeMapping,
@@ -58,7 +48,7 @@ where
 {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<AC::Spec>,
-    input_builder: Option<InputProviderBuilder>,
+    input_factory: Option<InputStreamFactory>,
     output_builder: Option<OutputHandlerBuilder>,
     reconf_topic: Option<String>,
     use_context_transfer: bool,
@@ -87,7 +77,7 @@ where
         Self {
             executor: None,
             model: None,
-            input_builder: None,
+            input_factory: None,
             output_builder: None,
             reconf_topic: None,
             use_context_transfer: true,
@@ -109,27 +99,16 @@ where
 
     fn model(mut self, model: AC::Spec) -> Self {
         self.model = Some(model.clone());
-        if let Some(input_builder) = self.input_builder {
-            self.input_builder = Some(input_builder.model(model.clone()));
-        }
         if let Some(output_builder) = self.output_builder {
             self.output_builder = Some(output_builder.output_var_names(model.output_vars()));
         }
         self
     }
 
-    fn input(self, _input: Box<dyn InputProvider<Val = AC::Val>>) -> Self {
+    fn input(self, _input: InputStream<AC::Val>) -> Self {
         panic!(
-            "Direct InputProvider is not supported in ReconfSemiSyncRuntimeBuilder. Use InputProviderBuilder instead."
+            "Direct InputStream is not supported in ReconfSemiSyncRuntimeBuilder. Use InputStreamFactory instead."
         );
-    }
-
-    fn input_builder(mut self, input_builder: InputProviderBuilder) -> Self {
-        self.input_builder = Some(match self.model.clone() {
-            Some(model) => input_builder.model(model),
-            None => input_builder,
-        });
-        self
     }
 
     fn output(self, _output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
@@ -145,24 +124,10 @@ where
             let model = self.model.clone().unwrap();
             let use_context_transfer = self.use_context_transfer;
             let starting_history = self.starting_history.clone().unwrap_or_default();
-            let mut inner_input = Box::new(ManualInputProvider::<AC>::new(model.input_vars()));
-            let sender_channels = model
-                .input_vars()
-                .into_iter()
-                .map(|v| {
-                    (
-                        v.clone(),
-                        inner_input
-                            .sender_channel(&v)
-                            .expect("Should never happen unless bug in ManualInputProvider"),
-                    )
-                })
-                .collect();
             self.inject_reconf_stream();
 
-            if let Some(input_builder) = &self.input_builder {
-                if let InputProviderSpec::Ros(topic_mapping, msg_type_mapping) = &input_builder.spec
-                {
+            if let Some(input_factory) = &self.input_factory {
+                if let Some((topic_mapping, msg_type_mapping)) = input_factory.ros_mappings() {
                     self.known_topic_mapping.extend(topic_mapping.clone());
                     self.known_type_info.extend(msg_type_mapping.clone());
                 }
@@ -176,11 +141,28 @@ where
                 }
             }
 
+            let input_vars = self
+                .model
+                .as_ref()
+                .expect("Input factory must have a model")
+                .input_vars();
+            let input_factory = self
+                .input_factory
+                .as_ref()
+                .expect("Input factory must be configured before building");
             info!(
-                ?self.input_builder,
-                "Building ReconfSemiSyncRuntime input provider"
+                ?input_factory,
+                ?input_vars,
+                "Opening reconfigurable input stream"
             );
-            let input_provider = self.input_builder.clone().unwrap().build().await;
+            let input_stream = match input_factory.ensure_reconfigurable() {
+                Ok(()) => input_factory
+                    .open(input_vars)
+                    .await
+                    .context("Reconfigurable input stream could not be opened"),
+                Err(error) => Err(error),
+            };
+
             info!(
                 ?self.output_builder,
                 "Building ReconfSemiSyncRuntime output handler"
@@ -189,18 +171,16 @@ where
             let semi_sync_monitor = SemiSyncRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(model)
-                .input(inner_input)
+                .input(Box::pin(futures::stream::empty()))
                 .output(output)
                 .starting_history(starting_history)
                 .build()
                 .await;
 
             ReconfSemiSyncRuntime {
-                executor,
                 semi_sync_monitor: Some(semi_sync_monitor),
-                input_provider,
+                input_stream: Some(input_stream),
                 self_builder: self,
-                sender_channels,
                 use_context_transfer,
                 _marker: (std::marker::PhantomData, std::marker::PhantomData),
             }
@@ -217,9 +197,9 @@ where
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
 {
-    pub fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
+    pub fn input_factory(self, input_factory: InputStreamFactory) -> Self {
         Self {
-            input_builder: Some(input_builder),
+            input_factory: Some(input_factory),
             ..self
         }
     }
@@ -242,13 +222,13 @@ where
     }
 
     fn inject_reconf_stream(&mut self) {
-        let input_builder = self
-            .input_builder
-            .clone()
-            .expect("Input builder must be set before injecting reconfiguration stream");
+        let input_factory = self
+            .input_factory
+            .as_mut()
+            .expect("Input factory must be set before injecting the reconfiguration stream");
 
         // Early‑return if self.reconf_topic is already an input var
-        let model = self.model.clone().expect("Input builder must have model");
+        let model = self.model.clone().expect("Input factory must have a model");
         let reconf_topic: VarName = self
             .reconf_topic
             .clone()
@@ -257,81 +237,19 @@ where
         if model.input_vars().contains(&reconf_topic) {
             info!(
                 ?reconf_topic,
-                "Reconfiguration variable already present in InputProviderModel, skipping injection"
+                "Reconfiguration variable already present in the input model, skipping injection"
             );
             return;
         }
 
-        // Compute new spec with reconf_topic injected when applicable
-        let new_spec = match &input_builder.spec {
-            InputProviderSpec::File(_) => {
-                warn!(
-                    "Limited support for reconfiguration of file inputs. \
-                 Treating var '{:?}' as reconfiguration variable",
-                    reconf_topic
-                );
-                input_builder.spec.clone()
-            }
-            InputProviderSpec::Manual(fan_rx) => {
-                // No need to change enything here, as ManualInputProvider simply forwards whatever
-                // it receives on the channel
-                InputProviderSpec::Manual(fan_rx.clone())
-            }
-            InputProviderSpec::Mqtt(topics) | InputProviderSpec::Redis(topics) => {
-                info!(
-                    ?reconf_topic,
-                    "Injecting reconf variable into InputProvider topics"
-                );
-
-                let mut var_topics: TopicMapping = topics.clone().unwrap_or_else(|| {
-                    model
-                        .input_vars()
-                        .into_iter()
-                        .map(|v| {
-                            let topic: String = (&v).into();
-                            (v, topic)
-                        })
-                        .collect()
-                });
-                var_topics.insert(reconf_topic.clone(), reconf_topic.name());
-
-                match input_builder.spec {
-                    InputProviderSpec::Mqtt(_) => InputProviderSpec::Mqtt(Some(var_topics)),
-                    InputProviderSpec::Redis(_) => InputProviderSpec::Redis(Some(var_topics)),
-                    _ => unreachable!(),
-                }
-            }
-            InputProviderSpec::Ros(topic_mapping, msg_type_mapping) => {
-                let mut topic_mapping = topic_mapping.clone();
-                let mut msg_type_mapping = msg_type_mapping.clone();
-                info!(
-                    ?reconf_topic,
-                    "Injecting reconf variable into InputProvider topics"
-                );
-                let reconf_topic_name = format!("/{}", reconf_topic.name());
-                topic_mapping.insert(reconf_topic.clone(), reconf_topic_name.into());
-                msg_type_mapping.insert(reconf_topic.clone(), "String".into());
-                InputProviderSpec::Ros(topic_mapping, msg_type_mapping)
-            }
-        };
-
-        // Update model and builder
+        input_factory.add_reconfiguration_input(reconf_topic.clone(), model.input_vars());
         self.model
             .as_mut()
-            .expect("Input builder must have model")
-            .add_input_var(reconf_topic.into());
-        // Including reconf topic
-        let model = self.model.clone().expect("Model must exist");
-        self.input_builder = Some(
-            self.input_builder
-                .clone()
-                .unwrap()
-                .spec(new_spec)
-                .model(model),
-        );
+            .expect("Input factory must have a model")
+            .add_input_var(reconf_topic);
         debug!(
-            ?self.input_builder,
-            "Updated InputProviderBuilder with reconfiguration variable"
+            ?self.input_factory,
+            "Updated InputStreamFactory with reconfiguration variable"
         );
     }
 }
@@ -345,11 +263,11 @@ where
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
 {
-    executor: Rc<LocalExecutor<'static>>,
     semi_sync_monitor: Option<SemiSyncRuntime<AC, MS>>,
-    input_provider: Box<dyn InputProvider<Val = AC::Val>>,
+    /// Opening happens while building so transports are subscribed before the runtime is spawned.
+    /// The result is retained so setup failures can still be returned from `run_boxed`.
+    input_stream: Option<anyhow::Result<InputStream<AC::Val>>>,
     self_builder: ReconfSemiSyncRuntimeBuilder<AC, MS, P>,
-    sender_channels: BTreeMap<VarName, SpscSender<AC::Val>>,
     use_context_transfer: bool,
     _marker: (std::marker::PhantomData<MS>, std::marker::PhantomData<P>),
 }
@@ -363,69 +281,22 @@ where
     MS: MonitoringSemantics<AC>,
     P: SpecParser<AC::Spec>,
 {
-    // Returns a configured input_provider and the input streams mapped by variable name
-    async fn setup_input_provider(&mut self) -> BTreeMap<VarName, OutputStream<AC::Val>> {
-        let input_streams = self
-            .self_builder
-            .model
-            .clone()
-            .expect("Model must exist")
-            .input_vars()
-            .into_iter()
-            .map(|var| {
-                let stream = self.input_provider.var_stream(&var);
-                (
-                    var.clone(),
-                    stream.expect(&format!(
-                        "Input stream unavailable for input variable: {}",
-                        var
-                    )),
-                )
-            })
-            .collect::<BTreeMap<VarName, OutputStream<AC::Val>>>();
-        input_streams
+    fn setup_input_stream(&mut self) -> anyhow::Result<InputTickStream<AC::Val>> {
+        let input = self
+            .input_stream
+            .take()
+            .expect("Input stream already taken")?;
+        Ok(crate::into_tick_stream(input))
     }
 
-    async fn inner_monitor_tasks(
+    async fn setup_inner_monitor(
         monitor: SemiSyncRuntime<AC, MS>,
     ) -> anyhow::Result<(
-        LocalBoxFuture<'static, anyhow::Result<()>>,
-        LocalBoxFuture<'static, anyhow::Result<()>>,
+        Box<dyn OutputHandler<Val = AC::Val>>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
-        let (mut input_provider, mut output_handler, context, expr_evals) =
-            monitor.setup_runtime().await?;
-        let output_fut = async move { output_handler.run().await }.boxed_local();
-        let input_fut =
-            async move { SemiSyncRuntime::<AC, MS>::input_task(&mut *input_provider).await }
-                .boxed_local();
-
-        Ok((output_fut, input_fut, context, expr_evals))
-    }
-
-    async fn await_inputs(
-        streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
-    ) -> BTreeMap<VarName, Option<AC::Val>> {
-        // Collect (name, future) pairs to preserve key association
-        let (names, futs): (Vec<_>, Vec<_>) = streams
-            .iter_mut()
-            .map(|(name, stream)| (name.clone(), stream.next()))
-            .unzip();
-
-        // Await all futures concurrently, results come back in the same order as names
-        let results = join_all(futs).await;
-
-        let mut ret = BTreeMap::new();
-        for (name, res) in names.into_iter().zip(results) {
-            if let Some(val) = res {
-                ret.insert(name, Some(val));
-            } else {
-                debug!("ReconfSemiSyncRuntime: Input stream for {} has ended", name);
-                ret.insert(name, None);
-            }
-        }
-        ret
+        monitor.setup_runtime_without_input().await
     }
 
     // Merge the existing mappings/type data with the existing one so that the types for
@@ -668,48 +539,15 @@ where
 
         self.self_builder = self.self_builder.clone().model(parsed.clone());
 
-        // Update InputProvider spec
-        let input_spec = match self.self_builder.input_builder.clone().unwrap().spec {
-            InputProviderSpec::Mqtt(topics) => {
-                InputProviderSpec::Mqtt(Some(Self::merge_topic_mappings(
-                    parsed.input_vars(),
-                    &self.self_builder.known_topic_mapping,
-                    topics.as_ref(),
-                )))
-            }
-            InputProviderSpec::Ros(topic_mapping, msg_type_mapping) => {
-                let vars = parsed.input_vars();
-                let (new_topic_mapping, new_type_mapping) = Self::merge_topic_msg_type_mappings(
-                    &vars,
-                    &self.self_builder.known_topic_mapping,
-                    &topic_mapping,
-                    &self.self_builder.known_type_info,
-                    &msg_type_mapping,
-                )?;
-                InputProviderSpec::Ros(new_topic_mapping, new_type_mapping)
-            }
-            InputProviderSpec::File(_path) => {
-                // TODO: Maybe this could be implemented if FileInputProvider had a way of telling us which line it
-                // currently read on
-                // (or simply by having a counter inside our RT and forwarding inputs up until that
-                // point)
-                unimplemented!(
-                    "Reconfiguration of file inputs is not supported as it requires re-reading the input file, which causes the inputs to start over."
-                )
-            }
-            InputProviderSpec::Redis(topics) => {
-                InputProviderSpec::Redis(Some(Self::merge_topic_mappings(
-                    parsed.input_vars(),
-                    &self.self_builder.known_topic_mapping,
-                    topics.as_ref(),
-                )))
-            }
-            InputProviderSpec::Manual(tx) => InputProviderSpec::Manual(tx),
-        };
-        if let Some(ref mut input_builder) = self.self_builder.input_builder {
-            input_builder.spec = input_spec;
-            self.self_builder.input_builder = Some(input_builder.clone());
-        }
+        self.self_builder
+            .input_factory
+            .as_mut()
+            .expect("Input factory must exist")
+            .reconfigure(
+                parsed.input_vars(),
+                &self.self_builder.known_topic_mapping,
+                &self.self_builder.known_type_info,
+            )?;
 
         // Update OutputSpec
         let output_spec = match self.self_builder.output_builder.clone().unwrap().spec {
@@ -783,48 +621,17 @@ where
 
             self.self_builder.starting_history = Some(starting_history);
         }
-        warn!(?self.self_builder.model, ?self.self_builder.input_builder, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
+        warn!(?self.self_builder.model, ?self.self_builder.input_factory, ?self.self_builder.starting_history, "Reconfiguring ReconfSemiSyncMonitor");
         context.cancel();
-        // For now, reassign existing InputProvider with empty to shut down. In future when we can reconfig them, we should do that instead.
-        self.input_provider = Box::new(MapInputProvider::new(BTreeMap::new()));
+        // For now, reassign existing input stream with empty to shut down. In future when we can reconfig them, we should do that instead.
+        self.input_stream = None;
         let new_self = Box::new(self.self_builder.clone()).build().await;
         Ok(Some(new_self))
     }
 
-    async fn handle_regular_input_update(
-        &mut self,
-        input_streams: &mut BTreeMap<VarName, OutputStream<AC::Val>>,
-        var: VarName,
-        val: Option<Value>,
-    ) -> anyhow::Result<()> {
-        let Some(val) = val else {
-            info!("Input stream for variable {:?} ended", var);
-            input_streams.remove(&var);
-            return Ok(());
-        };
-
-        let chan = self
-            .sender_channels
-            .get_mut(&var)
-            .ok_or_else(|| anyhow!("No sender channel found for variable: {:?}", var))?;
-
-        info!(
-            "Forwarding to inner RT input for variable: {:?} with value: {:?}",
-            var, val
-        );
-
-        chan.send(val).await.map_err(|send_err| {
-            anyhow!(
-                "Failed to send for variable: {:?} with result: {:?}",
-                var,
-                send_err
-            )
-        })
-    }
-
     fn process_input_updates<'a>(
         &'a mut self,
-        input_streams: &'a mut BTreeMap<VarName, OutputStream<AC::Val>>,
+        input_ticks: &'a mut InputTickStream<AC::Val>,
         reconf_topic: &'a VarName,
         context: &'a mut SemiSyncContext<AC>,
         expr_evals: &'a mut Vec<ExprEvalutor<AC, MS>>,
@@ -832,16 +639,18 @@ where
         Box::pin(try_stream! {
             loop {
                 info!("ReconfSemiSyncRuntime: Waiting for inputs",);
-                let mut values = Self::await_inputs(input_streams).await;
-
+                let Some(tick) = input_ticks.next().await else {
+                    return;
+                };
+                let mut events = tick?;
                 // If we have reconf then do only that, as reconfiguration is orthogonal to receiving
                 // regular inputs
-                if let Some(reconf_val) = values.remove(reconf_topic) {
-                    match reconf_val {
-                        Some(Value::NoVal) => {
+                if let Some(index) = events.iter().position(|event| &event.var == reconf_topic) {
+                    match events.remove(index).value {
+                        Value::NoVal => {
                             info!("Ignoring NoVal for reconfiguration command");
                         }
-                        Some(val) => {
+                        val => {
                             let new_self = self.handle_reconfig_input(val, context).await?;
                             if let Some(new_self) = new_self {
                                 yield Some(new_self);
@@ -849,31 +658,129 @@ where
                             else {
                                 // In case we received reconfig input but it did not lead to new
                                 // RT, e.g., due to duplicate specs
-                                values.clear();
+                                events.clear();
                             }
-                        }
-                        None => {
-                            info!("Input stream for variable {:?} ended", reconf_topic);
-                            input_streams.remove(reconf_topic);
                         }
                     }
                 }
 
-                // Done synchronously because we would have to take/give back sender_channels otherwise,
-                // which is a bit annoying
-                let mut forwarded_regular_input = false;
-                for (var, val) in values {
-                    self.handle_regular_input_update(input_streams, var, val)
-                    .await?;
-                    forwarded_regular_input = true;
-                }
-
-                if forwarded_regular_input {
-                    SemiSyncRuntime::<AC, MS>::step(context, expr_evals).await?;
+                if !events.is_empty() {
+                    SemiSyncRuntime::<AC, MS>::advance_tick(
+                        events,
+                        context,
+                        expr_evals,
+                    ).await?;
                 }
                 yield None;
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod input_tick_tests {
+    use std::collections::BTreeMap;
+
+    use async_unsync::bounded;
+    use futures::future::LocalBoxFuture;
+    use macro_rules_attribute::apply;
+
+    use super::{ReconfSemiSyncRuntime, ReconfSemiSyncRuntimeBuilder};
+    use crate::{
+        OutputStream, Runtime, Specification, Value, VarName,
+        core::OutputHandler,
+        io::{InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec},
+        lang::dsrv::{lalr_parser::LALRParser, parser::dsrv_specification},
+        runtime::{
+            RuntimeBuilder, builder::SemiSyncValueConfig, semi_sync::SemiSyncRuntimeBuilder,
+        },
+        semantics::UntimedDsrvSemantics,
+    };
+
+    type TestSemantics = UntimedDsrvSemantics<LALRParser>;
+    type TestRuntime = ReconfSemiSyncRuntime<SemiSyncValueConfig, TestSemantics, LALRParser>;
+
+    struct FailingOutputHandler;
+
+    impl OutputHandler for FailingOutputHandler {
+        type Val = Value;
+
+        fn provide_streams(&mut self, _streams: BTreeMap<VarName, OutputStream<Value>>) {}
+
+        fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+            Box::pin(async { anyhow::bail!("forced output failure") })
+        }
+    }
+
+    #[apply(crate::async_test)]
+    async fn reconfigurable_input_setup_errors_are_returned(
+        executor: std::rc::Rc<smol::LocalExecutor<'static>>,
+    ) {
+        let spec = dsrv_specification(&mut "in x\nout z\nz = x").unwrap();
+        let input_factory = InputStreamFactory::mqtt(Some(BTreeMap::new()), None);
+        let (output_sender, _output_receiver) =
+            bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
+        let output_builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(output_sender))
+            .executor(executor.clone())
+            .output_var_names(spec.output_vars());
+
+        let runtime =
+            ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics, LALRParser>::new()
+                .executor(executor)
+                .model(spec)
+                .input_factory(input_factory)
+                .output_builder(output_builder)
+                .reconf_topic("reconfigure".into())
+                .build()
+                .await;
+
+        let error = runtime
+            .run()
+            .await
+            .expect_err("invalid input setup should be returned from run");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("Topic mapping is missing topics"),
+            "unexpected setup error: {message}"
+        );
+    }
+
+    #[apply(crate::async_test)]
+    async fn reconfigurable_output_errors_are_returned(
+        executor: std::rc::Rc<smol::LocalExecutor<'static>>,
+    ) {
+        let spec = dsrv_specification(&mut "in x\nout z\nz = x").unwrap();
+        let monitor = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics>::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(Box::pin(futures::stream::empty()))
+            .output(Box::new(FailingOutputHandler))
+            .build()
+            .await;
+        let self_builder = ReconfSemiSyncRuntimeBuilder::new()
+            .executor(executor)
+            .model(spec)
+            .reconf_topic("reconfigure".into());
+        let runtime: TestRuntime = ReconfSemiSyncRuntime {
+            semi_sync_monitor: Some(monitor),
+            input_stream: Some(Ok(Box::pin(futures::stream::pending()))),
+            self_builder,
+            use_context_transfer: true,
+            _marker: (std::marker::PhantomData, std::marker::PhantomData),
+        };
+
+        let run_result = tc_testutils::streams::with_timeout(
+            runtime.run(),
+            1,
+            "reconfigurable output failure propagation",
+        )
+        .await
+        .expect("runtime should not hang after an output failure");
+        let error = run_result.expect_err("output failure should be returned from run");
+        assert!(
+            format!("{error:#}").contains("forced output failure"),
+            "unexpected output error: {error:#}"
+        );
     }
 }
 
@@ -900,62 +807,76 @@ where
                 .into();
 
             // Includes reconf stream:
-            let mut input_streams = self.setup_input_provider().await;
-            let mut input_provider_stream = self.input_provider.control_stream().await;
+            let mut input_ticks = self.setup_input_stream()?;
 
             let monitor = self
                 .semi_sync_monitor
                 .take()
                 .expect("SemiSyncRuntime must exist");
-            let (inner_input_task, output_task, mut context, mut expr_evals) =
-                Self::inner_monitor_tasks(monitor).await?;
-            // TODO: Don't spawn these
-            self.executor.spawn(inner_input_task).detach();
-            self.executor.spawn(output_task).detach();
+            let (mut output_handler, mut context, mut expr_evals) =
+                Self::setup_inner_monitor(monitor).await?;
 
             let mut process_stream = self.process_input_updates(
-                &mut input_streams,
+                &mut input_ticks,
                 &reconf_topic,
                 &mut context,
                 &mut expr_evals,
             );
             let mut pending_update = None;
+            let output_fut = output_handler.run().fuse();
+            futures::pin_mut!(output_fut);
+            let mut output_finished = false;
+
+            enum GenerationEvent<T> {
+                Input(Option<anyhow::Result<Option<T>>>),
+                Output(anyhow::Result<()>),
+            }
 
             // Inner loop that runs the current reconf monitor as long as inputs are available and
             // checks for reconfiguration commands. If a reconfiguration command is received, it
             // breaks to start the new monitor with the new config.
-            while let Some(ip_res) = input_provider_stream.next().await {
-                ip_res.map_err(|err| {
-                    error!(
-                        "ReconfSemiSyncRuntime: Input provider stream returned error: {:?}",
-                        err
-                    );
-                    err
-                })?;
-
-                let Some(process_res) = process_stream.next().await else {
-                    info!("ReconfSemiSyncRuntime: Input streams ended. Shutting down.");
-                    return Ok(());
+            loop {
+                let event = if output_finished {
+                    GenerationEvent::Input(process_stream.next().await)
+                } else {
+                    futures::select! {
+                        process_res = process_stream.next().fuse() => GenerationEvent::Input(process_res),
+                        output_res = output_fut.as_mut() => GenerationEvent::Output(output_res),
+                    }
                 };
-                match process_res {
-                    Ok(Some(new_self)) => {
+
+                match event {
+                    GenerationEvent::Output(result) => {
+                        result.context("Reconfigurable output handler failed")?;
+                        output_finished = true;
+                    }
+                    GenerationEvent::Input(Some(Ok(Some(new_self)))) => {
                         debug!(
                             "ReconfSemiSyncRuntime: Received new configuration, preparing to switch runtimes"
                         );
                         pending_update = Some(new_self);
                         break;
                     }
-                    Ok(None) => continue, // No reconfiguration, continue processing inputs
-                    Err(err) => {
+                    GenerationEvent::Input(Some(Ok(None))) => continue,
+                    GenerationEvent::Input(Some(Err(err))) => {
                         error!(
                             "Error processing inputs in ReconfSemiSyncRuntime: {:?}",
                             err
                         );
                         return Err(err);
                     }
-                };
+                    GenerationEvent::Input(None) => break,
+                }
             }
             drop(process_stream);
+            drop(context);
+            drop(expr_evals);
+
+            if !output_finished {
+                output_fut
+                    .await
+                    .context("Reconfigurable output handler failed")?;
+            }
 
             if let Some(new_self) = pending_update {
                 self = Box::new(new_self);

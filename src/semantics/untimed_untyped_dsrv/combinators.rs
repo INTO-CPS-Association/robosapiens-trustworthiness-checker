@@ -452,8 +452,15 @@ where
             // do not have a `prev_data.eval_output_stream` to evaluate from
             match current {
                 Value::Deferred => {
-                    // Consume a sample from the subcontext but return Deferred
+                    // Keep the installed expression on the global timeline while propagating the
+                    // Deferred property value. Advance and discard its internal result so its
+                    // temporal state remains aligned.
                     subcontext.tick().await;
+                    if let Some(prev_data) = &mut prev_data {
+                        if prev_data.eval_output_stream.next().await.is_none() {
+                            return;
+                        }
+                    }
                     yield Value::Deferred;
                 }
                 Value::NoVal => {

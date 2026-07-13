@@ -2,7 +2,10 @@
 
 pub mod benches_common;
 pub mod core;
-pub use core::{InputProvider, OutputStream, Runtime, Specification, Value, VarName};
+pub use core::{
+    InputBatch, InputEvent, InputStream, OutputStream, Runtime, Specification, Value, VarName,
+};
+pub(crate) use core::{InputTickStream, into_tick_stream};
 pub mod cli;
 pub mod io;
 pub use io::file::parse_file;

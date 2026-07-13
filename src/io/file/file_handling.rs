@@ -27,21 +27,33 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use crate::{InputProvider, Value};
+    use crate::{Value, io::file};
 
     use super::*;
     use crate::async_test;
     use futures::StreamExt;
     use macro_rules_attribute::apply;
 
+    async fn values(data: crate::io::file::UntimedInputFileData, var: &str) -> Vec<Value> {
+        let input = file::input_stream(data, std::collections::BTreeSet::from([var.into()]));
+        crate::into_tick_stream(input)
+            .map(Result::unwrap)
+            .flat_map(futures::stream::iter)
+            .map(|event| event.value)
+            .collect()
+            .await
+    }
+
     #[apply(async_test)]
     async fn test_parse_file() {
         let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/simple_add.input";
-        let mut data = parse_file(parser, file).await.unwrap();
-        let x_vals = data
-            .var_stream(&"x".into())
-            .unwrap()
+        let input = file::input_stream(
+            parse_file(parser, file).await.unwrap(),
+            std::collections::BTreeSet::from(["x".into()]),
+        );
+        let x_vals = crate::into_tick_stream(input)
+            .map(|tick| tick.unwrap().into_iter().next().unwrap().value)
             .collect::<Vec<_>>()
             .await;
         assert_eq!(x_vals, vec![Value::Int(1), Value::Int(3)]);
@@ -51,10 +63,12 @@ mod tests {
     async fn test_parse_json_object_literal_file() {
         let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/object_literal.input";
-        let mut data = parse_file(parser, file).await.unwrap();
-        let payload_vals = data
-            .var_stream(&"payload".into())
-            .unwrap()
+        let input = file::input_stream(
+            parse_file(parser, file).await.unwrap(),
+            std::collections::BTreeSet::from(["payload".into()]),
+        );
+        let payload_vals = crate::into_tick_stream(input)
+            .map(|tick| tick.unwrap().into_iter().next().unwrap().value)
             .collect::<Vec<_>>()
             .await;
         assert_eq!(
@@ -76,12 +90,8 @@ mod tests {
     async fn test_parse_boolean_file() {
         let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/maple_sequence_true.input";
-        let mut data = parse_file(parser, file).await.unwrap();
-        let m_vals = data
-            .var_stream(&"m".into())
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
+        let data = parse_file(parser, file).await.unwrap();
+        let m_vals = values(data.clone(), "m").await;
         assert_eq!(
             m_vals,
             vec![
@@ -92,11 +102,7 @@ mod tests {
                 Value::Bool(false)
             ],
         );
-        let a_vals = data
-            .var_stream(&"a".into())
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
+        let a_vals = values(data.clone(), "a").await;
         assert_eq!(
             a_vals,
             vec![
@@ -107,11 +113,7 @@ mod tests {
                 Value::Bool(false)
             ],
         );
-        let p_vals = data
-            .var_stream(&"p".into())
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
+        let p_vals = values(data.clone(), "p").await;
         assert_eq!(
             p_vals,
             vec![
@@ -122,11 +124,7 @@ mod tests {
                 Value::Bool(false)
             ],
         );
-        let l_vals = data
-            .var_stream(&"l".into())
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
+        let l_vals = values(data.clone(), "l").await;
         assert_eq!(
             l_vals,
             vec![
@@ -137,11 +135,7 @@ mod tests {
                 Value::Bool(false)
             ],
         );
-        let e_vals = data
-            .var_stream(&"e".into())
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
+        let e_vals = values(data, "e").await;
         assert_eq!(
             e_vals,
             vec![

@@ -3,13 +3,13 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 use crate::io::TopicMapping;
 
 use async_trait::async_trait;
-use futures::{FutureExt, StreamExt, future::LocalBoxFuture, join, select};
+use futures::{Future, FutureExt, StreamExt, future::LocalBoxFuture, pin_mut, select};
 use smol::LocalExecutor;
 use tracing::debug;
 use unsync::spsc;
 
 use crate::{
-    InputProvider, OutputStream, Specification, UntypedDsrvSpecification, Value, VarName,
+    InputStream, OutputStream, Specification, UntypedDsrvSpecification, Value, VarName,
     core::{OutputHandler, Runtime},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -167,7 +167,7 @@ pub struct DistAsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> 
     pub async_monitor_builder: AsyncRuntimeBuilder<AC, S>,
     var_msg_types: Option<BTreeMap<VarName, String>>,
     topic_mapping: Option<TopicMapping>,
-    input: Option<Box<dyn InputProvider<Val = AC::Val>>>,
+    input: Option<InputStream<AC::Val>>,
     pub context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
     scheduler_mode: Option<SchedulerCommunication>,
@@ -368,8 +368,7 @@ pub enum SchedulerCommunication {
 }
 
 struct DirectSchedulerInputRuntime {
-    input_provider: Option<Box<dyn InputProvider<Val = Value>>>,
-    input_events: OutputStream<Vec<(VarName, Value)>>,
+    input_ticks: crate::InputTickStream<Value>,
     constraint_input_index: ConstraintInputIndex,
     constraint_sender: spsc::Sender<ConstraintInputBatch>,
     planning_context: Option<PlanningContext>,
@@ -377,50 +376,35 @@ struct DirectSchedulerInputRuntime {
 
 impl DirectSchedulerInputRuntime {
     async fn run(mut self) -> anyhow::Result<()> {
-        let mut control_stream = if let Some(input_provider) = self.input_provider.as_mut() {
-            input_provider.control_stream().await
-        } else {
-            Box::pin(futures::stream::pending()) as OutputStream<anyhow::Result<()>>
-        };
+        while let Some(tick) = self.input_ticks.next().await {
+            let tick = tick?;
+            let mut compact_batch = Vec::new();
+            let mut planning_batch = Vec::new();
+            for crate::InputEvent { var, value, .. } in tick {
+                if matches!(value, Value::NoVal | Value::Deferred) {
+                    continue;
+                }
 
-        loop {
-            select! {
-                result = control_stream.next().fuse() => {
-                    match result {
-                        Some(result) => result?,
-                        None => control_stream = Box::pin(futures::stream::pending()),
-                    }
-                },
-                event = self.input_events.next().fuse() => {
-                    let Some(batch) = event else {
-                        return Ok(());
-                    };
-                    let mut compact_batch = Vec::new();
-                    let mut planning_batch = Vec::new();
-                    for (var, value) in batch {
-                        if matches!(value, Value::NoVal | Value::Deferred) {
-                            continue;
-                        }
+                if let Some(index) = self.constraint_input_index.index_of(&var) {
+                    compact_batch.push((index, value.clone()));
+                }
+                planning_batch.push((var, value));
+            }
 
-                        if let Some(index) = self.constraint_input_index.index_of(&var) {
-                            compact_batch.push((index, value.clone()));
-                        }
-                        planning_batch.push((var, value));
-                    }
+            if let Some(planning_context) = &self.planning_context {
+                planning_context.record_batch(planning_batch);
+            }
 
-                    if let Some(planning_context) = &self.planning_context {
-                        planning_context.record_batch(planning_batch);
-                    }
-
-                    if !compact_batch.is_empty() {
-                        self.constraint_sender
-                            .send(compact_batch)
-                            .await
-                            .map_err(|_| anyhow::anyhow!("failed to send scheduler constraint input batch"))?;
-                    }
-                },
+            if !compact_batch.is_empty() {
+                self.constraint_sender
+                    .send(compact_batch)
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("failed to send scheduler constraint input batch")
+                    })?;
             }
         }
+        Ok(())
     }
 }
 
@@ -494,7 +478,7 @@ where
         self
     }
 
-    fn input(mut self, input: Box<dyn crate::InputProvider<Val = AC::Val>>) -> Self {
+    fn input(mut self, input: crate::InputStream<AC::Val>) -> Self {
         self.input = Some(input);
         self
     }
@@ -1158,17 +1142,8 @@ where
                 let constraint_inputs = dist_constraint_input_vars(&spec, &dist_constraints);
                 let constraint_input_index =
                     ConstraintInputIndex::new(constraint_inputs.iter().cloned());
-                let input_vars_for_planning_context = spec.input_vars();
-                let all_scheduler_input_vars = constraint_inputs
-                    .iter()
-                    .chain(input_vars_for_planning_context.iter())
-                    .cloned()
-                    .collect::<std::collections::BTreeSet<_>>();
-                let mut input = self.input.expect("Input provider not set");
-                let needs_control = input.event_stream_requires_control();
-                let input_events = input
-                    .batched_event_stream(&all_scheduler_input_vars)
-                    .unwrap_or_else(|| Box::pin(futures::stream::pending()));
+                let input = self.input.expect("Input stream not set");
+                let input_ticks = crate::into_tick_stream(input);
                 let constraint_channel_size =
                     constraint_input_index.len().saturating_mul(4).max(64);
                 let (constraint_sender, constraint_receiver) =
@@ -1191,8 +1166,7 @@ where
                 return DistributedRuntime {
                     async_monitor: None,
                     direct_input_runtime: Some(DirectSchedulerInputRuntime {
-                        input_provider: needs_control.then_some(input),
-                        input_events,
+                        input_ticks,
                         constraint_input_index: constraint_input_index.clone(),
                         constraint_sender,
                         planning_context,
@@ -1249,9 +1223,12 @@ where
                 unreachable!("nonempty distribution constraints use the direct scheduler runtime")
             };
 
-            let async_builder = self
-                .async_monitor_builder
-                .maybe_input(self.input)
+            let async_builder = self.async_monitor_builder;
+            let async_builder = match self.input {
+                Some(input) => async_builder.input(input),
+                None => async_builder,
+            };
+            let async_builder = async_builder
                 .context_builder(context_builder)
                 .model(monitor_spec);
 
@@ -1290,12 +1267,30 @@ where
     pub(crate) scheduler: Scheduler<AC::Spec>,
 }
 
-#[async_trait(?Send)]
+async fn run_with_stay_alive_scheduler<S, W>(scheduler: S, worker: W) -> anyhow::Result<()>
+where
+    S: Future<Output = anyhow::Result<()>>,
+    W: Future<Output = anyhow::Result<()>>,
+{
+    let scheduler = scheduler.fuse();
+    let worker = worker.fuse();
+    pin_mut!(scheduler, worker);
+
+    select! {
+        result = scheduler => result,
+        result = worker => {
+            result?;
+            // A clean worker shutdown must not close distributed output topics.
+            // The scheduler owns that stay-alive policy and normally remains pending.
+            scheduler.await
+        }
+    }
+}
+
 #[async_trait(?Send)]
 impl<S, AC> Runtime for DistributedRuntime<AC, S>
 where
     AC::Spec: Localisable,
-    S: MonitoringSemantics<AC>,
     AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
     S: MonitoringSemantics<AC>,
 {
@@ -1306,14 +1301,120 @@ where
     async fn run(self: Self) -> anyhow::Result<()> {
         match (self.async_monitor, self.direct_input_runtime) {
             (Some(async_monitor), None) => {
-                let (res1, res2) = join!(self.scheduler.run(), async_monitor.run());
-                res1.and(res2)
+                run_with_stay_alive_scheduler(self.scheduler.run(), async_monitor.run()).await
             }
             (None, Some(direct_input_runtime)) => {
-                let (res1, res2) = join!(self.scheduler.run(), direct_input_runtime.run());
-                res1.and(res2)
+                run_with_stay_alive_scheduler(self.scheduler.run(), direct_input_runtime.run())
+                    .await
             }
             _ => panic!("Distributed runtime must have exactly one input driver"),
         }
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn distributed_task_orchestration_propagates_worker_errors() {
+        smol::block_on(async {
+            let scheduler = futures::future::pending::<anyhow::Result<()>>();
+            let worker = futures::future::ready(Err(anyhow::anyhow!("input failed")));
+
+            let error = run_with_stay_alive_scheduler(scheduler, worker)
+                .await
+                .unwrap_err();
+            assert_eq!(error.to_string(), "input failed");
+        });
+    }
+
+    #[test]
+    fn distributed_task_orchestration_keeps_running_after_clean_worker_shutdown() {
+        let result = run_with_stay_alive_scheduler(
+            futures::future::pending::<anyhow::Result<()>>(),
+            futures::future::ready(Ok(())),
+        )
+        .now_or_never();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn scheduler_input_preserves_event_ticks_and_packed_step_boundaries() {
+        smol::block_on(async {
+            let events = Box::pin(futures::stream::iter([Ok(crate::InputBatch::events(
+                vec![
+                    crate::InputEvent::new(VarName::new("x"), Value::Int(1)),
+                    crate::InputEvent::new(VarName::new("x"), Value::Int(2)),
+                ],
+            ))]));
+            let event_ticks = crate::into_tick_stream(events)
+                .map(Result::unwrap)
+                .collect::<Vec<_>>()
+                .await;
+            assert_eq!(event_ticks.len(), 2);
+            assert_eq!(event_ticks[0][0].value, Value::Int(1));
+            assert_eq!(event_ticks[1][0].value, Value::Int(2));
+
+            let steps = Box::pin(futures::stream::iter([crate::InputBatch::packed_steps(
+                std::num::NonZeroUsize::new(2).unwrap(),
+                vec![
+                    crate::InputEvent::new(VarName::new("x"), Value::Int(1)),
+                    crate::InputEvent::new(VarName::new("y"), Value::Int(10)),
+                    crate::InputEvent::new(VarName::new("x"), Value::Int(2)),
+                    crate::InputEvent::new(VarName::new("y"), Value::Int(20)),
+                ],
+            )]));
+            let step_ticks = crate::into_tick_stream(steps)
+                .map(Result::unwrap)
+                .collect::<Vec<_>>()
+                .await;
+            assert_eq!(step_ticks.len(), 2);
+            assert_eq!(step_ticks[0][0].value, Value::Int(1));
+            assert_eq!(step_ticks[1][0].value, Value::Int(2));
+        });
+    }
+
+    #[test]
+    fn direct_scheduler_input_propagates_errors() {
+        smol::block_on(async {
+            let (constraint_sender, _constraint_receiver) = spsc::channel(1);
+            let runtime = DirectSchedulerInputRuntime {
+                input_ticks: Box::pin(futures::stream::iter([Err(anyhow::anyhow!(
+                    "input failed"
+                ))])),
+                constraint_input_index: ConstraintInputIndex::new(std::iter::empty()),
+                constraint_sender,
+                planning_context: None,
+            };
+
+            let error = runtime.run().await.unwrap_err();
+            assert_eq!(error.to_string(), "input failed");
+        });
+    }
+
+    #[test]
+    fn direct_scheduler_does_not_advance_constraints_for_planning_only_ticks() {
+        smol::block_on(async {
+            let planning_context = PlanningContext::new(false);
+            let (constraint_sender, constraint_receiver) = spsc::channel(1);
+            let runtime = DirectSchedulerInputRuntime {
+                input_ticks: Box::pin(futures::stream::iter([Ok(vec![crate::InputEvent::new(
+                    VarName::new("planning_only"),
+                    Value::Int(1),
+                )])])),
+                constraint_input_index: ConstraintInputIndex::new(std::iter::empty()),
+                constraint_sender,
+                planning_context: Some(planning_context.clone()),
+            };
+            let mut constraint_ticks = channel_to_output_stream(constraint_receiver);
+
+            runtime.run().await.unwrap();
+            assert_eq!(constraint_ticks.next().await, None);
+            assert_eq!(
+                planning_context.snapshot().latest_bindings,
+                BTreeMap::from([(VarName::new("planning_only"), Value::Int(1))])
+            );
+        });
     }
 }

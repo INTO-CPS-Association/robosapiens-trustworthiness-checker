@@ -9,10 +9,9 @@ use mstlo::{Algorithm, SynchronizationStrategy, Variables};
 use smol::LocalExecutor;
 use tracing::{debug, warn};
 
-use crate::InputProvider;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
-    Runtime, Specification, UntypedDsrvSpecification, Value, VarName,
+    InputStream, Runtime, Specification, UntypedDsrvSpecification, Value, VarName,
     cli::{
         adapters::DistributionModeBuilder,
         args::{MstloAlgorithm, MstloSynchronizationStrategy, ParserMode},
@@ -20,7 +19,7 @@ use crate::{
     core::{OutputHandler, RuntimeSpec, Semantics, StreamData, StreamType},
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputProviderBuilder, builders::OutputHandlerBuilder},
+    io::{InputStreamFactory, OutputHandlerBuilder},
     lang::core::parser::SpecParser,
     lang::dsrv::{
         ast::SpannedExpr,
@@ -163,37 +162,7 @@ pub trait RuntimeBuilder<M, V: StreamData> {
         }
     }
 
-    fn input(self, input: Box<dyn InputProvider<Val = V>>) -> Self;
-
-    fn maybe_input(self, input: Option<Box<dyn InputProvider<Val = V>>>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(input) = input {
-            self.input(input)
-        } else {
-            self
-        }
-    }
-
-    fn input_builder(self, input_builder: InputProviderBuilder) -> Self
-    where
-        Self: Sized,
-    {
-        let _ = input_builder;
-        panic!("This builder type does not support input_builder method")
-    }
-
-    fn maybe_input_builder(self, input_builder: Option<InputProviderBuilder>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(input_builder) = input_builder {
-            self.input_builder(input_builder)
-        } else {
-            self
-        }
-    }
+    fn input(self, input: InputStream<V>) -> Self;
 
     fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
 
@@ -232,25 +201,7 @@ pub trait RuntimeBuilderDyn<M, V: StreamData>: 'static {
 
     fn maybe_model(self: Box<Self>, model: Option<M>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    fn input(
-        self: Box<Self>,
-        input: Box<dyn crate::InputProvider<Val = V>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
-
-    fn maybe_input(
-        self: Box<Self>,
-        input: Option<Box<dyn crate::InputProvider<Val = V>>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
-
-    fn input_builder(
-        self: Box<Self>,
-        input_builder: InputProviderBuilder,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
-
-    fn maybe_input_builder(
-        self: Box<Self>,
-        input_builder: Option<InputProviderBuilder>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
+    fn input(self: Box<Self>, input: crate::InputStream<V>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
     fn output(
         self: Box<Self>,
@@ -296,32 +247,8 @@ impl<
         Box::new(MonBuilder::maybe_model(*self, model))
     }
 
-    fn input(
-        self: Box<Self>,
-        input: Box<dyn crate::InputProvider<Val = V>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+    fn input(self: Box<Self>, input: crate::InputStream<V>) -> Box<dyn RuntimeBuilderDyn<M, V>> {
         Box::new(MonBuilder::input(*self, input))
-    }
-
-    fn maybe_input(
-        self: Box<Self>,
-        input: Option<Box<dyn crate::InputProvider<Val = V>>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
-        Box::new(MonBuilder::maybe_input(*self, input))
-    }
-
-    fn input_builder(
-        self: Box<Self>,
-        input_builder: InputProviderBuilder,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
-        Box::new(MonBuilder::input_builder(*self, input_builder))
-    }
-
-    fn maybe_input_builder(
-        self: Box<Self>,
-        input_builder: Option<InputProviderBuilder>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
-        Box::new(MonBuilder::maybe_input_builder(*self, input_builder))
     }
 
     fn output(
@@ -403,7 +330,7 @@ impl<
         Self(self.0.model(model))
     }
 
-    fn input(self, input: Box<dyn crate::InputProvider<Val = V>>) -> Self {
+    fn input(self, input: crate::InputStream<V>) -> Self {
         Self(self.0.input(input))
     }
 
@@ -437,7 +364,7 @@ impl<
         Self(self.0.model(model))
     }
 
-    fn input(self, input: Box<dyn crate::InputProvider<Val = V>>) -> Self {
+    fn input(self, input: crate::InputStream<V>) -> Self {
         Self(self.0.input(input))
     }
 
@@ -660,8 +587,8 @@ impl Debug for DistributionMode {
 pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
-    pub input: Option<Box<dyn crate::InputProvider<Val = V>>>,
-    pub input_provider_builder: Option<InputProviderBuilder>,
+    input: Option<InputStream<V>>,
+    input_factory: Option<InputStreamFactory>,
     pub output: Option<Box<dyn OutputHandler<Val = V>>>,
     pub output_handler_builder: Option<OutputHandlerBuilder>,
     pub runtime: RuntimeSpec,
@@ -701,13 +628,6 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
     ) -> Self {
         Self {
             distribution_mode_builder: Some(distribution_mode_builder),
-            ..self
-        }
-    }
-
-    pub fn input_provider_builder(self, builder: InputProviderBuilder) -> Self {
-        Self {
-            input_provider_builder: Some(builder),
             ..self
         }
     }
@@ -804,6 +724,26 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
     }
 }
 
+impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
+    pub fn input_factory(self, builder: InputStreamFactory) -> anyhow::Result<Self> {
+        builder.ensure_reconfigurable()?;
+        Ok(Self {
+            input_factory: Some(builder),
+            ..self
+        })
+    }
+}
+
+impl GeneralRuntimeBuilder<LangSpecification, Value> {
+    pub fn input_factory(self, builder: InputStreamFactory) -> anyhow::Result<Self> {
+        builder.ensure_reconfigurable()?;
+        Ok(Self {
+            input_factory: Some(builder),
+            ..self
+        })
+    }
+}
+
 impl From<MstloAlgorithm> for Algorithm {
     fn from(algorithm: MstloAlgorithm) -> Self {
         match algorithm {
@@ -831,7 +771,7 @@ impl RuntimeBuilder<LangSpecification, Value> for GeneralRuntimeBuilder<LangSpec
             executor: None,
             model: None,
             input: None,
-            input_provider_builder: None,
+            input_factory: None,
             output: None,
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -864,16 +804,9 @@ impl RuntimeBuilder<LangSpecification, Value> for GeneralRuntimeBuilder<LangSpec
         }
     }
 
-    fn input(self, input: Box<dyn crate::InputProvider<Val = Value>>) -> Self {
+    fn input(self, input: crate::InputStream<Value>) -> Self {
         Self {
             input: Some(input),
-            ..self
-        }
-    }
-
-    fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
-        Self {
-            input_provider_builder: Some(input_builder),
             ..self
         }
     }
@@ -900,7 +833,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),
                     input: self.input,
-                    input_provider_builder: self.input_provider_builder,
+                    input_factory: self.input_factory,
                     output: self.output,
                     output_handler_builder: self.output_handler_builder,
                     runtime: self.runtime,
@@ -925,7 +858,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),
                     input: self.input,
-                    input_provider_builder: self.input_provider_builder,
+                    input_factory: self.input_factory,
                     output: self.output,
                     output_handler_builder: self.output_handler_builder,
                     runtime: RuntimeSpec::Async,
@@ -961,7 +894,7 @@ impl RuntimeBuilder<UntypedDsrvSpecification, Value>
             executor: None,
             model: None,
             input: None,
-            input_provider_builder: None,
+            input_factory: None,
             output: None,
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -994,16 +927,9 @@ impl RuntimeBuilder<UntypedDsrvSpecification, Value>
         }
     }
 
-    fn input(self, input: Box<dyn crate::InputProvider<Val = Value>>) -> Self {
+    fn input(self, input: crate::InputStream<Value>) -> Self {
         Self {
             input: Some(input),
-            ..self
-        }
-    }
-
-    fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
-        Self {
-            input_provider_builder: Some(input_builder),
             ..self
         }
     }
@@ -1032,7 +958,7 @@ impl RuntimeBuilder<MstloSpecification, Value>
             executor: None,
             model: None,
             input: None,
-            input_provider_builder: None,
+            input_factory: None,
             output: None,
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -1065,16 +991,9 @@ impl RuntimeBuilder<MstloSpecification, Value>
         }
     }
 
-    fn input(self, input: Box<dyn crate::InputProvider<Val = Value>>) -> Self {
+    fn input(self, input: crate::InputStream<Value>) -> Self {
         Self {
             input: Some(input),
-            ..self
-        }
-    }
-
-    fn input_builder(self, input_builder: InputProviderBuilder) -> Self {
-        Self {
-            input_provider_builder: Some(input_builder),
             ..self
         }
     }
@@ -1107,6 +1026,10 @@ impl GeneralRuntimeBuilder<MstloSpecification, Value> {
     }
 
     pub async fn build(self) -> Box<dyn Runtime> {
+        assert!(
+            self.input_factory.is_none(),
+            "InputStreamFactory is only supported by ReconfigurableSemiSync DSRV runtimes"
+        );
         let mut builder = MstloRuntimeBuilder::new()
             .maybe_executor(self.executor)
             .maybe_model(self.model)
@@ -1115,16 +1038,9 @@ impl GeneralRuntimeBuilder<MstloSpecification, Value> {
             .synchronization_strategy(self.mstlo_synchronization_strategy)
             .variables(self.mstlo_variables);
 
-        builder = if let Some(input_provider_builder) = self.input_provider_builder {
-            let input = input_provider_builder
-                .runtime(RuntimeSpec::Async)
-                .build()
-                .await;
-            builder.input(input)
-        } else if let Some(input) = self.input {
-            builder.input(input)
-        } else {
-            builder
+        builder = match self.input {
+            Some(input) => builder.input(input),
+            None => builder,
         };
 
         builder = if let Some(output_handler_builder) = self.output_handler_builder {
@@ -1150,7 +1066,7 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
         model: Option<UntypedDsrvSpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
-        input_provider_builder: Option<InputProviderBuilder>,
+        input_factory: Option<InputStreamFactory>,
         output_handler_builder: Option<OutputHandlerBuilder>,
         reconf_topic: String,
         use_context_transfer: bool,
@@ -1214,9 +1130,9 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                 >::new();
                 builder = builder.reconf_topic(reconf_topic);
                 builder = builder.use_context_transfer(use_context_transfer);
-                builder =
-                    builder.input_builder(input_provider_builder.expect(
-                        "Input provider builder required for ReconfigurableSemiSync runtime",
+                builder = builder
+                    .input_factory(input_factory.expect(
+                        "Input stream builder required for ReconfigurableSemiSync runtime",
                     ));
                 builder =
                     builder.output_builder(output_handler_builder.expect(
@@ -1231,9 +1147,9 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                     TypeCheckingSpecParser<LALRParser>,
                 >::new();
                 builder = builder.reconf_topic(reconf_topic);
-                builder =
-                    builder.input_builder(input_provider_builder.expect(
-                        "Input provider builder required for ReconfigurableSemiSync runtime",
+                builder = builder
+                    .input_factory(input_factory.expect(
+                        "Input stream builder required for ReconfigurableSemiSync runtime",
                     ));
                 builder =
                     builder.output_builder(output_handler_builder.expect(
@@ -1248,9 +1164,9 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                     GradualTypeCheckingSpecParser<LALRParser>,
                 >::new();
                 builder = builder.reconf_topic(reconf_topic);
-                builder =
-                    builder.input_builder(input_provider_builder.expect(
-                        "Input provider builder required for ReconfigurableSemiSync runtime",
+                builder = builder
+                    .input_factory(input_factory.expect(
+                        "Input stream builder required for ReconfigurableSemiSync runtime",
                     ));
                 builder =
                     builder.output_builder(output_handler_builder.expect(
@@ -1472,6 +1388,25 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                 self.distribution_mode
             }
         };
+        let (input_factory, input) = if self.runtime == RuntimeSpec::ReconfSemiSync {
+            assert!(
+                self.input.is_none(),
+                "ReconfigurableSemiSync runtime requires an InputStreamFactory"
+            );
+            (
+                Some(
+                    self.input_factory
+                        .expect("ReconfigurableSemiSync runtime requires an InputStreamFactory"),
+                ),
+                None,
+            )
+        } else {
+            assert!(
+                self.input_factory.is_none(),
+                "InputStreamFactory is only supported by ReconfigurableSemiSync runtime"
+            );
+            (None, self.input)
+        };
         let builder: Box<dyn RuntimeBuilderDyn<UntypedDsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
@@ -1481,7 +1416,7 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
                 self.model,
                 distribution_mode,
                 self.scheduler_mode,
-                self.input_provider_builder.clone(),
+                input_factory,
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
                 self.use_context_transfer,
@@ -1494,14 +1429,9 @@ impl GeneralRuntimeBuilder<UntypedDsrvSpecification, Value> {
         let builder = if self.runtime == RuntimeSpec::ReconfSemiSync {
             builder
         } else {
-            // Normal handling for non-reconfigurable runtimes
-            let builder = if let Some(input_provider_builder) = self.input_provider_builder {
-                let input = input_provider_builder.runtime(self.runtime).build().await;
-                builder.input(input)
-            } else if let Some(input) = self.input {
-                builder.input(input)
-            } else {
-                builder
+            let builder = match input {
+                Some(input) => builder.input(input),
+                None => builder,
             };
 
             if let Some(output_handler_builder) = self.output_handler_builder {
