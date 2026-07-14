@@ -322,6 +322,22 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
     );
 
     group.bench_with_input(
+        BenchmarkId::new("dsrv_dataflow_untyped", size),
+        &size,
+        |b, &size| {
+            b.to_async(local_smol_executor.clone()).iter(|| {
+                run_dsrv_with_semantics(
+                    local_smol_executor.executor.clone(),
+                    black_box(dsrv_spec.clone()),
+                    dsrv_input(size),
+                    RuntimeSpec::Dataflow(Default::default()),
+                    Semantics::Untimed,
+                )
+            })
+        },
+    );
+
+    group.bench_with_input(
         BenchmarkId::new("dsrv_semisync_gradual_typed", size),
         &size,
         |b, &size| {
@@ -331,6 +347,22 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
                     black_box(dsrv_spec.clone()),
                     dsrv_input(size),
                     RuntimeSpec::SemiSync,
+                    Semantics::GradualTypedUntimed,
+                )
+            })
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("dsrv_dataflow_gradual_typed", size),
+        &size,
+        |b, &size| {
+            b.to_async(local_smol_executor.clone()).iter(|| {
+                run_dsrv_with_semantics(
+                    local_smol_executor.executor.clone(),
+                    black_box(dsrv_spec.clone()),
+                    dsrv_input(size),
+                    RuntimeSpec::Dataflow(Default::default()),
                     Semantics::GradualTypedUntimed,
                 )
             })
@@ -449,6 +481,21 @@ fn compare_threshold_property(c: &mut Criterion) {
                         dsrv_spec.clone(),
                         dsrv_input(size),
                         RuntimeSpec::SemiSync,
+                    )
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("dsrv_dataflow", size),
+            &size,
+            |b, &size| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    run_dsrv(
+                        local_smol_executor.executor.clone(),
+                        dsrv_spec.clone(),
+                        dsrv_input(size),
+                        RuntimeSpec::Dataflow(Default::default()),
                     )
                 })
             },

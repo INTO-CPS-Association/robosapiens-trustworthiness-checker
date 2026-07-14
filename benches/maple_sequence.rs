@@ -7,7 +7,9 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
+use trustworthiness_checker::benches_common::monitor_outputs_typed_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
@@ -66,6 +68,19 @@ fn from_elem(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
+            BenchmarkId::new("maple_sequence_untyped_dataflow", size),
+            &(&spec),
+            |b, &spec| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_dataflow(
+                        local_smol_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
             BenchmarkId::new("maple_sequence_typed_async", size),
             &(&spec_typed),
             |b, &spec_typed| {
@@ -74,6 +89,20 @@ fn from_elem(c: &mut Criterion) {
                         local_smol_executor.executor.clone(),
                         spec_typed.clone(),
                         input_stream_fn(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("maple_sequence_typed_dataflow", size),
+            &(&spec_typed),
+            |b, &spec_typed| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    monitor_outputs_typed_dataflow(
+                        local_smol_executor.executor.clone(),
+                        spec_typed.clone(),
+                        input_stream_fn(),
+                        trustworthiness_checker::core::Semantics::TypedUntimed,
                     )
                 })
             },

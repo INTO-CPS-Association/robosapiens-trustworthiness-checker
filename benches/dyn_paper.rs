@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async_limited;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_limited;
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
@@ -71,6 +72,20 @@ fn from_elem(c: &mut Criterion) {
                 })
             },
         );
+        group.bench_with_input(
+            BenchmarkId::new("dyn_paper_direct_dataflow", size),
+            &(&spec_direct),
+            |b, &spec| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_dataflow_limited(
+                        local_smol_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                        *size,
+                    )
+                })
+            },
+        );
     }
 
     for (size, percent) in sizes.into_iter().cartesian_product(percents) {
@@ -81,6 +96,20 @@ fn from_elem(c: &mut Criterion) {
             |b, &spec| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async_limited(
+                        local_smol_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                        size,
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(format!("dyn_paper_{}_dataflow", percent), size),
+            &(&spec),
+            |b, &spec| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_dataflow_limited(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),

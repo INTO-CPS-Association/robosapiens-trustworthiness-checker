@@ -13,6 +13,7 @@ use crate::core::OutputHandler;
 use crate::core::Runtime;
 use crate::core::RuntimeSpec;
 use crate::core::Semantics;
+use crate::core::ExecutionPolicy;
 use crate::io::InputStreamFactory;
 use crate::io::testing::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::io::{OutputHandlerBuilder, OutputHandlerSpec};
@@ -20,6 +21,7 @@ use crate::lang::dsrv::lalr_parser::LALRParser;
 use crate::lang::dsrv::type_checker::TypedDsrvSpecification;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
+use crate::runtime::dataflow::DataflowRuntimeBuilder;
 use crate::runtime::builder::SemiSyncValueConfig;
 use crate::runtime::builder::TypedValueConfig;
 use crate::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
@@ -79,6 +81,70 @@ pub async fn monitor_outputs_untyped_async_limited(
         Some(limit),
     )
     .await;
+}
+
+pub async fn monitor_outputs_untyped_dataflow_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: UntypedDsrvSpecification,
+    input_stream: InputStream<Value>,
+    limit: usize,
+) {
+    monitor_runtime_outputs(
+        RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+        Semantics::Untimed,
+        executor,
+        spec,
+        input_stream,
+        Some(limit),
+    )
+    .await;
+}
+
+pub async fn monitor_outputs_untyped_dataflow(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: UntypedDsrvSpecification,
+    input_stream: InputStream<Value>,
+) {
+    monitor_runtime_outputs(
+        RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+        Semantics::Untimed,
+        executor,
+        spec,
+        input_stream,
+        None,
+    )
+    .await;
+}
+
+pub async fn monitor_outputs_typed_dataflow(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: TypedDsrvSpecification,
+    input_stream: InputStream<Value>,
+    semantics: Semantics,
+) {
+    if !matches!(
+        semantics,
+        Semantics::TypedUntimed | Semantics::GradualTypedUntimed
+    ) {
+        panic!(
+            "dataflow typed runtime only supports typed/gradual typed semantics, got {semantics:?}",
+        );
+    }
+
+    let output_handler = Box::new(NullOutputHandler::new(
+        executor.clone(),
+        spec.output_vars.clone(),
+    ));
+
+    let monitor = DataflowRuntimeBuilder::<TypedDsrvSpecification>::new()
+        .execution_policy(ExecutionPolicy::Buffered)
+        .executor(executor)
+        .model(spec)
+        .output(output_handler)
+        .input(input_stream)
+        .build()
+        .await;
+    monitor.run().await.expect("Error running monitor");
 }
 
 pub async fn monitor_outputs_untyped_reconf_limited(

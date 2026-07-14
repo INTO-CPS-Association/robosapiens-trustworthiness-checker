@@ -7,6 +7,8 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::dsrv_fixtures::add_defer_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
 
@@ -55,6 +57,32 @@ fn from_elem(c: &mut Criterion) {
             |b, &spec| {
                 b.to_async(local_smol_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async(
+                        local_smol_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("dup_defer_untyped_dataflow", size),
+            &(&spec),
+            |b, &spec| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_dataflow(
+                        local_smol_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("dup_defer_untyped_semisync", size),
+            &(&spec),
+            |b, &spec| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_little(
                         local_smol_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),

@@ -254,6 +254,22 @@ fn compare_time_dependent_property_diagnostics(c: &mut Criterion) {
         },
     );
 
+    group.bench_with_input(
+        BenchmarkId::new("dsrv_counted_window_dataflow", size),
+        &size,
+        |b, &size| {
+            b.to_async(local_smol_executor.clone()).iter(|| {
+                run_dsrv_counted(
+                    local_smol_executor.executor.clone(),
+                    black_box(dsrv_spec.clone()),
+                    dsrv_input(size),
+                    RuntimeSpec::Dataflow(Default::default()),
+                    size,
+                )
+            })
+        },
+    );
+
     group.finish();
 }
 
@@ -297,6 +313,21 @@ fn compare_time_dependent_property(c: &mut Criterion) {
                         dsrv_spec.clone(),
                         dsrv_input(size),
                         RuntimeSpec::SemiSync,
+                    )
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("dsrv_default_window_dataflow", size),
+            &size,
+            |b, &size| {
+                b.to_async(local_smol_executor.clone()).iter(|| {
+                    run_dsrv(
+                        local_smol_executor.executor.clone(),
+                        dsrv_spec.clone(),
+                        dsrv_input(size),
+                        RuntimeSpec::Dataflow(Default::default()),
                     )
                 })
             },
