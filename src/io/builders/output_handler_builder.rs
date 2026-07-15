@@ -5,9 +5,12 @@ use async_unsync::bounded::Sender as MpscSender;
 use futures::StreamExt;
 use smol::LocalExecutor;
 
-use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
+#[cfg(feature = "mqtt")]
+use crate::core::MQTT_HOSTNAME;
+use crate::core::REDIS_HOSTNAME;
 use crate::io::cli::StdoutOutputHandler;
 use crate::io::config::{MsgTypeMapping, TopicMapping};
+#[cfg(feature = "mqtt")]
 use crate::io::mqtt::{MqttFactory, MqttOutputHandler};
 use crate::io::redis::RedisOutputHandler;
 use crate::io::testing::ManualOutputHandler;
@@ -50,6 +53,7 @@ pub struct OutputHandlerBuilder {
     redis_port: Option<u16>,
 }
 
+#[cfg(feature = "mqtt")]
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 impl OutputHandlerBuilder {
@@ -205,44 +209,52 @@ impl OutputHandlerBuilder {
                 }
             }
             OutputHandlerSpec::Mqtt(topics) => {
-                let topics: BTreeMap<VarName, String> = if let Some(topics) = topics {
-                    // Topics provided by user
-                    topics
-                        .into_iter()
-                        // Only include topics that are in the output_vars
-                        // this is necessary for localisation support
-                        .filter(|(var, _)| output_vars.contains(var))
-                        .collect()
-                } else {
-                    // Auto generated topics from spec
-                    output_vars
-                        .iter()
-                        .map(|var| (var.clone(), var.into()))
-                        .collect()
-                };
-                Self::validate_cli_topics(
-                    &topics.keys().cloned().collect::<BTreeSet<_>>(),
-                    &output_vars,
-                )
-                .expect("Provided MQTT topics do not match output variables");
+                #[cfg(feature = "mqtt")]
+                {
+                    let topics: BTreeMap<VarName, String> = if let Some(topics) = topics {
+                        // Topics provided by user
+                        topics
+                            .into_iter()
+                            // Only include topics that are in the output_vars
+                            // this is necessary for localisation support
+                            .filter(|(var, _)| output_vars.contains(var))
+                            .collect()
+                    } else {
+                        // Auto generated topics from spec
+                        output_vars
+                            .iter()
+                            .map(|var| (var.clone(), var.into()))
+                            .collect()
+                    };
+                    Self::validate_cli_topics(
+                        &topics.keys().cloned().collect::<BTreeSet<_>>(),
+                        &output_vars,
+                    )
+                    .expect("Provided MQTT topics do not match output variables");
 
-                // TODO: OutputHandler should not need both output_vars and
-                // output_mapping, since the mapping already contains the exact variable names.
-                let mut handler = MqttOutputHandler::new(
-                    executor.clone(),
-                    MQTT_FACTORY,
-                    output_vars.into_iter().collect(),
-                    MQTT_HOSTNAME,
-                    self.mqtt_port,
-                    topics,
-                    aux_info,
-                )
-                .expect("MQTT output handler could not be created");
-                handler
-                    .connect()
-                    .await
-                    .expect("MQTT output handler failed to connect");
-                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
+                    // TODO: OutputHandler should not need both output_vars and
+                    // output_mapping, since the mapping already contains the exact variable names.
+                    let mut handler = MqttOutputHandler::new(
+                        executor.clone(),
+                        MQTT_FACTORY,
+                        output_vars.into_iter().collect(),
+                        MQTT_HOSTNAME,
+                        self.mqtt_port,
+                        topics,
+                        aux_info,
+                    )
+                    .expect("MQTT output handler could not be created");
+                    handler
+                        .connect()
+                        .await
+                        .expect("MQTT output handler failed to connect");
+                    Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
+                }
+                #[cfg(not(feature = "mqtt"))]
+                {
+                    let _ = topics;
+                    unimplemented!("MQTT support not enabled")
+                }
             }
             OutputHandlerSpec::Redis(topics) => {
                 let topics: BTreeMap<VarName, String> = if let Some(topics) = topics {

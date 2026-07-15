@@ -1,0 +1,6 @@
+in velocity: Float
+in emergency_stop: Bool
+
+out verdict: Bool
+
+verdict = velocity <= 5.0 || emergency_stop

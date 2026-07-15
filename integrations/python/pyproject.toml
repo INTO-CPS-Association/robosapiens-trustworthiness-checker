@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "trustworthiness-checker"
+version = "0.1.0"
+description = "Python bindings for the RoboSAPIENS Trustworthiness Checker"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+fmu = [
+    "protobuf==5.27.3",
+    "pyzmq==27.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.0,<2.0",
+    "pytest>=8,<10",
+]
+fmu-dev = [
+    "fmpy>=0.3,<0.4",
+]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+
+# TODO: Confirm the supported Python versions and package classifiers.

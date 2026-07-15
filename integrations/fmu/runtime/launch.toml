@@ -1,0 +1,3 @@
+linux = ["sh", "launch.sh"]
+macos = ["python", "main.py"]
+windows = ["python", "main.py"]

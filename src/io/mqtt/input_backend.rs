@@ -34,8 +34,21 @@ impl MqttInputBackend {
                 .await
             }
             Self::Paho => {
-                super::input_stream::input_stream(host, port, var_topics, max_reconnect_attempts)
+                #[cfg(feature = "mqtt")]
+                {
+                    super::input_stream::input_stream(
+                        host,
+                        port,
+                        var_topics,
+                        max_reconnect_attempts,
+                    )
                     .await
+                }
+                #[cfg(not(feature = "mqtt"))]
+                {
+                    let _ = (host, port, var_topics, max_reconnect_attempts);
+                    anyhow::bail!("Paho MQTT support not enabled")
+                }
             }
         }
     }
@@ -124,15 +137,25 @@ mod tests {
     }
 
     #[test]
-    fn empty_inputs_need_no_connection_for_either_backend() {
+    fn empty_rumqttc_input_needs_no_connection() {
         smol::block_on(async {
-            for backend in [MqttInputBackend::Rumqttc, MqttInputBackend::Paho] {
-                let mut input = backend
-                    .open("unreachable.invalid", None, BTreeMap::new(), 0)
-                    .await
-                    .unwrap();
-                assert!(futures::StreamExt::next(&mut input).await.is_none());
-            }
+            let mut input = MqttInputBackend::Rumqttc
+                .open("unreachable.invalid", None, BTreeMap::new(), 0)
+                .await
+                .unwrap();
+            assert!(futures::StreamExt::next(&mut input).await.is_none());
+        });
+    }
+
+    #[cfg(feature = "mqtt")]
+    #[test]
+    fn empty_paho_input_needs_no_connection() {
+        smol::block_on(async {
+            let mut input = MqttInputBackend::Paho
+                .open("unreachable.invalid", None, BTreeMap::new(), 0)
+                .await
+                .unwrap();
+            assert!(futures::StreamExt::next(&mut input).await.is_none());
         });
     }
 }

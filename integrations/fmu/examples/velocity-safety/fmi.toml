@@ -1,0 +1,20 @@
+[model]
+name = "velocity_safety_checker"
+guid = "66dfef50-26bd-4e02-b036-45da70f45f48"
+description = "Checks whether observed velocity behaviour is safe"
+
+[variables.velocity]
+value-reference = 0
+start = 0.0
+unit = "m/s"
+description = "Velocity observed from the system under test"
+
+[variables.emergency_stop]
+value-reference = 1
+start = false
+description = "Whether the system has engaged its emergency stop"
+
+[variables.verdict]
+value-reference = 2
+start = false
+description = "True when the observed system behaviour is safe"

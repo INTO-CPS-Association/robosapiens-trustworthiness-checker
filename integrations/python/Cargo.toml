@@ -1,0 +1,18 @@
+[package]
+name = "trustworthiness_checker_py"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE.md"
+
+[lib]
+name = "trustworthiness_checker"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.102"
+futures = "0.3.32"
+pyo3 = { version = "0.27.2", features = ["extension-module"] }
+smol = "2.0.2"
+tc_core = { package = "trustworthiness_checker", path = "../..", default-features = false }
+
+# TODO: Keep this crate as a thin adapter over the root Rust library crate.

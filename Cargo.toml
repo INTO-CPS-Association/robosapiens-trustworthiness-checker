@@ -8,6 +8,10 @@ exclude = ["examples/*", "scripts/*", "log/*", "benches/*"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
+members = [
+    "libs/tc-testutils",
+    "integrations/python",
+]
 
 [lib]
 name = "trustworthiness_checker"
@@ -28,9 +32,10 @@ r2r = { version = "0.9.5", optional = true }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.150"
 serde_json5 = "0.2.1"
+toml = "0.9.8"
 # mqtt client
 # Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = { version = "0.14.0", default-features = false, features = [
+paho-mqtt = { version = "0.14.0", optional = true, default-features = false, features = [
     "bundled",
     "ssl",
 ] }
@@ -59,7 +64,7 @@ async-unsync = "0.3.0"
 smol-macros = "0.1.1"
 macro_rules_attribute = "0.2.2"
 async-compat = "0.2.5"
-tikv-jemallocator = "0.6.1"
+tikv-jemallocator = { version = "0.6.1", optional = true }
 ecow = { version = "0.3.0", features = ["serde"] }
 async_cell = "0.2.3"
 async-channel = "2.5.0"
@@ -72,7 +77,7 @@ thiserror = "2.0.18"
 rand = "0.10.1"
 unsync = "0.2.0"
 itertools = "0.15.0"
-sat-solver = "0.2.1"
+sat-solver = { version = "0.2.1", optional = true }
 redis = { version = "1.2.3", default-features = false, features = ["smol-comp"] }
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 fs2 = "0.4.3"
@@ -99,7 +104,11 @@ lto = false
 codegen-units = 16
 
 [features]
-ros = ["dep:r2r", "tc-testutils/ros"]
+default = ["jemalloc", "mqtt", "sat"]
+jemalloc = ["dep:tikv-jemallocator"]
+mqtt = ["dep:paho-mqtt"]
+sat = ["dep:sat-solver"]
+ros = ["dep:r2r", "tc-testutils/ros", "mqtt"]
 testcontainers = ["tc-testutils/testcontainers"]
 span-tracing = []
 extended-proptests = []

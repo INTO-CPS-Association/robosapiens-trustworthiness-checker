@@ -37,7 +37,7 @@ use crate::{
             sat_solver::SatMonitoredAtDistConstraintSolver,
         },
     },
-    io::mqtt::dist_graph_provider::{self, DistGraphProvider, StaticDistGraphProvider},
+    io::mqtt::dist_graph_provider::{DistGraphProvider, StaticDistGraphProvider},
     runtime::RuntimeBuilder,
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
@@ -48,6 +48,41 @@ use crate::{
     },
     stream_utils::channel_to_output_stream,
 };
+
+#[cfg(feature = "mqtt")]
+use crate::io::mqtt::dist_graph_provider as mqtt_dist_graph_provider;
+
+#[cfg(not(feature = "mqtt"))]
+mod mqtt_dist_graph_provider {
+    use std::{collections::BTreeMap, rc::Rc};
+
+    use crate::{
+        OutputStream,
+        distributed::distribution_graphs::{DistributionGraph, NodeName},
+        io::mqtt::dist_graph_provider::DistGraphProvider,
+    };
+
+    pub struct MqttDistGraphProvider {
+        pub central_node: NodeName,
+    }
+
+    impl MqttDistGraphProvider {
+        pub fn new(
+            _executor: Rc<smol::LocalExecutor<'static>>,
+            central_node: NodeName,
+            _locations: BTreeMap<NodeName, String>,
+        ) -> Result<Self, &'static str> {
+            let _ = central_node;
+            Err("MQTT support not enabled")
+        }
+    }
+
+    impl DistGraphProvider for MqttDistGraphProvider {
+        fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
+            Box::pin(futures::stream::pending())
+        }
+    }
+}
 
 #[cfg(feature = "ros")]
 use crate::io::ros::dist_graph_provider as ros_dist_graph_provider;
@@ -594,7 +629,7 @@ where
                     debug!("Creating MQTT dist graph provider");
                     let location_names = locations.keys().cloned().collect();
                     let dist_graph_provider = Box::new(
-                        dist_graph_provider::MqttDistGraphProvider::new(
+                        mqtt_dist_graph_provider::MqttDistGraphProvider::new(
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
@@ -619,7 +654,7 @@ where
                     debug!("Creating random dist graph stream");
                     let location_names = locations.keys().cloned().collect();
                     let dist_graph_provider = Box::new(
-                        dist_graph_provider::MqttDistGraphProvider::new(
+                        mqtt_dist_graph_provider::MqttDistGraphProvider::new(
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
@@ -642,7 +677,7 @@ where
                     debug!("Creating static optimized dist graph provider");
                     let location_names = locations.keys().cloned().collect();
                     let dist_graph_provider = Box::new(
-                        dist_graph_provider::MqttDistGraphProvider::new(
+                        mqtt_dist_graph_provider::MqttDistGraphProvider::new(
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
@@ -682,7 +717,7 @@ where
                     debug!("Creating static optimized SAT dist graph provider");
                     let location_names = locations.keys().cloned().collect();
                     let dist_graph_provider = Box::new(
-                        dist_graph_provider::MqttDistGraphProvider::new(
+                        mqtt_dist_graph_provider::MqttDistGraphProvider::new(
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
@@ -709,7 +744,7 @@ where
                     debug!("Creating dynamic optimized dist graph provider");
                     let location_names = locations.keys().cloned().collect();
                     let dist_graph_provider = Box::new(
-                        dist_graph_provider::MqttDistGraphProvider::new(
+                        mqtt_dist_graph_provider::MqttDistGraphProvider::new(
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
@@ -749,7 +784,7 @@ where
                     debug!("Creating dynamic optimized SAT dist graph provider");
                     let location_names = locations.keys().cloned().collect();
                     let dist_graph_provider = Box::new(
-                        dist_graph_provider::MqttDistGraphProvider::new(
+                        mqtt_dist_graph_provider::MqttDistGraphProvider::new(
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
