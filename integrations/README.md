@@ -17,11 +17,13 @@ uv run --project integrations/python --locked pytest integrations/python/tests i
 
 ## FMU
 
-Authored FMU backend files live in `integrations/fmu/runtime`, while selectable
-specification examples live in `integrations/fmu/examples/<name>`. The build
-type-checks the selected DSRV specification, generates its FMI description and runtime interface, and
-assembles these sources with the local Python wheel under the ignored
-`integrations/fmu/build` directory.
+The authored UniFMU model adapter and launch configuration live in
+`integrations/fmu/adapter`, while selectable specification examples live in
+`integrations/fmu/examples/<name>`. The build preserves UniFMU's generated entry
+point and command dispatcher, type-checks the selected DSRV specification,
+generates its FMI description and runtime interface, and assembles the adapter
+with the local Python extension under the ignored `integrations/fmu/build`
+directory.
 
 ```bash
 integrations/fmu/scripts/install-unifmu.sh

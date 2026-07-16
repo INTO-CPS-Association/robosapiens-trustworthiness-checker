@@ -2,25 +2,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 from typing import Any
 
-_RESOURCES = Path(__file__).resolve().parent
-_SITE_PACKAGES = _RESOURCES / "site-packages"
-if _SITE_PACKAGES.exists():
-    sys.path.insert(0, str(_SITE_PACKAGES))
-
-try:
-    from abstract_backend import Fmi2Status
-except ImportError:
-    class Fmi2Status:
-        ok = 0
-        warning = 1
-        discard = 2
-        error = 3
-        fatal = 4
-
 from trustworthiness_checker import DeferredValue, NoValue, TcRuntime
+
+_RESOURCES = Path(__file__).resolve().parent
+
+
+class Fmi2Status:
+    ok = 0
+    warning = 1
+    discard = 2
+    error = 3
+    fatal = 4
+    pending = 5
 
 
 class Model:
@@ -156,18 +151,6 @@ class Model:
             if not _is_absent_value(value):
                 self.values[variable["name"]] = _coerce(variable["fmi_type"], value)
         return Fmi2Status.ok
-
-    def fmi3DoStep(
-        self,
-        currentCommunicationPoint: float,
-        communicationStepSize: float,
-        noSetFMUStatePriorToCurrentPoint: bool,
-    ) -> int:
-        return self.fmi2DoStep(
-            currentCommunicationPoint,
-            communicationStepSize,
-            noSetFMUStatePriorToCurrentPoint,
-        )
 
 
 def _coerce(fmi_type: str, value: Any) -> Any:

@@ -53,9 +53,9 @@ def adapter(monkeypatch, tmp_path):
     fake_extension.TcRuntime = FakeRuntime
     monkeypatch.setitem(sys.modules, "trustworthiness_checker", fake_extension)
 
-    runtime_dir = Path(__file__).resolve().parents[1] / "runtime"
+    adapter_dir = Path(__file__).resolve().parents[1] / "adapter"
     module_name = f"tc_unifmu_model_{uuid4().hex}"
-    spec = importlib.util.spec_from_file_location(module_name, runtime_dir / "model.py")
+    spec = importlib.util.spec_from_file_location(module_name, adapter_dir / "model.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, module_name, module)

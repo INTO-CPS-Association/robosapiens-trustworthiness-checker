@@ -20,3 +20,4 @@ integrations/python/dist/
 log
 install
 .zed/settings.json
+ros_interfaces/build/

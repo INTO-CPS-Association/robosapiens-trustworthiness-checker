@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 FMU_DIR="$ROOT/integrations/fmu"
 BUILD_DIR="$FMU_DIR/build"
 SKELETON_DIR="$BUILD_DIR/trustworthiness_checker"
+WHEELS_DIR="$BUILD_DIR/wheels"
 DIST_DIR="$FMU_DIR/dist"
 FMU_PATH="$DIST_DIR/trustworthiness_checker.fmu"
 UNIFMU_BINARY="unifmu"
@@ -91,13 +92,9 @@ for platform_dir in "$SKELETON_DIR"/binaries/*; do
     fi
 done
 
-cp "$FMU_DIR/runtime/backend.py" "$SKELETON_DIR/resources/backend.py"
-cp "$FMU_DIR/runtime/launch.sh" "$SKELETON_DIR/resources/launch.sh"
-cp "$FMU_DIR/runtime/launch.toml" "$SKELETON_DIR/resources/launch.toml"
-cp "$FMU_DIR/runtime/main.py" "$SKELETON_DIR/resources/main.py"
-cp "$FMU_DIR/runtime/model.py" "$SKELETON_DIR/resources/model.py"
+cp "$FMU_DIR/adapter/launch.toml" "$SKELETON_DIR/resources/launch.toml"
+cp "$FMU_DIR/adapter/model.py" "$SKELETON_DIR/resources/model.py"
 cp "$SPEC_DIR/spec.dsrv" "$SKELETON_DIR/resources/spec.dsrv"
-chmod +x "$SKELETON_DIR/resources/launch.sh"
 
 GENERATOR_ARGS=(
     --spec "$SPEC_DIR/spec.dsrv"
@@ -114,14 +111,14 @@ build_wheel() {
         --manifest-path "$ROOT/integrations/python/Cargo.toml" \
         --interpreter "$PYTHON" \
         --release \
-        --out "$SKELETON_DIR/resources/wheels"
+        --out "$WHEELS_DIR"
 }
 
 build_wheel
 
-WHEEL_PATH=("$SKELETON_DIR"/resources/wheels/trustworthiness_checker-*.whl)
+WHEEL_PATH=("$WHEELS_DIR"/trustworthiness_checker-*.whl)
 uv pip install \
-    --target "$SKELETON_DIR/resources/site-packages" \
+    --target "$SKELETON_DIR/resources" \
     "${WHEEL_PATH[0]}" \
     "protobuf==5.27.3" \
     "pyzmq==27.1.0"

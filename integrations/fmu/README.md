@@ -18,9 +18,9 @@ The build and development scripts require:
 - `curl`, Bash, and Git
 - Internet access for the initial tool and Python dependency downloads
 
-The FMU contains a CPython-specific native wheel. The current integration targets CPython
-3.12. Install CPython 3.12 with the operating system's package manager and
-verify it before continuing:
+The FMU contains a CPython-specific native extension. The current integration
+targets CPython 3.12. Install CPython 3.12 with the operating system's package
+manager and verify it before continuing:
 
 ```bash
 python --version
@@ -98,6 +98,9 @@ During the build, `generate_fmu_interface` parses and strictly type-checks
 `spec.dsrv`, merges `fmi.toml`, and generates both `modelDescription.xml` and
 `resources/interface.json`. The adapter consumes the JSON mapping, so its value
 references and types cannot drift from the generated FMI description.
+UniFMU supplies the FMI binary, protocol schemas, Python entry point, and command
+dispatcher unchanged; the build replaces only the generated example model with
+the checker adapter and packages its runtime dependencies alongside it.
 The artefact contains only the current host platform's FMI binary and native
 Python extension; build a separate FMU on each target platform.
 
