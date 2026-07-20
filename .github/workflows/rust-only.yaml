@@ -29,8 +29,17 @@ jobs:
         run: cargo build
       - name: Build project for testing
         run: cargo test --no-run
+      - name: List Criterion benchmark targets
+        run: |
+          cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] as $package | $package.targets[] | select(.kind | index("bench")) | [$package.name, .name] | @tsv' \
+            > benchmark-targets.tsv
+          test -s benchmark-targets.tsv
       - name: Build project for benching
-        run: cargo bench --profile bench-fast --benches --no-run
+        run: |
+          while IFS=$'\t' read -r package benchmark; do
+            cargo bench --profile bench-fast --package "$package" --bench "$benchmark" --no-run
+          done < benchmark-targets.tsv
 
         # Then run the tests and benches
       - name: Test project
@@ -38,7 +47,11 @@ jobs:
       - name: Bench project
         run: |
           set -o pipefail
-          cargo bench --profile bench-fast --benches -- --output-format bencher 2>&1 | tee benchmark-output.txt
+          : > benchmark-output.txt
+          while IFS=$'\t' read -r package benchmark; do
+            cargo bench --profile bench-fast --package "$package" --bench "$benchmark" -- --output-format bencher 2>&1 |
+              tee -a benchmark-output.txt
+          done < benchmark-targets.tsv
 
       - name: Update benchmark history
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
