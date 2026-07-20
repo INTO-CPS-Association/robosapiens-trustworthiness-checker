@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" data-page="all">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>All performance benchmarks</title>
+    <link rel="stylesheet" href="dashboard.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <div>
+        <h1>All performance benchmarks</h1>
+        <p>The complete Criterion history, including diagnostics and every parameter size.</p>
+      </div>
+      <nav aria-label="Benchmark views">
+        <a href="./">Key benchmarks</a>
+        <a class="active" href="all.html">All benchmarks</a>
+        <a href="data.js" download>Download data</a>
+      </nav>
+    </header>
+    <div id="metadata" class="metadata" aria-live="polite"></div>
+    <label class="search">
+      <span>Filter benchmarks</span>
+      <input id="benchmark-filter" type="search" placeholder="e.g. dataflow, threshold, dynamic" autocomplete="off">
+    </label>
+    <main id="charts" class="charts"></main>
+    <p id="empty-state" class="empty-state" hidden>No matching benchmark history was found.</p>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>
+    <script src="data.js"></script>
+    <script src="dashboard.js"></script>
+  </body>
+</html>

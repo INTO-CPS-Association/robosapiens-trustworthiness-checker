@@ -59,6 +59,11 @@ jobs:
             cp -a .benchmark-data/benchmarks .pages-site/benchmarks
           fi
 
+          # Presentation is version-controlled on main. The benchmark-data branch
+          # contains the measurements and remains independent of the dashboard UI.
+          mkdir -p .pages-site/benchmarks
+          cp -a docs/benchmark-dashboard/. .pages-site/benchmarks/
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
