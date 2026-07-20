@@ -30,13 +30,15 @@ jobs:
       - name: Build project for testing
         run: cargo test --no-run
       - name: Build project for benching
-        run: cargo bench --profile bench-fast --no-run
+        run: cargo bench --profile bench-fast --benches --no-run
 
         # Then run the tests and benches
       - name: Test project
         run: cargo test
       - name: Bench project
-        run: cargo bench --profile bench-fast -- --output-format bencher 2>&1 | tee benchmark-output.txt
+        run: |
+          set -o pipefail
+          cargo bench --profile bench-fast --benches -- --output-format bencher 2>&1 | tee benchmark-output.txt
 
       - name: Update benchmark history
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
