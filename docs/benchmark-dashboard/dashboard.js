@@ -69,6 +69,11 @@ function readableDuration(nanoseconds) {
   return `${nanoseconds.toFixed(1)} ns`;
 }
 
+function dateAndCommit(point) {
+  const date = new Date(point.date).toISOString().slice(0, 10);
+  return `${date} · ${point.commit.id.slice(0, 8)}`;
+}
+
 function seriesFor(name, runs) {
   return runs.flatMap((run) => {
     const bench = run.benches.find((candidate) => candidate.name === name);
@@ -104,14 +109,25 @@ function render(names, runs) {
     container.className = "chart-container";
     const canvas = document.createElement("canvas");
     container.append(canvas);
-    card.append(title, container);
+    const history = document.createElement("div");
+    history.className = "commit-history";
+    history.setAttribute("aria-label", "Benchmark commits");
+    series.forEach((point) => {
+      const link = document.createElement("a");
+      link.href = point.commit.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = dateAndCommit(point);
+      history.append(link);
+    });
+    card.append(title, container, history);
     chartsElement.append(card);
 
     chartInstances.push(
       new Chart(canvas.getContext("2d"), {
         type: "line",
         data: {
-          labels: series.map((point) => point.commit.id.slice(0, 8)),
+          labels: series.map(dateAndCommit),
           datasets: [
             {
               data: series.map((point) => point.value),
@@ -128,6 +144,11 @@ function render(names, runs) {
         options: {
           maintainAspectRatio: false,
           legend: { display: false },
+          hover: {
+            onHover: (event, elements) => {
+              event.target.style.cursor = elements.length > 0 ? "pointer" : "default";
+            },
+          },
           onClick: (_event, elements) => {
             if (elements.length > 0) {
               window.open(series[elements[0]._index].commit.url, "_blank", "noopener");
@@ -146,7 +167,7 @@ function render(names, runs) {
             callbacks: {
               title: (items) => {
                 const point = series[items[0].index];
-                return `${point.commit.id.slice(0, 12)} · ${new Date(point.date).toLocaleDateString()}`;
+                return dateAndCommit(point);
               },
               label: (item) => readableDuration(series[item.index].value),
               afterLabel: (item) => series[item.index].commit.message.split("\n")[0],

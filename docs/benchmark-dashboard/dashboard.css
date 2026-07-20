@@ -23,11 +23,6 @@ h1 {
   margin: 0 0 0.35rem;
 }
 
-.site-header p {
-  color: #59636e;
-  margin: 0;
-}
-
 nav {
   display: flex;
   flex-wrap: wrap;
@@ -101,6 +96,25 @@ nav a.active {
   position: relative;
 }
 
+.commit-history {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.65rem;
+  overflow-x: auto;
+  padding: 0.25rem 0;
+}
+
+.commit-history a {
+  color: #0969da;
+  flex: none;
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.commit-history a:hover {
+  text-decoration: underline;
+}
+
 .empty-state {
   border: 1px dashed #8c959f;
   border-radius: 0.65rem;
@@ -127,13 +141,16 @@ nav a.active {
     color: #e6edf3;
   }
 
-  .site-header p,
   .metadata,
   .empty-state {
     color: #8d96a0;
   }
 
   nav a {
+    color: #58a6ff;
+  }
+
+  .commit-history a {
     color: #58a6ff;
   }
 
