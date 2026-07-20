@@ -12,6 +12,10 @@ env:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main-benchmarks' || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   workflow-default-settings:
     name: workflow default settings
