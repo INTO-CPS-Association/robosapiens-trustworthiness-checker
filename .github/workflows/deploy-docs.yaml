@@ -6,6 +6,9 @@ on:
     paths:
       - "docs/**"
       - ".github/workflows/deploy-docs.yaml"
+  workflow_run:
+    workflows: ["Rust only workflow"]
+    types: [completed]
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
@@ -22,10 +25,17 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Checkout benchmark history
+        uses: actions/checkout@v4
+        with:
+          ref: benchmark-data
+          path: .benchmark-data
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -39,38 +49,20 @@ jobs:
           cd docs
           mdbook build
 
-      - name: Restore existing GitHub Pages site
-        uses: actions/cache/restore@v4
-        with:
-          path: .pages-site
-          key: pages-site-${{ github.run_id }}
-          restore-keys: |
-            pages-site-
-
       - name: Prepare GitHub Pages site
         run: |
-          if [ -d .pages-site/benchmarks ]; then
-            mv .pages-site/benchmarks /tmp/benchmark-pages
-          fi
-
           rm -rf .pages-site
           mkdir -p .pages-site
           cp -a docs/book/. .pages-site/
 
-          if [ -d /tmp/benchmark-pages ]; then
-            mv /tmp/benchmark-pages .pages-site/benchmarks
+          if [ -d .benchmark-data/benchmarks ]; then
+            cp -a .benchmark-data/benchmarks .pages-site/benchmarks
           fi
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: .pages-site
-
-      - name: Save GitHub Pages site
-        uses: actions/cache/save@v4
-        with:
-          path: .pages-site
-          key: pages-site-${{ github.run_id }}
 
   deploy:
     environment:
