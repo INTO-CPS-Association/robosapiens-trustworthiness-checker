@@ -3,18 +3,19 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use async_stream::stream;
+use contiguous_tree::TreeCursorExt;
 use sat_solver::sat::cnf::Cnf;
 use sat_solver::sat::literal::PackedLiteral;
 use sat_solver::sat::solver::{Solver, SolverImpls};
 use tracing::{info, warn};
 
 use crate::{
-    Specification, UntypedDsrvSpecification, Value, VarName,
+    DsrvSpecification, Value, VarName,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
     },
     distributed::scheduling::planning_context::PlanningContextSnapshot,
-    lang::dsrv::ast::{SExpr, SpannedExpr},
+    lang::dsrv::ast::{BoolBinOp, ExprKind, ExprRef, ExprView, SBinOp},
     semantics::{AsyncConfig, MonitoringSemantics, distributed::localisation::Localisable},
 };
 
@@ -29,7 +30,7 @@ use crate::{
 pub struct SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
 {
     pub dist_constraints: Vec<VarName>,
     pub output_vars: Vec<VarName>,
@@ -46,13 +47,13 @@ where
 impl<S, AC> SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(
         dist_constraints: Vec<VarName>,
         output_vars: Vec<VarName>,
-        spec: UntypedDsrvSpecification,
+        spec: DsrvSpecification,
         default_planning_context: Option<PlanningContextSnapshot>,
     ) -> Self {
         let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();
@@ -65,7 +66,7 @@ where
             .filter(|var| var.to_string().ends_with("Pose"))
             .collect();
         let planning_binding_candidates =
-            planning_binding_candidates(&spec, local_input_vars.into_iter());
+            planning_binding_candidates(&spec, local_input_vars.iter().cloned());
 
         Self {
             dist_constraints,
@@ -219,7 +220,7 @@ where
         let mut top_lits = Vec::new();
 
         for c in &self.dist_constraints {
-            let expr = spec.var_expr(c).unwrap_or_else(|| {
+            let expr = spec.var_expr_ref(c).unwrap_or_else(|| {
                 panic!(
                     "Missing expression for distribution constraint variable `{}`",
                     c
@@ -312,7 +313,7 @@ where
 }
 
 fn planning_binding_candidates(
-    spec: &UntypedDsrvSpecification,
+    spec: &DsrvSpecification,
     roots: impl IntoIterator<Item = VarName>,
 ) -> BTreeSet<VarName> {
     let mut candidates = BTreeSet::new();
@@ -323,8 +324,8 @@ fn planning_binding_candidates(
             continue;
         }
 
-        if let Some(expr) = spec.var_expr(&var) {
-            pending.extend(expr.node.inputs());
+        if let Some(expr) = spec.exprs().get(&var) {
+            expr.visit_free_variables(|dependency| pending.push(dependency.clone()));
         }
     }
 
@@ -333,7 +334,7 @@ fn planning_binding_candidates(
 
 fn eval_bound_var(
     var: &VarName,
-    spec: &UntypedDsrvSpecification,
+    spec: &DsrvSpecification,
     graph: &DistributionGraph,
     value_bindings: &BTreeMap<VarName, Value>,
     successful_eval_cache: &mut BTreeMap<VarName, Value>,
@@ -342,7 +343,7 @@ fn eval_bound_var(
         return Some(val);
     }
 
-    let expr = spec.var_expr(var)?;
+    let expr = spec.var_expr_ref(var)?;
     let mut st_full = CnfCompilerState::new(graph);
     st_full.value_bindings = value_bindings.clone();
     let val = eval_const_expr(expr, spec, &st_full)?;
@@ -367,18 +368,18 @@ fn try_build_labelled_graph_from_guarded_monitored_choices(
     output_vars: &[VarName],
     dist_constraints: &[VarName],
     dist_constraint_set: &HashSet<VarName>,
-    spec: &UntypedDsrvSpecification,
+    spec: &DsrvSpecification,
     st: &CnfCompilerState,
 ) -> Option<LabelledDistributionGraph> {
     let mut constrained_streams = BTreeSet::new();
     for c in dist_constraints {
-        collect_monitored_streams(spec.var_expr(c)?, spec, &mut constrained_streams);
+        collect_monitored_streams(spec.var_expr_ref(c)?, spec, &mut constrained_streams);
     }
 
     let mut placements = BTreeMap::<VarName, NodeName>::new();
 
     for c in dist_constraints {
-        let expr = spec.var_expr(c)?;
+        let expr = spec.var_expr_ref(c)?;
         let choices = guarded_monitored_choices(expr, spec, st).ok()?;
         match choices {
             GuardedChoice::True => {}
@@ -406,101 +407,33 @@ fn try_build_labelled_graph_from_guarded_monitored_choices(
 }
 
 fn collect_monitored_streams(
-    expr: SpannedExpr,
-    spec: &UntypedDsrvSpecification,
+    expr: ExprRef<'_>,
+    spec: &DsrvSpecification,
     streams: &mut BTreeSet<VarName>,
 ) {
-    match expr.node {
-        SExpr::MonitoredAt(v, _) => {
-            streams.insert(v);
+    match expr.kind() {
+        ExprKind::MonitoredAt(v, _) => {
+            streams.insert(v.clone());
         }
-        SExpr::Var(v) => {
-            if let Some(expr) = spec.var_expr(&v) {
-                collect_monitored_streams(expr, spec, streams);
+        ExprKind::Var(v) => {
+            if let Some(definition) = spec.var_expr_ref(v) {
+                collect_monitored_streams(definition, spec, streams);
             }
         }
-        SExpr::BinOp(lhs, rhs, _) => {
-            collect_monitored_streams(*lhs, spec, streams);
-            collect_monitored_streams(*rhs, spec, streams);
-        }
-        SExpr::If(cond, then_e, else_e) => {
-            collect_monitored_streams(*cond, spec, streams);
-            collect_monitored_streams(*then_e, spec, streams);
-            collect_monitored_streams(*else_e, spec, streams);
-        }
-        SExpr::Not(e)
-        | SExpr::Lambda(_, e)
-        | SExpr::Fix(e)
-        | SExpr::SIndex(e, _)
-        | SExpr::IsDefined(e)
-        | SExpr::When(e)
-        | SExpr::LHead(e)
-        | SExpr::LTail(e)
-        | SExpr::LLen(e)
-        | SExpr::MGet(e, _)
-        | SExpr::SGet(e, _)
-        | SExpr::MRemove(e, _)
-        | SExpr::MHasKey(e, _)
-        | SExpr::Sin(e)
-        | SExpr::Cos(e)
-        | SExpr::Tan(e)
-        | SExpr::Abs(e) => collect_monitored_streams(*e, spec, streams),
-        SExpr::Dynamic(runtime) | SExpr::Defer(runtime) => {
-            collect_monitored_streams(*runtime.source, spec, streams)
-        }
-        SExpr::Update(lhs, rhs)
-        | SExpr::Default(lhs, rhs)
-        | SExpr::Latch(lhs, rhs)
-        | SExpr::Init(lhs, rhs)
-        | SExpr::LIndex(lhs, rhs)
-        | SExpr::LAppend(lhs, rhs)
-        | SExpr::LConcat(lhs, rhs)
-        | SExpr::LMap(lhs, rhs)
-        | SExpr::LFilter(lhs, rhs) => {
-            collect_monitored_streams(*lhs, spec, streams);
-            collect_monitored_streams(*rhs, spec, streams);
-        }
-        SExpr::LFold(func, init, list) => {
-            collect_monitored_streams(*func, spec, streams);
-            collect_monitored_streams(*init, spec, streams);
-            collect_monitored_streams(*list, spec, streams);
-        }
-        SExpr::List(items) | SExpr::Tuple(items) => {
-            for item in items {
-                collect_monitored_streams(item, spec, streams);
+        _ => {
+            for child in expr.children() {
+                collect_monitored_streams(child, spec, streams);
             }
         }
-        SExpr::Apply(func, args) => {
-            collect_monitored_streams(*func, spec, streams);
-            for arg in args {
-                collect_monitored_streams(arg, spec, streams);
-            }
-        }
-        SExpr::Partial(func, args) => {
-            collect_monitored_streams(*func, spec, streams);
-            for arg in args {
-                collect_monitored_streams(arg, spec, streams);
-            }
-        }
-        SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
-            for (_, item) in map {
-                collect_monitored_streams(item, spec, streams);
-            }
-        }
-        SExpr::MInsert(map, _, value) => {
-            collect_monitored_streams(*map, spec, streams);
-            collect_monitored_streams(*value, spec, streams);
-        }
-        SExpr::Val(_) | SExpr::Dist(_, _) => {}
     }
 }
 
 fn guarded_monitored_choices(
-    expr: SpannedExpr,
-    spec: &UntypedDsrvSpecification,
+    expr: ExprRef<'_>,
+    spec: &DsrvSpecification,
     st: &CnfCompilerState,
 ) -> Result<GuardedChoice, ()> {
-    if let Some(value) = eval_const_expr(expr.clone(), spec, st) {
+    if let Some(value) = eval_const_expr(expr, spec, st) {
         return match value {
             Value::Bool(true) => Ok(GuardedChoice::True),
             Value::Bool(false) | Value::NoVal | Value::Deferred => Ok(GuardedChoice::False),
@@ -508,38 +441,30 @@ fn guarded_monitored_choices(
         };
     }
 
-    match expr.node {
-        SExpr::MonitoredAt(v, n) => Ok(GuardedChoice::Choices(vec![(v, n)])),
-        SExpr::Var(v) => {
-            let expr = spec.var_expr(&v).ok_or(())?;
+    match expr.view() {
+        ExprView::MonitoredAt(v, n) => Ok(GuardedChoice::Choices(vec![(v.clone(), n.clone())])),
+        ExprView::Var(v) => {
+            let expr = spec.var_expr_ref(v).ok_or(())?;
             guarded_monitored_choices(expr, spec, st)
         }
-        SExpr::If(cond, then_e, else_e) => match eval_const_expr(*cond, spec, st) {
-            Some(Value::Bool(true)) => guarded_monitored_choices(*then_e, spec, st),
+        ExprView::If(cond, then_e, else_e) => match eval_const_expr(cond, spec, st) {
+            Some(Value::Bool(true)) => guarded_monitored_choices(then_e, spec, st),
             Some(Value::Bool(false) | Value::NoVal | Value::Deferred) => {
-                guarded_monitored_choices(*else_e, spec, st)
+                guarded_monitored_choices(else_e, spec, st)
             }
             _ => Err(()),
         },
-        SExpr::BinOp(
-            lhs,
-            rhs,
-            crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::And),
-        ) => {
-            let lhs = guarded_monitored_choices(*lhs, spec, st)?;
-            let rhs = guarded_monitored_choices(*rhs, spec, st)?;
+        ExprView::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And)) => {
+            let lhs = guarded_monitored_choices(lhs, spec, st)?;
+            let rhs = guarded_monitored_choices(rhs, spec, st)?;
             guarded_choice_and(lhs, rhs)
         }
-        SExpr::BinOp(
-            lhs,
-            rhs,
-            crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::Or),
-        ) => {
-            let lhs = guarded_monitored_choices(*lhs, spec, st)?;
-            let rhs = guarded_monitored_choices(*rhs, spec, st)?;
+        ExprView::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or)) => {
+            let lhs = guarded_monitored_choices(lhs, spec, st)?;
+            let rhs = guarded_monitored_choices(rhs, spec, st)?;
             Ok(guarded_choice_or(lhs, rhs))
         }
-        SExpr::BinOp(_, _, _) | SExpr::Not(_) => {
+        ExprView::BinOp(_, _, _) | ExprView::Not(_) => {
             if let Some(value) = eval_const_expr(expr, spec, st) {
                 match value {
                     Value::Bool(true) => Ok(GuardedChoice::True),
@@ -780,38 +705,37 @@ impl std::fmt::Display for SatCompileError {
 impl std::error::Error for SatCompileError {}
 
 fn eval_const_expr(
-    expr: impl Into<SpannedExpr>,
-    spec: &crate::UntypedDsrvSpecification,
+    expr: ExprRef<'_>,
+    spec: &crate::DsrvSpecification,
     st: &CnfCompilerState,
 ) -> Option<Value> {
-    let expr = expr.into().node;
-    match expr {
-        SExpr::Val(v) => Some(v),
-        SExpr::Var(v) => {
-            if let Some(bound) = st.value_bindings.get(&v) {
+    match expr.view() {
+        ExprView::Val(v) => Some(v.clone()),
+        ExprView::Var(v) => {
+            if let Some(bound) = st.value_bindings.get(v) {
                 return Some(bound.clone());
             }
-            let inner = spec.var_expr(&v)?;
+            let inner = spec.var_expr_ref(v)?;
             eval_const_expr(inner, spec, st)
         }
-        SExpr::List(items) => {
+        ExprView::List(items) => {
             let mut out = ecow::EcoVec::new();
             for item in items {
                 out.push(eval_const_expr(item, spec, st)?);
             }
             Some(Value::List(out))
         }
-        SExpr::LIndex(list, idx) => {
-            let list_v = eval_const_expr(*list, spec, st)?;
-            let idx_v = eval_const_expr(*idx, spec, st)?;
+        ExprView::LIndex(list, idx) => {
+            let list_v = eval_const_expr(list, spec, st)?;
+            let idx_v = eval_const_expr(idx, spec, st)?;
             match (list_v, idx_v) {
                 (Value::List(l), Value::Int(i)) if i >= 0 => l.get(i as usize).cloned(),
                 _ => None,
             }
         }
-        SExpr::LAppend(list, el) => {
-            let list_v = eval_const_expr(*list, spec, st)?;
-            let el_v = eval_const_expr(*el, spec, st)?;
+        ExprView::LAppend(list, el) => {
+            let list_v = eval_const_expr(list, spec, st)?;
+            let el_v = eval_const_expr(el, spec, st)?;
             match list_v {
                 Value::List(mut l) => {
                     l.push(el_v);
@@ -820,9 +744,9 @@ fn eval_const_expr(
                 _ => None,
             }
         }
-        SExpr::LConcat(list1, list2) => {
-            let list1_v = eval_const_expr(*list1, spec, st)?;
-            let list2_v = eval_const_expr(*list2, spec, st)?;
+        ExprView::LConcat(list1, list2) => {
+            let list1_v = eval_const_expr(list1, spec, st)?;
+            let list2_v = eval_const_expr(list2, spec, st)?;
             match (list1_v, list2_v) {
                 (Value::List(mut l1), Value::List(l2)) => {
                     l1.extend(l2);
@@ -831,15 +755,15 @@ fn eval_const_expr(
                 _ => None,
             }
         }
-        SExpr::LHead(list) => {
-            let list_v = eval_const_expr(*list, spec, st)?;
+        ExprView::LHead(list) => {
+            let list_v = eval_const_expr(list, spec, st)?;
             match list_v {
                 Value::List(l) => l.first().cloned(),
                 _ => None,
             }
         }
-        SExpr::LTail(list) => {
-            let list_v = eval_const_expr(*list, spec, st)?;
+        ExprView::LTail(list) => {
+            let list_v = eval_const_expr(list, spec, st)?;
             match list_v {
                 Value::List(l) => {
                     let tail = l.get(1..)?;
@@ -848,81 +772,81 @@ fn eval_const_expr(
                 _ => None,
             }
         }
-        SExpr::LLen(list) => {
-            let list_v = eval_const_expr(*list, spec, st)?;
+        ExprView::LLen(list) => {
+            let list_v = eval_const_expr(list, spec, st)?;
             match list_v {
                 Value::List(l) => Some(Value::Int(l.len() as i64)),
                 _ => None,
             }
         }
-        SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
+        ExprView::Map(map) | ExprView::Struct(map) | ExprView::ObjectLiteral(map) => {
             let mut out = BTreeMap::new();
-            for (k, v) in map {
-                out.insert(k, eval_const_expr(v, spec, st)?);
+            for (k, v) in map.iter() {
+                out.insert(k.clone(), eval_const_expr(v, spec, st)?);
             }
             Some(Value::Map(out))
         }
-        SExpr::MGet(map, k) | SExpr::SGet(map, k) => {
-            let map_v = eval_const_expr(*map, spec, st)?;
+        ExprView::MGet(map, k) | ExprView::SGet(map, k) => {
+            let map_v = eval_const_expr(map, spec, st)?;
             match map_v {
-                Value::Map(m) => m.get(&k).cloned(),
+                Value::Map(m) => m.get(k).cloned(),
                 _ => None,
             }
         }
-        SExpr::MRemove(map, k) => {
-            let map_v = eval_const_expr(*map, spec, st)?;
+        ExprView::MRemove(map, k) => {
+            let map_v = eval_const_expr(map, spec, st)?;
             match map_v {
                 Value::Map(mut m) => {
-                    m.remove(&k);
+                    m.remove(k);
                     Some(Value::Map(m))
                 }
                 _ => None,
             }
         }
-        SExpr::MInsert(map, k, v) => {
-            let map_v = eval_const_expr(*map, spec, st)?;
-            let val_v = eval_const_expr(*v, spec, st)?;
+        ExprView::MInsert(map, k, v) => {
+            let map_v = eval_const_expr(map, spec, st)?;
+            let val_v = eval_const_expr(v, spec, st)?;
             match map_v {
                 Value::Map(mut m) => {
-                    m.insert(k, val_v);
+                    m.insert(k.clone(), val_v);
                     Some(Value::Map(m))
                 }
                 _ => None,
             }
         }
-        SExpr::MHasKey(map, k) => {
-            let map_v = eval_const_expr(*map, spec, st)?;
+        ExprView::MHasKey(map, k) => {
+            let map_v = eval_const_expr(map, spec, st)?;
             match map_v {
-                Value::Map(m) => Some(Value::Bool(m.contains_key(&k))),
+                Value::Map(m) => Some(Value::Bool(m.contains_key(k))),
                 _ => None,
             }
         }
-        SExpr::If(c, t, e) => {
-            let c_v = eval_const_expr(*c, spec, st)?;
+        ExprView::If(c, t, e) => {
+            let c_v = eval_const_expr(c, spec, st)?;
             match c_v {
-                Value::Bool(true) => eval_const_expr(*t, spec, st),
-                Value::Bool(false) => eval_const_expr(*e, spec, st),
+                Value::Bool(true) => eval_const_expr(t, spec, st),
+                Value::Bool(false) => eval_const_expr(e, spec, st),
                 _ => None,
             }
         }
-        SExpr::Not(e) => {
-            let v = eval_const_expr(*e, spec, st)?;
+        ExprView::Not(e) => {
+            let v = eval_const_expr(e, spec, st)?;
             match v {
                 Value::Bool(b) => Some(Value::Bool(!b)),
                 _ => None,
             }
         }
-        SExpr::Abs(e) => {
-            let v = eval_const_expr(*e, spec, st)?;
+        ExprView::Abs(e) => {
+            let v = eval_const_expr(e, spec, st)?;
             match v {
                 Value::Int(i) => i.checked_abs().map(Value::Int),
                 Value::Float(f) => Some(Value::Float(f.abs())),
                 _ => None,
             }
         }
-        SExpr::BinOp(lhs, rhs, op) => {
-            let l = eval_const_expr(*lhs, spec, st)?;
-            let r = eval_const_expr(*rhs, spec, st)?;
+        ExprView::BinOp(lhs, rhs, op) => {
+            let l = eval_const_expr(lhs, spec, st)?;
+            let r = eval_const_expr(rhs, spec, st)?;
             match (op, l, r) {
                 (
                     crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::And),
@@ -1212,72 +1136,71 @@ fn eval_const_expr(
 }
 
 fn compile_expr_to_lit(
-    expr: impl Into<SpannedExpr>,
-    spec: &crate::UntypedDsrvSpecification,
+    expr: ExprRef<'_>,
+    spec: &crate::DsrvSpecification,
     st: &mut CnfCompilerState,
 ) -> Result<Lit, SatCompileError> {
-    let expr = expr.into().node;
-    match expr {
-        SExpr::MonitoredAt(v, n) => Ok(st.atom_for_monitored_at(v, n)),
+    match expr.view() {
+        ExprView::MonitoredAt(v, n) => Ok(st.atom_for_monitored_at(v.clone(), n.clone())),
 
-        SExpr::Val(Value::Bool(true)) => {
+        ExprView::Val(Value::Bool(true)) => {
             let x = i32::try_from(st.fresh_var())
                 .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
             st.cnf.push(vec![x]);
             Ok(x)
         }
-        SExpr::Val(Value::Bool(false)) => {
+        ExprView::Val(Value::Bool(false)) => {
             let x = i32::try_from(st.fresh_var())
                 .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
             st.cnf.push(vec![-x]);
             Ok(x)
         }
 
-        SExpr::Not(e) => {
-            let a = compile_expr_to_lit(*e, spec, st)?;
+        ExprView::Not(e) => {
+            let a = compile_expr_to_lit(e, spec, st)?;
             Ok(-a)
         }
 
-        SExpr::BinOp(
+        ExprView::BinOp(
             lhs,
             rhs,
-            crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::And),
+            SBinOp::BOp(BoolBinOp::And),
         ) => {
-            let a = compile_expr_to_lit(*lhs, spec, st)?;
-            let b = compile_expr_to_lit(*rhs, spec, st)?;
+            let a = compile_expr_to_lit(lhs, spec, st)?;
+            let b = compile_expr_to_lit(rhs, spec, st)?;
             Ok(st.tseitin_and(a, b))
         }
 
-        SExpr::BinOp(
+        ExprView::BinOp(
             lhs,
             rhs,
-            crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::Or),
+            SBinOp::BOp(BoolBinOp::Or),
         ) => {
-            let a = compile_expr_to_lit(*lhs, spec, st)?;
-            let b = compile_expr_to_lit(*rhs, spec, st)?;
+            let a = compile_expr_to_lit(lhs, spec, st)?;
+            let b = compile_expr_to_lit(rhs, spec, st)?;
             Ok(st.tseitin_or(a, b))
         }
 
-        SExpr::BinOp(
+        ExprView::BinOp(
             lhs,
             rhs,
-            crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::Impl),
+            SBinOp::BOp(BoolBinOp::Impl),
         ) => {
-            let a = compile_expr_to_lit(*lhs, spec, st)?;
-            let b = compile_expr_to_lit(*rhs, spec, st)?;
+            let a = compile_expr_to_lit(lhs, spec, st)?;
+            let b = compile_expr_to_lit(rhs, spec, st)?;
             Ok(st.tseitin_impl(a, b))
         }
 
-        SExpr::BinOp(
+        ExprView::BinOp(
             lhs,
             rhs,
             crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Eq),
         ) => {
-            let lhs_expr = *lhs;
-            let rhs_expr = *rhs;
+            let lhs_expr = lhs;
+            let rhs_expr = rhs;
             if let (Some(l), Some(r)) = (
-                eval_const_expr(lhs_expr.clone(), spec, st),
-                eval_const_expr(rhs_expr.clone(), spec, st),
+                eval_const_expr(lhs_expr, spec, st),
+                eval_const_expr(rhs_expr, spec, st),
             ) {
                 let x = i32::try_from(st.fresh_var())
                     .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
@@ -1294,15 +1217,15 @@ fn compile_expr_to_lit(
             }
         }
 
-        SExpr::If(cond, then_e, else_e) => {
-            let c = compile_expr_to_lit(*cond, spec, st)?;
-            let t = compile_expr_to_lit(*then_e, spec, st)?;
-            let e = compile_expr_to_lit(*else_e, spec, st)?;
+        ExprView::If(cond, then_e, else_e) => {
+            let c = compile_expr_to_lit(cond, spec, st)?;
+            let t = compile_expr_to_lit(then_e, spec, st)?;
+            let e = compile_expr_to_lit(else_e, spec, st)?;
             Ok(st.tseitin_ite(c, t, e))
         }
 
-        SExpr::Var(v) => {
-            if let Some(const_v) = eval_const_expr(SExpr::Var(v.clone()), spec, st) {
+        ExprView::Var(v) => {
+            if let Some(const_v) = eval_const_expr(expr, spec, st) {
                 let x = i32::try_from(st.fresh_var())
                     .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
                 match const_v {
@@ -1322,22 +1245,22 @@ fn compile_expr_to_lit(
                 }
             }
 
-            let is_dist_constraint = spec.var_expr(&v).is_some_and(|e| {
+            let is_dist_constraint = spec.var_expr_ref(v).is_some_and(|e| {
                 matches!(
-                    e.node,
-                    SExpr::MonitoredAt(_, _)
-                        | SExpr::If(_, _, _)
-                        | SExpr::Not(_)
-                        | SExpr::BinOp(_, _, _)
-                        | SExpr::Val(Value::Bool(_))
+                    e.view(),
+                    ExprView::MonitoredAt(_, _)
+                        | ExprView::If(_, _, _)
+                        | ExprView::Not(_)
+                        | ExprView::BinOp(_, _, _)
+                        | ExprView::Val(Value::Bool(_))
                 )
             });
             if is_dist_constraint {
                 let inlined = spec
-                    .var_expr(&v)
+                    .var_expr_ref(v)
                     .ok_or_else(|| SatCompileError::UnknownConstraintVar(v.clone()))?;
                 compile_expr_to_lit(inlined, spec, st)
-            } else if spec.input_vars.contains(&v) {
+            } else if spec.input_vars.contains(v) {
                 // Unresolved input booleans are treated as symbolic SAT variables.
                 // This preserves satisfiability exploration when context data does not
                 // bind all inputs yet.
@@ -1355,15 +1278,15 @@ leave unresolved vars are currently unsupported.",
             }
         }
 
-        SExpr::Dist(_, _) => Err(SatCompileError::UnsupportedExpr(
+        ExprView::Dist(_, _) => Err(SatCompileError::UnsupportedExpr(
             "SAT monitored_at solver supports only monitored_at(...) + boolean logic; dist(...) is unsupported".to_string(),
         )),
-        SExpr::SIndex(_, _) => Err(SatCompileError::UnsupportedExpr(
+        ExprView::SIndex(_, _) => Err(SatCompileError::UnsupportedExpr(
             "SAT monitored_at solver supports only timeless constraints; time-indexed expressions are unsupported".to_string(),
         )),
 
-        other => {
-            if let Some(v) = eval_const_expr(other.clone(), spec, st) {
+        _ => {
+            if let Some(v) = eval_const_expr(expr, spec, st) {
                 let x = i32::try_from(st.fresh_var())
                     .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
                 match v {
@@ -1383,7 +1306,7 @@ leave unresolved vars are currently unsupported.",
             } else {
                 Err(SatCompileError::UnsupportedExpr(format!(
                     "Unsupported distribution-constraint expression for SAT monitored_at solver: {:?}",
-                    other
+                    expr.kind()
                 )))
             }
         },
@@ -1914,7 +1837,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         });
 
         let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr(&VarName::new("c")).expect("expr exists");
+        let expr = spec.var_expr_ref(&VarName::new("c")).expect("expr exists");
         let res = compile_expr_to_lit(expr, &spec, &mut st);
 
         assert!(
@@ -1940,7 +1863,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         });
 
         let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr(&VarName::new("c2")).expect("expr exists");
+        let expr = spec.var_expr_ref(&VarName::new("c2")).expect("expr exists");
         let lit = compile_expr_to_lit(expr, &spec, &mut st).expect("compile succeeds");
 
         let a_lit = st.atom_for_monitored_at(VarName::new("x"), "A".into());
@@ -1967,8 +1890,8 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         st.value_bindings
             .insert(VarName::new("b"), Value::Bool(true));
 
-        let lit =
-            compile_expr_to_lit(SExpr::Var(VarName::new("b")), &spec, &mut st).expect("compiles");
+        let expr: crate::lang::dsrv::ast::Expr = ExprKind::Var(VarName::new("b")).into();
+        let lit = compile_expr_to_lit(expr.as_ref(), &spec, &mut st).expect("compiles");
 
         assert!(st.cnf.iter().any(|c| c == &vec![lit]));
     }
@@ -1991,7 +1914,8 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
         let mut st = CnfCompilerState::new(&graph);
 
-        let res = compile_expr_to_lit(SExpr::Var(VarName::new("b")), &spec, &mut st);
+        let expr: crate::lang::dsrv::ast::Expr = ExprKind::Var(VarName::new("b")).into();
+        let res = compile_expr_to_lit(expr.as_ref(), &spec, &mut st);
         assert!(
             res.is_ok(),
             "unresolved input vars in SAT constraints should compile to symbolic literals"
@@ -2119,7 +2043,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         });
 
         let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr(&VarName::new("c")).expect("expr exists");
+        let expr = spec.var_expr_ref(&VarName::new("c")).expect("expr exists");
 
         let res = compile_expr_to_lit(expr, &spec, &mut st);
         assert!(res.is_err(), "time-indexed expression should be rejected");
@@ -2142,7 +2066,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         });
 
         let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr(&VarName::new("c")).expect("expr exists");
+        let expr = spec.var_expr_ref(&VarName::new("c")).expect("expr exists");
 
         let res = compile_expr_to_lit(expr, &spec, &mut st);
         assert!(
@@ -3155,13 +3079,13 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
             localised.input_vars,
             BTreeSet::from(["c1".into(), "c2".into(), "c3".into()])
         );
-        assert!(localised.var_expr(&VarName::new("h1")).is_none());
-        assert!(localised.var_expr(&VarName::new("h2")).is_none());
+        assert!(localised.var_expr_ref(&VarName::new("h1")).is_none());
+        assert!(localised.var_expr_ref(&VarName::new("h2")).is_none());
 
         let d3_expr = localised
-            .var_expr(&VarName::new("d3"))
+            .var_expr_ref(&VarName::new("d3"))
             .expect("d3 expression should be present after localisation");
-        let d3_inputs = d3_expr.inputs();
+        let d3_inputs = d3_expr.free_variables();
         assert!(
             !d3_inputs.contains(&VarName::new("h1")) && !d3_inputs.contains(&VarName::new("h2")),
             "localised d3 should not reference aux vars h1/h2 anymore"

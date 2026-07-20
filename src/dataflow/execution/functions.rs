@@ -1,20 +1,46 @@
 use super::super::plan::*;
 use super::super::*;
-use super::plan_executor::{EvalContext, PlanExecutor};
+use super::plan_executor::{PlanEvalContext, PlanExecutor};
 use super::value_ops::propagated_special;
 use futures::StreamExt;
 use std::{cell::RefCell, rc::Rc};
 
 pub(in crate::dataflow) fn eval_function_op(
     func: &BoundFunctionDef,
-    tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
+    function: &mut Option<RuntimeFunction>,
+    captures: &Rc<RefCell<Vec<Value>>>,
 ) -> Value {
-    let display = func.display.clone();
-    let call = Rc::new(DataflowFunctionCall::new(func, tick, context));
-    Value::Function(RuntimeFunction::native_value(display, move |args| {
-        call.call(args)
-    }))
+    for (value, source) in captures.borrow_mut().iter_mut().zip(&func.capture_sources) {
+        *value = context.inputs[source.index()].clone();
+    }
+    let function = function.get_or_insert_with(|| {
+        let display = func.display.clone();
+        let plan = Rc::clone(&func.plan);
+        let captures = Rc::clone(captures);
+        let param_count = func.params.len();
+        let temporal = func.plan.body.has_temporal_state();
+        RuntimeFunction::value_factory(display, temporal, move || {
+            let executor = Rc::new(RefCell::new(PlanExecutor::new(Rc::clone(&plan))));
+            let captures = Rc::clone(&captures);
+            Rc::new(move |args| {
+                if args.len() != param_count {
+                    return Err(anyhow::anyhow!(
+                        "Function expected {} arguments, got {}",
+                        param_count,
+                        args.len()
+                    ));
+                }
+                let mut values = captures.borrow().clone();
+                values.extend(args);
+                executor
+                    .borrow_mut()
+                    .evaluate(&values, None)
+                    .map_err(anyhow::Error::from)
+            })
+        })
+    });
+    Value::Function(function.clone())
 }
 
 struct DataflowFunctionCall {
@@ -31,7 +57,7 @@ struct DataflowFunctionFrame {
 }
 
 impl DataflowFunctionCall {
-    fn new(func: &BoundFunctionDef, _tick: usize, context: EvalContext<'_>) -> Self {
+    fn new(func: &BoundFunctionDef, _tick: usize, context: PlanEvalContext<'_>) -> Self {
         let mut values = func
             .capture_sources
             .iter()
@@ -53,10 +79,6 @@ impl DataflowFunctionCall {
             values: self.values_template.clone(),
         }
     }
-    fn call(&self, args: EcoVec<Value>) -> anyhow::Result<Value> {
-        self.call_with_context(args, None)
-    }
-
     fn call_recursive(&self, args: EcoVec<Value>) -> anyhow::Result<Value> {
         let recursive_call = |args| {
             self.call_recursive(args)
@@ -98,21 +120,62 @@ impl DataflowFunctionCall {
     }
 }
 
-pub(in crate::dataflow) fn eval_apply_op(func: Value, args: EcoVec<Value>) -> Value {
+pub(in crate::dataflow) fn eval_apply_op(
+    func: Value,
+    args: EcoVec<Value>,
+    active_function: &mut Option<RuntimeFunction>,
+    callable: &mut Option<crate::core::RuntimeFunctionValueCallable>,
+) -> Value {
     if let Some(value) = propagated_special(std::iter::once(&func).chain(args.iter())) {
         return value;
     }
     let Value::Function(function) = func else {
         panic!("Function application requires a function, got {}", func);
     };
+    let changed = active_function
+        .as_ref()
+        .is_none_or(|active| !active.same_definition(&function));
+    if changed {
+        *callable = function.instantiate_value();
+        *active_function = Some(function.clone());
+    }
+    if let Some(callable) = callable {
+        return callable(args).expect("Function application failed");
+    }
     call_runtime_function_once(function, args)
+}
+
+pub(in crate::dataflow) fn eval_direct_apply_op(
+    func: &BoundFunctionDef,
+    args: EcoVec<Value>,
+    context: PlanEvalContext<'_>,
+    executor: &mut PlanExecutor,
+    values: &mut [Value],
+) -> Value {
+    let capture_count = func.capture_sources.len();
+    debug_assert_eq!(values.len(), capture_count + func.params.len());
+    debug_assert_eq!(args.len(), func.params.len());
+
+    for (slot, source) in values[..capture_count]
+        .iter_mut()
+        .zip(&func.capture_sources)
+    {
+        *slot = context.inputs[source.index()].clone();
+    }
+    for (slot, value) in values[capture_count..].iter_mut().zip(args) {
+        *slot = value;
+    }
+
+    executor
+        .evaluate(values, None)
+        .expect("direct function plans cannot contain fallible dynamic operators")
 }
 
 pub(in crate::dataflow) fn eval_direct_fix_apply_op(
     func: &BoundFunctionDef,
     args: EcoVec<Value>,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Value {
     if let Some(value) = propagated_special(args.iter()) {
         return value;
@@ -125,7 +188,7 @@ pub(in crate::dataflow) fn eval_direct_fix_apply_op(
 
 pub(in crate::dataflow) fn eval_recursive_call_op(
     args: EcoVec<Value>,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Value {
     if let Some(value) = propagated_special(args.iter()) {
         return value;
@@ -147,6 +210,9 @@ pub(in crate::dataflow) fn eval_partial_op(
     let Value::Function(function) = func else {
         panic!("partial requires a function, got {}", func);
     };
+    if function.requires_call_site_instance() {
+        panic!("temporal functions are not supported by partial application");
+    }
     partial_function(function, applied, display)
 }
 
@@ -164,6 +230,9 @@ pub(in crate::dataflow) fn eval_list_map_op(func: Value, list: Value) -> Value {
         return value;
     }
     match (func, list) {
+        (Value::Function(function), _) if function.requires_call_site_instance() => {
+            panic!("temporal functions are not supported by List.map")
+        }
         (Value::Function(function), Value::List(values)) => Value::List(
             values
                 .into_iter()
@@ -184,6 +253,9 @@ pub(in crate::dataflow) fn eval_list_filter_op(func: Value, list: Value) -> Valu
         return value;
     }
     match (func, list) {
+        (Value::Function(function), _) if function.requires_call_site_instance() => {
+            panic!("temporal functions are not supported by List.filter")
+        }
         (Value::Function(function), Value::List(values)) => {
             let mut filtered = EcoVec::new();
             for value in values {
@@ -210,6 +282,9 @@ pub(in crate::dataflow) fn eval_list_fold_op(func: Value, init: Value, list: Val
         return value;
     }
     match (func, init, list) {
+        (Value::Function(function), _, _) if function.requires_call_site_instance() => {
+            panic!("temporal functions are not supported by List.fold")
+        }
         (Value::Function(function), mut acc, Value::List(values)) => {
             for value in values {
                 acc = call_runtime_function_once(function.clone(), EcoVec::from(vec![acc, value]));
@@ -227,6 +302,9 @@ pub(in crate::dataflow) fn call_runtime_function_once(
     function: RuntimeFunction,
     args: EcoVec<Value>,
 ) -> Value {
+    if let Some(callable) = function.instantiate_value() {
+        return callable(args).expect("Function application failed");
+    }
     if function.has_value_callable() {
         return function
             .call_value(args)
@@ -248,7 +326,7 @@ fn partial_function(
         all_args.extend(args);
         Ok(call_runtime_function_once(function.clone(), all_args))
     });
-    if !stream_function.has_value_callable() {
+    if !stream_function.supports_value_calls() {
         return Value::Function(RuntimeFunction::native(
             runtime_function.display_source().clone(),
             move |args| {
@@ -277,7 +355,7 @@ fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
         all_args.extend(args);
         Ok(call_runtime_function_once(function.clone(), all_args))
     });
-    let runtime_function = if function_for_stream.has_value_callable() {
+    let runtime_function = if function_for_stream.supports_value_calls() {
         runtime_function
     } else {
         RuntimeFunction::native(runtime_function.display_source().clone(), move |args| {

@@ -6,7 +6,7 @@ use smol::Timer;
 use tracing::info;
 
 use crate::{
-    UntypedDsrvSpecification, Value, VarName,
+    DsrvSpecification, Value, VarName,
     distributed::{
         distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
         scheduling::planning_context::PlanningContext,
@@ -25,7 +25,7 @@ use super::core::SchedulerPlanner;
 pub struct StaticOptimizedSchedulerPlannerSat<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     solver: Rc<SatMonitoredAtDistConstraintSolver<S, AC>>,
@@ -35,7 +35,7 @@ where
 impl<S, AC> StaticOptimizedSchedulerPlannerSat<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(solver: SatMonitoredAtDistConstraintSolver<S, AC>) -> Self {
@@ -50,7 +50,7 @@ where
 impl<S, AC> SchedulerPlanner for StaticOptimizedSchedulerPlannerSat<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     async fn plan(
@@ -117,7 +117,7 @@ where
 pub struct DynamicOptimizedSchedulerPlannerSat<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     solver: Rc<SatMonitoredAtDistConstraintSolver<S, AC>>,
@@ -126,7 +126,7 @@ where
 impl<S, AC> DynamicOptimizedSchedulerPlannerSat<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(solver: SatMonitoredAtDistConstraintSolver<S, AC>) -> Self {
@@ -140,7 +140,7 @@ where
 impl<S, AC> SchedulerPlanner for DynamicOptimizedSchedulerPlannerSat<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     async fn plan(
@@ -276,7 +276,7 @@ mod tests {
         })
     }
 
-    fn aux_spec() -> UntypedDsrvSpecification {
+    fn aux_spec() -> DsrvSpecification {
         let src = r#"
 in c1
 in c2

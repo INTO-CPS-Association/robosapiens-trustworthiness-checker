@@ -9,10 +9,7 @@ use std::{
     },
 };
 
-use crate::{
-    OutputStream,
-    distributed::distribution_graphs::DistributionGraph,
-};
+use crate::{OutputStream, distributed::distribution_graphs::DistributionGraph};
 #[cfg(feature = "mqtt")]
 use crate::{
     distributed::distribution_graphs::{NodeName, Pos, dist_graph_from_positions},

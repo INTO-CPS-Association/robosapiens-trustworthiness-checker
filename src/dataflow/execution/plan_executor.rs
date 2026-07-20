@@ -5,14 +5,14 @@ use super::state::*;
 use std::cell::RefCell;
 
 #[derive(Clone, Copy)]
-pub(in crate::dataflow) struct EvalContext<'a> {
+pub(in crate::dataflow) struct PlanEvalContext<'a> {
     pub(in crate::dataflow) inputs: &'a [Value],
     pub(in crate::dataflow) environment: &'a Rc<EnvironmentLayout>,
     pub(in crate::dataflow) recursive_call: Option<&'a dyn Fn(EcoVec<Value>) -> Value>,
-    pub(in crate::dataflow) dynamic_dependencies: Option<&'a RefCell<BTreeSet<VarName>>>,
+    pub(in crate::dataflow) dynamic_dependencies: Option<&'a RefCell<Vec<EnvironmentId>>>,
 }
 
-impl EvalContext<'_> {
+impl PlanEvalContext<'_> {
     pub(in crate::dataflow) fn read(
         self,
         state: &DataflowState,
@@ -52,7 +52,7 @@ impl PlanExecutor {
     }
 
     pub(in crate::dataflow) fn may_reconfigure_dependencies(&self) -> bool {
-        self.plan.evaluation == EvaluationKind::Fallible
+        self.plan.evaluation == PlanMode::Dynamic
     }
 
     pub(in crate::dataflow) fn evaluate(
@@ -67,13 +67,13 @@ impl PlanExecutor {
         &mut self,
         inputs: &[Value],
         recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
-        dynamic_dependencies: Option<&RefCell<BTreeSet<VarName>>>,
+        dynamic_dependencies: Option<&RefCell<Vec<EnvironmentId>>>,
     ) -> Result<Value, DataflowEvalError> {
         let body = &self.plan.body;
         debug_assert_eq!(self.state.nodes.len(), body.nodes.len());
         debug_assert_eq!(self.state.states.len(), body.nodes.len());
         let evaluation = self.plan.evaluation;
-        let context = EvalContext {
+        let context = PlanEvalContext {
             inputs,
             environment: &self.plan.environment,
             recursive_call,
@@ -81,10 +81,8 @@ impl PlanExecutor {
         };
 
         match evaluation {
-            EvaluationKind::Static => eval_nodes_at(&body.nodes, &mut self.state, 0, context),
-            EvaluationKind::Fallible => {
-                try_eval_nodes_at(&body.nodes, &mut self.state, 0, context)?
-            }
+            PlanMode::Static => eval_nodes_at(&body.nodes, &mut self.state, 0, context),
+            PlanMode::Dynamic => try_eval_nodes_at(&body.nodes, &mut self.state, 0, context)?,
         }
         let value = context.read(&self.state, &body.output, 0);
         commit_recursive_delays(&body.recursive_delays, &mut self.state, &value);

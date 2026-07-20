@@ -14,8 +14,8 @@ use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specificati
 use trustworthiness_checker::io::testing::NullOutputHandler;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
+use trustworthiness_checker::{DsrvSpecification, Value, VarName, dsrv_specification};
 use trustworthiness_checker::{InputStream, io::map};
-use trustworthiness_checker::{UntypedDsrvSpecification, Value, VarName, dsrv_specification};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -39,7 +39,7 @@ impl AsyncExecutor for LocalSmolExecutor {
     }
 }
 
-fn dsrv_threshold_spec() -> UntypedDsrvSpecification {
+fn dsrv_threshold_spec() -> DsrvSpecification {
     dsrv_specification(
         &mut r#"
 in x: Float
@@ -124,7 +124,7 @@ fn mstlo_value_input(size: usize) -> Vec<Value> {
 
 async fn run_dsrv_with_semantics(
     executor: Rc<LocalExecutor<'static>>,
-    spec: UntypedDsrvSpecification,
+    spec: DsrvSpecification,
     input: InputStream<Value>,
     runtime_spec: RuntimeSpec,
     semantics: Semantics,
@@ -152,7 +152,7 @@ async fn run_dsrv_with_semantics(
 
 async fn run_dsrv(
     executor: Rc<LocalExecutor<'static>>,
-    spec: UntypedDsrvSpecification,
+    spec: DsrvSpecification,
     input: InputStream<Value>,
     runtime_spec: RuntimeSpec,
 ) {
@@ -295,7 +295,6 @@ fn run_mstlo_direct_with_value_adapter_qual(formula: FormulaDefinition, input: V
 
 fn compare_threshold_property_diagnostics(c: &mut Criterion) {
     let size = 1_000;
-    let local_smol_executor = LocalSmolExecutor::new();
     let dsrv_spec = dsrv_threshold_spec();
     let mstlo_spec = mstlo_threshold_spec();
     let mstlo_formula = mstlo_threshold_formula();
@@ -309,9 +308,10 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
         BenchmarkId::new("dsrv_semisync_untyped", size),
         &size,
         |b, &size| {
-            b.to_async(local_smol_executor.clone()).iter(|| {
+            let benchmark_executor = LocalSmolExecutor::new();
+            b.to_async(benchmark_executor.clone()).iter(|| {
                 run_dsrv_with_semantics(
-                    local_smol_executor.executor.clone(),
+                    benchmark_executor.executor.clone(),
                     black_box(dsrv_spec.clone()),
                     dsrv_input(size),
                     RuntimeSpec::SemiSync,
@@ -325,9 +325,10 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
         BenchmarkId::new("dsrv_dataflow_untyped", size),
         &size,
         |b, &size| {
-            b.to_async(local_smol_executor.clone()).iter(|| {
+            let benchmark_executor = LocalSmolExecutor::new();
+            b.to_async(benchmark_executor.clone()).iter(|| {
                 run_dsrv_with_semantics(
-                    local_smol_executor.executor.clone(),
+                    benchmark_executor.executor.clone(),
                     black_box(dsrv_spec.clone()),
                     dsrv_input(size),
                     RuntimeSpec::Dataflow(Default::default()),
@@ -341,9 +342,10 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
         BenchmarkId::new("dsrv_semisync_gradual_typed", size),
         &size,
         |b, &size| {
-            b.to_async(local_smol_executor.clone()).iter(|| {
+            let benchmark_executor = LocalSmolExecutor::new();
+            b.to_async(benchmark_executor.clone()).iter(|| {
                 run_dsrv_with_semantics(
-                    local_smol_executor.executor.clone(),
+                    benchmark_executor.executor.clone(),
                     black_box(dsrv_spec.clone()),
                     dsrv_input(size),
                     RuntimeSpec::SemiSync,
@@ -357,9 +359,10 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
         BenchmarkId::new("dsrv_dataflow_gradual_typed", size),
         &size,
         |b, &size| {
-            b.to_async(local_smol_executor.clone()).iter(|| {
+            let benchmark_executor = LocalSmolExecutor::new();
+            b.to_async(benchmark_executor.clone()).iter(|| {
                 run_dsrv_with_semantics(
-                    local_smol_executor.executor.clone(),
+                    benchmark_executor.executor.clone(),
                     black_box(dsrv_spec.clone()),
                     dsrv_input(size),
                     RuntimeSpec::Dataflow(Default::default()),
@@ -373,9 +376,10 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
         BenchmarkId::new("mstlo_runtime_qual_list_input", size),
         &size,
         |b, &size| {
-            b.to_async(local_smol_executor.clone()).iter(|| {
+            let benchmark_executor = LocalSmolExecutor::new();
+            b.to_async(benchmark_executor.clone()).iter(|| {
                 run_mstlo(
-                    local_smol_executor.executor.clone(),
+                    benchmark_executor.executor.clone(),
                     black_box(mstlo_spec.clone()),
                     mstlo_input(size),
                     Semantics::DelayedQualitative,
@@ -388,9 +392,10 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
         BenchmarkId::new("mstlo_runtime_qual_map_input", size),
         &size,
         |b, &size| {
-            b.to_async(local_smol_executor.clone()).iter(|| {
+            let benchmark_executor = LocalSmolExecutor::new();
+            b.to_async(benchmark_executor.clone()).iter(|| {
                 run_mstlo(
-                    local_smol_executor.executor.clone(),
+                    benchmark_executor.executor.clone(),
                     black_box(mstlo_spec.clone()),
                     mstlo_map_input(size),
                     Semantics::DelayedQualitative,
@@ -418,9 +423,10 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
             BenchmarkId::new("mstlo_runtime_output_streams", outputs),
             &outputs,
             |b, &_outputs| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     run_mstlo(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         black_box(spec.clone()),
                         mstlo_input(size),
                         Semantics::DelayedQualitative,
@@ -449,7 +455,6 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
 
 fn compare_threshold_property(c: &mut Criterion) {
     let sizes = [100, 1_000, 5_000, 10_000];
-    let local_smol_executor = LocalSmolExecutor::new();
     let dsrv_spec = dsrv_threshold_spec();
     let mstlo_spec = mstlo_threshold_spec();
     let mstlo_formula = mstlo_threshold_formula();
@@ -461,9 +466,10 @@ fn compare_threshold_property(c: &mut Criterion) {
 
     for size in sizes {
         // group.bench_with_input(BenchmarkId::new("dsrv_async", size), &size, |b, &size| {
-        //     b.to_async(local_smol_executor.clone()).iter(|| {
+        //     let benchmark_executor = LocalSmolExecutor::new();
+        //     b.to_async(benchmark_executor.clone()).iter(|| {
         //         run_dsrv(
-        //             local_smol_executor.executor.clone(),
+        //             benchmark_executor.executor.clone(),
         //             dsrv_spec.clone(),
         //             dsrv_input(size),
         //             RuntimeSpec::Async,
@@ -475,9 +481,10 @@ fn compare_threshold_property(c: &mut Criterion) {
             BenchmarkId::new("dsrv_semisync", size),
             &size,
             |b, &size| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     run_dsrv(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         dsrv_spec.clone(),
                         dsrv_input(size),
                         RuntimeSpec::SemiSync,
@@ -490,9 +497,10 @@ fn compare_threshold_property(c: &mut Criterion) {
             BenchmarkId::new("dsrv_dataflow", size),
             &size,
             |b, &size| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     run_dsrv(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         dsrv_spec.clone(),
                         dsrv_input(size),
                         RuntimeSpec::Dataflow(Default::default()),
@@ -505,9 +513,10 @@ fn compare_threshold_property(c: &mut Criterion) {
             BenchmarkId::new("mstlo_runtime_qual", size),
             &size,
             |b, &size| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     run_mstlo(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         mstlo_spec.clone(),
                         mstlo_input(size),
                         Semantics::DelayedQualitative,
@@ -520,9 +529,10 @@ fn compare_threshold_property(c: &mut Criterion) {
             BenchmarkId::new("mstlo_runtime_quant", size),
             &size,
             |b, &size| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     run_mstlo(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         mstlo_spec.clone(),
                         mstlo_input(size),
                         Semantics::DelayedQuantitative,

@@ -7,8 +7,8 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use trustworthiness_checker::core::StreamType;
+use trustworthiness_checker::dsrv_specification;
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
-use trustworthiness_checker::{Specification, dsrv_specification};
 
 #[derive(Parser)]
 struct Args {
@@ -100,7 +100,10 @@ fn main() -> Result<()> {
 
     let inputs = typed.input_vars();
     let outputs = typed.output_vars();
-    let known = inputs.union(&outputs).map(ToString::to_string).collect::<BTreeSet<_>>();
+    let known = inputs
+        .union(outputs)
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
     let unknown_annotations = annotations
         .variables
         .keys()
@@ -122,11 +125,10 @@ fn main() -> Result<()> {
     let mut next_reference = 0;
     let mut annotations_by_name = annotations.variables;
     let mut variables = Vec::new();
-    for (names, causality) in [(&inputs, "input"), (&outputs, "output")] {
+    for (names, causality) in [(inputs, "input"), (outputs, "output")] {
         for name in names {
             let stream_type = typed
-                .type_annotations
-                .get(name)
+                .type_annotation(name)
                 .ok_or_else(|| anyhow!("missing type for variable {name}"))?;
             let fmi_type = fmi_type(stream_type)?;
             let annotation = annotations_by_name
@@ -175,10 +177,7 @@ fn main() -> Result<()> {
             })
             .collect(),
     };
-    write_file(
-        &args.interface,
-        &serde_json::to_string_pretty(&interface)?,
-    )?;
+    write_file(&args.interface, &serde_json::to_string_pretty(&interface)?)?;
     write_file(
         &args.model_description,
         &render_model_description(
@@ -264,7 +263,11 @@ fn render_model_description(
         } else {
             ""
         };
-        let variability = variable.annotation.variability.as_deref().unwrap_or("discrete");
+        let variability = variable
+            .annotation
+            .variability
+            .as_deref()
+            .unwrap_or("discrete");
         let description = variable
             .annotation
             .description
@@ -326,7 +329,10 @@ fn render_model_description(
     xml.push_str("        </Outputs>\n        <InitialUnknowns>\n");
     for (index, variable) in variables.iter().enumerate() {
         if variable.interface.causality == "output" {
-            xml.push_str(&format!("            <Unknown index=\"{}\" />\n", index + 1));
+            xml.push_str(&format!(
+                "            <Unknown index=\"{}\" />\n",
+                index + 1
+            ));
         }
     }
     xml.push_str("        </InitialUnknowns>\n    </ModelStructure>\n</fmiModelDescription>\n");

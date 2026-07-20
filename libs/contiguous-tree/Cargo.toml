@@ -1,0 +1,16 @@
+[package]
+name = "contiguous-tree"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE.md"
+
+[lib]
+name = "contiguous_tree"
+path = "src/lib.rs"
+
+[dependencies]
+contiguous-tree-macros = { path = "../contiguous-tree-macros" }
+serde = { version = "1.0.228", features = ["derive"] }
+
+[dev-dependencies]
+ecow = { version = "0.3.0", features = ["serde"] }

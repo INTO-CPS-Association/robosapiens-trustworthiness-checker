@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use criterion::BatchSize;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::SamplingMode;
@@ -9,8 +10,10 @@ use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
+use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::dsrv_fixtures::add_defer_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
+use trustworthiness_checker::{Value, VarName};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -40,50 +43,96 @@ fn from_elem(c: &mut Criterion) {
               // 1000000,
     ];
 
-    let local_smol_executor = LocalSmolExecutor::new();
-
     let mut group = c.benchmark_group("dup_defer");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
     let spec = trustworthiness_checker::dsrv_specification(&mut spec_add_defer()).unwrap();
+    let dynamic_spec =
+        trustworthiness_checker::dsrv_specification(&mut "in x\nin y\nin e\nout z\nz = dynamic(e)")
+            .unwrap();
 
     for size in sizes {
         let input_stream_fn = || add_defer_input_stream(size);
+        let async_executor = LocalSmolExecutor::new();
         group.bench_with_input(
             BenchmarkId::new("dup_defer_untyped_async", size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                b.to_async(async_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async(
-                        local_smol_executor.executor.clone(),
+                        async_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )
                 })
             },
         );
+        let dynamic_async_executor = LocalSmolExecutor::new();
+        group.bench_with_input(
+            BenchmarkId::new("dynamic_untyped_async", size),
+            &(&dynamic_spec),
+            |b, &spec| {
+                b.to_async(dynamic_async_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_async(
+                        dynamic_async_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        let dynamic_dataflow_executor = LocalSmolExecutor::new();
+        group.bench_with_input(
+            BenchmarkId::new("dynamic_untyped_dataflow", size),
+            &(&dynamic_spec),
+            |b, &spec| {
+                b.to_async(dynamic_dataflow_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_dataflow(
+                        dynamic_dataflow_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        let dynamic_semisync_executor = LocalSmolExecutor::new();
+        group.bench_with_input(
+            BenchmarkId::new("dynamic_untyped_semisync", size),
+            &(&dynamic_spec),
+            |b, &spec| {
+                b.to_async(dynamic_semisync_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_little(
+                        dynamic_semisync_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        let dataflow_executor = LocalSmolExecutor::new();
         group.bench_with_input(
             BenchmarkId::new("dup_defer_untyped_dataflow", size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                b.to_async(dataflow_executor.clone()).iter(|| {
                     monitor_outputs_untyped_dataflow(
-                        local_smol_executor.executor.clone(),
+                        dataflow_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )
                 })
             },
         );
+        let semisync_executor = LocalSmolExecutor::new();
         group.bench_with_input(
             BenchmarkId::new("dup_defer_untyped_semisync", size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                b.to_async(semisync_executor.clone()).iter(|| {
                     monitor_outputs_untyped_little(
-                        local_smol_executor.executor.clone(),
+                        semisync_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )
@@ -94,5 +143,66 @@ fn from_elem(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, from_elem);
+fn dataflow_dynamic_phases(c: &mut Criterion) {
+    fn compile(operator: &str) -> DataflowMonitor {
+        let source = format!("in x\nin y\nin e\nout z\nz = {operator}(e)");
+        let spec = trustworthiness_checker::dsrv_specification(&mut source.as_str()).unwrap();
+        DataflowMonitor::try_compile_untyped(spec).unwrap()
+    }
+
+    fn row(monitor: &DataflowMonitor) -> Vec<Value> {
+        monitor
+            .input_vars()
+            .iter()
+            .map(|name| {
+                if name == &VarName::new("x") {
+                    Value::Int(2)
+                } else if name == &VarName::new("y") {
+                    Value::Int(3)
+                } else if name == &VarName::new("e") {
+                    Value::Str("x + y".into())
+                } else {
+                    unreachable!("unexpected dynamic benchmark input {name}")
+                }
+            })
+            .collect()
+    }
+
+    let mut group = c.benchmark_group("dataflow_dynamic_phases");
+    group.sample_size(20);
+    group.warm_up_time(std::time::Duration::from_millis(500));
+    group.measurement_time(std::time::Duration::from_secs(2));
+
+    for operator in ["dynamic", "defer"] {
+        group.bench_function(format!("{operator}_first_compile"), |b| {
+            b.iter_batched(
+                || {
+                    let monitor = compile(operator);
+                    let input = row(&monitor);
+                    (monitor, input)
+                },
+                |(mut monitor, input)| {
+                    let mut output = vec![Value::NoVal];
+                    monitor.evaluate(&input, &mut output).unwrap();
+                    std::hint::black_box(output)
+                },
+                BatchSize::SmallInput,
+            )
+        });
+
+        let mut monitor = compile(operator);
+        let input = row(&monitor);
+        let mut output = vec![Value::NoVal];
+        monitor.evaluate(&input, &mut output).unwrap();
+        group.bench_function(format!("{operator}_cached_tick"), |b| {
+            b.iter(|| {
+                monitor.evaluate(&input, &mut output).unwrap();
+                std::hint::black_box(&output);
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, from_elem, dataflow_dynamic_phases);
 criterion_main!(benches);

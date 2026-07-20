@@ -12,7 +12,8 @@ pub struct DataflowMonitor {
     // change without invalidating environment IDs or moving persistent executor state.
     stream_vars: Vec<VarName>,
     static_dependencies: BTreeMap<VarName, BTreeSet<VarName>>,
-    dynamic_dependencies: Vec<BTreeSet<VarName>>,
+    dynamic_dependencies: Vec<Vec<EnvironmentId>>,
+    environment_vars: Vec<VarName>,
     stream_ids: Vec<EnvironmentId>,
     stream_executors: Vec<PlanExecutor>,
     evaluation_order: Vec<usize>,
@@ -39,7 +40,18 @@ impl DataflowMonitor {
             .map(EnvironmentId::new)
             .collect::<Vec<_>>();
         let evaluation_order = (0..stream_executors.len()).collect();
-        let dynamic_dependencies = vec![BTreeSet::new(); stream_executors.len()];
+        let dynamic_dependencies = vec![Vec::new(); stream_executors.len()];
+        let mut environment_vars = vec![None; environment_size];
+        for (index, var) in input_vars.iter().enumerate() {
+            environment_vars[index] = Some(var.clone());
+        }
+        for (index, &id) in stream_ids.iter().enumerate() {
+            environment_vars[id.index()] = Some(stream_vars[index].clone());
+        }
+        let environment_vars = environment_vars
+            .into_iter()
+            .map(|var| var.expect("every dataflow environment slot must have a variable"))
+            .collect();
         let has_dynamic_dependencies = stream_executors
             .iter()
             .any(PlanExecutor::may_reconfigure_dependencies);
@@ -50,6 +62,7 @@ impl DataflowMonitor {
             stream_vars,
             static_dependencies,
             dynamic_dependencies,
+            environment_vars,
             stream_ids,
             stream_executors,
             evaluation_order,
@@ -172,10 +185,10 @@ impl DataflowMonitor {
 
     fn evaluate_streams_observing_dependencies(
         &mut self,
-    ) -> Result<Vec<BTreeSet<VarName>>, DataflowEvalError> {
-        let mut observed = vec![BTreeSet::new(); self.stream_executors.len()];
+    ) -> Result<Vec<Vec<EnvironmentId>>, DataflowEvalError> {
+        let mut observed = vec![Vec::new(); self.stream_executors.len()];
         for &executor_index in &self.evaluation_order {
-            let dependencies = RefCell::new(BTreeSet::new());
+            let dependencies = RefCell::new(Vec::new());
             let value = self.stream_executors[executor_index].evaluate_observing(
                 &self.environment_values,
                 None,
@@ -189,14 +202,18 @@ impl DataflowMonitor {
 
     fn order_for(
         &self,
-        dynamic_dependencies: &[BTreeSet<VarName>],
+        dynamic_dependencies: &[Vec<EnvironmentId>],
     ) -> Result<Vec<usize>, DataflowEvalError> {
         let mut dependencies = self.static_dependencies.clone();
         for (stream, dynamic) in self.stream_vars.iter().zip(dynamic_dependencies) {
             dependencies
                 .get_mut(stream)
                 .expect("compiled stream must have a dependency entry")
-                .extend(dynamic.iter().cloned());
+                .extend(
+                    dynamic
+                        .iter()
+                        .map(|id| self.environment_vars[id.index()].clone()),
+                );
         }
         let stream_set = self.stream_vars.iter().cloned().collect::<BTreeSet<_>>();
         let ordered = DepGraph::from_dependencies(dependencies)

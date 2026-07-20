@@ -2,18 +2,11 @@
 //! expression-level checker, falling back to `Any` for unannotated variables
 //! that cannot be given a concrete type.
 
-use super::expr::{cast_to_type, coerce_empty_list, coerce_empty_map};
 use super::*;
+use crate::DsrvSpecification;
 use crate::core::StreamType;
-use crate::lang::dsrv::ast::SpannedExpr;
-use crate::{UntypedDsrvSpecification, VarName};
-use std::collections::BTreeMap;
-
-struct PendingAssignment {
-    var: VarName,
-    expr: SpannedExpr,
-    errors: SemanticErrors,
-}
+use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn gradual_fallback_type(typ: TCType) -> StreamType {
     match typ {
@@ -69,20 +62,6 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
     }
 }
 
-/// Replace unresolved empty-container placeholder element types with `Any` so
-/// that inferred gradual expressions have concrete types at runtime.
-fn coerce_gradual_placeholders(te: SExprTE) -> SExprTE {
-    match te {
-        SExprTE::List(tl) if *tl.element_type() == TCType::EmptyList => {
-            SExprTE::List(coerce_empty_list(tl, TCType::Any))
-        }
-        SExprTE::Map(tm) if *tm.value_type() == TCType::EmptyMap => {
-            SExprTE::Map(coerce_empty_map(tm, TCType::Any))
-        }
-        other => other,
-    }
-}
-
 fn can_widen_gradual_error(error: &SemanticError) -> bool {
     match error {
         SemanticError::UndeclaredVariable(_, _) => true,
@@ -92,148 +71,100 @@ fn can_widen_gradual_error(error: &SemanticError) -> bool {
                 | TypeErrorKind::DefaultTypeMismatch
                 | TypeErrorKind::ListElementTypeMismatch
                 | TypeErrorKind::MapValueTypeMismatch
+                | TypeErrorKind::AnnotationTypeMismatch
         ),
         _ => false,
     }
 }
 
-fn can_widen_gradual_errors(errors: &[SemanticError]) -> bool {
-    !errors.is_empty() && errors.iter().all(can_widen_gradual_error)
-}
-
-pub fn type_check_gradual(
-    spec: UntypedDsrvSpecification,
-) -> SemanticResult<TypedDsrvSpecification> {
-    let mut type_context = spec.type_annotations.clone();
-    for var in spec.input_vars.iter() {
-        type_context.entry(var.clone()).or_insert(StreamType::Any);
+pub fn type_check_gradual(mut spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+    spec = spec.into_compact_arena();
+    super::validation::validate_specification(&spec)?;
+    let mut types = spec.type_annotations.clone();
+    for input in &spec.input_vars {
+        types.entry(input.clone()).or_insert(StreamType::Any);
     }
-
-    let mut typed_exprs: BTreeMap<VarName, SExprTE> = BTreeMap::new();
-    let mut errors = vec![];
-    let mut pending: Vec<PendingAssignment> = spec
+    let known_vars = spec
+        .input_vars
+        .iter()
+        .chain(spec.exprs.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let assignment_inputs = spec
         .exprs
         .iter()
-        .map(|(var, expr)| PendingAssignment {
-            var: var.clone(),
-            expr: expr.clone(),
-            errors: vec![],
-        })
-        .collect();
+        .map(|(var, expr)| (var.clone(), expr.free_variables()))
+        .collect::<BTreeMap<_, _>>();
+    let mut pending = spec.exprs.keys().cloned().collect::<Vec<_>>();
+    let mut errors = Vec::new();
+    let mut root_types = BTreeMap::new();
 
-    'outer: while !pending.is_empty() {
-        // Fixed-point passes: repeatedly attempt to type check the remaining
-        // assignments so that inference does not depend on declaration order.
-        loop {
-            let mut progressed = false;
-            let mut next_pending = Vec::new();
-            for pending_assignment in std::mem::take(&mut pending) {
-                let PendingAssignment { var, expr, .. } = pending_assignment;
-                let expected = type_context.get(&var).cloned();
-                let mut ctx = type_context.clone();
-                let mut local_errors = vec![];
-                match expr.type_check_raw(expected.as_ref(), &mut ctx, &mut local_errors) {
-                    Ok(te) => {
-                        let actual = extract_type(&te);
-                        match expected {
-                            Some(expected_ty) => {
-                                if gradual_consistent(&expected_ty, &actual) {
-                                    typed_exprs.insert(var, cast_to_type(te, &expected_ty));
-                                    progressed = true;
-                                } else {
-                                    errors.push(SemanticError::type_error(TypeErrorKind::AnnotationTypeMismatch, format!(
-                                        "Variable {} has declared type {}, but expression has inconsistent type {}",
-                                        var, expected_ty, actual
-                                    )));
-                                }
-                            }
-                            None => {
-                                let final_te = coerce_gradual_placeholders(te);
-                                let inferred = gradual_fallback_type(extract_type(&final_te));
-                                type_context.insert(var.clone(), inferred);
-                                typed_exprs.insert(var, final_te);
-                                progressed = true;
-                            }
+    while !pending.is_empty() {
+        let mut progressed = false;
+        let mut next = Vec::new();
+        for var in std::mem::take(&mut pending) {
+            let unresolved_dependency = assignment_inputs[&var]
+                .iter()
+                .filter(|dependency| known_vars.contains(dependency))
+                .any(|dependency| !types.contains_key(&dependency));
+            if unresolved_dependency {
+                next.push(var);
+                continue;
+            }
+            let expr = &spec.exprs[&var];
+            let expected_stream = types.get(&var).cloned();
+            let expected = expected_stream.as_ref().map(TCType::from_stream_type);
+            match super::checker::infer_expression(expr, expected.as_ref(), &types) {
+                Ok(actual) => {
+                    if let Some(expected) = &expected_stream {
+                        root_types.insert(var.clone(), actual.clone());
+                        if !gradual_consistent(expected, &actual) {
+                            errors.push(SemanticError::type_error_at(
+                                TypeErrorKind::AnnotationTypeMismatch,
+                                format!(
+                                    "Variable {var} has declared type {expected}, but expression has inconsistent type {actual}"
+                                ),
+                                expr.span(),
+                            ));
                         }
+                    } else {
+                        let inferred = gradual_fallback_type(actual);
+                        root_types.insert(var.clone(), TCType::from_stream_type(&inferred));
+                        types.insert(var.clone(), inferred);
                     }
-                    Err(()) => next_pending.push(PendingAssignment {
-                        var,
-                        expr,
-                        errors: local_errors,
-                    }),
+                    progressed = true;
                 }
-            }
-            pending = next_pending;
-            if pending.is_empty() {
-                break 'outer;
-            }
-            if !progressed {
-                break;
-            }
-        }
-
-        // No further progress is possible. Fall back the first unannotated
-        // unresolved assignment to Any, which may unblock the others.
-        if let Some(pos) = pending
-            .iter()
-            .position(|pending_assignment| !type_context.contains_key(&pending_assignment.var))
-        {
-            let PendingAssignment {
-                var,
-                expr,
-                errors: local_errors,
-            } = pending.remove(pos);
-            if can_widen_gradual_errors(&local_errors) {
-                typed_exprs.insert(var.clone(), SExprTE::Any(SExprAny::Expr(expr.node)));
-                type_context.insert(var, StreamType::Any);
-                continue 'outer;
-            }
-            errors.extend(local_errors);
-            break 'outer;
-        }
-
-        // All remaining unresolved assignments are annotated: hard errors.
-        for PendingAssignment { var, expr, .. } in std::mem::take(&mut pending) {
-            let expected = type_context
-                .get(&var)
-                .cloned()
-                .expect("only annotated variables can remain pending here");
-            let mut ctx = type_context.clone();
-            // Re-run the failing check to surface its underlying errors.
-            if expr
-                .type_check_raw(Some(&expected), &mut ctx, &mut errors)
-                .is_ok()
-            {
-                errors.push(SemanticError::unresolved_type(
-                    UnresolvedTypeKind::VariableType,
-                    format!("Could not resolve a type for variable {:?}", var),
-                ));
+                Err(error) if expected_stream.is_none() && can_widen_gradual_error(&error) => {
+                    types.insert(var.clone(), StreamType::Any);
+                    root_types.insert(var.clone(), TCType::Any);
+                    progressed = true;
+                }
+                Err(error) => errors.push(error),
             }
         }
-        break 'outer;
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        if !progressed {
+            for var in next.drain(..) {
+                types.entry(var.clone()).or_insert(StreamType::Any);
+                root_types.insert(var, TCType::Any);
+            }
+            break;
+        }
+        pending = next;
     }
 
-    if errors.is_empty() && typed_exprs.len() == spec.exprs.len() {
-        Ok(TypedDsrvSpecification {
-            input_vars: spec.input_vars.clone(),
-            output_vars: spec.output_vars.clone(),
-            aux_vars: spec.aux_vars.clone(),
-            stream_vars: spec.stream_vars.clone(),
-            exprs: typed_exprs,
-            type_annotations: type_context,
-        })
-    } else {
-        Err(errors)
-    }
+    spec.type_annotations = types.clone();
+    let annotations = super::checker::check_gradual_annotations(&spec, &root_types, &mut types)?;
+    Ok(CheckedDsrvSpecification::new(spec, annotations))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::dsrv::ast::{
-        BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, SExpr, StrBinOp,
-    };
-    use crate::{Specification, Value};
+    use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
+    use crate::{Value, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;
@@ -245,15 +176,15 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             y.clone(),
-            SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone()).into()),
-                Box::new(SExpr::Val(Value::Int(1)).into()),
+            Expr::BinOp(
+                Box::new(Expr::Var(x.clone())),
+                Box::new(Expr::Val(Value::Int(1))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(x.clone(), StreamType::Int);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -266,8 +197,8 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("gradual type check should infer y");
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Int));
-        assert!(matches!(typed.var_expr(&y), Some(SExprTE::Int(_))));
+        assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
+        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
     }
 
     #[test]
@@ -277,13 +208,13 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             y.clone(),
-            SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone()).into()),
-                Box::new(SExpr::Val(Value::Int(1)).into()),
+            Expr::BinOp(
+                Box::new(Expr::Var(x.clone())),
+                Box::new(Expr::Val(Value::Int(1))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -296,12 +227,9 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("gradual type check should accept untyped x");
-        assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Any));
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Int));
-        let Some(SExprTE::Int(SExprInt::BinOp(lhs, _, _))) = typed.var_expr(&y) else {
-            panic!("expected y to be an int binop");
-        };
-        assert!(matches!(*lhs, SExprInt::Cast(_)));
+        assert_eq!(typed.type_annotations().get(&x), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
+        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
     }
 
     #[test]
@@ -310,15 +238,15 @@ mod tests {
         let z: VarName = "gradual_aux_z".into();
         let u: VarName = "gradual_aux_u".into();
         let exprs = BTreeMap::from([
-            (u.clone(), SExpr::Var(x.clone())),
-            (z.clone(), SExpr::Var(u.clone())),
+            (u.clone(), Expr::Var(x.clone())),
+            (z.clone(), Expr::Var(u.clone())),
         ]);
         let type_annotations = BTreeMap::from([
             (x.clone(), StreamType::Int),
             (u.clone(), StreamType::Int),
             (z.clone(), StreamType::Int),
         ]);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([z.clone()]),
             aux_vars: BTreeSet::from([u.clone()]),
@@ -332,17 +260,17 @@ mod tests {
 
         let typed = type_check_gradual(spec).expect("gradual type check should preserve aux vars");
 
-        assert_eq!(typed.aux_vars(), BTreeSet::from([u.clone()]));
-        assert_eq!(typed.stream_vars(), BTreeSet::from([z.clone(), u]));
-        assert_eq!(typed.output_vars(), BTreeSet::from([z]));
+        assert_eq!(typed.aux_vars(), &BTreeSet::from([u.clone()]));
+        assert_eq!(typed.stream_vars(), &BTreeSet::from([z.clone(), u]));
+        assert_eq!(typed.output_vars(), &BTreeSet::from([z]));
     }
 
     #[test]
     fn test_strict_type_check_still_requires_output_annotation() {
         let y: VarName = "y_strict_missing".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), SExpr::Val(Value::Int(1)));
-        let spec = UntypedDsrvSpecification {
+        exprs.insert(y.clone(), Expr::Val(Value::Int(1)));
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y]),
@@ -370,23 +298,23 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             z.clone(),
-            SExpr::BinOp(
-                Box::new(SExpr::Var(y.clone()).into()),
-                Box::new(SExpr::Val(Value::Int(1)).into()),
+            Expr::BinOp(
+                Box::new(Expr::Var(y.clone())),
+                Box::new(Expr::Val(Value::Int(1))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         exprs.insert(
             y.clone(),
-            SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone()).into()),
-                Box::new(SExpr::Val(Value::Int(1)).into()),
+            Expr::BinOp(
+                Box::new(Expr::Var(x.clone())),
+                Box::new(Expr::Val(Value::Int(1))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(x.clone(), StreamType::Int);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([y.clone(), z.clone()]),
             stream_vars: BTreeSet::from([y.clone(), z.clone()]),
@@ -399,10 +327,10 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("dependency chain should be inferred");
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Int));
-        assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Int));
-        assert!(matches!(typed.var_expr(&y), Some(SExprTE::Int(_))));
-        assert!(matches!(typed.var_expr(&z), Some(SExprTE::Int(_))));
+        assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
+        assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Int));
+        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
+        assert_eq!(typed.var_expr(&z).unwrap().typ(), &TCType::Int);
     }
 
     #[test]
@@ -410,9 +338,9 @@ mod tests {
         let xs: VarName = "gradual_empty_xs".into();
         let m: VarName = "gradual_empty_m".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(xs.clone(), SExpr::List(EcoVec::new()));
-        exprs.insert(m.clone(), SExpr::Map(BTreeMap::new()));
-        let spec = UntypedDsrvSpecification {
+        exprs.insert(xs.clone(), Expr::List(EcoVec::new()));
+        exprs.insert(m.clone(), Expr::Map(BTreeMap::new()));
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone(), m.clone()]),
             stream_vars: BTreeSet::from([xs.clone(), m.clone()]),
@@ -426,31 +354,26 @@ mod tests {
 
         let typed = type_check_gradual(spec).expect("empty containers should fall back to Any");
         assert_eq!(
-            typed.type_annotations.get(&xs),
+            typed.type_annotations().get(&xs),
             Some(&StreamType::List(Box::new(StreamType::Any)))
         );
         assert_eq!(
-            typed.type_annotations.get(&m),
+            typed.type_annotations().get(&m),
             Some(&StreamType::Map(Box::new(StreamType::Any)))
         );
-        // The typed expressions must have concrete (Any) element types so they
-        // can be converted to stream types at runtime.
-        let Some(SExprTE::List(tl)) = typed.var_expr(&xs) else {
-            panic!("expected a typed list expression for xs");
-        };
-        assert_eq!(*tl.element_type(), TCType::Any);
-        let Some(SExprTE::Map(tm)) = typed.var_expr(&m) else {
-            panic!("expected a typed map expression for m");
-        };
-        assert_eq!(*tm.value_type(), TCType::Any);
+        assert_eq!(
+            typed.var_expr(&xs).unwrap().typ(),
+            &TCType::list(TCType::Any)
+        );
+        assert_eq!(typed.var_expr(&m).unwrap().typ(), &TCType::map(TCType::Any));
     }
 
     #[test]
     fn test_gradual_rejects_noval_literal_ast() {
         let x: VarName = "gradual_noval_x".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(x.clone(), SExpr::Val(Value::NoVal));
-        let spec = UntypedDsrvSpecification {
+        exprs.insert(x.clone(), Expr::Val(Value::NoVal));
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([x.clone()]),
             stream_vars: BTreeSet::from([x.clone()]),
@@ -475,10 +398,10 @@ mod tests {
         // deferred to a runtime cast that can never succeed.
         let y: VarName = "gradual_mismatch_y".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), SExpr::Val(Value::Int(1)));
+        exprs.insert(y.clone(), Expr::Val(Value::Int(1)));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Bool);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y]),
@@ -499,13 +422,11 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             xs.clone(),
-            SExpr::List(EcoVec::from(vec![
-                SExpr::Val(Value::Str("a".into())).into(),
-            ])),
+            Expr::List(EcoVec::from(vec![Expr::Val(Value::Str("a".into())).into()])),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
             stream_vars: BTreeSet::from([xs.clone()]),
@@ -524,10 +445,10 @@ mod tests {
     fn test_gradual_any_annotation_accepts_any_expression() {
         let y: VarName = "gradual_any_annot_y".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), SExpr::Val(Value::Str("hello".into())));
+        exprs.insert(y.clone(), Expr::Val(Value::Str("hello".into())));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Any);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -540,9 +461,9 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("Any annotation should accept any value");
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Any));
         // The expression keeps its precise type; only the declaration is Any.
-        assert!(matches!(typed.var_expr(&y), Some(SExprTE::Str(_))));
+        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Str);
     }
 
     #[test]
@@ -552,15 +473,15 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             z.clone(),
-            SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1)).into()),
-                Box::new(SExpr::Val(Value::Str("a".into())).into()),
+            Expr::BinOp(
+                Box::new(Expr::Val(Value::Int(1))),
+                Box::new(Expr::Val(Value::Str("a".into()))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(z.clone(), StreamType::Int);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z]),
@@ -584,13 +505,13 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             z.clone(),
-            SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Int(1)).into()),
-                Box::new(SExpr::Val(Value::Str("a".into())).into()),
+            Expr::BinOp(
+                Box::new(Expr::Val(Value::Int(1))),
+                Box::new(Expr::Val(Value::Str("a".into()))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
@@ -614,12 +535,12 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             xs.clone(),
-            SExpr::List(EcoVec::from(vec![
-                SExpr::Val(Value::Int(1)).into(),
-                SExpr::Val(Value::Str("a".into())).into(),
+            Expr::List(EcoVec::from(vec![
+                Expr::Val(Value::Int(1)).into(),
+                Expr::Val(Value::Str("a".into())).into(),
             ])),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
             stream_vars: BTreeSet::from([xs.clone()]),
@@ -632,11 +553,8 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("heterogeneous list should widen to Any");
-        assert_eq!(typed.type_annotations.get(&xs), Some(&StreamType::Any));
-        assert!(matches!(
-            typed.var_expr(&xs),
-            Some(SExprTE::Any(SExprAny::Expr(_)))
-        ));
+        assert_eq!(typed.type_annotations().get(&xs), Some(&StreamType::Any));
+        assert_eq!(typed.var_expr(&xs).unwrap().typ(), &TCType::Any);
     }
 
     #[test]
@@ -645,14 +563,14 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             xs.clone(),
-            SExpr::List(EcoVec::from(vec![
-                SExpr::Val(Value::Int(1)).into(),
-                SExpr::Val(Value::Str("a".into())).into(),
+            Expr::List(EcoVec::from(vec![
+                Expr::Val(Value::Int(1)).into(),
+                Expr::Val(Value::Str("a".into())).into(),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([xs.clone()]),
             stream_vars: BTreeSet::from([xs]),
@@ -676,12 +594,12 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             m.clone(),
-            SExpr::Map(BTreeMap::from([
-                ("x".into(), SExpr::Val(Value::Int(1)).into()),
-                ("y".into(), SExpr::Val(Value::Str("a".into())).into()),
+            Expr::Map(BTreeMap::from([
+                ("x".into(), Expr::Val(Value::Int(1)).into()),
+                ("y".into(), Expr::Val(Value::Str("a".into())).into()),
             ])),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([m.clone()]),
             stream_vars: BTreeSet::from([m.clone()]),
@@ -694,11 +612,8 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("heterogeneous map should widen to Any");
-        assert_eq!(typed.type_annotations.get(&m), Some(&StreamType::Any));
-        assert!(matches!(
-            typed.var_expr(&m),
-            Some(SExprTE::Any(SExprAny::Expr(_)))
-        ));
+        assert_eq!(typed.type_annotations().get(&m), Some(&StreamType::Any));
+        assert_eq!(typed.var_expr(&m).unwrap().typ(), &TCType::Any);
     }
 
     #[test]
@@ -707,14 +622,14 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             m.clone(),
-            SExpr::Map(BTreeMap::from([
-                ("x".into(), SExpr::Val(Value::Int(1)).into()),
-                ("y".into(), SExpr::Val(Value::Str("a".into())).into()),
+            Expr::Map(BTreeMap::from([
+                ("x".into(), Expr::Val(Value::Int(1)).into()),
+                ("y".into(), Expr::Val(Value::Str("a".into())).into()),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(m.clone(), StreamType::Map(Box::new(StreamType::Int)));
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([m.clone()]),
             stream_vars: BTreeSet::from([m]),
@@ -736,12 +651,12 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             robot.clone(),
-            SExpr::Struct(BTreeMap::from([
-                ("id".into(), SExpr::Val(Value::Int(1)).into()),
-                ("name".into(), SExpr::Val(Value::Str("r2d2".into())).into()),
+            Expr::Struct(BTreeMap::from([
+                ("id".into(), Expr::Val(Value::Int(1)).into()),
+                ("name".into(), Expr::Val(Value::Str("r2d2".into())).into()),
             ])),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([robot.clone()]),
             stream_vars: BTreeSet::from([robot.clone()]),
@@ -755,7 +670,7 @@ mod tests {
 
         let typed = type_check_gradual(spec).expect("struct fields should be inferred");
         assert_eq!(
-            typed.type_annotations.get(&robot),
+            typed.type_annotations().get(&robot),
             Some(&StreamType::Struct(
                 EcoVec::from(vec![
                     ("id".into(), StreamType::Int),
@@ -764,15 +679,15 @@ mod tests {
                 false,
             ))
         );
-        let Some(SExprTE::Struct(st)) = typed.var_expr(&robot) else {
-            panic!("expected inferred struct expression");
-        };
         assert_eq!(
-            st.typ_map,
-            EcoVec::from(vec![
-                ("id".into(), TCType::Int),
-                ("name".into(), TCType::Str)
-            ])
+            typed.var_expr(&robot).unwrap().typ(),
+            &TCType::Struct(
+                EcoVec::from(vec![
+                    ("id".into(), TCType::Int),
+                    ("name".into(), TCType::Str)
+                ]),
+                false
+            )
         );
     }
 
@@ -783,16 +698,16 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             robot.clone(),
-            SExpr::Struct(BTreeMap::from([
-                ("id".into(), SExpr::Val(Value::Int(1)).into()),
-                ("name".into(), SExpr::Val(Value::Str("r2d2".into())).into()),
+            Expr::Struct(BTreeMap::from([
+                ("id".into(), Expr::Val(Value::Int(1)).into()),
+                ("name".into(), Expr::Val(Value::Str("r2d2".into())).into()),
             ])),
         );
         exprs.insert(
             name.clone(),
-            SExpr::SGet(Box::new(SExpr::Var(robot.clone()).into()), "name".into()),
+            Expr::SGet(Box::new(Expr::Var(robot.clone())), "name".into()),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([name.clone()]),
             stream_vars: BTreeSet::from([robot.clone(), name.clone()]),
@@ -805,8 +720,8 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("field access should use inferred struct type");
-        assert_eq!(typed.type_annotations.get(&name), Some(&StreamType::Str));
-        assert!(matches!(typed.var_expr(&name), Some(SExprTE::Str(_))));
+        assert_eq!(typed.type_annotations().get(&name), Some(&StreamType::Str));
+        assert_eq!(typed.var_expr(&name).unwrap().typ(), &TCType::Str);
     }
 
     #[test]
@@ -815,12 +730,12 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             robot.clone(),
-            SExpr::Struct(BTreeMap::from([
+            Expr::Struct(BTreeMap::from([
                 (
                     "id".into(),
-                    SExpr::Val(Value::Str("not an int".into())).into(),
+                    Expr::Val(Value::Str("not an int".into())).into(),
                 ),
-                ("name".into(), SExpr::Val(Value::Str("r2d2".into())).into()),
+                ("name".into(), Expr::Val(Value::Str("r2d2".into())).into()),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
@@ -834,7 +749,7 @@ mod tests {
                 false,
             ),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([robot.clone()]),
             stream_vars: BTreeSet::from([robot]),
@@ -860,15 +775,15 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             z.clone(),
-            SExpr::If(
-                Box::new(SExpr::Var(c.clone()).into()),
-                Box::new(SExpr::Val(Value::Int(1)).into()),
-                Box::new(SExpr::Val(Value::Str("a".into())).into()),
+            Expr::If(
+                Box::new(Expr::Var(c.clone())),
+                Box::new(Expr::Val(Value::Int(1))),
+                Box::new(Expr::Val(Value::Str("a".into()))),
             ),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(c, StreamType::Bool);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
@@ -881,11 +796,8 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("heterogeneous if should widen to Any");
-        assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Any));
-        assert!(matches!(
-            typed.var_expr(&z),
-            Some(SExprTE::Any(SExprAny::Expr(_)))
-        ));
+        assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));
+        assert_eq!(typed.var_expr(&z).unwrap().typ(), &TCType::Any);
     }
 
     #[test]
@@ -893,8 +805,8 @@ mod tests {
         let x: VarName = "gradual_pass_x".into();
         let y: VarName = "gradual_pass_y".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), SExpr::Var(x.clone()));
-        let spec = UntypedDsrvSpecification {
+        exprs.insert(y.clone(), Expr::Var(x.clone()));
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::from([x.clone()]),
             output_vars: BTreeSet::from([y.clone()]),
             stream_vars: BTreeSet::from([y.clone()]),
@@ -907,12 +819,9 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("passthrough should type check");
-        assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Any));
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Any));
-        assert!(matches!(
-            typed.var_expr(&y),
-            Some(SExprTE::Any(SExprAny::Var(_)))
-        ));
+        assert_eq!(typed.type_annotations().get(&x), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Any));
+        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Any);
     }
 
     #[test]
@@ -923,13 +832,13 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             z.clone(),
-            SExpr::BinOp(
-                Box::new(SExpr::Var(a.clone()).into()),
-                Box::new(SExpr::Var(b.clone()).into()),
+            Expr::BinOp(
+                Box::new(Expr::Var(a.clone())),
+                Box::new(Expr::Var(b.clone())),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::from([a.clone(), b.clone()]),
             output_vars: BTreeSet::from([z.clone()]),
             stream_vars: BTreeSet::from([z.clone()]),
@@ -942,151 +851,8 @@ mod tests {
         };
 
         let typed = type_check_gradual(spec).expect("Any + Any widens to Any");
-        assert_eq!(typed.type_annotations.get(&a), Some(&StreamType::Any));
-        assert_eq!(typed.type_annotations.get(&b), Some(&StreamType::Any));
-        assert_eq!(typed.type_annotations.get(&z), Some(&StreamType::Any));
-    }
-
-    #[test]
-    fn test_gradual_any_operand_comparisons_cast_to_concrete() {
-        let x: VarName = "gradual_cmp_x".into();
-        for op in [
-            CompBinOp::Eq,
-            CompBinOp::Le,
-            CompBinOp::Lt,
-            CompBinOp::Ge,
-            CompBinOp::Gt,
-        ] {
-            let mut ctx = TypeInfo::new();
-            ctx.insert(x.clone(), StreamType::Any);
-            let expr = SExpr::BinOp(
-                Box::new(SExpr::Var(x.clone()).into()),
-                Box::new(SExpr::Val(Value::Int(10)).into()),
-                SBinOp::COp(op.clone()),
-            );
-            let te = expr
-                .type_check(&mut ctx)
-                .expect("comparison with Any operand should type check");
-            assert_eq!(extract_type(&te), TCType::Bool);
-            let SExprTE::Bool(SExprBool::Cmp(got_op, lhs, rhs)) = te else {
-                panic!("expected a typed comparison");
-            };
-            assert_eq!(got_op, op);
-            assert!(
-                matches!(*lhs, SExprTE::Int(SExprInt::Cast(_))),
-                "Any operand should be cast to Int"
-            );
-            assert!(matches!(*rhs, SExprTE::Int(SExprInt::Val(_))));
-        }
-    }
-
-    #[test]
-    fn test_gradual_any_operand_primitive_ops_cast_to_concrete() {
-        let x: VarName = "gradual_ops_x".into();
-        let mut ctx = TypeInfo::new();
-        ctx.insert(x.clone(), StreamType::Any);
-
-        // Int arithmetic: x * 2 : Int with a cast on the Any side
-        let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone()).into()),
-            Box::new(SExpr::Val(Value::Int(2)).into()),
-            SBinOp::NOp(NumericalBinOp::Mul),
-        );
-        let te = expr.type_check(&mut ctx).expect("Any * Int should check");
-        let SExprTE::Int(SExprInt::BinOp(lhs, _, IntBinOp::Mul)) = te else {
-            panic!("expected an Int binop");
-        };
-        assert!(matches!(*lhs, SExprInt::Cast(_)));
-
-        // Float arithmetic: x + 1.5 : Float
-        let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone()).into()),
-            Box::new(SExpr::Val(Value::Float(1.5)).into()),
-            SBinOp::NOp(NumericalBinOp::Add),
-        );
-        let te = expr.type_check(&mut ctx).expect("Any + Float should check");
-        let SExprTE::Float(SExprFloat::BinOp(lhs, _, FloatBinOp::Add)) = te else {
-            panic!("expected a Float binop");
-        };
-        assert!(matches!(*lhs, SExprFloat::Cast(_)));
-
-        // Boolean operation: x && true : Bool
-        let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone()).into()),
-            Box::new(SExpr::Val(Value::Bool(true)).into()),
-            SBinOp::BOp(BoolBinOp::And),
-        );
-        let te = expr.type_check(&mut ctx).expect("Any && Bool should check");
-        let SExprTE::Bool(SExprBool::BinOp(lhs, _, BoolBinOp::And)) = te else {
-            panic!("expected a Bool binop");
-        };
-        assert!(matches!(*lhs, SExprBool::Cast(_)));
-
-        // String concatenation: x ++ "s" : Str
-        let expr = SExpr::BinOp(
-            Box::new(SExpr::Var(x.clone()).into()),
-            Box::new(SExpr::Val(Value::Str("s".into())).into()),
-            SBinOp::SOp(StrBinOp::Concat),
-        );
-        let te = expr.type_check(&mut ctx).expect("Any ++ Str should check");
-        let SExprTE::Str(SExprStr::BinOp(lhs, _, StrBinOp::Concat)) = te else {
-            panic!("expected a Str binop");
-        };
-        assert!(matches!(*lhs, SExprStr::Cast(_)));
-    }
-
-    #[test]
-    fn test_gradual_consistent_relation() {
-        // Any is consistent with everything
-        assert!(gradual_consistent(&StreamType::Any, &TCType::Int));
-        assert!(gradual_consistent(&StreamType::Int, &TCType::Any));
-        // Concrete types must match
-        assert!(gradual_consistent(&StreamType::Int, &TCType::Int));
-        assert!(!gradual_consistent(&StreamType::Int, &TCType::Bool));
-        // Containers compare structurally with Any permeating inwards
-        assert!(gradual_consistent(
-            &StreamType::List(Box::new(StreamType::Int)),
-            &TCType::List(Box::new(TCType::Any))
-        ));
-        assert!(gradual_consistent(
-            &StreamType::List(Box::new(StreamType::Int)),
-            &TCType::EmptyList
-        ));
-        assert!(!gradual_consistent(
-            &StreamType::List(Box::new(StreamType::Int)),
-            &TCType::List(Box::new(TCType::Str))
-        ));
-        assert!(!gradual_consistent(
-            &StreamType::Map(Box::new(StreamType::Int)),
-            &TCType::List(Box::new(TCType::Int))
-        ));
-    }
-
-    #[test]
-    fn test_gradual_keeps_explicit_input_annotations() {
-        let x: VarName = "gradual_keep_x".into();
-        let y: VarName = "gradual_keep_y".into();
-        let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), SExpr::Var(x.clone()));
-        let mut type_annotations = BTreeMap::new();
-        type_annotations.insert(x.clone(), StreamType::Str);
-        let spec = UntypedDsrvSpecification {
-            input_vars: BTreeSet::from([x.clone()]),
-            output_vars: BTreeSet::from([y.clone()]),
-            stream_vars: BTreeSet::from([y.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
-
-        let typed = type_check_gradual(spec).expect("annotated input passthrough");
-        // The input keeps its explicit type rather than being widened to Any,
-        // and the output inherits the concrete inferred type.
-        assert_eq!(typed.type_annotations.get(&x), Some(&StreamType::Str));
-        assert_eq!(typed.type_annotations.get(&y), Some(&StreamType::Str));
-        assert!(matches!(typed.var_expr(&y), Some(SExprTE::Str(_))));
+        assert_eq!(typed.type_annotations().get(&a), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations().get(&b), Some(&StreamType::Any));
+        assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));
     }
 }

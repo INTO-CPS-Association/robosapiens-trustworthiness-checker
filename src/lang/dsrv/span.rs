@@ -1,14 +1,9 @@
-use ecow::{EcoString, EcoVec};
-use serde;
-use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Deref, Range};
 
-use crate::core::{StreamType, StreamTypeAscription, Value, VarName};
-
 use crate::{
-    SExpr,
-    lang::dsrv::ast::{RuntimeExpr, RuntimeScope, SBinOp, SpannedExpr},
+    ExprKind,
+    lang::dsrv::ast::{DynamicExprScope, Expr, ExprFields},
 };
 
 // Span struct designed by IWANABETHATGUY in the l-lang repository at https://github.com/IWANABETHATGUY/l-lang/blob/master/crates/parser/src/span.rs
@@ -65,7 +60,7 @@ impl From<&Span> for Range<usize> {
     }
 }
 
-// Generic Spanned struct that can be used to wrap any node with a span, used for the SExpr nodes in the AST to keep track of their location in the source code.
+// Generic Spanned struct that can be used to wrap any node with a span, used for the ExprKind nodes in the AST to keep track of their location in the source code.
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq, PartialOrd, Ord, serde::Serialize)]
 pub struct Spanned<T> {
     pub node: T,
@@ -86,462 +81,108 @@ impl<T> Deref for Spanned<T> {
     }
 }
 
-// Helper function to convert SExpr into SpannedExpr with a default span for the files that need use spans
-impl From<SExpr> for SpannedExpr {
-    fn from(node: SExpr) -> Self {
-        Spanned {
-            node,
-            span: Span::default(),
-        }
-    }
-}
-
-// Helper functions to create SpannedExprs without having to specify the span every time for quicker migration to the spans
-#[allow(non_snake_case)]
-impl SpannedExpr {
-    pub fn with_span(node: SExpr, span: Span) -> Self {
-        Spanned {
-            node: node,
-            span: span,
-        }
-    }
-    pub fn VarAt(v: VarName, span: Span) -> Self {
-        Self::with_span(SExpr::Var(v), span)
-    }
-
-    pub fn Val(v: impl Into<Value>) -> Self {
-        SExpr::Val(v.into()).into()
-    }
-
-    pub fn Var(v: VarName) -> Self {
-        SExpr::Var(v).into()
-    }
-
-    pub fn BinOp<L, R>(lhs: Box<L>, rhs: Box<R>, op: SBinOp) -> Self
-    where
-        L: Into<SpannedExpr>,
-        R: Into<SpannedExpr>,
-    {
-        SExpr::BinOp(Box::new((*lhs).into()), Box::new((*rhs).into()), op).into()
-    }
-
-    pub fn If<C, T, E>(c: Box<C>, t: Box<T>, e: Box<E>) -> Self
-    where
-        C: Into<SpannedExpr>,
-        T: Into<SpannedExpr>,
-        E: Into<SpannedExpr>,
-    {
-        SExpr::If(
-            Box::new((*c).into()),
-            Box::new((*t).into()),
-            Box::new((*e).into()),
-        )
-        .into()
-    }
-
-    pub fn SIndex<E>(e: Box<E>, idx: u64) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::SIndex(Box::new((*e).into()), idx).into()
-    }
-
-    pub fn Init<L, R>(lhs: Box<L>, rhs: Box<R>) -> Self
-    where
-        L: Into<SpannedExpr>,
-        R: Into<SpannedExpr>,
-    {
-        SExpr::Init(Box::new((*lhs).into()), Box::new((*rhs).into())).into()
-    }
-
-    pub fn Dynamic<E>(e: Box<E>, t: StreamTypeAscription) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Dynamic(RuntimeExpr::automatic(Box::new((*e).into()), t)).into()
-    }
-
-    pub fn RestrictedDynamic<E>(e: Box<E>, t: StreamTypeAscription, vs: EcoVec<VarName>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Dynamic(RuntimeExpr::explicit(Box::new((*e).into()), t, vs)).into()
-    }
-
-    pub fn Defer<E>(e: Box<E>, t: StreamTypeAscription, vs: EcoVec<VarName>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Defer(if vs.is_empty() {
-            RuntimeExpr::automatic(Box::new((*e).into()), t)
-        } else {
-            RuntimeExpr::explicit(Box::new((*e).into()), t, vs)
-        })
-        .into()
-    }
-
-    pub fn Default<L, R>(l: Box<L>, r: Box<R>) -> Self
-    where
-        L: Into<SpannedExpr>,
-        R: Into<SpannedExpr>,
-    {
-        SExpr::Default(Box::new((*l).into()), Box::new((*r).into())).into()
-    }
-
-    pub fn When<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::When(Box::new((*e).into())).into()
-    }
-
-    pub fn Update<L, R>(l: Box<L>, r: Box<R>) -> Self
-    where
-        L: Into<SpannedExpr>,
-        R: Into<SpannedExpr>,
-    {
-        SExpr::Update(Box::new((*l).into()), Box::new((*r).into())).into()
-    }
-
-    pub fn Latch<V, T>(v: Box<V>, t: Box<T>) -> Self
-    where
-        V: Into<SpannedExpr>,
-        T: Into<SpannedExpr>,
-    {
-        SExpr::Latch(Box::new((*v).into()), Box::new((*t).into())).into()
-    }
-
-    pub fn Not<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Not(Box::new((*e).into())).into()
-    }
-
-    pub fn Lambda(
-        params: EcoVec<(VarName, StreamType)>,
-        body: Box<impl Into<SpannedExpr>>,
-    ) -> Self {
-        SExpr::Lambda(params, Box::new((*body).into())).into()
-    }
-
-    pub fn Apply<F>(func: Box<F>, args: EcoVec<SpannedExpr>) -> Self
-    where
-        F: Into<SpannedExpr>,
-    {
-        SExpr::Apply(Box::new((*func).into()), args).into()
-    }
-
-    pub fn Fix<F>(func: Box<F>) -> Self
-    where
-        F: Into<SpannedExpr>,
-    {
-        SExpr::Fix(Box::new((*func).into())).into()
-    }
-
-    pub fn Partial<F>(func: Box<F>, args: EcoVec<SpannedExpr>) -> Self
-    where
-        F: Into<SpannedExpr>,
-    {
-        SExpr::Partial(Box::new((*func).into()), args).into()
-    }
-
-    pub fn IsDefined<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::IsDefined(Box::new((*e).into())).into()
-    }
-
-    pub fn Sin<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Sin(Box::new((*e).into())).into()
-    }
-
-    pub fn Cos<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Cos(Box::new((*e).into())).into()
-    }
-
-    pub fn Tan<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Tan(Box::new((*e).into())).into()
-    }
-
-    pub fn Abs<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::Abs(Box::new((*e).into())).into()
-    }
-
-    pub fn Map(map: BTreeMap<EcoString, SpannedExpr>) -> Self {
-        SExpr::Map(map).into()
-    }
-
-    pub fn Struct(map: BTreeMap<EcoString, SpannedExpr>) -> Self {
-        SExpr::Struct(map).into()
-    }
-
-    pub fn ObjectLiteral(map: BTreeMap<EcoString, SpannedExpr>) -> Self {
-        SExpr::ObjectLiteral(map).into()
-    }
-
-    pub fn List(items: EcoVec<SpannedExpr>) -> Self {
-        SExpr::List(items).into()
-    }
-
-    pub fn Tuple(items: EcoVec<SpannedExpr>) -> Self {
-        SExpr::Tuple(items).into()
-    }
-
-    pub fn LIndex<L, R>(lhs: Box<L>, rhs: Box<R>) -> Self
-    where
-        L: Into<SpannedExpr>,
-        R: Into<SpannedExpr>,
-    {
-        SExpr::LIndex(Box::new((*lhs).into()), Box::new((*rhs).into())).into()
-    }
-
-    pub fn LAppend<L, R>(lhs: Box<L>, rhs: Box<R>) -> Self
-    where
-        L: Into<SpannedExpr>,
-        R: Into<SpannedExpr>,
-    {
-        SExpr::LAppend(Box::new((*lhs).into()), Box::new((*rhs).into())).into()
-    }
-
-    pub fn LConcat<L, R>(lhs: Box<L>, rhs: Box<R>) -> Self
-    where
-        L: Into<SpannedExpr>,
-        R: Into<SpannedExpr>,
-    {
-        SExpr::LConcat(Box::new((*lhs).into()), Box::new((*rhs).into())).into()
-    }
-
-    pub fn LHead<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::LHead(Box::new((*e).into())).into()
-    }
-
-    pub fn LTail<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::LTail(Box::new((*e).into())).into()
-    }
-
-    pub fn LLen<E>(e: Box<E>) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::LLen(Box::new((*e).into())).into()
-    }
-
-    pub fn MGet<E>(e: Box<E>, key: EcoString) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::MGet(Box::new((*e).into()), key).into()
-    }
-
-    pub fn SGet<E>(e: Box<E>, key: EcoString) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::SGet(Box::new((*e).into()), key).into()
-    }
-
-    pub fn MInsert<M, V>(map: Box<M>, key: EcoString, value: Box<V>) -> Self
-    where
-        M: Into<SpannedExpr>,
-        V: Into<SpannedExpr>,
-    {
-        SExpr::MInsert(Box::new((*map).into()), key, Box::new((*value).into())).into()
-    }
-
-    pub fn MRemove<E>(e: Box<E>, key: EcoString) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::MRemove(Box::new((*e).into()), key).into()
-    }
-
-    pub fn MHasKey<E>(e: Box<E>, key: EcoString) -> Self
-    where
-        E: Into<SpannedExpr>,
-    {
-        SExpr::MHasKey(Box::new((*e).into()), key).into()
-    }
-}
-
-//Helper function to wrap an SExpr in a SpannedExpr with a default span (0..0) for winnow parsing,
-pub fn span_wrapper_winnow(
-    source: &str,
-    start_rest: &str,
-    end_rest: &str,
-    node: SExpr,
-) -> SpannedExpr {
-    Spanned {
-        node,
-        span: offset(source, start_rest, end_rest),
-    }
-}
-
-// Helper function to calculate the offset for the span
-#[inline]
 pub fn offset(source: &str, rest_start: &str, rest_end: &str) -> Span {
     let start = source.len() - rest_start.len();
     let end = source.len() - rest_end.len();
-
     Span::new(start as u32, end as u32)
 }
 
-pub fn strip_span(e: &Spanned<SExpr>) -> String {
-    match &e.node {
-        SExpr::Var(v) => format!("Var({:?})", v),
-        SExpr::Val(v) => format!("Val({:?})", v),
+pub fn span_wrapper_winnow(source: &str, start_rest: &str, end_rest: &str, expr: Expr) -> Expr {
+    crate::lang::dsrv::ast::finish_root_span(expr, offset(source, start_rest, end_rest))
+}
 
-        SExpr::If(a, b, c) => format!(
-            "If({}, {}, {})",
-            strip_span(a),
-            strip_span(b),
-            strip_span(c),
-        ),
-
-        SExpr::BinOp(l, r, op) => format!("BinOp({}, {}, {:?})", strip_span(l), strip_span(r), op,),
-
-        SExpr::SIndex(e, idx) => format!("SIndex({}, {})", strip_span(e), idx),
-        SExpr::Dynamic(runtime) => match &runtime.scope {
-            RuntimeScope::Automatic(_) => format!(
-                "Dynamic({}, {:?})",
-                strip_span(&runtime.source),
-                runtime.result_type
-            ),
-            RuntimeScope::Explicit(vars, _) => format!(
-                "RestrictedDynamic({}, {:?}, {:?})",
-                strip_span(&runtime.source),
-                runtime.result_type,
-                vars
+pub(crate) fn strip_span(expr: &Expr) -> String {
+    let child = |id| strip_span(&expr.child(id));
+    let children = |ids: &[crate::lang::dsrv::ast::ExprId]| {
+        ids.iter()
+            .map(|id| child(*id))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let keyed = |items: &ExprFields| {
+        items
+            .iter()
+            .map(|(key, id)| format!("{key:?}: {}", child(*id)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match expr.as_ref().kind() {
+        ExprKind::Var(v) => format!("Var({v:?})"),
+        ExprKind::Val(v) => format!("Val({v:?})"),
+        ExprKind::If(a, b, c) => format!("If({}, {}, {})", child(*a), child(*b), child(*c)),
+        ExprKind::BinOp(a, b, op) => format!("BinOp({}, {}, {op:?})", child(*a), child(*b)),
+        ExprKind::SIndex(e, index) => format!("SIndex({}, {index})", child(*e)),
+        ExprKind::Dynamic(source, result_type, scope) => match scope {
+            DynamicExprScope::Automatic => {
+                format!("Dynamic({}, {:?})", child(*source), result_type)
+            }
+            DynamicExprScope::Explicit(vars) => format!(
+                "RestrictedDynamic({}, {:?}, {vars:?})",
+                child(*source),
+                result_type
             ),
         },
-        SExpr::Defer(runtime) => format!(
+        ExprKind::Defer(source, result_type, scope) => format!(
             "Defer({}, {:?}, {:?})",
-            strip_span(&runtime.source),
-            runtime.result_type,
-            runtime.scope.explicit_vars().cloned().unwrap_or_default()
+            child(*source),
+            result_type,
+            scope.explicit_vars().cloned().unwrap_or_default()
         ),
-        SExpr::Update(l, r) => format!("Update({}, {})", strip_span(l), strip_span(r)),
-        SExpr::Default(l, r) => format!("Default({}, {})", strip_span(l), strip_span(r)),
-        SExpr::IsDefined(e) => format!("IsDefined({})", strip_span(e)),
-        SExpr::When(e) => format!("When({})", strip_span(e)),
-        SExpr::Latch(v, t) => format!("Latch({}, {})", strip_span(v), strip_span(t)),
-        SExpr::Init(e1, e2) => format!("Init({}, {})", strip_span(e1), strip_span(e2)),
-        SExpr::Not(e) => format!("Not({})", strip_span(e)),
-        SExpr::Lambda(params, body) => format!("Lambda({:?}, {})", params, strip_span(body)),
-        SExpr::Apply(func, args) => {
-            let args = args.iter().map(strip_span).collect::<Vec<_>>().join(", ");
-            format!("Apply({}, [{}])", strip_span(func), args)
+        ExprKind::Update(a, b) => format!("Update({}, {})", child(*a), child(*b)),
+        ExprKind::Default(a, b) => format!("Default({}, {})", child(*a), child(*b)),
+        ExprKind::Latch(a, b) => format!("Latch({}, {})", child(*a), child(*b)),
+        ExprKind::Init(a, b) => format!("Init({}, {})", child(*a), child(*b)),
+        ExprKind::Not(e) => format!("Not({})", child(*e)),
+        ExprKind::IsDefined(e) => format!("IsDefined({})", child(*e)),
+        ExprKind::When(e) => format!("When({})", child(*e)),
+        ExprKind::Lambda(params, body) => format!("Lambda({params:?}, {})", child(*body)),
+        ExprKind::Apply(func, args) => format!("Apply({}, [{}])", child(*func), children(args)),
+        ExprKind::Fix(func) => format!("Fix({})", child(*func)),
+        ExprKind::Partial(func, args) => format!("Partial({}, [{}])", child(*func), children(args)),
+        ExprKind::List(items) => format!("List([{}])", children(items)),
+        ExprKind::Tuple(items) => format!("Tuple([{}])", children(items)),
+        ExprKind::LIndex(a, b) => format!("LIndex({}, {})", child(*a), child(*b)),
+        ExprKind::LAppend(a, b) => format!("LAppend({}, {})", child(*a), child(*b)),
+        ExprKind::LConcat(a, b) => format!("LConcat({}, {})", child(*a), child(*b)),
+        ExprKind::LHead(e) => format!("LHead({})", child(*e)),
+        ExprKind::LTail(e) => format!("LTail({})", child(*e)),
+        ExprKind::LLen(e) => format!("LLen({})", child(*e)),
+        ExprKind::LMap(a, b) => format!("LMap({}, {})", child(*a), child(*b)),
+        ExprKind::LFilter(a, b) => format!("LFilter({}, {})", child(*a), child(*b)),
+        ExprKind::LFold(a, b, c) => format!("LFold({}, {}, {})", child(*a), child(*b), child(*c)),
+        ExprKind::Map(items) => format!("Map({{{}}})", keyed(items)),
+        ExprKind::Struct(items) => format!("Struct({{{}}})", keyed(items)),
+        ExprKind::ObjectLiteral(items) => format!("ObjectLiteral({{{}}})", keyed(items)),
+        ExprKind::MGet(e, key) => format!("MGet({}, {key:?})", child(*e)),
+        ExprKind::SGet(e, key) => format!("SGet({}, {key})", child(*e)),
+        ExprKind::MInsert(e, key, value) => {
+            format!("MInsert({}, {key:?}, {})", child(*e), child(*value))
         }
-        SExpr::Fix(func) => format!("Fix({})", strip_span(func)),
-        SExpr::Partial(func, args) => {
-            let args = args.iter().map(strip_span).collect::<Vec<_>>().join(", ");
-            format!("Partial({}, [{}])", strip_span(func), args)
-        }
-        SExpr::List(es) => {
-            let items = es
-                .iter()
-                .map(|e| strip_span(e))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("List([{}])", items)
-        }
-        SExpr::Tuple(es) => {
-            let items = es
-                .iter()
-                .map(|e| strip_span(e))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Tuple([{}])", items)
-        }
-        SExpr::LAppend(lst, e1) => format!("LAppend({}, {})", strip_span(lst), strip_span(e1)),
-        SExpr::LIndex(e, i) => format!("LIndex({}, {})", strip_span(e), strip_span(i)),
-        SExpr::LConcat(lst, e1) => format!("LConcat({}, {})", strip_span(lst), strip_span(e1)),
-        SExpr::LHead(e) => format!("LHead({})", strip_span(e)),
-        SExpr::LTail(e) => format!("LTail({})", strip_span(e)),
-        SExpr::LLen(e) => format!("LLen({})", strip_span(e)),
-        SExpr::LMap(func, list) => format!("LMap({}, {})", strip_span(func), strip_span(list)),
-        SExpr::LFilter(func, list) => {
-            format!("LFilter({}, {})", strip_span(func), strip_span(list))
-        }
-        SExpr::LFold(func, init, list) => format!(
-            "LFold({}, {}, {})",
-            strip_span(func),
-            strip_span(init),
-            strip_span(list)
-        ),
-
-        SExpr::Map(map) => {
-            let items = map
-                .iter()
-                .map(|(k, v)| format!("{:?}: {}", k, strip_span(v)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Map({{{}}})", items)
-        }
-        SExpr::Struct(map) => {
-            let items = map
-                .iter()
-                .map(|(k, v)| format!("{:?}: {}", k, strip_span(v)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Struct({{{}}})", items)
-        }
-        SExpr::ObjectLiteral(map) => {
-            let items = map
-                .iter()
-                .map(|(k, v)| format!("{:?}: {}", k, strip_span(v)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("ObjectLiteral({{{}}})", items)
-        }
-        SExpr::MGet(e, k) => format!("MGet({}, {:?})", strip_span(e), k),
-        SExpr::SGet(e, k) => format!("SGet({}, {})", strip_span(e), k),
-        SExpr::MInsert(e, k, v) => {
-            format!("MInsert({}, {:?}, {})", strip_span(e), k, strip_span(v))
-        }
-        SExpr::MRemove(e, k) => format!("MRemove({}, {:?})", strip_span(e), k),
-
-        SExpr::MHasKey(e, k) => format!("MHasKey({}, {:?})", strip_span(e), k),
-
-        SExpr::Sin(e) => format!("Sin({})", strip_span(e)),
-        SExpr::Cos(e) => format!("Cos({})", strip_span(e)),
-        SExpr::Tan(e) => format!("Tan({})", strip_span(e)),
-        SExpr::Abs(e) => format!("Abs({})", strip_span(e)),
-        SExpr::MonitoredAt(v, n) => format!("MonitoredAt({}, {})", v, n),
-        SExpr::Dist(v, u) => format!("Dist({}, {})", v, u),
+        ExprKind::MRemove(e, key) => format!("MRemove({}, {key:?})", child(*e)),
+        ExprKind::MHasKey(e, key) => format!("MHasKey({}, {key:?})", child(*e)),
+        ExprKind::Sin(e) => format!("Sin({})", child(*e)),
+        ExprKind::Cos(e) => format!("Cos({})", child(*e)),
+        ExprKind::Tan(e) => format!("Tan({})", child(*e)),
+        ExprKind::Abs(e) => format!("Abs({})", child(*e)),
+        ExprKind::MonitoredAt(var, node) => format!("MonitoredAt({var}, {node})"),
+        ExprKind::Dist(a, b) => format!("Dist({a}, {b})"),
     }
 }
 
-pub trait SpanStrippedDisplay {
+#[cfg(test)]
+pub(crate) trait SpanStrippedDisplay {
     fn span_stripped_str(&self) -> String;
 }
 
-impl SpanStrippedDisplay for Spanned<SExpr> {
+#[cfg(test)]
+impl SpanStrippedDisplay for Expr {
     fn span_stripped_str(&self) -> String {
         format!("Ok({})", strip_span(self))
     }
 }
 
-impl<E: fmt::Debug> SpanStrippedDisplay for Result<Spanned<SExpr>, E> {
+#[cfg(test)]
+impl<E: fmt::Debug> SpanStrippedDisplay for Result<Expr, E> {
     fn span_stripped_str(&self) -> String {
         match self {
             Ok(expr) => format!("Ok({})", strip_span(expr)),
@@ -550,10 +191,10 @@ impl<E: fmt::Debug> SpanStrippedDisplay for Result<Spanned<SExpr>, E> {
     }
 }
 
-pub fn presult_strip_span<T: SpanStrippedDisplay + ?Sized>(e: &T) -> String {
-    e.span_stripped_str()
+#[cfg(test)]
+pub(crate) fn presult_strip_span<T: SpanStrippedDisplay + ?Sized>(value: &T) -> String {
+    value.span_stripped_str()
 }
-
 #[cfg(test)]
 mod tests {
     use super::{Span, Spanned};

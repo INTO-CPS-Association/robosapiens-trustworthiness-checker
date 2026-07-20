@@ -45,6 +45,16 @@
 //!
 //! ## Pipeline
 //!
+//! ```text
+//! DsrvSpecification
+//!     → ExprRef
+//!     → UnboundPlanBody        (syntax lowered; variables still named)
+//!     → BoundPlanBody          (variables assigned environment slots)
+//!     → ExecutablePlan
+//!     → PlanExecutor
+//!     → DataflowMonitor
+//! ```
+//!
 //! The monitor is compiled once and evaluated many times. Compilation lowers each equation into a
 //! `compiler::compile::LoweredProgram`, derives a temporary [`crate::lang::core::DepGraph`] from
 //! its free variables, topologically orders the plans, assigns environment slots, validates and
@@ -158,7 +168,7 @@
 //!
 //! `DataflowMonitor` owns the mutable row as `environment_values: Vec<Value>`, a stable
 //! `Vec<PlanExecutor>`, a separate executor-order vector, and the output projection in
-//! `output_ids`. During one plan, `EvalContext` borrows the complete row and resolves bound
+//! `output_ids`. During one plan, `PlanEvalContext` borrows the complete row and resolves bound
 //! `DataRef::External` directly against it. Topological scheduling guarantees that a computed slot
 //! is filled before a plan reads it. Each tick replaces the row values while the shared layout and
 //! bound indices remain unchanged, even when the executor order changes.
@@ -187,7 +197,7 @@
 //! </figure>
 //!
 //! The bound body becomes a `plan::ExecutablePlan`. This immutable structure owns the body, an
-//! `Rc<EnvironmentLayout>`, and an `EvaluationKind` classification selecting static or fallible
+//! `Rc<EnvironmentLayout>`, and an `PlanMode` classification selecting static or fallible
 //! traversal. Sharing the plan is important for function frames and runtime-compiled plans:
 //! each invocation can own state without cloning operation vectors or layouts.
 //!
@@ -202,7 +212,7 @@
 //!   `NodeState::Stateless`; delays, lifted operators, lazy branches, and dynamic nodes use matching
 //!   variants with their histories or nested state.
 //!
-//! `PlanExecutor::evaluate` creates an `execution::plan_executor::EvalContext` containing the shared environment
+//! `PlanExecutor::evaluate` creates an `execution::plan_executor::PlanEvalContext` containing the shared environment
 //! row, its layout, and an optional recursive-function callback. Static plans call
 //! `execution::interpreter::eval_nodes_at`; plans marked fallible call `execution::interpreter::try_eval_nodes_at`, which
 //! handles dynamic nodes and delegates ordinary operations to the same evaluator. The executor then
@@ -330,10 +340,13 @@
 //! </figure>
 //!
 //! Application stream-lifts the function operand and every argument independently. `Deferred`
-//! still propagates before calling the function. A normal call uses `plan::DataflowOp::Apply`. For a directly applied `fix` lambda,
+//! still propagates before calling the function. A literal lambda uses
+//! `plan::DataflowOp::DirectApply`, whose nested executor persists across ticks so temporal
+//! state in the function body is retained. A dynamically obtained function value uses
+//! `plan::DataflowOp::Apply` and remains pointwise. For a directly applied `fix` lambda,
 //! `compiler::lower` instead emits `plan::DataflowOp::DirectFixApply` and rewrites calls to the self parameter
 //! as `plan::DataflowOp::RecursiveCall`. `execution::functions::eval_direct_fix_apply_op` supplies the recursive
-//! callback through `execution::plan_executor::EvalContext`. Because `if` is lazy, a recursive base-case branch can
+//! callback through `execution::plan_executor::PlanEvalContext`. Because `if` is lazy, a recursive base-case branch can
 //! return without evaluating the recursive branch. Non-specialized function values still use the
 //! general `fix` wrapper in `functions`.
 //!
@@ -342,7 +355,7 @@
 //! sees the same captured value:
 //!
 //! ```
-//! use trustworthiness_checker::{UntypedDsrvSpecification, Value, VarName};
+//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 //! use trustworthiness_checker::lang::core::parser::SpecParser;
 //! use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
@@ -350,7 +363,7 @@
 //! let mut source = "in bias: Int\nin n: Int\nout direct: Int\nout recursive: Int\n\
 //!     direct = (\\x: Int -> x + bias)(n)\n\
 //!     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)";
-//! let spec = <LALRParser as SpecParser<UntypedDsrvSpecification>>::parse(&mut source).unwrap();
+//! let spec = <LALRParser as SpecParser<DsrvSpecification>>::parse(&mut source).unwrap();
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let output_vars = monitor.output_vars().to_vec();
@@ -551,13 +564,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::core::{RuntimeFunction, StreamType, StreamTypeAscription, Value};
+use crate::core::{RuntimeFunction, StreamType, Value};
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dsrv::ast::{SpannedExpr, UntypedDsrvSpecification};
+use crate::lang::dsrv::ast::{DsrvSpecification, Expr};
 use crate::lang::dsrv::lalr_parser::LALRParser;
-use crate::lang::dsrv::type_checker::{
-    SExprTE, TCType, TypeCheckable, TypeInfo, TypedDsrvSpecification,
-};
+use crate::lang::dsrv::type_checker::{TCType, TypeInfo};
 use crate::{Specification, VarName};
 use ecow::{EcoString, EcoVec};
 

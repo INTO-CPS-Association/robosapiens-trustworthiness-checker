@@ -10,17 +10,14 @@ use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::io::testing::LimitedNullOutputHandler;
 use trustworthiness_checker::lang::core::parser::SpecParser;
+use trustworthiness_checker::lang::dsrv::ast::CheckedDsrvSpecification;
 use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
-use trustworthiness_checker::lang::dsrv::type_checker::{TypedDsrvSpecification, type_check};
-use trustworthiness_checker::runtime::builder::{
-    RuntimeBuilder, SemiSyncValueConfig, TypedSemiSyncValueConfig,
-};
+use trustworthiness_checker::lang::dsrv::type_checker::type_check;
+use trustworthiness_checker::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder;
 use trustworthiness_checker::runtime::semi_sync::SemiSyncRuntimeBuilder;
-use trustworthiness_checker::semantics::{TypedUntimedDsrvSemantics, UntimedDsrvSemantics};
-use trustworthiness_checker::{
-    InputStream, UntypedDsrvSpecification, Value, VarName, dsrv_specification,
-};
+use trustworthiness_checker::semantics::UntimedDsrvSemantics;
+use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName, dsrv_specification};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -63,13 +60,13 @@ impl AsyncExecutor for LocalSmolExecutor {
 
 async fn monitor_recursive_outputs_semisync(
     executor: Rc<LocalExecutor<'static>>,
-    spec: UntypedDsrvSpecification,
+    spec: DsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
     let output_handler = Box::new(LimitedNullOutputHandler::new(
         executor.clone(),
-        spec.output_vars.clone(),
+        spec.output_vars().clone(),
         output_limit,
     ));
     let monitor =
@@ -85,16 +82,16 @@ async fn monitor_recursive_outputs_semisync(
 
 async fn monitor_recursive_outputs_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: UntypedDsrvSpecification,
+    spec: DsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
     let output_handler = Box::new(LimitedNullOutputHandler::new(
         executor.clone(),
-        spec.output_vars.clone(),
+        spec.output_vars().clone(),
         output_limit,
     ));
-    let monitor = DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new()
+    let monitor = DataflowRuntimeBuilder::<DsrvSpecification>::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
@@ -106,18 +103,18 @@ async fn monitor_recursive_outputs_dataflow(
 
 async fn monitor_recursive_outputs_typed_semisync(
     executor: Rc<LocalExecutor<'static>>,
-    spec: TypedDsrvSpecification,
+    spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
     let output_handler = Box::new(LimitedNullOutputHandler::new(
         executor.clone(),
-        spec.output_vars.clone(),
+        spec.output_vars().clone(),
         output_limit,
     ));
     let monitor = SemiSyncRuntimeBuilder::<
-        TypedSemiSyncValueConfig,
-        TypedUntimedDsrvSemantics<LALRParser>,
+        trustworthiness_checker::runtime::builder::CheckedSemiSyncValueConfig,
+        trustworthiness_checker::semantics::CheckedUntimedDsrvSemantics<LALRParser>,
     >::new()
     .executor(executor.clone())
     .model(spec)
@@ -130,16 +127,16 @@ async fn monitor_recursive_outputs_typed_semisync(
 
 async fn monitor_recursive_outputs_typed_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: TypedDsrvSpecification,
+    spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
     let output_handler = Box::new(LimitedNullOutputHandler::new(
         executor.clone(),
-        spec.output_vars.clone(),
+        spec.output_vars().clone(),
         output_limit,
     ));
-    let monitor = DataflowRuntimeBuilder::<TypedDsrvSpecification>::new()
+    let monitor = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
@@ -149,7 +146,7 @@ async fn monitor_recursive_outputs_typed_dataflow(
     monitor.run().await.expect("Error running monitor");
 }
 
-fn recursive_spec() -> UntypedDsrvSpecification {
+fn recursive_spec() -> DsrvSpecification {
     let mut spec = "in x\n\
                     in y\n\
                     out z\n\
@@ -157,7 +154,7 @@ fn recursive_spec() -> UntypedDsrvSpecification {
     dsrv_specification(&mut spec).expect("recursive benchmark spec should parse")
 }
 
-fn typed_recursive_spec() -> TypedDsrvSpecification {
+fn typed_recursive_spec() -> CheckedDsrvSpecification {
     let mut spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
@@ -166,7 +163,7 @@ fn typed_recursive_spec() -> TypedDsrvSpecification {
     type_check(spec).expect("typed recursive benchmark spec should type check")
 }
 
-fn arithmetic_spec() -> UntypedDsrvSpecification {
+fn arithmetic_spec() -> DsrvSpecification {
     let mut spec = "in x\n\
                     in y\n\
                     out z\n\
@@ -174,7 +171,7 @@ fn arithmetic_spec() -> UntypedDsrvSpecification {
     dsrv_specification(&mut spec).expect("arithmetic benchmark spec should parse")
 }
 
-fn typed_arithmetic_spec() -> TypedDsrvSpecification {
+fn typed_arithmetic_spec() -> CheckedDsrvSpecification {
     let mut spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
@@ -183,7 +180,7 @@ fn typed_arithmetic_spec() -> TypedDsrvSpecification {
     type_check(spec).expect("typed arithmetic benchmark spec should type check")
 }
 
-fn if_arithmetic_spec() -> UntypedDsrvSpecification {
+fn if_arithmetic_spec() -> DsrvSpecification {
     let mut spec = "in x\n\
                     in y\n\
                     out z\n\
@@ -191,7 +188,7 @@ fn if_arithmetic_spec() -> UntypedDsrvSpecification {
     dsrv_specification(&mut spec).expect("if arithmetic benchmark spec should parse")
 }
 
-fn typed_if_arithmetic_spec() -> TypedDsrvSpecification {
+fn typed_if_arithmetic_spec() -> CheckedDsrvSpecification {
     let mut spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
@@ -201,7 +198,7 @@ fn typed_if_arithmetic_spec() -> TypedDsrvSpecification {
     type_check(spec).expect("typed if arithmetic benchmark spec should type check")
 }
 
-fn stream_dependency_spec() -> UntypedDsrvSpecification {
+fn stream_dependency_spec() -> DsrvSpecification {
     let mut spec = "in x\n\
                     in y\n\
                     out w\n\
@@ -211,7 +208,7 @@ fn stream_dependency_spec() -> UntypedDsrvSpecification {
     dsrv_specification(&mut spec).expect("stream dependency benchmark spec should parse")
 }
 
-fn typed_stream_dependency_spec() -> TypedDsrvSpecification {
+fn typed_stream_dependency_spec() -> CheckedDsrvSpecification {
     let mut spec = "in x: Int\n\
                     in y: Int\n\
                     out w: Int\n\
@@ -223,7 +220,7 @@ fn typed_stream_dependency_spec() -> TypedDsrvSpecification {
     type_check(spec).expect("typed stream dependency benchmark spec should type check")
 }
 
-fn function_heavy_spec() -> UntypedDsrvSpecification {
+fn function_heavy_spec() -> DsrvSpecification {
     let mut spec = "in n\n\
                     in bias\n\
                     out direct\n\
@@ -241,7 +238,7 @@ fn function_heavy_spec() -> UntypedDsrvSpecification {
     LALRParser::parse(&mut spec).expect("function-heavy benchmark spec should parse")
 }
 
-fn typed_function_heavy_spec() -> TypedDsrvSpecification {
+fn typed_function_heavy_spec() -> CheckedDsrvSpecification {
     let mut spec = "in n: Int\n\
                     in bias: Int\n\
                     out direct: Int\n\
@@ -257,7 +254,7 @@ fn typed_function_heavy_spec() -> TypedDsrvSpecification {
     type_check(spec).expect("typed function-heavy benchmark spec should type check")
 }
 
-fn recursive_function_if_spec() -> UntypedDsrvSpecification {
+fn recursive_function_if_spec() -> DsrvSpecification {
     let mut spec = "in n\n\
                     in bias\n\
                     out recursive\n\
@@ -265,7 +262,7 @@ fn recursive_function_if_spec() -> UntypedDsrvSpecification {
     LALRParser::parse(&mut spec).expect("recursive function-if benchmark spec should parse")
 }
 
-fn typed_recursive_function_if_spec() -> TypedDsrvSpecification {
+fn typed_recursive_function_if_spec() -> CheckedDsrvSpecification {
     let mut spec = "in n: Int\n\
                     in bias: Int\n\
                     out recursive: Int\n\
@@ -275,7 +272,7 @@ fn typed_recursive_function_if_spec() -> TypedDsrvSpecification {
     type_check(spec).expect("typed recursive function-if benchmark spec should type check")
 }
 
-fn direct_function_if_spec() -> UntypedDsrvSpecification {
+fn direct_function_if_spec() -> DsrvSpecification {
     let mut spec = "in n\n\
                     in bias\n\
                     out direct\n\
@@ -283,7 +280,7 @@ fn direct_function_if_spec() -> UntypedDsrvSpecification {
     LALRParser::parse(&mut spec).expect("direct function-if benchmark spec should parse")
 }
 
-fn typed_direct_function_if_spec() -> TypedDsrvSpecification {
+fn typed_direct_function_if_spec() -> CheckedDsrvSpecification {
     let mut spec = "in n: Int\n\
                     in bias: Int\n\
                     out direct: Int\n\
@@ -350,7 +347,6 @@ fn recursive_function_input_columns(size: usize) -> Vec<Vec<Value>> {
 }
 
 fn compare_dataflow_semantics(c: &mut Criterion) {
-    let executor = LocalSmolExecutor::new();
     let spec = recursive_spec();
     let typed_spec = typed_recursive_spec();
 
@@ -365,9 +361,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("semisync_untyped_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_semisync(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         recursive_inputs(size),
                         size,
@@ -379,9 +376,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("dataflow_untyped_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_dataflow(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         recursive_inputs(size),
                         size,
@@ -393,9 +391,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("semisync_typed_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_typed_semisync(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         typed_spec.clone(),
                         recursive_inputs(size),
                         size,
@@ -407,9 +406,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("dataflow_typed_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_typed_dataflow(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         typed_spec.clone(),
                         recursive_inputs(size),
                         size,
@@ -434,9 +434,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("semisync_untyped_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_semisync(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -448,9 +449,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("dataflow_untyped_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_dataflow(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -462,9 +464,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("semisync_typed_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_typed_semisync(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         typed_spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -476,9 +479,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("dataflow_typed_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_typed_dataflow(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         typed_spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -503,9 +507,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("semisync_untyped_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_semisync(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -517,9 +522,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("dataflow_untyped_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_dataflow(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -531,9 +537,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("semisync_typed_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_typed_semisync(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         typed_spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -545,9 +552,10 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             BenchmarkId::new("dataflow_typed_runtime", size),
             &size,
             |b, &size| {
-                b.to_async(executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_recursive_outputs_typed_dataflow(
-                        executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         typed_spec.clone(),
                         arithmetic_inputs(size),
                         size,
@@ -557,6 +565,24 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
         );
     }
 
+    group.finish();
+
+    let mut group = c.benchmark_group("function_call_binding");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(300));
+    group.measurement_time(Duration::from_secs(2));
+
+    for terms in [8, 64, 512] {
+        for checked in [false, true] {
+            let phase = if checked { "checked" } else { "untyped" };
+            let mut bind =
+                trustworthiness_checker::benches_common::function_binding_benchmark(terms, checked);
+            group.bench_function(BenchmarkId::new(phase, terms), |b| {
+                b.iter(|| std::hint::black_box(bind()))
+            });
+        }
+    }
     group.finish();
 
     let arithmetic_spec = arithmetic_spec();
@@ -604,7 +630,8 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_typed(typed_arithmetic_spec.clone()).unwrap();
+                        DataflowMonitor::try_compile_checked(typed_arithmetic_spec.clone())
+                            .unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
             },
@@ -626,7 +653,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_typed(typed_if_arithmetic_spec.clone())
+                        DataflowMonitor::try_compile_checked(typed_if_arithmetic_spec.clone())
                             .unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
@@ -638,7 +665,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_typed(typed_function_spec.clone()).unwrap();
+                        DataflowMonitor::try_compile_checked(typed_function_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &function_input_columns(size))
                 })
             },
@@ -661,7 +688,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_typed(typed_direct_function_if_spec.clone())
+                        DataflowMonitor::try_compile_checked(typed_direct_function_if_spec.clone())
                             .unwrap();
                     evaluate_monitor(&mut monitor, &recursive_function_input_columns(size))
                 })
@@ -684,7 +711,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             &size,
             |b, &size| {
                 b.iter(|| {
-                    let mut monitor = DataflowMonitor::try_compile_typed(
+                    let mut monitor = DataflowMonitor::try_compile_checked(
                         typed_recursive_function_if_spec.clone(),
                     )
                     .unwrap();

@@ -1,6 +1,8 @@
 use super::super::plan::*;
 use super::super::*;
 use super::plan_executor::PlanExecutor;
+use crate::core::{RuntimeFunction, RuntimeFunctionValueCallable};
+use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone)]
 pub(in crate::dataflow) struct DataflowState {
@@ -10,7 +12,6 @@ pub(in crate::dataflow) struct DataflowState {
 
 #[derive(Clone)]
 pub(in crate::dataflow) enum NodeState {
-    Stateless,
     UnaryLift {
         last: Option<Value>,
     },
@@ -45,6 +46,17 @@ pub(in crate::dataflow) enum NodeState {
     },
     CallLift {
         func_last: Option<Value>,
+        arg_last: Vec<Option<Value>>,
+        active_function: Option<RuntimeFunction>,
+        callable: Option<RuntimeFunctionValueCallable>,
+    },
+    Function {
+        function: Option<RuntimeFunction>,
+        captures: Rc<RefCell<Vec<Value>>>,
+    },
+    PersistentCall {
+        executor: PlanExecutor,
+        values: Vec<Value>,
         arg_last: Vec<Option<Value>>,
     },
     Dynamic(DynamicState),
@@ -83,7 +95,7 @@ pub(in crate::dataflow) struct DynamicState {
 pub(in crate::dataflow) struct ActiveDynamic {
     pub(in crate::dataflow) source: EcoString,
     pub(in crate::dataflow) executor: PlanExecutor,
-    pub(in crate::dataflow) dependencies: BTreeSet<VarName>,
+    pub(in crate::dataflow) dependencies: Vec<EnvironmentId>,
 }
 
 #[derive(Clone)]
@@ -217,11 +229,24 @@ impl NodeState {
             BoundOp::Apply { args, .. } | BoundOp::Partial { args, .. } => Self::CallLift {
                 func_last: None,
                 arg_last: vec![None; args.len()],
+                active_function: None,
+                callable: None,
+            },
+            BoundOp::Function { func } => Self::Function {
+                function: None,
+                captures: Rc::new(RefCell::new(vec![Value::NoVal; func.capture_sources.len()])),
+            },
+            BoundOp::DirectApply { func, args } => Self::PersistentCall {
+                executor: PlanExecutor::new(Rc::clone(&func.plan)),
+                values: vec![Value::NoVal; func.capture_sources.len() + func.params.len()],
+                arg_last: vec![None; args.len()],
             },
             BoundOp::DirectFixApply { args, .. } | BoundOp::RecursiveCall { args } => {
                 Self::CallLift {
                     func_last: None,
                     arg_last: vec![None; args.len()],
+                    active_function: None,
+                    callable: None,
                 }
             }
             BoundOp::Dynamic(_) => Self::Dynamic(DynamicState::default()),
@@ -236,13 +261,11 @@ impl NodeState {
                 then_last: None,
                 else_last: None,
             }),
-            _ => Self::Stateless,
         }
     }
 
     fn reset(&mut self) {
         match self {
-            Self::Stateless => {}
             Self::UnaryLift { last } | Self::Default { last } | Self::IsDefined { last } => {
                 *last = None
             }
@@ -270,8 +293,25 @@ impl NodeState {
             Self::CallLift {
                 func_last,
                 arg_last,
+                active_function,
+                callable,
             } => {
                 *func_last = None;
+                arg_last.fill(None);
+                *active_function = None;
+                *callable = None;
+            }
+            Self::Function { function, captures } => {
+                *function = None;
+                captures.borrow_mut().fill(Value::NoVal);
+            }
+            Self::PersistentCall {
+                executor,
+                values,
+                arg_last,
+            } => {
+                executor.reset_state();
+                values.fill(Value::NoVal);
                 arg_last.fill(None);
             }
             Self::Dynamic(dynamic) => *dynamic = DynamicState::default(),

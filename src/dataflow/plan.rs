@@ -1,4 +1,5 @@
 use super::*;
+use crate::lang::dsrv::ast::DynamicExprScope;
 use std::num::NonZeroU64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,10 +68,10 @@ pub(super) enum DataflowDynamicScope {
 }
 
 impl DataflowDynamicScope {
-    pub(super) fn from_ast(scope: crate::lang::dsrv::ast::RuntimeScope) -> Self {
+    pub(super) fn from_ast(scope: DynamicExprScope) -> Self {
         match scope {
-            crate::lang::dsrv::ast::RuntimeScope::Automatic(_) => Self::Automatic,
-            crate::lang::dsrv::ast::RuntimeScope::Explicit(vars, _) => Self::Restricted(vars),
+            DynamicExprScope::Automatic => Self::Automatic,
+            DynamicExprScope::Explicit(vars) => Self::Restricted(vars),
         }
     }
 
@@ -128,6 +129,24 @@ impl<E> PlanBody<E> {
             _ => false,
         })
     }
+
+    pub(super) fn has_temporal_state(&self) -> bool {
+        self.nodes.iter().any(|op| {
+            op.temporal_operator_name().is_some()
+                || match op {
+                    DataflowOp::If {
+                        then_branch,
+                        else_branch,
+                        ..
+                    } => then_branch.has_temporal_state() || else_branch.has_temporal_state(),
+                    DataflowOp::DirectApply { func, .. }
+                    | DataflowOp::DirectFixApply { func, .. } => {
+                        func.plan.body.has_temporal_state()
+                    }
+                    _ => false,
+                }
+        })
+    }
 }
 
 impl BoundPlanBody {
@@ -157,7 +176,9 @@ impl BoundPlanBody {
                     then_branch.debug_assert_valid(environment_len);
                     else_branch.debug_assert_valid(environment_len);
                 }
-                BoundOp::Function { func } | BoundOp::DirectFixApply { func, .. } => {
+                BoundOp::Function { func }
+                | BoundOp::DirectApply { func, .. }
+                | BoundOp::DirectFixApply { func, .. } => {
                     func.plan
                         .body
                         .debug_assert_valid(func.plan.environment.len());
@@ -180,21 +201,21 @@ impl BoundPlanBody {
 pub(super) struct Plan<E> {
     pub(super) body: PlanBody<E>,
     pub(super) environment: Rc<EnvironmentLayout>,
-    pub(super) evaluation: EvaluationKind,
+    pub(super) evaluation: PlanMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum EvaluationKind {
+pub(super) enum PlanMode {
     Static,
-    Fallible,
+    Dynamic,
 }
 
 impl<E> Plan<E> {
     pub(super) fn new(body: PlanBody<E>, environment: Rc<EnvironmentLayout>) -> Self {
         let evaluation = if body.is_fallible() {
-            EvaluationKind::Fallible
+            PlanMode::Dynamic
         } else {
-            EvaluationKind::Static
+            PlanMode::Static
         };
         Self {
             body,
@@ -229,7 +250,7 @@ pub(super) struct DynamicSpec<E> {
     pub(super) scope: DataflowDynamicScope,
     pub(super) mode: DataflowDynamicMode,
     /// Type information for typed plans; `None` for untyped plans.
-    pub(super) typed: Option<(TypeInfo, TCType)>,
+    pub(super) typed: Option<(Rc<TypeInfo>, TCType)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -328,6 +349,11 @@ pub(super) enum DataflowOp<E> {
     },
     Apply {
         func: DataRef<E>,
+        args: Vec<DataRef<E>>,
+    },
+    /// A statically known lambda application with one persistent plan instance.
+    DirectApply {
+        func: DataflowFunctionDef<E>,
         args: Vec<DataRef<E>>,
     },
     DirectFixApply {
@@ -433,9 +459,9 @@ macro_rules! for_each_operand_body {
                 $visit(func);
                 args.into_iter().for_each($visit);
             }
-            DataflowOp::DirectFixApply { args, .. } | DataflowOp::RecursiveCall { args } => {
-                args.into_iter().for_each($visit)
-            }
+            DataflowOp::DirectApply { args, .. }
+            | DataflowOp::DirectFixApply { args, .. }
+            | DataflowOp::RecursiveCall { args } => args.into_iter().for_each($visit),
             DataflowOp::Function { .. } | DataflowOp::RecursiveSIndex { .. } => {}
         }
     };

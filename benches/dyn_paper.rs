@@ -44,8 +44,6 @@ fn from_elem(c: &mut Criterion) {
         // 1000000,
     ];
 
-    let local_smol_executor = LocalSmolExecutor::new();
-
     let mut group = c.benchmark_group("dyn_paper");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
@@ -62,9 +60,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new("dyn_paper_direct", size),
             &(&spec_direct),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async_limited(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                         *size,
@@ -76,9 +75,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new("dyn_paper_direct_dataflow", size),
             &(&spec_direct),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_dataflow_limited(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                         *size,
@@ -94,9 +94,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new(format!("dyn_paper_{}", percent), size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async_limited(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                         size,
@@ -108,9 +109,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new(format!("dyn_paper_{}_dataflow", percent), size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_dataflow_limited(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                         size,

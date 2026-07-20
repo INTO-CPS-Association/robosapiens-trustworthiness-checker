@@ -268,8 +268,8 @@ mod tests {
     use crate::io::map;
     use crate::io::testing::LimitedNullOutputHandler;
     use crate::io::testing::ManualOutputHandler;
-    use crate::lang::dsrv::type_checker::{TypedDsrvSpecification, type_check, type_check_gradual};
-    use crate::{UntypedDsrvSpecification, Value, async_test, dsrv_specification};
+    use crate::lang::dsrv::type_checker::{type_check, type_check_gradual};
+    use crate::{DsrvSpecification, Value, async_test, dsrv_specification};
 
     use super::*;
 
@@ -283,10 +283,10 @@ mod tests {
         let spec = dsrv_specification(&mut spec_src).unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
             limit,
         ));
-        let runtime = DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
             .input(map::input_stream(inputs))
@@ -325,14 +325,14 @@ mod tests {
         let spec = dsrv_specification(&mut spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let mut outputs = output_handler.get_output();
         let input = map::input_stream(BTreeMap::from([(
             VarName::new("x"),
             vec![Value::Int(1), Value::Int(2)],
         )]));
-        let (builder, controller) = DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new()
+        let (builder, controller) = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
             .controlled_input(input);
@@ -379,19 +379,20 @@ mod tests {
         let spec = type_check(dsrv_specification(&mut spec_src).unwrap()).unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
             3,
         ));
-        let runtime = DataflowRuntimeBuilder::<TypedDsrvSpecification>::new()
-            .executor(executor.clone())
-            .model(spec)
-            .input(map::input_stream(BTreeMap::from([
-                (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
-                (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
-            ])))
-            .output(output_handler)
-            .build()
-            .await;
+        let runtime =
+            DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
+                .executor(executor.clone())
+                .model(spec)
+                .input(map::input_stream(BTreeMap::from([
+                    (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+                    (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+                ])))
+                .output(output_handler)
+                .build()
+                .await;
 
         runtime
             .run()
@@ -407,19 +408,20 @@ mod tests {
         let spec = type_check_gradual(dsrv_specification(&mut spec_src).unwrap()).unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
             3,
         ));
-        let runtime = DataflowRuntimeBuilder::<TypedDsrvSpecification>::new()
-            .executor(executor.clone())
-            .model(spec)
-            .input(map::input_stream(BTreeMap::from([
-                (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
-                (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
-            ])))
-            .output(output_handler)
-            .build()
-            .await;
+        let runtime =
+            DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
+                .executor(executor.clone())
+                .model(spec)
+                .input(map::input_stream(BTreeMap::from([
+                    (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+                    (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+                ])))
+                .output(output_handler)
+                .build()
+                .await;
 
         runtime
             .run()
@@ -435,19 +437,20 @@ mod tests {
         let spec = type_check_gradual(dsrv_specification(&mut spec_src).unwrap()).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
-        let runtime = DataflowRuntimeBuilder::<TypedDsrvSpecification>::new()
-            .executor(executor.clone())
-            .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                vec![41.into(), 1.into()],
-            )])))
-            .output(output_handler)
-            .build()
-            .await;
+        let runtime =
+            DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
+                .executor(executor.clone())
+                .model(spec)
+                .input(map::input_stream(BTreeMap::from([(
+                    VarName::new("x"),
+                    vec![41.into(), 1.into()],
+                )])))
+                .output(output_handler)
+                .build()
+                .await;
 
         executor.spawn(runtime.run()).detach();
         let outputs = tc_testutils::streams::with_timeout(
@@ -475,10 +478,10 @@ mod tests {
         let spec = dsrv_specification(&mut spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
-        let runtime = DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
             .input(map::input_stream(BTreeMap::from([(
@@ -515,10 +518,10 @@ mod tests {
         let spec = dsrv_specification(&mut spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
-        let runtime = DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
             .input(map::input_stream(BTreeMap::from([(
@@ -551,7 +554,7 @@ mod tests {
         let spec = dsrv_specification(&mut spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
         let simultaneous = crate::InputBatch::step(vec![
@@ -563,7 +566,7 @@ mod tests {
             crate::InputEvent::new("y".into(), Value::Int(20)),
         ]));
         let input = Box::pin(futures::stream::iter([simultaneous, independent]));
-        let runtime = DataflowRuntimeBuilder::<UntypedDsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
             .input(input)

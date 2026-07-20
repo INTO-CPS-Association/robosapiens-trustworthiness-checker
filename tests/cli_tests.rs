@@ -1,7 +1,7 @@
 //! # CLI Integration Tests
 //!
 //! This module contains integration tests for the trustworthiness checker's command-line interface.
-//! These tests run the actual compiled binary and verify its behavior with various input files
+//! These tests run the actual compiled binary and verify its behaviour with various input files
 //! and command-line options using custom fixture files.
 //!
 //! ## Test Organization
@@ -1271,7 +1271,7 @@ mod integration_tests {
                 );
             }
         }
-        // If no exit status, the process was terminated due to timeout (expected behavior)
+        // If no exit status, the process was terminated due to timeout (expected behaviour)
     }
 
     #[apply(async_test)]
@@ -2396,7 +2396,7 @@ mod integration_tests {
                     stderr
                 );
             }
-            // If no exit status, the process was terminated due to timeout (expected behavior)
+            // If no exit status, the process was terminated due to timeout (expected behaviour)
         }
     }
 

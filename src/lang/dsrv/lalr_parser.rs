@@ -3,67 +3,73 @@ use std::fmt;
 
 use anyhow::{Error, anyhow};
 use ecow::EcoVec;
+use lalrpop_util::lalrpop_mod;
 // use lalrpop_util::ParseError;
 use tracing::debug;
 
-use super::lalr::{ExprParser, TopDeclParser, TopDeclsParser};
+lalrpop_mod!(lalr, "/lang/dsrv/lalr.rs");
+
+#[cfg(test)]
+use self::lalr::TopDeclParser;
+use self::lalr::{ExprParser, TopDeclsParser};
 use crate::lang::core::parser::{ExprParser as EParserTrait, SpecParser as SParserTrait};
 use crate::{
-    SExpr, UntypedDsrvSpecification,
-    lang::dsrv::ast::{STopDecl, SpannedExpr},
+    DsrvSpecification,
+    lang::dsrv::ast::{Expr, ExprArena, ExprBuilder, STopDecl},
 };
 
 #[derive(Clone)]
 pub struct LALRParser;
 
-impl EParserTrait<SpannedExpr> for LALRParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SpannedExpr> {
+impl EParserTrait<Expr> for LALRParser {
+    fn parse(input: &mut &str) -> anyhow::Result<Expr> {
         debug!("Parsing expr: {}", input);
         parse_sexpr(input)
     }
     type Error = anyhow::Error;
-    fn raw_parse_error(input: &mut &str) -> Result<SpannedExpr, Self::Error> {
+    fn raw_parse_error(input: &mut &str) -> Result<Expr, Self::Error> {
         parse_sexpr(input)
     }
 }
 
-impl EParserTrait<SExpr> for LALRParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
-        debug!("Parsing expr: {}", input);
-        parse_sexpr(input).map(|expr| expr.node)
-    }
-    type Error = anyhow::Error;
-    fn raw_parse_error(input: &mut &str) -> Result<SExpr, Self::Error> {
-        parse_sexpr(input).map(|expr| expr.node)
-    }
-}
-
-impl SParserTrait<UntypedDsrvSpecification> for LALRParser {
-    fn parse(input: &mut &str) -> anyhow::Result<UntypedDsrvSpecification> {
+impl SParserTrait<DsrvSpecification> for LALRParser {
+    fn parse(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
         debug!("Parsing expr: {}", input);
         parse_str(input)
     }
 }
 
-pub fn parse_sexpr<'input>(input: &'input str) -> Result<SpannedExpr, Error> {
-    ExprParser::new()
-        .parse(input)
-        .map_err(|e| anyhow!("Parse error: {:?}", e))
+pub fn parse_sexpr(input: &str) -> Result<Expr, Error> {
+    let mut builder = ExprBuilder::for_source(input);
+    let root = ExprParser::new()
+        .parse(&mut builder, input)
+        .map_err(|e| anyhow!("Parse error: {:?}", e))?;
+    let expr = builder.finish(root);
+    if let Some(key) = expr.as_ref().duplicate_key() {
+        return Err(anyhow!("duplicate expression field {key:?}"));
+    }
+    Ok(expr)
 }
 
-pub fn parse_stopdecl<'input>(input: &'input str) -> Result<STopDecl, Error> {
-    TopDeclParser::new()
-        .parse(input)
-        .map_err(|e| anyhow!("Parse error: {:?}", e))
+fn reject_duplicate_fields(arena: &ExprArena) -> anyhow::Result<()> {
+    if let Some(key) = arena.duplicate_key() {
+        anyhow::bail!("duplicate expression field {key:?}");
+    }
+    Ok(())
 }
 
-pub fn parse_stopdecls<'input>(input: &'input str) -> Result<EcoVec<STopDecl>, Error> {
-    TopDeclsParser::new()
-        .parse(input)
-        .map_err(|e| anyhow!("Parse error: {:?}", e))
+#[cfg(test)]
+fn parse_stopdecl(input: &str) -> Result<(ExprArena, STopDecl), Error> {
+    let mut builder = ExprBuilder::for_source(input);
+    let declaration = TopDeclParser::new()
+        .parse(&mut builder, input)
+        .map_err(|e| anyhow!("Parse error: {:?}", e))?;
+    let arena = builder.finish_arena();
+    reject_duplicate_fields(&arena)?;
+    Ok((arena, declaration))
 }
 
-pub fn create_dsrv_spec(stmts: &EcoVec<STopDecl>) -> UntypedDsrvSpecification {
+pub(crate) fn create_dsrv_spec(arena: ExprArena, stmts: EcoVec<STopDecl>) -> DsrvSpecification {
     let mut inputs = BTreeSet::new();
     let mut outputs = BTreeSet::new();
     let mut aux_vars = Vec::new();
@@ -73,30 +79,37 @@ pub fn create_dsrv_spec(stmts: &EcoVec<STopDecl>) -> UntypedDsrvSpecification {
     for stmt in stmts {
         match stmt {
             STopDecl::Input(var, typ, _) => {
-                inputs.insert(var.clone());
                 if let Some(typ) = typ {
-                    type_annotations.insert(var.clone(), typ.clone());
+                    type_annotations.insert(var.clone(), typ);
                 }
+                inputs.insert(var);
             }
             STopDecl::Output(var, typ, _) => {
-                outputs.insert(var.clone());
                 if let Some(typ) = typ {
-                    type_annotations.insert(var.clone(), typ.clone());
+                    type_annotations.insert(var.clone(), typ);
                 }
+                outputs.insert(var);
             }
             STopDecl::Aux(var, typ, _) => {
-                aux_vars.push(var.clone());
                 if let Some(typ) = typ {
-                    type_annotations.insert(var.clone(), typ.clone());
+                    type_annotations.insert(var.clone(), typ);
                 }
+                aux_vars.push(var);
             }
             STopDecl::Assignment(var, sexpr, _) => {
-                assignments.insert(var.clone(), sexpr.clone());
+                assignments.insert(var, sexpr);
             }
         }
     }
 
-    UntypedDsrvSpecification::new(inputs, outputs, assignments, type_annotations, aux_vars)
+    DsrvSpecification::from_arena(
+        inputs,
+        outputs,
+        arena,
+        assignments,
+        type_annotations,
+        aux_vars,
+    )
 }
 
 struct LineCol {
@@ -127,56 +140,32 @@ fn line_col(input: &str, byte: usize) -> LineCol {
     LineCol { line, col }
 }
 
-pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<UntypedDsrvSpecification> {
-    let stmts = TopDeclsParser::new().parse(&input).map_err(|e| {
-        let err_fixed = e.map_location(|byte| line_col(&input, byte));
-        anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse input {}", input))
-    })?;
-    Ok(create_dsrv_spec(&stmts))
+pub fn parse_str<'input>(input: &'input str) -> anyhow::Result<DsrvSpecification> {
+    let mut builder = ExprBuilder::for_source(input);
+    let stmts = TopDeclsParser::new()
+        .parse(&mut builder, &input)
+        .map_err(|e| {
+            let err_fixed = e.map_location(|byte| line_col(&input, byte));
+            anyhow::anyhow!(err_fixed.to_string())
+                .context(format!("Failed to parse input {}", input))
+        })?;
+    let arena = builder.finish_arena();
+    reject_duplicate_fields(&arena)?;
+    Ok(create_dsrv_spec(arena, stmts))
 }
 
-pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<UntypedDsrvSpecification> {
+pub async fn parse_file<'file>(file: &'file str) -> anyhow::Result<DsrvSpecification> {
     let contents = smol::fs::read_to_string(file).await?;
-    let stmts = TopDeclsParser::new().parse(&contents).map_err(|e| {
-        let err_fixed = e.map_location(|byte| line_col(&contents, byte));
-        anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse file {}", file))
-    })?;
-    Ok(create_dsrv_spec(&stmts))
-}
-
-// Might come back to this later to make way to get the partial ast tree even if there is a parse error.
-fn recover_stopdecls_prefix(input: &str, err_byte: usize) -> EcoVec<STopDecl> {
-    let mut ends: Vec<usize> = input
-        .char_indices()
-        .filter_map(|(i, ch)| (ch == '\n' && i <= err_byte).then_some(i + 1))
-        .collect();
-
-    ends.push(0);
-    ends.sort_unstable();
-    ends.dedup();
-
-    for end in ends.into_iter().rev() {
-        if let Ok(stmts) = TopDeclsParser::new().parse(&input[..end]) {
-            return stmts;
-        }
-    }
-    EcoVec::new()
-}
-
-pub fn parser_str_lossy(input: &str) -> anyhow::Result<EcoVec<STopDecl>> {
-    match TopDeclsParser::new().parse(input) {
-        Ok(stmts) => Ok(stmts),
-
-        Err(e) => {
-            let mut byte_pos = input.len();
-            let _err_fixed = e.map_location(|byte| {
-                byte_pos = byte;
-                line_col(input, byte);
-            });
-
-            Ok(recover_stopdecls_prefix(input, byte_pos))
-        }
-    }
+    let mut builder = ExprBuilder::for_source(&contents);
+    let stmts = TopDeclsParser::new()
+        .parse(&mut builder, &contents)
+        .map_err(|e| {
+            let err_fixed = e.map_location(|byte| line_col(&contents, byte));
+            anyhow::anyhow!(err_fixed.to_string()).context(format!("Failed to parse file {}", file))
+        })?;
+    let arena = builder.finish_arena();
+    reject_duplicate_fields(&arena)?;
+    Ok(create_dsrv_spec(arena, stmts))
 }
 
 #[cfg(test)]
@@ -187,7 +176,7 @@ mod tests {
 
     use crate::VarName;
     use crate::lang::dsrv::ast::NumericalBinOp;
-    use crate::lang::dsrv::ast::{SBinOp, SpannedExpr};
+    use crate::lang::dsrv::ast::{Expr, ExprHandle, SBinOp};
     use crate::lang::dsrv::span::Span;
 
     use crate::core::StreamTypeAscription;
@@ -196,12 +185,18 @@ mod tests {
     use super::*;
     use test_log::test;
 
-    type SExpr = SpannedExpr;
+    fn stopdecl_to_string(result: &Result<(ExprArena, STopDecl), Error>) -> String {
+        match result {
+            Ok((arena, STopDecl::Assignment(name, root, span))) => {
+                let expr = Expr::new(ExprHandle::new(arena.clone(), *root));
+                format!("Ok(Assignment({name:?}, {}, {span:?}))", strip_span(&expr))
+            }
+            Ok((_, declaration)) => format!("Ok({declaration:?})"),
+            Err(error) => format!("Err({error:?})"),
+        }
+    }
 
-    fn assert_specs_eq_ignoring_spans(
-        actual: &UntypedDsrvSpecification,
-        expected: &UntypedDsrvSpecification,
-    ) {
+    fn assert_specs_eq_ignoring_spans(actual: &DsrvSpecification, expected: &DsrvSpecification) {
         assert_eq!(actual.input_vars, expected.input_vars);
         assert_eq!(actual.output_vars, expected.output_vars);
         assert_eq!(actual.aux_vars, expected.aux_vars);
@@ -301,7 +296,7 @@ mod tests {
     fn test_input_decl() {
         let parsed = parse_stopdecl(&mut "in x");
         let exp = r#"Ok(Input(VarName::new("x"), None, Span { start: 0, end: 4 }))"#;
-        assert_eq!(presult_to_string(&parsed), exp);
+        assert_eq!(stopdecl_to_string(&parsed), exp);
 
         // Not sure if we should allow this, but this is how it currently works. As long as we
         // start with "in"
@@ -315,15 +310,15 @@ mod tests {
     fn test_typed_input_decl() {
         let parsed = parse_stopdecl("in x: Int");
         let exp = r#"Ok(Input(VarName::new("x"), Some(Int), Span { start: 0, end: 9 }))"#;
-        assert_eq!(presult_to_string(&parsed), exp);
+        assert_eq!(stopdecl_to_string(&parsed), exp);
 
         let parsed = parse_stopdecl("in x: Float");
         let exp = r#"Ok(Input(VarName::new("x"), Some(Float), Span { start: 0, end: 11 }))"#;
-        assert_eq!(presult_to_string(&parsed), exp);
+        assert_eq!(stopdecl_to_string(&parsed), exp);
 
         let input = "in xs: List<Int>";
         assert_eq!(
-            parse_stopdecl(input).unwrap(),
+            parse_stopdecl(input).unwrap().1,
             STopDecl::Input(
                 "xs".into(),
                 Some(StreamType::List(Box::new(StreamType::Int))),
@@ -333,7 +328,7 @@ mod tests {
 
         let input = "in m: Map<List<Bool>>";
         assert_eq!(
-            parse_stopdecl(input).unwrap(),
+            parse_stopdecl(input).unwrap().1,
             STopDecl::Input(
                 "m".into(),
                 Some(StreamType::Map(Box::new(StreamType::List(Box::new(
@@ -345,7 +340,7 @@ mod tests {
 
         let input = "in robot: Struct<id: Int, label: Str>";
         assert_eq!(
-            parse_stopdecl(input).unwrap(),
+            parse_stopdecl(input).unwrap().1,
             STopDecl::Input(
                 "robot".into(),
                 Some(StreamType::Struct(
@@ -362,7 +357,7 @@ mod tests {
 
         let input = "in robot: Struct<id: Int, ...>";
         assert_eq!(
-            parse_stopdecl(input).unwrap(),
+            parse_stopdecl(input).unwrap().1,
             STopDecl::Input(
                 "robot".into(),
                 Some(StreamType::Struct(
@@ -384,14 +379,14 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor();
-        let simple_add_spec = UntypedDsrvSpecification::new(
+        let simple_add_spec = DsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into()]),
             BTreeSet::from(["z".into()]),
             BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Var("x".into())),
-                    Box::new(SExpr::Var("y".into())),
+                Expr::BinOp(
+                    Box::new(Expr::Var("x".into())),
+                    Box::new(Expr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -407,14 +402,14 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed();
-        let simple_add_spec = UntypedDsrvSpecification::new(
+        let simple_add_spec = DsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into()]),
             BTreeSet::from(["z".into()]),
             BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Var("x".into())),
-                    Box::new(SExpr::Var("y".into())),
+                Expr::BinOp(
+                    Box::new(Expr::Var("x".into())),
+                    Box::new(Expr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -434,14 +429,14 @@ mod tests {
     #[test]
     fn test_parse_dsrv_simple_add_float_typed() {
         let input = crate::dsrv_fixtures::spec_simple_add_monitor_typed_float();
-        let simple_add_spec = UntypedDsrvSpecification::new(
+        let simple_add_spec = DsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into()]),
             BTreeSet::from(["z".into()]),
             BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Var("x".into())),
-                    Box::new(SExpr::Var("y".into())),
+                Expr::BinOp(
+                    Box::new(Expr::Var("x".into())),
+                    Box::new(Expr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -463,14 +458,14 @@ mod tests {
         let input = "\
             out x\n\
             x = 1 + (x)[1]";
-        let count_spec = UntypedDsrvSpecification::new(
+        let count_spec = DsrvSpecification::new(
             BTreeSet::from([]),
             BTreeSet::from(["x".into()]),
             BTreeMap::from([(
                 "x".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Val(1)),
-                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1)),
+                Expr::BinOp(
+                    Box::new(Expr::Val(1)),
+                    Box::new(Expr::SIndex(Box::new(Expr::Var("x".into())), 1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -493,22 +488,22 @@ mod tests {
             out w\n\
             z = x + y\n\
             w = dynamic(s)";
-        let dynamic_spec = UntypedDsrvSpecification::new(
+        let dynamic_spec = DsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into(), "s".into()]),
             BTreeSet::from(["z".into(), "w".into()]),
             BTreeMap::from([
                 (
                     "z".into(),
-                    SExpr::BinOp(
-                        Box::new(SExpr::Var("x".into())),
-                        Box::new(SExpr::Var("y".into())),
+                    Expr::BinOp(
+                        Box::new(Expr::Var("x".into())),
+                        Box::new(Expr::Var("y".into())),
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
                 (
                     "w".into(),
-                    SExpr::Dynamic(
-                        Box::new(SExpr::Var("s".into())),
+                    Expr::Dynamic(
+                        Box::new(Expr::Var("s".into())),
                         StreamTypeAscription::Unascribed,
                     ),
                 ),
@@ -845,19 +840,19 @@ mod tests {
     #[test]
     fn test_assignment_decl() {
         assert_eq!(
-            presult_to_string(&parse_stopdecl("x = 0")),
+            stopdecl_to_string(&parse_stopdecl("x = 0")),
             r#"Ok(Assignment(VarName::new("x"), Val(Int(0)), Span { start: 0, end: 5 }))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl(r#"x = "hello""#)),
+            stopdecl_to_string(&parse_stopdecl(r#"x = "hello""#)),
             r#"Ok(Assignment(VarName::new("x"), Val(Str("hello")), Span { start: 0, end: 11 }))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl("x = true")),
+            stopdecl_to_string(&parse_stopdecl("x = true")),
             r#"Ok(Assignment(VarName::new("x"), Val(Bool(true)), Span { start: 0, end: 8 }))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl("x = false")),
+            stopdecl_to_string(&parse_stopdecl("x = false")),
             r#"Ok(Assignment(VarName::new("x"), Val(Bool(false)), Span { start: 0, end: 9 }))"#
         );
     }
@@ -869,10 +864,10 @@ mod tests {
         let res = res.unwrap();
         assert_eq!(
             res,
-            UntypedDsrvSpecification::new(
+            DsrvSpecification::new(
                 BTreeSet::new(),
                 BTreeSet::new(),
-                BTreeMap::<VarName, SpannedExpr>::new(),
+                BTreeMap::<VarName, Expr>::new(),
                 BTreeMap::new(),
                 vec![]
             )
@@ -1021,7 +1016,7 @@ mod tests {
             r#"Ok(List([Val(Int(1)), Val(Str("hello"))]))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl("y = List()")),
+            stopdecl_to_string(&parse_stopdecl("y = List()")),
             r#"Ok(Assignment(VarName::new("y"), List([]), Span { start: 0, end: 10 }))"#
         )
     }
@@ -1169,9 +1164,31 @@ mod tests {
             r#"Ok(Map({"x": Val(Int(1)), "y": Val(Str("hello"))}))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl("y = Map()")),
+            stopdecl_to_string(&parse_stopdecl("y = Map()")),
             r#"Ok(Assignment(VarName::new("y"), Map({}), Span { start: 0, end: 9 }))"#
         )
+    }
+
+    #[test]
+    fn keyed_expression_fields_preserve_source_order() {
+        let expr = parse_sexpr(r#"Map("z": 1, "a": 2, "m": 3)"#).unwrap();
+        let crate::ExprKind::Map(fields) = expr.as_ref().kind() else {
+            panic!("expected a map expression");
+        };
+        assert_eq!(
+            fields
+                .keys()
+                .map(|key| AsRef::<str>::as_ref(key))
+                .collect::<Vec<_>>(),
+            ["z", "a", "m"]
+        );
+    }
+
+    #[test]
+    fn keyed_expression_fields_reject_duplicates() {
+        assert!(parse_sexpr(r#"Map("x": 1, "x": 2)"#).is_err());
+        assert!(parse_sexpr(r#"Struct("x": 1, "x": 2)"#).is_err());
+        assert!(parse_sexpr(r#"{x: 1, x: 2}"#).is_err());
     }
 
     #[test]
@@ -1394,19 +1411,19 @@ mod tests {
     #[test]
     fn test_capital_varname() {
         assert_eq!(
-            presult_to_string(&parse_stopdecl("in G")),
+            stopdecl_to_string(&parse_stopdecl("in G")),
             r#"Ok(Input(VarName::new("G"), None, Span { start: 0, end: 4 }))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl("out F")),
+            stopdecl_to_string(&parse_stopdecl("out F")),
             r#"Ok(Output(VarName::new("F"), None, Span { start: 0, end: 5 }))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl("in GANDALF")),
+            stopdecl_to_string(&parse_stopdecl("in GANDALF")),
             r#"Ok(Input(VarName::new("GANDALF"), None, Span { start: 0, end: 10 }))"#
         );
         assert_eq!(
-            presult_to_string(&parse_stopdecl("out FRODO")),
+            stopdecl_to_string(&parse_stopdecl("out FRODO")),
             r#"Ok(Output(VarName::new("FRODO"), None, Span { start: 0, end: 9 }))"#
         );
     }
@@ -1429,69 +1446,69 @@ mod spec_tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[1], 0) + 1",
-            "Ok(UntypedDsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[1], 0) + x",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
 
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor(),
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn if_statement() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if x == 0 then y else 42",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 
     fn if_statement_newlines() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 

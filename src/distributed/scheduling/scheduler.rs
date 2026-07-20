@@ -440,7 +440,7 @@ mod tests {
     use petgraph::graph::DiGraph;
 
     use crate::{
-        OutputStream, UntypedDsrvSpecification, Value, async_test,
+        DsrvSpecification, OutputStream, Value, async_test,
         distributed::{
             distribution_graphs::NodeName,
             scheduling::{
@@ -496,7 +496,7 @@ mod tests {
         })
     }
 
-    fn scheduler_constraint_spec() -> UntypedDsrvSpecification {
+    fn scheduler_constraint_spec() -> DsrvSpecification {
         let mut src = r#"
 in gate
 out work

@@ -1,15 +1,16 @@
 use super::super::compiler::lower::*;
 use super::super::plan::*;
 use super::super::*;
-use super::plan_executor::{EvalContext, PlanExecutor};
+use super::plan_executor::{PlanEvalContext, PlanExecutor};
 use super::state::*;
+use crate::lang::dsrv::type_checker::check_expression;
 
 pub(in crate::dataflow) fn eval_dynamic_value(
     current: Value,
     spec: &BoundDynamicSpec,
     dynamic: &mut DynamicState,
     _tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Result<Value, DataflowEvalError> {
     match current {
         // The active plan is always ticked so its state keeps advancing; in
@@ -47,7 +48,7 @@ pub(in crate::dataflow) fn eval_dynamic_value(
 
 fn tick_dynamic_plan(
     dynamic: &mut DynamicState,
-    observed: Option<&std::cell::RefCell<BTreeSet<VarName>>>,
+    observed: Option<&std::cell::RefCell<Vec<EnvironmentId>>>,
 ) -> Result<Value, DataflowEvalError> {
     let DynamicState {
         active,
@@ -60,7 +61,7 @@ fn tick_dynamic_plan(
     if let Some(observed) = observed {
         observed
             .borrow_mut()
-            .extend(active.dependencies.iter().cloned());
+            .extend_from_slice(&active.dependencies);
     }
     active
         .executor
@@ -69,7 +70,7 @@ fn tick_dynamic_plan(
 
 struct CompiledDynamicPlan {
     plan: Rc<ExecutablePlan>,
-    dependencies: BTreeSet<VarName>,
+    dependencies: Vec<EnvironmentId>,
 }
 
 fn compile_dynamic_plan(
@@ -84,25 +85,21 @@ fn compile_dynamic_plan(
             message: error.to_string(),
         })?;
     let mut program = if let Some((type_info, typ)) = &spec.typed {
-        let stream_type = typ
-            .to_stream_type()
-            .expect("typed dynamic/defer target should be concrete at runtime");
-        let mut type_info = type_info.clone();
-        let typed = (expr, StreamTypeAscription::Ascribed(stream_type))
-            .type_check(&mut type_info)
-            .map_err(|errors| DataflowEvalError::DynamicType {
+        let expr = check_expression(expr, typ, type_info).map_err(|errors| {
+            DataflowEvalError::DynamicType {
                 expression: source.clone(),
                 message: format!("{errors:?}"),
-            })?;
-        lower_typed_expr_plan(typed)
+            }
+        })?;
+        lower_checked_expr_plan(expr)
     } else {
-        lower_untyped_expr_plan(expr)
+        lower_expr_plan(expr)
     };
     let allowed_vars = spec
         .scope
         .vars()
         .expect("dynamic scope should be resolved during plan binding");
-    program.inherit_dynamic_context(allowed_vars);
+    program.inherit_dynamic_scope(allowed_vars);
     let dependencies = program.free_vars(None);
     let unsupported = dependencies
         .iter()
@@ -112,6 +109,14 @@ fn compile_dynamic_plan(
     if !unsupported.is_empty() {
         return Err(DataflowEvalError::DynamicRestrictedContext(unsupported));
     }
+    let dependencies = dependencies
+        .iter()
+        .map(|name| {
+            environment
+                .get(name)
+                .expect("validated dynamic dependency must have an environment slot")
+        })
+        .collect();
     let plan = program
         .bind(None, Rc::clone(environment))
         .map_err(DataflowEvalError::DynamicPlan)?;

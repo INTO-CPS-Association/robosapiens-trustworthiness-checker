@@ -42,12 +42,12 @@ pub fn dist_constraints(s: &mut &str) -> Result<Vec<(VarName, DistConstraint)>> 
     separated(0.., dist_constraint, seq!(lb_or_lc, loop_ms_or_lb_or_lc)).parse_next(s)
 }
 
-fn paren(s: &mut &str) -> Result<DistConstraintBody> {
+fn paren(s: &mut &str) -> Result<DistConstraintExpr> {
     delimited('(', dist_constraint_body, ')').parse_next(s)
 }
 
 // Used for Lists in output streams
-fn dist_constraint_body_list(s: &mut &str) -> Result<DistConstraintBody> {
+fn dist_constraint_body_list(s: &mut &str) -> Result<DistConstraintExpr> {
     let res = delimited(
         seq!("List", loop_ms_or_lb_or_lc, '('),
         separated(
@@ -59,23 +59,23 @@ fn dist_constraint_body_list(s: &mut &str) -> Result<DistConstraintBody> {
     )
     .parse_next(s);
     match res {
-        Ok(exprs) => Ok(DistConstraintBody::List(exprs)),
+        Ok(exprs) => Ok(DistConstraintExpr::List(exprs)),
         Err(e) => Err(e),
     }
 }
 
-fn var(s: &mut &str) -> Result<DistConstraintBody> {
+fn var(s: &mut &str) -> Result<DistConstraintExpr> {
     ident
-        .map(|name: &str| DistConstraintBody::Var(name.into()))
+        .map(|name: &str| DistConstraintExpr::Var(name.into()))
         .parse_next(s)
 }
 
 // Same as `val` but returns dist_constraint_body::Val
-fn sval(s: &mut &str) -> Result<DistConstraintBody> {
-    val.map(DistConstraintBody::Val).parse_next(s)
+fn sval(s: &mut &str) -> Result<DistConstraintExpr> {
+    val.map(DistConstraintExpr::Val).parse_next(s)
 }
 
-fn sindex(s: &mut &str) -> Result<DistConstraintBody> {
+fn sindex(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!(
         _: whitespace,
         alt((sval, var, paren)),
@@ -90,11 +90,11 @@ fn sindex(s: &mut &str) -> Result<DistConstraintBody> {
         _: loop_ms_or_lb_or_lc,
         _: ']'
     )
-    .map(|(e, i, d)| DistConstraintBody::SIndex(Box::new(e), i, d))
+    .map(|(e, i, d)| DistConstraintExpr::SIndex(Box::new(e), i, d))
     .parse_next(s)
 }
 
-fn ifelse(s: &mut &str) -> Result<DistConstraintBody> {
+fn ifelse(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "if",
@@ -110,11 +110,11 @@ fn ifelse(s: &mut &str) -> Result<DistConstraintBody> {
         dist_constraint_body,
         _: whitespace,
     ))
-    .map(|(b, s1, s2)| DistConstraintBody::If(Box::new(b), Box::new(s1), Box::new(s2)))
+    .map(|(b, s1, s2)| DistConstraintExpr::If(Box::new(b), Box::new(s1), Box::new(s2)))
     .parse_next(s)
 }
 
-fn is_defined(s: &mut &str) -> Result<DistConstraintBody> {
+fn is_defined(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: literal("is_defined"),
@@ -125,11 +125,11 @@ fn is_defined(s: &mut &str) -> Result<DistConstraintBody> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(e,)| DistConstraintBody::IsDefined(Box::new(e)))
+    .map(|(e,)| DistConstraintExpr::IsDefined(Box::new(e)))
     .parse_next(s)
 }
 
-fn default(s: &mut &str) -> Result<DistConstraintBody> {
+fn default(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: literal("default"),
@@ -143,11 +143,11 @@ fn default(s: &mut &str) -> Result<DistConstraintBody> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     ))
-    .map(|(lhs, rhs)| DistConstraintBody::Default(Box::new(lhs), Box::new(rhs)))
+    .map(|(lhs, rhs)| DistConstraintExpr::Default(Box::new(lhs), Box::new(rhs)))
     .parse_next(s)
 }
 
-fn not(s: &mut &str) -> Result<DistConstraintBody> {
+fn not(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "!",
@@ -155,11 +155,11 @@ fn not(s: &mut &str) -> Result<DistConstraintBody> {
         atom,
         _: whitespace,
     ))
-    .map(|(e,)| DistConstraintBody::Not(Box::new(e)))
+    .map(|(e,)| DistConstraintExpr::Not(Box::new(e)))
     .parse_next(s)
 }
 
-fn lindex(s: &mut &str) -> Result<DistConstraintBody> {
+fn lindex(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!(
         _: whitespace,
         _: "List.get",
@@ -174,11 +174,11 @@ fn lindex(s: &mut &str) -> Result<DistConstraintBody> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(e, i)| DistConstraintBody::LIndex(Box::new(e), Box::new(i)))
+    .map(|(e, i)| DistConstraintExpr::LIndex(Box::new(e), Box::new(i)))
     .parse_next(s)
 }
 
-fn lappend(s: &mut &str) -> Result<DistConstraintBody> {
+fn lappend(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!(
         _: whitespace,
         _: "List.append",
@@ -193,11 +193,11 @@ fn lappend(s: &mut &str) -> Result<DistConstraintBody> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(lst, el)| DistConstraintBody::LAppend(Box::new(lst), Box::new(el)))
+    .map(|(lst, el)| DistConstraintExpr::LAppend(Box::new(lst), Box::new(el)))
     .parse_next(s)
 }
 
-fn lconcat(s: &mut &str) -> Result<DistConstraintBody> {
+fn lconcat(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!(
         _: whitespace,
         _: "List.concat",
@@ -212,11 +212,11 @@ fn lconcat(s: &mut &str) -> Result<DistConstraintBody> {
         _: loop_ms_or_lb_or_lc,
         _: ')',
     )
-    .map(|(lst1, lst2)| DistConstraintBody::LConcat(Box::new(lst1), Box::new(lst2)))
+    .map(|(lst1, lst2)| DistConstraintExpr::LConcat(Box::new(lst1), Box::new(lst2)))
     .parse_next(s)
 }
 
-fn lhead(s: &mut &str) -> Result<DistConstraintBody> {
+fn lhead(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "List.head",
@@ -228,11 +228,11 @@ fn lhead(s: &mut &str) -> Result<DistConstraintBody> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| DistConstraintBody::LHead(Box::new(lst)))
+    .map(|(lst,)| DistConstraintExpr::LHead(Box::new(lst)))
     .parse_next(s)
 }
 
-fn ltail(s: &mut &str) -> Result<DistConstraintBody> {
+fn ltail(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "List.tail",
@@ -244,12 +244,12 @@ fn ltail(s: &mut &str) -> Result<DistConstraintBody> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(lst,)| DistConstraintBody::LTail(Box::new(lst)))
+    .map(|(lst,)| DistConstraintExpr::LTail(Box::new(lst)))
     .parse_next(s)
 }
 
 /// Monitors
-fn source(s: &mut &str) -> Result<DistConstraintBody> {
+fn source(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "source",
@@ -261,11 +261,11 @@ fn source(s: &mut &str) -> Result<DistConstraintBody> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(v,)| DistConstraintBody::Source(v.into()))
+    .map(|(v,)| DistConstraintExpr::Source(v.into()))
     .parse_next(s)
 }
 
-fn monitor(s: &mut &str) -> Result<DistConstraintBody> {
+fn monitor(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "monitor",
@@ -277,12 +277,12 @@ fn monitor(s: &mut &str) -> Result<DistConstraintBody> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(v,)| DistConstraintBody::Monitor(v.into()))
+    .map(|(v,)| DistConstraintExpr::Monitor(v.into()))
     .parse_next(s)
 }
 
 /// Trigonometric functions
-fn sin(s: &mut &str) -> Result<DistConstraintBody> {
+fn sin(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "sin",
@@ -294,10 +294,10 @@ fn sin(s: &mut &str) -> Result<DistConstraintBody> {
         _: ")",
         _: whitespace,
     ))
-    .map(|(v,)| DistConstraintBody::Sin(Box::new(v)))
+    .map(|(v,)| DistConstraintExpr::Sin(Box::new(v)))
     .parse_next(s)
 }
-fn cos(s: &mut &str) -> Result<DistConstraintBody> {
+fn cos(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "cos",
@@ -309,10 +309,10 @@ fn cos(s: &mut &str) -> Result<DistConstraintBody> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| DistConstraintBody::Cos(Box::new(v)))
+    .map(|(v,)| DistConstraintExpr::Cos(Box::new(v)))
     .parse_next(s)
 }
-fn tan(s: &mut &str) -> Result<DistConstraintBody> {
+fn tan(s: &mut &str) -> Result<DistConstraintExpr> {
     seq!((
         _: whitespace,
         _: "tan",
@@ -324,12 +324,12 @@ fn tan(s: &mut &str) -> Result<DistConstraintBody> {
         _: ')',
         _: whitespace,
     ))
-    .map(|(v,)| DistConstraintBody::Tan(Box::new(v)))
+    .map(|(v,)| DistConstraintExpr::Tan(Box::new(v)))
     .parse_next(s)
 }
 
 /// Fundamental expressions of the language
-fn atom(s: &mut &str) -> Result<DistConstraintBody> {
+fn atom(s: &mut &str) -> Result<DistConstraintExpr> {
     // Break up the large alt into smaller groups to avoid exceeding the trait implementation limit
     delimited(
         whitespace,
@@ -438,10 +438,10 @@ impl BinaryPrecedences {
 /// @param current_op: The current precedence level
 ///
 /// (Inspired by https://github.com/winnow-rs/winnow/blob/main/examples/arithmetic/parser_ast.rs)
-fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<DistConstraintBody> {
+fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<DistConstraintExpr> {
     move |s: &mut &str| {
         let next_parser_op = current_op.next();
-        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<DistConstraintBody>> =
+        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<DistConstraintExpr>> =
             match next_parser_op {
                 Some(next_parser) => Box::new(binary_op(next_parser)),
                 None => Box::new(|i: &mut &str| atom.parse_next(i)),
@@ -449,13 +449,13 @@ fn binary_op(current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<D
         let lit = current_op.get_lit();
 
         separated_foldl1(&mut next_parser, literal(lit), |left, _, right| {
-            DistConstraintBody::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
+            DistConstraintExpr::BinOp(Box::new(left), Box::new(right), current_op.get_binop())
         })
         .parse_next(s)
     }
 }
 
-pub fn dist_constraint_body(s: &mut &str) -> Result<DistConstraintBody> {
+pub fn dist_constraint_body(s: &mut &str) -> Result<DistConstraintExpr> {
     delimited(
         whitespace,
         binary_op(BinaryPrecedences::lowest_precedence()),
@@ -478,7 +478,7 @@ mod tests {
         let mut input = "source(x)";
         assert_eq!(
             dist_constraint_body(&mut input)?,
-            DistConstraintBody::Source("x".into())
+            DistConstraintExpr::Source("x".into())
         );
         Ok(())
     }
@@ -492,7 +492,7 @@ mod tests {
                 "x".into(),
                 DistConstraint(
                     DistConstraintType::CanRun,
-                    DistConstraintBody::Source("y".into())
+                    DistConstraintExpr::Source("y".into())
                 )
             )
         );
@@ -510,14 +510,14 @@ mod tests {
                     "x".into(),
                     DistConstraint(
                         DistConstraintType::CanRun,
-                        DistConstraintBody::Source("y".into())
+                        DistConstraintExpr::Source("y".into())
                     )
                 ),
                 (
                     "z".into(),
                     DistConstraint(
                         DistConstraintType::CanRun,
-                        DistConstraintBody::Source("w".into())
+                        DistConstraintExpr::Source("w".into())
                     )
                 )
             ]
@@ -558,19 +558,19 @@ mod tests {
     fn test_dist_constraint_body() -> Result<(), ContextError> {
         assert_eq!(
             dist_constraint_body(&mut (*"1 + 2".to_string()).into())?,
-            DistConstraintBody::BinOp(
-                Box::new(DistConstraintBody::Val(Value::Int(1))),
-                Box::new(DistConstraintBody::Val(Value::Int(2))),
+            DistConstraintExpr::BinOp(
+                Box::new(DistConstraintExpr::Val(Value::Int(1))),
+                Box::new(DistConstraintExpr::Val(Value::Int(2))),
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
         assert_eq!(
             dist_constraint_body(&mut (*"1 + 2 * 3".to_string()).into())?,
-            DistConstraintBody::BinOp(
-                Box::new(DistConstraintBody::Val(Value::Int(1))),
-                Box::new(DistConstraintBody::BinOp(
-                    Box::new(DistConstraintBody::Val(Value::Int(2))),
-                    Box::new(DistConstraintBody::Val(Value::Int(3))),
+            DistConstraintExpr::BinOp(
+                Box::new(DistConstraintExpr::Val(Value::Int(1))),
+                Box::new(DistConstraintExpr::BinOp(
+                    Box::new(DistConstraintExpr::Val(Value::Int(2))),
+                    Box::new(DistConstraintExpr::Val(Value::Int(3))),
                     SBinOp::NOp(NumericalBinOp::Mul),
                 )),
                 SBinOp::NOp(NumericalBinOp::Add),
@@ -578,11 +578,11 @@ mod tests {
         );
         assert_eq!(
             dist_constraint_body(&mut (*"x + (y + 2)".to_string()).into())?,
-            DistConstraintBody::BinOp(
-                Box::new(DistConstraintBody::Var("x".into())),
-                Box::new(DistConstraintBody::BinOp(
-                    Box::new(DistConstraintBody::Var("y".into())),
-                    Box::new(DistConstraintBody::Val(Value::Int(2))),
+            DistConstraintExpr::BinOp(
+                Box::new(DistConstraintExpr::Var("x".into())),
+                Box::new(DistConstraintExpr::BinOp(
+                    Box::new(DistConstraintExpr::Var("y".into())),
+                    Box::new(DistConstraintExpr::Val(Value::Int(2))),
                     SBinOp::NOp(NumericalBinOp::Add),
                 )),
                 SBinOp::NOp(NumericalBinOp::Add),
@@ -590,26 +590,26 @@ mod tests {
         );
         assert_eq!(
             dist_constraint_body(&mut (*"if true then 1 else 2".to_string()).into())?,
-            DistConstraintBody::If(
-                Box::new(DistConstraintBody::Val(true.into())),
-                Box::new(DistConstraintBody::Val(Value::Int(1))),
-                Box::new(DistConstraintBody::Val(Value::Int(2))),
+            DistConstraintExpr::If(
+                Box::new(DistConstraintExpr::Val(true.into())),
+                Box::new(DistConstraintExpr::Val(Value::Int(1))),
+                Box::new(DistConstraintExpr::Val(Value::Int(2))),
             ),
         );
         assert_eq!(
             dist_constraint_body(&mut (*"(x)[-1, 0]".to_string()).into())?,
-            DistConstraintBody::SIndex(
-                Box::new(DistConstraintBody::Var("x".into())),
+            DistConstraintExpr::SIndex(
+                Box::new(DistConstraintExpr::Var("x".into())),
                 -1,
                 Value::Int(0),
             ),
         );
         assert_eq!(
             dist_constraint_body(&mut (*"(x + y)[-3, 2]".to_string()).into())?,
-            DistConstraintBody::SIndex(
-                Box::new(DistConstraintBody::BinOp(
-                    Box::new(DistConstraintBody::Var("x".into())),
-                    Box::new(DistConstraintBody::Var("y".into()),),
+            DistConstraintExpr::SIndex(
+                Box::new(DistConstraintExpr::BinOp(
+                    Box::new(DistConstraintExpr::Var("x".into())),
+                    Box::new(DistConstraintExpr::Var("y".into()),),
                     SBinOp::NOp(NumericalBinOp::Add),
                 )),
                 -3,
@@ -618,10 +618,10 @@ mod tests {
         );
         assert_eq!(
             dist_constraint_body(&mut (*"1 + (x)[-1, 0]".to_string()).into())?,
-            DistConstraintBody::BinOp(
-                Box::new(DistConstraintBody::Val(Value::Int(1))),
-                Box::new(DistConstraintBody::SIndex(
-                    Box::new(DistConstraintBody::Var("x".into())),
+            DistConstraintExpr::BinOp(
+                Box::new(DistConstraintExpr::Val(Value::Int(1))),
+                Box::new(DistConstraintExpr::SIndex(
+                    Box::new(DistConstraintExpr::Var("x".into())),
                     -1,
                     Value::Int(0),
                 ),),
@@ -630,13 +630,13 @@ mod tests {
         );
         assert_eq!(
             dist_constraint_body(&mut (*"\"test\"".to_string()).into())?,
-            DistConstraintBody::Val(Value::Str("test".into())),
+            DistConstraintExpr::Val(Value::Str("test".into())),
         );
         assert_eq!(
             dist_constraint_body(&mut (*"(stage == \"m\")").into())?,
-            DistConstraintBody::BinOp(
-                Box::new(DistConstraintBody::Var("stage".into())),
-                Box::new(DistConstraintBody::Val("m".into())),
+            DistConstraintExpr::BinOp(
+                Box::new(DistConstraintExpr::Var("stage".into())),
+                Box::new(DistConstraintExpr::Val("m".into())),
                 SBinOp::COp(CompBinOp::Eq),
             )
         );

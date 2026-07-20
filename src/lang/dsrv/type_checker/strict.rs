@@ -2,69 +2,25 @@
 //! annotation for every variable in the specification.
 
 use super::*;
-use crate::UntypedDsrvSpecification;
-use std::collections::BTreeMap;
+use crate::DsrvSpecification;
+use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 
-pub fn type_check(spec: UntypedDsrvSpecification) -> SemanticResult<TypedDsrvSpecification> {
-    let type_context = spec.type_annotations.clone();
-    let mut typed_exprs = BTreeMap::new();
-    let mut errors = vec![];
-    for (var, expr) in spec.exprs.iter() {
-        let mut ctx = type_context.clone();
-        let expected = match ctx.get(var).cloned() {
-            Some(t) => t,
-            None => {
-                errors.push(SemanticError::MissingTypeAnnotation(
-                    format!("Variable {} is missing a type annotation", var),
-                    None,
-                ));
-                continue;
-            }
-        };
-        let typed_expr = expr.type_check_raw(Some(&expected), &mut ctx, &mut errors);
-        // Check consistency of inferred type with the declared type annotation
-        if let Ok(ref te) = typed_expr {
-            let actual = extract_type(te);
-            if actual != TCType::from_stream_type(&expected) {
-                errors.push(SemanticError::type_error_at(
-                    TypeErrorKind::AnnotationTypeMismatch,
-                    format!(
-                        "Variable {} has declared type {}, but expression has type {}",
-                        var, expected, actual
-                    ),
-                    expr.span,
-                ));
-            }
-        }
-        typed_exprs.insert(var, typed_expr);
-    }
-    if errors.is_empty() {
-        Ok(TypedDsrvSpecification {
-            input_vars: spec.input_vars.clone(),
-            output_vars: spec.output_vars.clone(),
-            aux_vars: spec.aux_vars.clone(),
-            stream_vars: spec.stream_vars.clone(),
-            exprs: typed_exprs
-                .into_iter()
-                .map(|(k, v)| (k.clone(), v.unwrap()))
-                .collect(),
-            type_annotations: spec.type_annotations.clone(),
-        })
-    } else {
-        Err(errors)
-    }
+/// Strictly type-check a specification and attach type metadata to its nodes.
+pub fn type_check(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+    super::checker::check_specification(spec)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VarName;
     use crate::core::StreamType;
+    use crate::dsrv_spec;
     use crate::lang::core::parser::SpecParser;
-    use crate::lang::dsrv::ast::SExpr;
+    use crate::lang::dsrv::ast::{Expr, ExprKind};
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lang::dsrv::parser::dsrv_specification;
     use crate::lang::dsrv::span::Span;
-    use crate::{Specification, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;
@@ -75,10 +31,10 @@ mod tests {
         // and its declared type is List<Int>.
         let mut exprs = BTreeMap::new();
         let var: VarName = "y".into();
-        exprs.insert(var.clone(), SExpr::List(EcoVec::new()));
+        exprs.insert(var.clone(), ExprKind::List(EcoVec::new()));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(var.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::new(),
             output_vars: BTreeSet::from([var.clone()]),
             stream_vars: BTreeSet::from([var.clone()]),
@@ -97,7 +53,7 @@ mod tests {
         );
         let typed_spec = result.unwrap();
         let te = typed_spec.var_expr(&var).unwrap();
-        assert_eq!(extract_type(&te), TCType::list(TCType::Int));
+        assert_eq!(te.typ(), &TCType::list(TCType::Int));
     }
 
     #[test]
@@ -106,15 +62,15 @@ mod tests {
         let z: VarName = "strict_aux_z".into();
         let u: VarName = "strict_aux_u".into();
         let exprs = BTreeMap::from([
-            (u.clone(), SExpr::Var(x.clone())),
-            (z.clone(), SExpr::Var(u.clone())),
+            (u.clone(), ExprKind::Var(x.clone())),
+            (z.clone(), ExprKind::Var(u.clone())),
         ]);
         let type_annotations = BTreeMap::from([
             (x.clone(), StreamType::Int),
             (u.clone(), StreamType::Int),
             (z.clone(), StreamType::Int),
         ]);
-        let spec = UntypedDsrvSpecification {
+        let spec = DsrvSpecification {
             input_vars: BTreeSet::from([x]),
             output_vars: BTreeSet::from([z.clone()]),
             aux_vars: BTreeSet::from([u.clone()]),
@@ -128,9 +84,50 @@ mod tests {
 
         let typed = type_check(spec).expect("strict type check should preserve aux vars");
 
-        assert_eq!(typed.aux_vars(), BTreeSet::from([u.clone()]));
-        assert_eq!(typed.stream_vars(), BTreeSet::from([z.clone(), u]));
-        assert_eq!(typed.output_vars(), BTreeSet::from([z]));
+        assert_eq!(typed.aux_vars(), &BTreeSet::from([u.clone()]));
+        assert_eq!(typed.stream_vars(), &BTreeSet::from([z.clone(), u]));
+        assert_eq!(typed.output_vars(), &BTreeSet::from([z]));
+    }
+
+    #[test]
+    fn shared_source_handles_get_independent_contextual_types() {
+        let int_output = VarName::new("int_output");
+        let bool_output = VarName::new("bool_output");
+        let empty_list: Expr = ExprKind::List(EcoVec::new()).into();
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([int_output.clone(), bool_output.clone()]),
+            BTreeMap::from([
+                (int_output.clone(), empty_list.clone()),
+                (bool_output.clone(), empty_list),
+            ]),
+            BTreeMap::from([
+                (
+                    int_output.clone(),
+                    StreamType::List(Box::new(StreamType::Int)),
+                ),
+                (
+                    bool_output.clone(),
+                    StreamType::List(Box::new(StreamType::Bool)),
+                ),
+            ]),
+            Vec::new(),
+        );
+
+        let checked = type_check(spec).expect("both contextual types are valid");
+
+        assert_eq!(
+            checked.var_expr(&int_output).unwrap().typ(),
+            &TCType::list(TCType::Int)
+        );
+        assert_eq!(
+            checked.var_expr(&bool_output).unwrap().typ(),
+            &TCType::list(TCType::Bool)
+        );
+        assert_ne!(
+            checked.var_expr(&int_output).unwrap().as_ref().id(),
+            checked.var_expr(&bool_output).unwrap().as_ref().id()
+        );
     }
 
     #[test]
@@ -243,5 +240,28 @@ mod tests {
         let mut source = document;
         type_check(LALRParser::parse(&mut source).unwrap())
             .expect("LALR parser explicit defer should type-check");
+    }
+
+    #[test]
+    fn recursive_function_application_type_checks() {
+        let mut source = "in n: Int\nin bias: Int\nout z: Int\n\
+                          z = fix(\\self: (Int -> Int), k: Int -> \
+                          if k == 0 then bias else self(k - 1) + 1)(n)";
+        type_check(LALRParser::parse(&mut source).unwrap())
+            .expect("fix should remove the recursive self parameter from the function type");
+    }
+
+    #[test]
+    fn checking_a_clone_does_not_annotate_or_poison_the_original() {
+        let original = dsrv_spec!("out z: Int\nz = 1");
+        let checked = type_check(original.clone()).unwrap();
+
+        assert_eq!(checked.var_expr(&"z".into()).unwrap().typ(), &TCType::Int);
+
+        let mut contradictory = original;
+        contradictory
+            .type_annotations
+            .insert("z".into(), StreamType::Bool);
+        type_check(contradictory).expect_err("a prior check must not cache away a new constraint");
     }
 }

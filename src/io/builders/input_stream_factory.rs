@@ -443,9 +443,7 @@ impl InputStreamFactory {
 mod tests {
     use super::*;
     use crate::lang::dsrv::parser::dsrv_specification;
-    use crate::{
-        Specification, Value, VarName, async_test, dsrv_fixtures::spec_simple_add_monitor,
-    };
+    use crate::{Value, VarName, async_test, dsrv_fixtures::spec_simple_add_monitor};
     use futures::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -501,7 +499,7 @@ mod tests {
         let fanouts = BTreeMap::from([(VarName::new("x"), fx), (VarName::new("y"), fy)]);
         let input_vars = model.input_vars();
         let input = InputStreamFactory::manual(fanouts)
-            .open(input_vars)
+            .open(input_vars.clone())
             .await
             .unwrap();
         let mut ticks = crate::into_tick_stream(input);
@@ -564,7 +562,7 @@ mod tests {
 
         // Open both streams first
         let mut ticks1 = crate::into_tick_stream(factory1.open(input_vars.clone()).await.unwrap());
-        let mut ticks2 = crate::into_tick_stream(factory2.open(input_vars).await.unwrap());
+        let mut ticks2 = crate::into_tick_stream(factory2.open(input_vars.clone()).await.unwrap());
 
         // Send one pair — both streams should receive the same values
         tx_x.send(Value::Int(10)).await;
@@ -623,7 +621,7 @@ mod tests {
         }
 
         // Open a second stream from the clone — same channel should still work
-        let mut ticks = crate::into_tick_stream(factory2.open(input_vars).await.unwrap());
+        let mut ticks = crate::into_tick_stream(factory2.open(input_vars.clone()).await.unwrap());
 
         tx_x.send(Value::Int(200)).await;
         assert_eq!(

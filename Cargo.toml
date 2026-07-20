@@ -9,6 +9,8 @@ exclude = ["examples/*", "scripts/*", "log/*", "benches/*"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
 members = [
+    "libs/contiguous-tree",
+    "libs/contiguous-tree-macros",
     "libs/tc-testutils",
     "integrations/python",
 ]
@@ -23,6 +25,7 @@ bench = false
 lalrpop = "0.23.1"
 
 [dependencies]
+contiguous-tree = { path = "libs/contiguous-tree" }
 winnow = { version = "1.0.3", features = ["simd"] }
 futures = "0.3.32"
 
@@ -145,6 +148,10 @@ harness = false
 
 [[bench]]
 name = "parsing"
+harness = false
+
+[[bench]]
+name = "compilation_phases"
 harness = false
 
 [[bench]]

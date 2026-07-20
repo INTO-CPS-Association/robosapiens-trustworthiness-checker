@@ -1,0 +1,5 @@
+error: a tree variant supports at most three fixed children
+  --> tests/ui/unsupported_shape.rs:11:9
+   |
+11 |         Node(a: child, b: child, c: child, d: child),
+   |         ^^^^

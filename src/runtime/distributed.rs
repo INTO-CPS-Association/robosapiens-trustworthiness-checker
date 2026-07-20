@@ -9,7 +9,7 @@ use tracing::debug;
 use unsync::spsc;
 
 use crate::{
-    InputStream, OutputStream, Specification, UntypedDsrvSpecification, Value, VarName,
+    DsrvSpecification, InputStream, OutputStream, Value, VarName,
     core::{OutputHandler, Runtime},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -186,7 +186,7 @@ pub enum DistGraphMode {
 }
 
 impl<
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     S: MonitoringSemantics<AC>,
 > AbstractAsyncRuntimeBuilder<AC> for DistAsyncRuntimeBuilder<AC, S>
 where
@@ -446,7 +446,7 @@ impl DirectSchedulerInputRuntime {
 impl<S, AC> DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     fn make_sat_solver(
@@ -486,7 +486,7 @@ where
 impl<S, AC> RuntimeBuilder<AC::Spec, AC::Val> for DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     type Runtime = DistributedRuntime<AC, S>;
@@ -566,7 +566,8 @@ where
                 .as_ref()
                 .expect("Var names not set")
                 .output_vars()
-                .into_iter()
+                .iter()
+                .cloned()
                 .collect();
 
             // TODO: Use set here to avoid collecting into vec
@@ -576,7 +577,8 @@ where
                 .as_ref()
                 .unwrap()
                 .output_vars()
-                .into_iter()
+                .iter()
+                .cloned()
                 .collect();
             let planning_context = match &dist_graph_mode {
                 DistGraphMode::MqttStaticOptimized(_, _)
@@ -696,7 +698,8 @@ where
                             .as_ref()
                             .unwrap()
                             .input_vars()
-                            .into_iter()
+                            .iter()
+                            .cloned()
                             .collect(),
                         output_vars: output_vars.clone(),
                         planning_context: planning_context.clone(),
@@ -763,7 +766,8 @@ where
                             .as_ref()
                             .unwrap()
                             .input_vars()
-                            .into_iter()
+                            .iter()
+                            .cloned()
                             .collect(),
                         output_vars: output_vars.clone(),
                         planning_context: planning_context.clone(),
@@ -1085,7 +1089,8 @@ where
                             .as_ref()
                             .unwrap()
                             .input_vars()
-                            .into_iter()
+                            .iter()
+                            .cloned()
                             .collect(),
                         output_vars: output_vars.clone(),
                         planning_context: planning_context.clone(),
@@ -1212,7 +1217,8 @@ where
 
             let dist_graph_stream = scheduler.borrow_mut().as_mut().unwrap().take_graph_stream();
             let scheduler_clone = scheduler.clone();
-            let input_vars_for_planning_context = spec.input_vars().into_iter().collect::<Vec<_>>();
+            let input_vars_for_planning_context =
+                spec.input_vars().iter().cloned().collect::<Vec<_>>();
             let planning_context_for_callback = planning_context.clone();
             let executor_for_planning_context = executor.clone();
             let context_builder = self
@@ -1326,7 +1332,7 @@ where
 impl<S, AC> Runtime for DistributedRuntime<AC, S>
 where
     AC::Spec: Localisable,
-    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     S: MonitoringSemantics<AC>,
 {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {

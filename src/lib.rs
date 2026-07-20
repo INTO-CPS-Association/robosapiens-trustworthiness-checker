@@ -13,7 +13,7 @@ pub mod io;
 pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
-    ast::{SExpr, UntypedDsrvSpecification},
+    ast::{DsrvSpecification, ExprKind, TreeCursorExt},
     parser::dsrv_specification,
 };
 pub mod distributed;

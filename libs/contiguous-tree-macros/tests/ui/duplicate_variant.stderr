@@ -1,0 +1,5 @@
+error: duplicate tree variant
+  --> tests/ui/duplicate_variant.rs:12:9
+   |
+12 |         Leaf(),
+   |         ^^^^

@@ -22,7 +22,7 @@ impl UnboundPlanBody {
         }
     }
 
-    pub(in crate::dataflow) fn configure_dynamic_context(
+    pub(in crate::dataflow) fn configure_dynamic_scope(
         &mut self,
         current_stream: &VarName,
         input_vars: &[VarName],
@@ -43,7 +43,7 @@ impl UnboundPlanBody {
         });
     }
 
-    pub(in crate::dataflow) fn inherit_dynamic_context(&mut self, allowed_vars: &[VarName]) {
+    pub(in crate::dataflow) fn inherit_dynamic_scope(&mut self, allowed_vars: &[VarName]) {
         self.for_each_dynamic_spec(&mut |spec| {
             let vars = match &spec.scope {
                 DataflowDynamicScope::Automatic => allowed_vars.iter().cloned().collect(),
@@ -63,7 +63,7 @@ impl UnboundPlanBody {
         environment: Rc<EnvironmentLayout>,
     ) -> Result<Rc<ExecutablePlan>, PlanValidationError> {
         let environment_vars = environment.keys().cloned().collect::<Vec<_>>();
-        self.inherit_dynamic_context(&environment_vars);
+        self.inherit_dynamic_scope(&environment_vars);
         self.validate(false)?;
         let body = bind_body(self, &environment, recursive_output.as_ref())?;
         body.debug_assert_valid(environment.len());
@@ -72,6 +72,24 @@ impl UnboundPlanBody {
 
     fn validate(&self, in_function: bool) -> Result<(), PlanValidationError> {
         for op in &self.nodes {
+            let restricted_function = match op {
+                UnboundOp::ListMap { func, .. }
+                | UnboundOp::ListFilter { func, .. }
+                | UnboundOp::ListFold { func, .. } => Some(func),
+                UnboundOp::Partial { func, .. } => Some(func),
+                _ => None,
+            };
+            if let Some(UnboundRef::Node(id)) = restricted_function
+                && let Some(UnboundOp::Function { func }) = self.nodes.get(id.index())
+                && func.plan.body.has_temporal_state()
+            {
+                return Err(PlanValidationError::TemporalFunctionBody {
+                    operator: match op {
+                        UnboundOp::Partial { .. } => "partial application",
+                        _ => "collection callback",
+                    },
+                });
+            }
             if in_function && let Some(operator) = op.temporal_operator_name() {
                 return Err(PlanValidationError::TemporalFunctionBody { operator });
             }
@@ -84,8 +102,42 @@ impl UnboundPlanBody {
                     then_branch.validate(in_function)?;
                     else_branch.validate(in_function)?;
                 }
+                UnboundOp::Function { func } => func.plan.body.validate_persistent_function()?,
+                // A direct application owns a persistent nested executor, so temporal
+                // operators retain their state across outer ticks.
+                UnboundOp::DirectApply { func, .. } => {
+                    func.plan.body.validate_persistent_function()?
+                }
+                UnboundOp::DirectFixApply { func, .. } => func.plan.body.validate(true)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_persistent_function(&self) -> Result<(), PlanValidationError> {
+        for op in &self.nodes {
+            match op {
+                // Runtime compilation has a fallible evaluation path which is not
+                // yet exposed through nested function execution.
+                UnboundOp::Dynamic(_) => {
+                    return Err(PlanValidationError::TemporalFunctionBody {
+                        operator: "dynamic/defer",
+                    });
+                }
+                UnboundOp::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    then_branch.validate_persistent_function()?;
+                    else_branch.validate_persistent_function()?;
+                }
                 UnboundOp::Function { func } | UnboundOp::DirectFixApply { func, .. } => {
-                    func.plan.body.validate(true)?
+                    func.plan.body.validate(true)?;
+                }
+                UnboundOp::DirectApply { func, .. } => {
+                    func.plan.body.validate_persistent_function()?;
                 }
                 _ => {}
             }
@@ -119,7 +171,9 @@ impl UnboundPlanBody {
                     then_branch.collect_free_vars(inputs, recursive_output);
                     else_branch.collect_free_vars(inputs, recursive_output);
                 }
-                UnboundOp::Function { func } | UnboundOp::DirectFixApply { func, .. } => {
+                UnboundOp::Function { func }
+                | UnboundOp::DirectApply { func, .. }
+                | UnboundOp::DirectFixApply { func, .. } => {
                     let mut captures = func.plan.body.free_vars(recursive_output);
                     for param in &func.params {
                         captures.remove(param);
@@ -276,6 +330,10 @@ fn bind_op(
         },
         UnboundOp::Apply { func, args } => BoundOp::Apply {
             func: r!(func),
+            args: rs!(args),
+        },
+        UnboundOp::DirectApply { func, args } => BoundOp::DirectApply {
+            func: function!(func),
             args: rs!(args),
         },
         UnboundOp::DirectFixApply { func, args } => BoundOp::DirectFixApply {

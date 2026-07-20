@@ -30,7 +30,7 @@ mod integration_tests {
 
     use trustworthiness_checker::dsrv_fixtures::{TestRuntime, integer_pair_input_stream};
     use trustworthiness_checker::{
-        UntypedDsrvSpecification, Value, VarName,
+        DsrvSpecification, Value, VarName,
         core::Runtime,
         dsrv_fixtures::{float_pair_input_stream, spec_simple_add_monitor_typed_float},
         dsrv_specification,
@@ -593,7 +593,7 @@ mod integration_tests {
         client_suffix: &str,
     ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
         let mut spec_src = spec_src;
-        let spec: UntypedDsrvSpecification = dsrv_specification(&mut spec_src).unwrap();
+        let spec: DsrvSpecification = dsrv_specification(&mut spec_src).unwrap();
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let var_topics = BTreeMap::from_iter([("payload".into(), "payload".to_string())]);
@@ -612,7 +612,7 @@ mod integration_tests {
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 

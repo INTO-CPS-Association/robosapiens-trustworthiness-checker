@@ -9,10 +9,7 @@ pub mod constrained_sat {
 
     use crate::distributed::{
         distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
-        scheduling::{
-            planners::core::SchedulerPlanner,
-            planning_context::PlanningContext,
-        },
+        scheduling::{planners::core::SchedulerPlanner, planning_context::PlanningContext},
         solvers::sat_solver::SatMonitoredAtDistConstraintSolver,
     };
     use crate::semantics::AsyncConfig;

@@ -9,14 +9,12 @@ use futures::{FutureExt, StreamExt};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use smol::LocalExecutor;
-use tc_core::core::{
-    ExecutionPolicy, OutputStream, Runtime, RuntimeSpec, Semantics, Specification,
-};
+use tc_core::core::{ExecutionPolicy, OutputStream, Runtime, RuntimeSpec, Semantics};
 use tc_core::io::InputController;
 use tc_core::io::testing::{ManualInputController, ManualOutputHandler, channel};
-use tc_core::runtime::builder::GeneralRuntimeBuilder;
 use tc_core::runtime::RuntimeBuilder;
-use tc_core::{InputEvent, UntypedDsrvSpecification, Value, VarName, dsrv_specification};
+use tc_core::runtime::builder::GeneralRuntimeBuilder;
+use tc_core::{DsrvSpecification, InputEvent, Value, VarName, dsrv_specification};
 
 type OutputBatch = BTreeMap<VarName, Value>;
 
@@ -63,10 +61,7 @@ struct TcRuntime {
 impl TcRuntime {
     #[new]
     #[pyo3(signature = (model, *, semantics="typed-untimed"))]
-    fn new(
-        model: &Bound<'_, PyAny>,
-        semantics: &str,
-    ) -> PyResult<Self> {
+    fn new(model: &Bound<'_, PyAny>, semantics: &str) -> PyResult<Self> {
         let model = model_to_text(model)?;
         let semantics = parse_semantics(semantics)?;
         Self::from_model(model, semantics)
@@ -74,20 +69,14 @@ impl TcRuntime {
 
     #[staticmethod]
     #[pyo3(signature = (model, semantics=None))]
-    fn from_text(
-        model: &str,
-        semantics: Option<&str>,
-    ) -> PyResult<Self> {
+    fn from_text(model: &str, semantics: Option<&str>) -> PyResult<Self> {
         let semantics = parse_semantics(semantics.unwrap_or("typed-untimed"))?;
         Self::from_model(model.to_string(), semantics)
     }
 
     #[staticmethod]
     #[pyo3(signature = (path, semantics=None))]
-    fn from_path(
-        path: &Bound<'_, PyAny>,
-        semantics: Option<&str>,
-    ) -> PyResult<Self> {
+    fn from_path(path: &Bound<'_, PyAny>, semantics: Option<&str>) -> PyResult<Self> {
         let model = read_pathlike(path)?;
         let semantics = parse_semantics(semantics.unwrap_or("typed-untimed"))?;
         Self::from_model(model, semantics)
@@ -118,9 +107,9 @@ impl TcRuntime {
 
         let provided = values.keys().cloned().collect::<BTreeSet<_>>();
         let extra = provided
-                .difference(&self.input_vars)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
+            .difference(&self.input_vars)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         if !extra.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "input batch contains unknown model inputs: {extra:?}"
@@ -188,9 +177,7 @@ fn parse_semantics(semantics: &str) -> PyResult<Semantics> {
     match normalize_option(semantics).as_str() {
         "typed" | "typed-untimed" => Ok(Semantics::TypedUntimed),
         "untyped" | "untimed" => Ok(Semantics::Untimed),
-        "gradual" | "gradual-typed" | "gradual-typed-untimed" => {
-            Ok(Semantics::GradualTypedUntimed)
-        }
+        "gradual" | "gradual-typed" | "gradual-typed-untimed" => Ok(Semantics::GradualTypedUntimed),
         _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
             "unsupported semantics {semantics:?}; expected 'typed-untimed', 'untimed', or 'gradual-typed-untimed'"
         ))),
@@ -226,10 +213,10 @@ impl TcRuntime {
         let executor = Rc::new(LocalExecutor::new());
         let (input_vars, input_controller, tick_controller, outputs) =
             build_runtime(executor.clone(), model, semantics).map_err(|err| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "failed to initialise trustworthiness checker runtime: {err:#}"
-            ))
-        })?;
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "failed to initialise trustworthiness checker runtime: {err:#}"
+                ))
+            })?;
 
         Ok(Self {
             executor,
@@ -287,19 +274,19 @@ fn build_runtime(
 
     smol::block_on(executor.run(async move {
         let mut model_input = model.as_str();
-        let spec: UntypedDsrvSpecification = dsrv_specification(&mut model_input)
+        let spec: DsrvSpecification = dsrv_specification(&mut model_input)
             .map_err(|err| anyhow::anyhow!("example model could not be parsed: {err:?}"))?;
-        let input_vars = spec.input_vars();
+        let input_vars = spec.input_vars().clone();
         let (input, input_controller) = channel();
         let (input, tick_controller) = tc_core::io::controlled(input);
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             runtime_executor.clone(),
-            spec.output_vars(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
-        let monitor = GeneralRuntimeBuilder::<UntypedDsrvSpecification, Value>::new()
+        let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
             .executor(runtime_executor.clone())
             .model(spec)
             .input(input)
@@ -383,6 +370,8 @@ fn value_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
         }
         Value::Deferred => Ok(Py::new(py, DeferredValue)?.into_any()),
         Value::NoVal => Ok(Py::new(py, NoValue)?.into_any()),
-        Value::Function(function) => Ok(function.to_string().into_pyobject(py)?.unbind().into_any()),
+        Value::Function(function) => {
+            Ok(function.to_string().into_pyobject(py)?.unbind().into_any())
+        }
     }
 }

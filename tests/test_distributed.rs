@@ -52,12 +52,14 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
 
     let spec = "in x\n
     out w\n
+    out tuple_element\n
     out y\n
     out z\n
     y = x + 1\n
     z = x + 2\n
+    tuple_element = Tuple(x, y).1\n
     w = monitored_at(x, B)";
-    let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
+    let var_names = BTreeSet::from(["tuple_element".into(), "w".into(), "y".into(), "z".into()]);
     let spec = dsrv_specification.parse(spec).unwrap();
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
@@ -69,6 +71,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
         ("y".into(), "Int32".to_string()),
         ("z".into(), "Int32".to_string()),
         ("w".into(), "Int32".to_string()),
+        ("tuple_element".into(), "Int32".to_string()),
     ]);
 
     let monitor = TestDistRuntimeBuilder::new()
@@ -89,6 +92,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         output[0],
         BTreeMap::from([
+            ("tuple_element".into(), 2.into()),
             ("w".into(), true.into()),
             ("y".into(), 2.into()),
             ("z".into(), 3.into())
@@ -97,6 +101,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         output[1],
         BTreeMap::from([
+            ("tuple_element".into(), 3.into()),
             ("w".into(), true.into()),
             ("y".into(), 3.into()),
             ("z".into(), 4.into())
@@ -105,6 +110,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     assert_eq!(
         output[2],
         BTreeMap::from([
+            ("tuple_element".into(), 4.into()),
             ("w".into(), true.into()),
             ("y".into(), 4.into()),
             ("z".into(), 5.into())

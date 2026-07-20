@@ -4,32 +4,33 @@ use super::super::plan::*;
 use super::super::*;
 use super::lower::*;
 use crate::lang::core::DepGraph;
+use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 
-impl TryFrom<UntypedDsrvSpecification> for DataflowMonitor {
+impl TryFrom<DsrvSpecification> for DataflowMonitor {
     type Error = DataflowCompileError;
 
-    fn try_from(spec: UntypedDsrvSpecification) -> Result<Self, Self::Error> {
+    fn try_from(spec: DsrvSpecification) -> Result<Self, Self::Error> {
         DataflowMonitor::try_compile_untyped(spec)
     }
 }
 
-impl TryFrom<TypedDsrvSpecification> for DataflowMonitor {
+impl TryFrom<CheckedDsrvSpecification> for DataflowMonitor {
     type Error = DataflowCompileError;
 
-    fn try_from(spec: TypedDsrvSpecification) -> Result<Self, Self::Error> {
-        DataflowMonitor::try_compile_typed(spec)
+    fn try_from(spec: CheckedDsrvSpecification) -> Result<Self, Self::Error> {
+        Self::try_compile_checked(spec)
     }
 }
 
 impl DataflowMonitor {
-    pub fn try_compile_untyped(
-        spec: UntypedDsrvSpecification,
+    pub fn try_compile_checked(
+        spec: CheckedDsrvSpecification,
     ) -> Result<Self, DataflowCompileError> {
-        Self::try_compile_spec(spec, lower_untyped_expr_plan)
+        Self::try_compile_spec(spec, lower_checked_expr_plan)
     }
 
-    pub fn try_compile_typed(spec: TypedDsrvSpecification) -> Result<Self, DataflowCompileError> {
-        Self::try_compile_spec(spec, lower_typed_expr_plan)
+    pub fn try_compile_untyped(spec: DsrvSpecification) -> Result<Self, DataflowCompileError> {
+        Self::try_compile_spec(spec, lower_expr_plan)
     }
 
     fn try_compile_spec<S>(
@@ -54,6 +55,11 @@ struct LoweredProgram {
     dependencies: BTreeMap<VarName, BTreeSet<VarName>>,
 }
 
+type OrderedPlans = (
+    Vec<(VarName, UnboundPlanBody)>,
+    BTreeMap<VarName, BTreeSet<VarName>>,
+);
+
 impl LoweredProgram {
     fn build(
         input_vars: &[VarName],
@@ -70,7 +76,7 @@ impl LoweredProgram {
         for var in stream_vars {
             let mut body =
                 build(var).ok_or_else(|| DataflowCompileError::MissingExpression(var.clone()))?;
-            body.configure_dynamic_context(var, input_vars, stream_vars);
+            body.configure_dynamic_scope(var, input_vars, stream_vars);
             let inputs = body.free_vars(Some(var));
             let unsupported = inputs
                 .iter()
@@ -92,15 +98,7 @@ impl LoweredProgram {
         })
     }
 
-    fn into_ordered(
-        self,
-    ) -> Result<
-        (
-            Vec<(VarName, UnboundPlanBody)>,
-            BTreeMap<VarName, BTreeSet<VarName>>,
-        ),
-        DataflowCompileError,
-    > {
+    fn into_ordered(self) -> Result<OrderedPlans, DataflowCompileError> {
         let stream_vars = self.plans.keys().cloned().collect::<BTreeSet<_>>();
         let ordered = DepGraph::from_dependencies(self.dependencies.clone())
             .topological_streams(&stream_vars)

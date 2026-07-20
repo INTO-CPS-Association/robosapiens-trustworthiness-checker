@@ -1263,7 +1263,10 @@ mod tests {
     async fn runtime_propagates_input_errors(executor: Rc<LocalExecutor<'static>>) {
         let mut source = spec_simple_add_monitor();
         let spec = crate::dsrv_specification(&mut source).unwrap();
-        let output = Box::new(NullOutputHandler::new(executor.clone(), spec.output_vars()));
+        let output = Box::new(NullOutputHandler::new(
+            executor.clone(),
+            spec.output_vars().clone(),
+        ));
         let runtime: TestRuntime = TestRuntime::new(executor, spec, failing_input(), output).await;
 
         let error = runtime.run().await.unwrap_err();

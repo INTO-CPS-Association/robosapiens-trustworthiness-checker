@@ -1,10 +1,7 @@
 use crate::core::StreamData;
 use crate::core::Value;
-use crate::lang::core::parser::ExprParser;
-use crate::lang::dsrv::ast::{RuntimeScope, SpannedExpr};
 use crate::semantics::AsyncConfig;
-use crate::semantics::untimed_untyped_dsrv::semantics::UntimedDsrvSemantics;
-use crate::semantics::{MonitoringSemantics, StreamContext};
+use crate::semantics::StreamContext;
 use crate::{OutputStream, VarName};
 use async_stream::stream;
 use core::panic;
@@ -19,7 +16,11 @@ use futures::{
 };
 use std::collections::BTreeMap;
 use tracing::debug;
-use tracing::info;
+
+#[cfg(test)]
+use crate::lang::dsrv::ast::DynamicExprScope;
+
+pub use super::dynamic::{defer, dynamic};
 
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
@@ -287,7 +288,7 @@ pub fn if_stm(
 // If we knew which variable the expression is assigned to, we could have a
 // sindex_rec implementation that is implemented more or less like normal sindex,
 // and sindex which is implemented like below.
-// (The correct call would need to be evaluated in semantics.rs where the SExpr
+// (The correct call would need to be evaluated in semantics.rs where the ExprKind
 // is still available).
 pub fn sindex(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
     fn sindex_base(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
@@ -389,114 +390,6 @@ pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
         y,
     )
 }
-
-// WARNING: this currently mirrors the code of the typed combinator so both should be updated in
-// tandom
-pub fn dynamic<AC, Parser>(
-    ctx: &AC::Ctx,
-    eval_stream: OutputStream<AC::Val>,
-    scope: RuntimeScope,
-    history_length: usize,
-) -> OutputStream<AC::Val>
-where
-    Parser: ExprParser<SpannedExpr> + 'static,
-    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
-{
-    // Note: Slight change in dynamic's behavior after language became async and we introduced
-    // NoVal. Consider the following behavior:
-    // eval_stream yields 42
-    // eval_stream yields Deferred
-    // Before the change, dynamic would evaluate to (42, 42), but now it evaluates
-    // to (42, Deferred).
-    // This is a design decision, but it is more flexible for scenarios where we have, e.g. nested
-    // DUPs. If one wants the old behavior, one can write z = default(dynamic(e), z[-1])
-
-    // Create a subcontext with a history window length
-    let mut subcontext = match scope {
-        RuntimeScope::Explicit(vs, _) => ctx.restricted_subcontext(vs, history_length),
-        RuntimeScope::Automatic(Some(owner)) => ctx.subcontext_excluding(&owner, history_length),
-        RuntimeScope::Automatic(None) => ctx.subcontext(history_length),
-    };
-    let mut eval_stream = stream_lift_base(eval_stream);
-
-    // Build an output stream for dynamic of x over the subcontext
-    Box::pin(stream! {
-        // Store the previous value of the stream we are evaluating so we can
-        // check when it changes
-        struct PrevData {
-            // The previous property provided
-            eval_val: Value,
-            // The output stream for dynamic
-            eval_output_stream: OutputStream<Value>
-        }
-        let mut prev_data: Option<PrevData> = None;
-        while let Some(current) = eval_stream.next().await {
-            debug!("Received new dynamic property value: {:?}", current);
-            // If we have a previous value and it is the same as the current value (no need to
-            // repeat evaluation), then continue using the existing stream as our output
-            if let Some(prev_data) = &mut prev_data {
-                if prev_data.eval_val == current {
-                    // Advance the subcontext to make a new set of input values
-                    // available for the dynamic stream
-                    subcontext.tick().await;
-
-                    if let Some(eval_res) = prev_data.eval_output_stream.next().await {
-                        yield eval_res;
-                        continue;
-                    } else {
-                        return;
-                    }
-                }
-            }
-            // This match only happens if we have a new Str to evaluate, received Deferred or if we
-            // do not have a `prev_data.eval_output_stream` to evaluate from
-            match current {
-                Value::Deferred => {
-                    // A Deferred property controls the value emitted by `dynamic`, but it must not
-                    // pause the already installed expression. DynSRV evaluates the most recently
-                    // supplied property at the current global time. For example, with property
-                    // `x[1]`, inputs x = [1, 2, 3], and property values
-                    // ["x[1]", Deferred, "x[1]"], the final value is 2, not 1: the installed
-                    // expression consumes the middle tick even though `dynamic` emits Deferred.
-                    // Advance and discard that internal result to keep its temporal state aligned.
-                    subcontext.tick().await;
-                    if let Some(prev_data) = &mut prev_data {
-                        if prev_data.eval_output_stream.next().await.is_none() {
-                            return;
-                        }
-                    }
-                    yield Value::Deferred;
-                }
-                Value::NoVal => {
-                    // Consume a sample from the subcontext but return NoVal
-                    subcontext.tick().await;
-                    yield Value::NoVal;
-                }
-                Value::Str(s) => {
-                    let expr = Parser::parse(&mut s.as_ref())
-                        .expect("Invalid dynamic str");
-                    debug!("Dynamic evaluated to expression {:?}", expr);
-                    let eval_output_stream = <UntimedDsrvSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
-                    let mut eval_output_stream = stream_lift_base(eval_output_stream);
-                    // Advance the subcontext to make a new set of input values
-                    // available for the dynamic stream
-                    subcontext.tick().await;
-                    if let Some(eval_res) = eval_output_stream.next().await {
-                        yield eval_res;
-                    } else {
-                        return;
-                    }
-                    prev_data = Some(PrevData{
-                        eval_val: Value::Str(s),
-                        eval_output_stream
-                    });
-                }
-                cur => panic!("Invalid dynamic property type {:?}", cur)
-            }
-        }
-    })
-}
-
 pub fn var<AC>(ctx: &AC::Ctx, var: VarName) -> OutputStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
@@ -515,81 +408,6 @@ where
 }
 
 // Defer for an UntimedDsrvExpression using the dsrv_expression parser
-pub fn defer<AC, Parser>(
-    ctx: &AC::Ctx,
-    eval_stream: OutputStream<AC::Val>,
-    scope: RuntimeScope,
-    history_length: usize,
-) -> OutputStream<AC::Val>
-where
-    Parser: ExprParser<SpannedExpr> + 'static,
-    AC: AsyncConfig<Val = Value, Expr = SpannedExpr>,
-{
-    // Create a subcontext with a history window length
-    let mut subcontext = match scope {
-        RuntimeScope::Explicit(vs, _) => ctx.restricted_subcontext(vs, history_length),
-        RuntimeScope::Automatic(Some(owner)) => ctx.subcontext_excluding(&owner, history_length),
-        RuntimeScope::Automatic(None) => ctx.subcontext(history_length),
-    };
-    let mut eval_stream = stream_lift_base(eval_stream);
-    let mut eval_output_stream: Option<OutputStream<Value>> = None;
-
-    // Build an output stream for dynamic of x over the subcontext
-    Box::pin(stream! {
-        while let Some(current) = eval_stream.next().await {
-            debug!("Received new defer property value: {:?}", current);
-            match current {
-                Value::Deferred => {
-                    // Consume a sample from the subcontext but return Deferred
-                    subcontext.tick().await;
-                    yield Value::Deferred;
-                }
-                Value::NoVal => {
-                    // Consume a sample from the subcontext but return NoVal
-                    subcontext.tick().await;
-                    yield Value::NoVal;
-                }
-                Value::Str(s) => {
-                    let expr = Parser::parse(&mut s.as_ref())
-                        .expect("Invalid defer str");
-                    debug!("Defer evaluated to expression {:?}", expr);
-                    let tmp_stream = <UntimedDsrvSemantics::<Parser> as MonitoringSemantics<AC>>::to_async_stream(expr, &subcontext);
-                    let mut tmp_stream = stream_lift_base(tmp_stream);
-                    // Advance the subcontext to make a new set of input values
-                    // available for the dynamic stream
-                    subcontext.tick().await;
-                    if let Some(eval_res) = tmp_stream.next().await {
-                        eval_output_stream = Some(tmp_stream);
-                        yield eval_res;
-                    } else {
-                        return;
-                    }
-                    break;
-                }
-                cur => panic!("Invalid defer property type {:?}", cur)
-            }
-        }
-        if eval_output_stream.is_none() {
-            info!("Eval stream ended without a valid property to defer on");
-            return;
-        }
-        let mut eval_output_stream = eval_output_stream.unwrap();
-
-        // Use eval_stream as controller for when to tick subcontext. Yield from
-        // eval_output_stream.
-        debug!("Starting defer output loop");
-        while let Some(_) = eval_stream.next().await {
-            subcontext.tick().await;
-            if let Some(eval_res) = eval_output_stream.next().await {
-                yield eval_res;
-            } else {
-                return;
-            }
-        }
-    })
-}
-
-// Evaluates to the l.h.s. until the r.h.s. provides a value.
 // Then continues evaluating the r.h.s. (even if it provides Deferred)
 pub fn update(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     let mut x = stream_lift_base(x);
@@ -1063,7 +881,7 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 10);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
@@ -1076,7 +894,7 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 10);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -1092,7 +910,7 @@ mod combinator_tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 10);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-deferred value
@@ -1109,7 +927,7 @@ mod combinator_tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 10);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Evaluates to Deferred when we get Deferred
@@ -1139,7 +957,7 @@ mod combinator_tests {
             5.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 1);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -2096,7 +1914,7 @@ mod noval_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 1);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
@@ -2109,7 +1927,7 @@ mod noval_tests {
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 1);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x + 1 until we get a non-deferred value
@@ -2137,7 +1955,7 @@ mod noval_tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 1);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -2178,7 +1996,7 @@ mod noval_tests {
             7.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, RuntimeScope::Automatic(None), 1);
+        let res_stream = dynamic::<TestConfig, Parser>(&ctx, e, DynamicExprScope::Automatic, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![

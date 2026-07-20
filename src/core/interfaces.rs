@@ -72,8 +72,6 @@ pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
 
     fn var_expr(&self, var: &VarName) -> Option<Self::Expr>;
 
-    fn add_input_var(&mut self, var: VarName);
-
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType>;
 }
 

@@ -77,13 +77,6 @@ impl Specification for MstloSpecification {
         self.formulae.get(var).cloned()
     }
 
-    fn add_input_var(&mut self, var: VarName) {
-        if !self.var_names.contains(&var) {
-            self.var_names.push(var);
-            self.var_names.sort();
-        }
-    }
-
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
         self.input_vars()
             .into_iter()

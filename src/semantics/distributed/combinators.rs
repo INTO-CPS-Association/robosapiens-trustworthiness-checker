@@ -92,15 +92,13 @@ mod tests {
             .node_names(vec!["A".into(), "B".into(), "C".into()])
             .build();
         let exp = vec![Value::Int(2), Value::Int(4)];
-        let res_stream = crate::semantics::untimed_untyped_dsrv::combinators::dynamic::<
-            TestDistConfig,
-            LALRParser,
-        >(
-            &ctx,
-            e,
-            crate::lang::dsrv::ast::RuntimeScope::Automatic(None),
-            10,
-        );
+        let res_stream =
+            crate::semantics::untimed_dsrv::combinators::dynamic::<TestDistConfig, LALRParser>(
+                &ctx,
+                e,
+                crate::lang::dsrv::ast::DynamicExprScope::Automatic,
+                10,
+            );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         assert_eq!(res, exp);

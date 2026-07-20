@@ -124,7 +124,7 @@ where
             let model = self.model.clone().unwrap();
             let use_context_transfer = self.use_context_transfer;
             let starting_history = self.starting_history.clone().unwrap_or_default();
-            self.inject_reconf_stream();
+            let subscribed_input_vars = self.configure_reconfiguration_input();
 
             if let Some(input_factory) = &self.input_factory {
                 if let Some((topic_mapping, msg_type_mapping)) = input_factory.ros_mappings() {
@@ -141,23 +141,18 @@ where
                 }
             }
 
-            let input_vars = self
-                .model
-                .as_ref()
-                .expect("Input factory must have a model")
-                .input_vars();
             let input_factory = self
                 .input_factory
                 .as_ref()
                 .expect("Input factory must be configured before building");
             info!(
                 ?input_factory,
-                ?input_vars,
+                ?subscribed_input_vars,
                 "Opening reconfigurable input stream"
             );
             let input_stream = match input_factory.ensure_reconfigurable() {
                 Ok(()) => input_factory
-                    .open(input_vars)
+                    .open(subscribed_input_vars)
                     .await
                     .context("Reconfigurable input stream could not be opened"),
                 Err(error) => Err(error),
@@ -221,36 +216,35 @@ where
         self
     }
 
-    fn inject_reconf_stream(&mut self) {
+    fn configure_reconfiguration_input(&mut self) -> BTreeSet<VarName> {
         let input_factory = self
             .input_factory
             .as_mut()
             .expect("Input factory must be set before injecting the reconfiguration stream");
 
-        // Early‑return if self.reconf_topic is already an input var
         let model = self.model.clone().expect("Input factory must have a model");
+        let mut subscribed_input_vars = model.input_vars();
         let reconf_topic: VarName = self
             .reconf_topic
             .clone()
             .expect("Reconf topic must be set")
             .into();
-        if model.input_vars().contains(&reconf_topic) {
+        if subscribed_input_vars.contains(&reconf_topic) {
             info!(
                 ?reconf_topic,
                 "Reconfiguration variable already present in the input model, skipping injection"
             );
-            return;
+            return subscribed_input_vars;
         }
 
-        input_factory.add_reconfiguration_input(reconf_topic.clone(), model.input_vars());
-        self.model
-            .as_mut()
-            .expect("Input factory must have a model")
-            .add_input_var(reconf_topic);
+        input_factory
+            .add_reconfiguration_input(reconf_topic.clone(), subscribed_input_vars.clone());
+        subscribed_input_vars.insert(reconf_topic);
         debug!(
             ?self.input_factory,
             "Updated InputStreamFactory with reconfiguration variable"
         );
+        subscribed_input_vars
     }
 }
 
@@ -687,7 +681,7 @@ mod input_tick_tests {
 
     use super::{ReconfSemiSyncRuntime, ReconfSemiSyncRuntimeBuilder};
     use crate::{
-        OutputStream, Runtime, Specification, Value, VarName,
+        OutputStream, Runtime, Value, VarName,
         core::OutputHandler,
         io::{InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec},
         lang::dsrv::{lalr_parser::LALRParser, parser::dsrv_specification},
@@ -722,7 +716,7 @@ mod input_tick_tests {
             bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
         let output_builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(output_sender))
             .executor(executor.clone())
-            .output_var_names(spec.output_vars());
+            .output_var_names(spec.output_vars().clone());
 
         let runtime =
             ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics, LALRParser>::new()

@@ -2,22 +2,22 @@ use super::*;
 use crate::core::{StreamType, Value};
 use crate::dataflow::DataflowMonitor;
 use crate::lang::dsrv::ast::generation::arb_dsrv_spec;
-use crate::lang::dsrv::ast::{BoolBinOp, NumericalBinOp, SBinOp, SExpr, SpannedExpr, StrBinOp};
-use crate::{Specification, UntypedDsrvSpecification, VarName};
+use crate::lang::dsrv::ast::{BoolBinOp, Expr, NumericalBinOp, SBinOp, StrBinOp};
+use crate::{DsrvSpecification, VarName};
 use ecow::eco_vec;
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
 struct TypeDirectedCase {
-    expr: SpannedExpr,
+    expr: Expr,
     expected: StreamType,
     inputs: BTreeMap<VarName, StreamType>,
     may_widen_without_annotation: bool,
 }
 
 fn scalar_case(
-    expression: impl Strategy<Value = SpannedExpr> + 'static,
+    expression: impl Strategy<Value = Expr> + 'static,
     expected: StreamType,
     input: (&'static str, StreamType),
 ) -> BoxedStrategy<TypeDirectedCase> {
@@ -35,22 +35,22 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let integers = scalar_case(
         (any::<i16>(), any::<i16>(), any::<bool>(), any::<u8>()).prop_map(
             |(lhs, rhs, condition, shape)| match shape % 4 {
-                0 => SExpr::Var(VarName::new("i")).into(),
-                1 => SExpr::BinOp(
-                    Box::new(SExpr::Val(Value::Int(i64::from(lhs))).into()),
-                    Box::new(SExpr::Val(Value::Int(i64::from(rhs))).into()),
+                0 => Expr::Var(VarName::new("i")).into(),
+                1 => Expr::BinOp(
+                    Box::new(Expr::Val(Value::Int(i64::from(lhs)))),
+                    Box::new(Expr::Val(Value::Int(i64::from(rhs)))),
                     SBinOp::NOp(NumericalBinOp::Add),
                 )
                 .into(),
-                2 => SExpr::If(
-                    Box::new(SExpr::Val(Value::Bool(condition)).into()),
-                    Box::new(SExpr::Val(Value::Int(i64::from(lhs))).into()),
-                    Box::new(SExpr::Var(VarName::new("i")).into()),
+                2 => Expr::If(
+                    Box::new(Expr::Val(Value::Bool(condition))),
+                    Box::new(Expr::Val(Value::Int(i64::from(lhs)))),
+                    Box::new(Expr::Var(VarName::new("i"))),
                 )
                 .into(),
-                _ => SExpr::Default(
-                    Box::new(SExpr::Var(VarName::new("i")).into()),
-                    Box::new(SExpr::Val(Value::Int(i64::from(rhs))).into()),
+                _ => Expr::Default(
+                    Box::new(Expr::Var(VarName::new("i"))),
+                    Box::new(Expr::Val(Value::Int(i64::from(rhs)))),
                 )
                 .into(),
             },
@@ -63,14 +63,14 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             let lhs = f64::from(lhs);
             let rhs = f64::from(rhs);
             match shape % 3 {
-                0 => SExpr::Var(VarName::new("f")).into(),
-                1 => SExpr::BinOp(
-                    Box::new(SExpr::Val(Value::Float(lhs)).into()),
-                    Box::new(SExpr::Val(Value::Float(rhs)).into()),
+                0 => Expr::Var(VarName::new("f")).into(),
+                1 => Expr::BinOp(
+                    Box::new(Expr::Val(Value::Float(lhs))),
+                    Box::new(Expr::Val(Value::Float(rhs))),
                     SBinOp::NOp(NumericalBinOp::Add),
                 )
                 .into(),
-                _ => SExpr::Abs(Box::new(SExpr::Var(VarName::new("f")).into())).into(),
+                _ => Expr::Abs(Box::new(Expr::Var(VarName::new("f")))).into(),
             }
         }),
         StreamType::Float,
@@ -78,14 +78,14 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     );
     let booleans = scalar_case(
         (any::<bool>(), any::<bool>(), any::<u8>()).prop_map(|(lhs, rhs, shape)| match shape % 3 {
-            0 => SExpr::Var(VarName::new("b")).into(),
-            1 => SExpr::BinOp(
-                Box::new(SExpr::Val(Value::Bool(lhs)).into()),
-                Box::new(SExpr::Val(Value::Bool(rhs)).into()),
+            0 => Expr::Var(VarName::new("b")).into(),
+            1 => Expr::BinOp(
+                Box::new(Expr::Val(Value::Bool(lhs))),
+                Box::new(Expr::Val(Value::Bool(rhs))),
                 SBinOp::BOp(BoolBinOp::And),
             )
             .into(),
-            _ => SExpr::Not(Box::new(SExpr::Var(VarName::new("b")).into())).into(),
+            _ => Expr::Not(Box::new(Expr::Var(VarName::new("b")))).into(),
         }),
         StreamType::Bool,
         ("b", StreamType::Bool),
@@ -93,17 +93,17 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let strings = scalar_case(
         ("[a-zA-Z0-9]{0,8}", "[a-zA-Z0-9]{0,8}", any::<u8>()).prop_map(|(lhs, rhs, shape)| {
             match shape % 3 {
-                0 => SExpr::Var(VarName::new("s")).into(),
-                1 => SExpr::BinOp(
-                    Box::new(SExpr::Val(Value::Str(lhs.into())).into()),
-                    Box::new(SExpr::Val(Value::Str(rhs.into())).into()),
+                0 => Expr::Var(VarName::new("s")).into(),
+                1 => Expr::BinOp(
+                    Box::new(Expr::Val(Value::Str(lhs.into()))),
+                    Box::new(Expr::Val(Value::Str(rhs.into()))),
                     SBinOp::SOp(StrBinOp::Concat),
                 )
                 .into(),
-                _ => SExpr::If(
-                    Box::new(SExpr::Val(Value::Bool(true)).into()),
-                    Box::new(SExpr::Var(VarName::new("s")).into()),
-                    Box::new(SExpr::Val(Value::Str(rhs.into())).into()),
+                _ => Expr::If(
+                    Box::new(Expr::Val(Value::Bool(true))),
+                    Box::new(Expr::Var(VarName::new("s"))),
+                    Box::new(Expr::Val(Value::Str(rhs.into()))),
                 )
                 .into(),
             }
@@ -114,10 +114,10 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let lists = prop::collection::vec(any::<i16>(), 0..8)
         .prop_map(|values| TypeDirectedCase {
             may_widen_without_annotation: values.is_empty(),
-            expr: SExpr::List(
+            expr: Expr::List(
                 values
                     .into_iter()
-                    .map(|value| SExpr::Val(Value::Int(i64::from(value))).into())
+                    .map(|value| Expr::Val(Value::Int(i64::from(value))).into())
                     .collect(),
             )
             .into(),
@@ -128,10 +128,10 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let maps = prop::collection::btree_map("[a-z]{1,3}", any::<bool>(), 0..8)
         .prop_map(|values| TypeDirectedCase {
             may_widen_without_annotation: values.is_empty(),
-            expr: SExpr::Map(
+            expr: Expr::Map(
                 values
                     .into_iter()
-                    .map(|(key, value)| (key.into(), SExpr::Val(Value::Bool(value)).into()))
+                    .map(|(key, value)| (key.into(), Expr::Val(Value::Bool(value)).into()))
                     .collect(),
             )
             .into(),
@@ -141,10 +141,10 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         .boxed();
     let tuples = (any::<i16>(), any::<bool>(), "[a-z]{0,8}")
         .prop_map(|(integer, boolean, string)| TypeDirectedCase {
-            expr: SExpr::Tuple(eco_vec![
-                SExpr::Val(Value::Int(i64::from(integer))).into(),
-                SExpr::Val(Value::Bool(boolean)).into(),
-                SExpr::Val(Value::Str(string.into())).into(),
+            expr: Expr::Tuple(eco_vec![
+                Expr::Val(Value::Int(i64::from(integer))).into(),
+                Expr::Val(Value::Bool(boolean)).into(),
+                Expr::Val(Value::Str(string.into())).into(),
             ])
             .into(),
             expected: StreamType::Tuple(eco_vec![
@@ -158,12 +158,12 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         .boxed();
     let structs = (any::<i16>(), any::<bool>())
         .prop_map(|(count, enabled)| TypeDirectedCase {
-            expr: SExpr::Struct(BTreeMap::from([
+            expr: Expr::Struct(BTreeMap::from([
                 (
                     "count".into(),
-                    SExpr::Val(Value::Int(i64::from(count))).into(),
+                    Expr::Val(Value::Int(i64::from(count))).into(),
                 ),
-                ("enabled".into(), SExpr::Val(Value::Bool(enabled)).into()),
+                ("enabled".into(), Expr::Val(Value::Bool(enabled)).into()),
             ]))
             .into(),
             expected: StreamType::Struct(
@@ -179,15 +179,12 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         .boxed();
     let functions = any::<i16>()
         .prop_map(|argument| TypeDirectedCase {
-            expr: SExpr::Apply(
-                Box::new(
-                    SExpr::Lambda(
-                        eco_vec![(VarName::new("x"), StreamType::Int)],
-                        Box::new(SExpr::Var(VarName::new("x")).into()),
-                    )
-                    .into(),
-                ),
-                eco_vec![SExpr::Val(Value::Int(i64::from(argument))).into()],
+            expr: Expr::Apply(
+                Box::new(Expr::Lambda(
+                    eco_vec![(VarName::new("x"), StreamType::Int)],
+                    Box::new(Expr::Var(VarName::new("x"))),
+                )),
+                eco_vec![Expr::Val(Value::Int(i64::from(argument))).into()],
             )
             .into(),
             expected: StreamType::Int,
@@ -196,7 +193,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         })
         .boxed();
     let unit = Just(TypeDirectedCase {
-        expr: SExpr::Val(Value::Unit).into(),
+        expr: Expr::Val(Value::Unit).into(),
         expected: StreamType::Unit,
         inputs: BTreeMap::new(),
         may_widen_without_annotation: false,
@@ -208,13 +205,13 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     ]
 }
 
-fn specification(case: &TypeDirectedCase, annotate_output: bool) -> UntypedDsrvSpecification {
+fn specification(case: &TypeDirectedCase, annotate_output: bool) -> DsrvSpecification {
     let output = VarName::new("result");
     let mut annotations = case.inputs.clone();
     if annotate_output {
         annotations.insert(output.clone(), case.expected.clone());
     }
-    UntypedDsrvSpecification::new(
+    DsrvSpecification::new(
         case.inputs.keys().cloned().collect(),
         BTreeSet::from([output.clone()]),
         BTreeMap::from([(output, case.expr.clone())]),
@@ -257,15 +254,18 @@ proptest! {
         let gradual = type_check_gradual(spec).expect("type-directed gradual program must type check");
         let output = VarName::new("result");
         let expected = TCType::from_stream_type(&case.expected);
-        prop_assert_eq!(extract_type(&strict.var_expr(&output).unwrap()), expected.clone());
-        prop_assert_eq!(extract_type(&gradual.var_expr(&output).unwrap()), expected);
+        let output_expr = strict.var_expr(&output).unwrap();
+        prop_assert_eq!(output_expr.typ(), &expected);
+        let gradual_output = gradual.var_expr(&output).unwrap();
+        prop_assert_eq!(gradual_output.typ(), &expected);
     }
 
     #[test]
     fn gradual_infers_unannotated_type_directed_programs(case in arb_type_directed_case()) {
         let typed = type_check_gradual(specification(&case, false))
             .expect("gradual checker must infer a type-directed expression");
-        let actual = extract_type(&typed.var_expr(&VarName::new("result")).unwrap());
+        let result = typed.var_expr(&VarName::new("result")).unwrap();
+        let actual = result.typ().clone();
         if !case.may_widen_without_annotation {
             prop_assert_eq!(actual, TCType::from_stream_type(&case.expected));
         }
@@ -295,11 +295,11 @@ proptest! {
     ) {
         let source = VarName::new("z_source");
         let consumer = VarName::new("a_consumer");
-        let spec = UntypedDsrvSpecification::new(
+        let spec = DsrvSpecification::new(
             case.inputs.keys().cloned().collect(),
             BTreeSet::from([source.clone(), consumer.clone()]),
             BTreeMap::from([
-                (consumer.clone(), SExpr::Var(source.clone()).into()),
+                (consumer.clone(), Expr::Var(source.clone()).into()),
                 (source.clone(), case.expr.clone()),
             ]),
             case.inputs.clone(),
@@ -307,8 +307,8 @@ proptest! {
         );
         let typed = type_check_gradual(spec)
             .expect("gradual inference must resolve a forward dependency chain");
-        let source_type = extract_type(&typed.var_expr(&source).unwrap());
-        let consumer_type = extract_type(&typed.var_expr(&consumer).unwrap());
+        let source_type = typed.var_expr(&source).unwrap().typ().clone();
+        let consumer_type = typed.var_expr(&consumer).unwrap().typ().clone();
         prop_assert_eq!(consumer_type, source_type.clone());
         if !case.may_widen_without_annotation {
             prop_assert_eq!(source_type, TCType::from_stream_type(&case.expected));
@@ -321,7 +321,7 @@ proptest! {
     ) {
         let typed = type_check(specification(&case, true))
             .expect("type-directed program must pass strict checking");
-        let mut monitor = DataflowMonitor::try_compile_typed(typed)
+        let mut monitor = DataflowMonitor::try_compile_checked(typed)
             .expect("type-directed program must compile to dataflow");
         let input = monitor
             .input_vars()

@@ -4,9 +4,9 @@ use crate::{
     lang::dsrv::lalr_parser::LALRParser,
     runtime::{
         asynchronous::AsyncRuntime,
-        builder::{DistValueConfig, TypedValueConfig, ValueConfig},
+        builder::{DistValueConfig, ValueConfig},
     },
-    semantics::untimed_untyped_dsrv::semantics::UntimedDsrvSemantics,
+    semantics::untimed_dsrv::semantics::UntimedDsrvSemantics,
 };
 use std::{collections::BTreeMap, iter};
 
@@ -14,7 +14,6 @@ use std::{collections::BTreeMap, iter};
 // track when functions are used in tests or with specific features.
 
 pub type TestConfig = ValueConfig;
-pub type TestTypedConfig = TypedValueConfig;
 pub type TestDistConfig = DistValueConfig;
 
 // Default semantics to use in tests
@@ -83,11 +82,6 @@ pub fn float_pair_input_stream() -> InputStream<Value> {
 }
 
 #[allow(dead_code)]
-pub fn spec_empty() -> &'static str {
-    ""
-}
-
-#[allow(dead_code)]
 pub fn spec_simple_add_monitor() -> &'static str {
     "in x\n\
      in y\n\
@@ -151,22 +145,6 @@ pub fn spec_simple_add_aux_typed_monitor() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn spec_simple_modulo_monitor() -> &'static str {
-    "in x\n\
-     in y\n\
-     out z\n\
-     z = y % x"
-}
-
-#[allow(dead_code)]
-pub fn spec_simple_modulo_monitor_typed() -> &'static str {
-    "in x: Int\n\
-     in y: Int\n\
-     out z: Int\n\
-     z = y % x"
-}
-
-#[allow(dead_code)]
 pub fn spec_simple_add_monitor_typed() -> &'static str {
     "in x: Int\n\
      in y: Int\n\
@@ -183,77 +161,10 @@ pub fn spec_simple_add_monitor_typed_float() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn spec_typed_string_concat() -> &'static str {
-    "in x: Str\n\
-     in y: Str\n\
-     out z: Str\n\
-     z = x ++ y"
-}
-
-#[allow(dead_code)]
-pub fn spec_typed_count_monitor() -> &'static str {
-    "out x: Int\n\
-     x = 1 + default(x[1], 0)"
-}
-
-#[allow(dead_code)]
-pub fn spec_typed_dynamic_monitor() -> &'static str {
-    "in x: Int\n\
-    in y: Int\n\
-    in s: Str\n\
-    out z: Int\n\
-    out w: Int\n\
-    z = x + y\n\
-    w = dynamic(s)"
-}
-
-#[allow(dead_code)]
 pub fn spec_sindex() -> &'static str {
     "in x\n\
      out z\n\
      z = x[1]"
-}
-
-#[allow(dead_code)]
-pub fn spec_sindex_plus() -> &'static str {
-    "in x\n\
-     out z\n\
-     z = x[1] + 1"
-}
-
-#[allow(dead_code)]
-pub fn spec_count_monitor() -> &'static str {
-    "out x\n\
-     x = 1 + default(x[1], 0)"
-}
-
-#[allow(dead_code)]
-pub fn spec_count_bounded_monitor() -> &'static str {
-    "in x\n\
-     out z\n\
-     z = default(z[1], 0) + 1 + x - x"
-}
-
-#[allow(dead_code)]
-pub fn spec_dynamic_monitor() -> &'static str {
-    "in x\n\
-    in y\n\
-    in s\n\
-    out z\n\
-    out w\n\
-    z = x + y\n\
-    w = dynamic(s)"
-}
-
-#[allow(dead_code)]
-pub fn spec_dynamic_restricted_monitor() -> &'static str {
-    "in x\n\
-    in y\n\
-    in s\n\
-    out z\n\
-    out w\n\
-    z = x + y\n\
-    w = dynamic(s, {x,y})"
 }
 
 #[allow(dead_code)]
@@ -481,14 +392,6 @@ pub fn spec_defer() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn spec_dynamic() -> &'static str {
-    "in x
-     in e
-     out z
-     z = dynamic(e)"
-}
-
-#[allow(dead_code)]
 pub fn indexing_input_stream() -> InputStream<Value> {
     let mut input_values = BTreeMap::new();
 
@@ -526,21 +429,6 @@ pub fn spec_direct_and() -> &'static str {
      out z: Bool
      z = x && y"
 }
-#[allow(dead_code)]
-pub fn spec_deferred_globally() -> &'static str {
-    "in x: Bool
-     in e: Str
-     out y: Bool
-     y = default(defer(e), x && default(x[1], true))"
-}
-
-#[allow(dead_code)]
-pub fn spec_direct_globally() -> &'static str {
-    "in x: Bool
-     out y: Bool
-     y = x && default(x[1], true)"
-}
-
 #[allow(dead_code)]
 pub fn paper_benchmark_input_stream(percent: usize, size: usize) -> InputStream<Value> {
     let x = iter::repeat(true.into()).take(size).collect();

@@ -1,36 +1,40 @@
 use std::collections::BTreeMap;
 
-use crate::SExpr;
 use crate::core::OutputStream;
 use crate::core::{RuntimeFunction, Value};
 use crate::lang::core::parser::ExprParser;
-use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SpannedExpr, StrBinOp};
+use crate::lang::dsrv::ast::{
+    BoolBinOp, CompBinOp, Expr, ExprView, NumericalBinOp, SBinOp, StrBinOp,
+};
 use crate::semantics::AsyncConfig;
 use crate::semantics::MonitoringSemantics;
 use crate::semantics::distributed::combinators as dist_mc;
-use crate::semantics::untimed_untyped_dsrv::combinators as mc;
+use crate::semantics::untimed_dsrv::combinators as mc;
 
 use super::contexts::DistributedContext;
 
 #[derive(Clone)]
 pub struct DistributedSemantics<Parser>
 where
-    Parser: ExprParser<SpannedExpr> + 'static,
+    Parser: ExprParser<Expr> + 'static,
 {
     _parser: std::marker::PhantomData<Parser>,
 }
 
 impl<Parser, AC> MonitoringSemantics<AC> for DistributedSemantics<Parser>
 where
-    Parser: ExprParser<SpannedExpr> + 'static,
-    AC: AsyncConfig<Val = Value, Expr = SpannedExpr, Ctx = DistributedContext<AC>>,
+    Parser: ExprParser<Expr> + 'static,
+    AC: AsyncConfig<Val = Value, Expr = Expr, Ctx = DistributedContext<AC>>,
 {
     fn to_async_stream(expr: AC::Expr, ctx: &AC::Ctx) -> OutputStream<AC::Val> {
-        match expr.node {
-            SExpr::Val(v) => mc::val(v),
-            SExpr::BinOp(e1, e2, op) => {
-                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);
-                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e2, ctx);
+        use ExprView as ExprKind;
+
+        let child = |child| expr.subtree(child);
+        match expr.as_ref().view() {
+            ExprKind::Val(v) => mc::val(v.clone()),
+            ExprKind::BinOp(e1, e2, op) => {
+                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e1), ctx);
+                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e2), ctx);
                 match op {
                     SBinOp::NOp(NumericalBinOp::Add) => mc::plus(e1, e2),
                     SBinOp::NOp(NumericalBinOp::Sub) => mc::minus(e1, e2),
@@ -48,11 +52,11 @@ where
                     SBinOp::COp(CompBinOp::Gt) => mc::gt(e1, e2),
                 }
             }
-            SExpr::Not(e) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
+            ExprKind::Not(e) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx);
                 mc::not(e)
             }
-            SExpr::Lambda(params, body) => {
+            ExprKind::Lambda(params, body) => {
                 let params = params
                     .iter()
                     .map(|(name, typ)| format!("{}: {}", name, typ))
@@ -60,160 +64,165 @@ where
                     .join(", ");
                 mc::val(Value::Function(RuntimeFunction::opaque(format!(
                     "\\{} -> {}",
-                    params, body
+                    params,
+                    child(body)
                 ))))
             }
-            SExpr::Fix(func) => mc::val(Value::Function(RuntimeFunction::opaque(format!(
+            ExprKind::Fix(func) => mc::val(Value::Function(RuntimeFunction::opaque(format!(
                 "fix({})",
-                func
+                child(func)
             )))),
-            SExpr::Apply(_, _) | SExpr::Partial(_, _) => {
+            ExprKind::Apply(_, _) | ExprKind::Partial(_, _) => {
                 panic!("function application requires typed DSRV semantics")
             }
-            SExpr::Var(v) => mc::var::<AC>(ctx, v),
-            SExpr::Dynamic(runtime) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*runtime.source, ctx);
-                mc::dynamic::<AC, Parser>(ctx, e, runtime.scope, 10)
+            ExprKind::Var(v) => mc::var::<AC>(ctx, v.clone()),
+            ExprKind::Dynamic(source, _, scope) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(source), ctx);
+                mc::dynamic::<AC, Parser>(ctx, e, scope.clone(), 10)
             }
-            SExpr::Defer(runtime) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*runtime.source, ctx);
-                mc::defer::<AC, Parser>(ctx, e, runtime.scope, 10)
+            ExprKind::Defer(source, _, scope) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(source), ctx);
+                mc::defer::<AC, Parser>(ctx, e, scope.clone(), 10)
             }
-            SExpr::Update(e1, e2) => {
-                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);
-                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e2, ctx);
+            ExprKind::Update(e1, e2) => {
+                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e1), ctx);
+                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e2), ctx);
                 mc::update(e1, e2)
             }
-            SExpr::Default(e, d) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                let d = <Self as MonitoringSemantics<AC>>::to_async_stream(*d, ctx);
+            ExprKind::Default(e, d) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx);
+                let d = <Self as MonitoringSemantics<AC>>::to_async_stream(child(d), ctx);
                 mc::default(e, d)
             }
-            SExpr::IsDefined(e) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
+            ExprKind::IsDefined(e) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx);
                 mc::is_defined(e)
             }
-            SExpr::When(e) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
+            ExprKind::When(e) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx);
                 mc::when(e)
             }
-            SExpr::Latch(e1, e2) => {
-                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);
-                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e2, ctx);
+            ExprKind::Latch(e1, e2) => {
+                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e1), ctx);
+                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e2), ctx);
                 mc::latch(e1, e2)
             }
-            SExpr::Init(e1, e2) => {
-                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);
-                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e2, ctx);
+            ExprKind::Init(e1, e2) => {
+                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e1), ctx);
+                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e2), ctx);
                 mc::init(e1, e2)
             }
-            SExpr::SIndex(e, i) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
+            ExprKind::SIndex(e, i) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx);
                 mc::sindex(e, i)
             }
-            SExpr::If(b, e1, e2) => {
-                let b = <Self as MonitoringSemantics<AC>>::to_async_stream(*b, ctx);
-                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e1, ctx);
-                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(*e2, ctx);
+            ExprKind::If(b, e1, e2) => {
+                let b = <Self as MonitoringSemantics<AC>>::to_async_stream(child(b), ctx);
+                let e1 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e1), ctx);
+                let e2 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e2), ctx);
                 mc::if_stm(b, e1, e2)
             }
-            SExpr::List(exprs) => {
+            ExprKind::List(exprs) => {
                 let exprs: Vec<_> = exprs
                     .into_iter()
-                    .map(|e| <Self as MonitoringSemantics<AC>>::to_async_stream(e, ctx))
+                    .map(|e| <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx))
                     .collect();
                 mc::list(exprs)
             }
-            SExpr::Tuple(exprs) => {
+            ExprKind::Tuple(exprs) => {
                 let exprs: Vec<_> = exprs
                     .into_iter()
-                    .map(|e| <Self as MonitoringSemantics<AC>>::to_async_stream(e, ctx))
+                    .map(|e| <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx))
                     .collect();
                 mc::tuple(exprs)
             }
-            SExpr::LIndex(e, i) => {
-                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(*e, ctx);
-                let i = <Self as MonitoringSemantics<AC>>::to_async_stream(*i, ctx);
+            ExprKind::LIndex(e, i) => {
+                let e = <Self as MonitoringSemantics<AC>>::to_async_stream(child(e), ctx);
+                let i = <Self as MonitoringSemantics<AC>>::to_async_stream(child(i), ctx);
                 mc::lindex(e, i)
             }
-            SExpr::LAppend(lst, el) => {
-                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst, ctx);
-                let el = <Self as MonitoringSemantics<AC>>::to_async_stream(*el, ctx);
+            ExprKind::LAppend(lst, el) => {
+                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(child(lst), ctx);
+                let el = <Self as MonitoringSemantics<AC>>::to_async_stream(child(el), ctx);
                 mc::lappend(lst, el)
             }
-            SExpr::LConcat(lst1, lst2) => {
-                let lst1 = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst1, ctx);
-                let lst2 = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst2, ctx);
+            ExprKind::LConcat(lst1, lst2) => {
+                let lst1 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(lst1), ctx);
+                let lst2 = <Self as MonitoringSemantics<AC>>::to_async_stream(child(lst2), ctx);
                 mc::lconcat(lst1, lst2)
             }
-            SExpr::LHead(lst) => {
-                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst, ctx);
+            ExprKind::LHead(lst) => {
+                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(child(lst), ctx);
                 mc::lhead(lst)
             }
-            SExpr::LTail(lst) => {
-                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst, ctx);
+            ExprKind::LTail(lst) => {
+                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(child(lst), ctx);
                 mc::ltail(lst)
             }
-            SExpr::LLen(lst) => {
-                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(*lst, ctx);
+            ExprKind::LLen(lst) => {
+                let lst = <Self as MonitoringSemantics<AC>>::to_async_stream(child(lst), ctx);
                 mc::llen(lst)
             }
-            SExpr::LMap(_, _) | SExpr::LFilter(_, _) | SExpr::LFold(_, _, _) => {
+            ExprKind::LMap(_, _) | ExprKind::LFilter(_, _) | ExprKind::LFold(_, _, _) => {
                 panic!("higher-order list operations require typed DSRV semantics")
             }
-            SExpr::Map(map) | SExpr::Struct(map) | SExpr::ObjectLiteral(map) => {
+            ExprKind::Map(map) | ExprKind::Struct(map) | ExprKind::ObjectLiteral(map) => {
                 let map: BTreeMap<_, _> = map
-                    .into_iter()
+                    .iter()
                     .map(|(k, v)| {
                         (
-                            k,
-                            <Self as MonitoringSemantics<AC>>::to_async_stream(v, ctx),
+                            k.clone(),
+                            <Self as MonitoringSemantics<AC>>::to_async_stream(child(v), ctx),
                         )
                     })
                     .collect();
                 mc::map(map)
             }
-            SExpr::MGet(map, k) => {
-                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);
-                mc::mget(map, k)
+            ExprKind::MGet(map, k) => {
+                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(child(map), ctx);
+                mc::mget(map, k.clone())
             }
-            SExpr::SGet(struct_expr, key) => {
-                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*struct_expr, ctx);
-                mc::mget(map, key)
+            ExprKind::SGet(struct_expr, key) => {
+                let value =
+                    <Self as MonitoringSemantics<AC>>::to_async_stream(child(struct_expr), ctx);
+                match key.parse::<usize>() {
+                    Ok(index) => mc::tget(value, index),
+                    Err(_) => mc::mget(value, key.clone()),
+                }
             }
-            SExpr::MRemove(map, k) => {
-                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);
-                mc::mremove(map, k)
+            ExprKind::MRemove(map, k) => {
+                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(child(map), ctx);
+                mc::mremove(map, k.clone())
             }
-            SExpr::MInsert(map, k, v) => {
-                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);
-                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(*v, ctx);
-                mc::minsert(map, k, v)
+            ExprKind::MInsert(map, k, v) => {
+                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(child(map), ctx);
+                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(child(v), ctx);
+                mc::minsert(map, k.clone(), v)
             }
-            SExpr::MHasKey(map, k) => {
-                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(*map, ctx);
-                mc::mhas_key(map, k)
+            ExprKind::MHasKey(map, k) => {
+                let map = <Self as MonitoringSemantics<AC>>::to_async_stream(child(map), ctx);
+                mc::mhas_key(map, k.clone())
             }
-            SExpr::Sin(v) => {
-                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(*v, ctx);
+            ExprKind::Sin(v) => {
+                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(child(v), ctx);
                 mc::sin(v)
             }
-            SExpr::Cos(v) => {
-                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(*v, ctx);
+            ExprKind::Cos(v) => {
+                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(child(v), ctx);
                 mc::cos(v)
             }
-            SExpr::Tan(v) => {
-                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(*v, ctx);
+            ExprKind::Tan(v) => {
+                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(child(v), ctx);
                 mc::tan(v)
             }
-            SExpr::Abs(v) => {
-                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(*v, ctx);
+            ExprKind::Abs(v) => {
+                let v = <Self as MonitoringSemantics<AC>>::to_async_stream(child(v), ctx);
                 mc::abs(v)
             }
-            SExpr::MonitoredAt(var_name, label) => {
-                dist_mc::monitored_at::<AC>(var_name, label, ctx)
+            ExprKind::MonitoredAt(var_name, label) => {
+                dist_mc::monitored_at::<AC>(var_name.clone(), label.clone(), ctx)
             }
-            SExpr::Dist(u, v) => dist_mc::dist::<AC>(u, v, ctx),
+            ExprKind::Dist(u, v) => dist_mc::dist::<AC>(u.clone(), v.clone(), ctx),
         }
     }
 }

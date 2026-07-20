@@ -140,7 +140,7 @@ impl<M: Specification + Localisable> SchedulerExecutor<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UntypedDsrvSpecification;
+    use crate::DsrvSpecification;
     use crate::distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph};
     use crate::distributed::scheduling::communication::{MockSchedulerCommunicator, WorkTypeInfo};
     use crate::lang::dsrv::parser::dsrv_specification;
@@ -204,9 +204,7 @@ mod tests {
             node_labels: BTreeMap::from([(node_a, vec!["y".into()])]),
         };
 
-        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<
-            UntypedDsrvSpecification,
-        > {
+        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<DsrvSpecification> {
             log: vec![],
         }));
         let topic_mapping: BTreeMap<VarName, String> = BTreeMap::from([
@@ -269,9 +267,7 @@ mod tests {
             node_labels: BTreeMap::from([(node_a, vec!["y".into()])]),
         };
 
-        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<
-            UntypedDsrvSpecification,
-        > {
+        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<DsrvSpecification> {
             log: vec![],
         }));
         let mut executor = SchedulerExecutor::new(
@@ -340,9 +336,7 @@ mod tests {
             node_labels: BTreeMap::from([(node_a, vec!["y".into()]), (node_b, vec![])]),
         };
 
-        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<
-            UntypedDsrvSpecification,
-        > {
+        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<DsrvSpecification> {
             log: vec![],
         }));
         let mut executor = SchedulerExecutor::new(
@@ -360,7 +354,7 @@ mod tests {
             assert_eq!(lock.log[0].0, NodeName::from("B"));
             assert_eq!(
                 lock.log[0].1.spec.output_vars(),
-                BTreeSet::from([VarName::from("y")])
+                &BTreeSet::from([VarName::from("y")])
             );
         }
 
@@ -371,7 +365,7 @@ mod tests {
         assert_eq!(lock.log[1].0, NodeName::from("A"));
         assert_eq!(
             lock.log[1].1.spec.output_vars(),
-            BTreeSet::from([VarName::from("y")])
+            &BTreeSet::from([VarName::from("y")])
         );
         assert_eq!(lock.log[2].0, NodeName::from("B"));
         assert!(lock.log[2].1.spec.output_vars().is_empty());

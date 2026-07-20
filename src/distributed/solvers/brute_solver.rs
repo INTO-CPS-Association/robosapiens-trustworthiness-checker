@@ -8,7 +8,7 @@ use smol::{
 use tracing::{debug, info};
 
 use crate::{
-    InputStream, OutputStream, UntypedDsrvSpecification, Value, VarName,
+    DsrvSpecification, InputStream, OutputStream, Value, VarName,
     core::Runtime,
     distributed::{
         distribution_graphs::{
@@ -32,7 +32,7 @@ use crate::{
 pub struct BruteForceDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub executor: Rc<LocalExecutor<'static>>,
@@ -47,7 +47,7 @@ where
 impl<S, AC> BruteForceDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = UntypedDsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
     AC::Spec: Localisable,
 {
     fn output_stream_for_graph(
@@ -72,7 +72,10 @@ where
         );
         let mut output_handler = ManualOutputHandler::new(
             self.executor.clone(),
-            self.dist_constraints.iter().cloned().collect(),
+            self.dist_constraints
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
         );
         let output_stream: OutputStream<BTreeMap<VarName, Value>> =
             Box::pin(output_handler.get_output());
@@ -239,3 +242,4 @@ where
         })
     }
 }
+use std::collections::BTreeSet;

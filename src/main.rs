@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -147,14 +147,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         (DistributionMode::LocalMonitor(locality_mode), LangSpecification::Dsrv(model)) => {
             debug!(?locality_mode, "Localising model");
             let model = model.localise(locality_mode);
-            info!(?model, output_vars=?model.output_vars, input_vars=?model.input_vars, "Localised model");
+            info!(?model, output_vars=?model.output_vars(), input_vars=?model.input_vars(), "Localised model");
             LangSpecification::Dsrv(model)
         }
         (_, model) => model,
     };
 
     // Filtered output variable names excluding distribution constraints
-    let output_var_names = model
+    let output_var_names: BTreeSet<_> = model
         .output_vars()
         .into_iter()
         .filter(|var_name| {
@@ -166,29 +166,30 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let aux_info = model.aux_vars().into_iter().collect();
     let builder = builder.model(model.clone());
 
-    // For distributed runtime with distribution constraints, create a localised model
-    // to restrict input subscriptions the constraint variables only (and their true input
-    // dependencies).
-    let localized_model = if matches!(runtime, RuntimeSpec::Distributed) {
+    // Restrict distributed input subscriptions to constraint variables and their
+    // true input dependencies without changing the language specification.
+    let subscribed_input_vars = if matches!(runtime, RuntimeSpec::Distributed) {
         match (&dist_constraints, &model) {
             (Some(constraints), LangSpecification::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
                     constraints.iter().cloned().map(VarName::from).collect();
-                let mut localized = model.localise(&localized_constraint_vars);
-                for var in dist_constraint_input_vars(model, &localized_constraint_vars) {
-                    localized.add_input_var(var);
-                }
-                LangSpecification::Dsrv(localized)
+                let localized = model.localise(&localized_constraint_vars);
+                let mut input_vars = localized.input_vars().clone();
+                input_vars.extend(dist_constraint_input_vars(
+                    model,
+                    &localized_constraint_vars,
+                ));
+                input_vars
             }
-            _ => model.clone(),
+            _ => model.input_vars(),
         }
     } else {
-        model.clone()
+        model.input_vars()
     };
 
     info!(
-        input_vars = ?localized_model.input_vars(),
-        "Localized model selected for input stream"
+        input_vars = ?subscribed_input_vars,
+        "Input variables selected for subscription"
     );
 
     // Configure the input stream factory.
@@ -218,7 +219,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     } else {
         builder.input(
             input_factory
-                .open(localized_model.input_vars())
+                .open(subscribed_input_vars)
                 .await
                 .context("Input stream could not be built")?,
         )

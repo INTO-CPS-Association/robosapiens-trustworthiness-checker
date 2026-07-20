@@ -3,14 +3,16 @@ use std::{
     rc::Rc,
 };
 
+use contiguous_tree::TreeCursorExt;
+
 use async_stream::stream;
 use ecow::{EcoString, EcoVec};
 use futures::{FutureExt, StreamExt, future::pending, pin_mut};
 
 use crate::{
-    OutputStream, Specification, UntypedDsrvSpecification, Value, VarName,
+    DsrvSpecification, OutputStream, Specification, Value, VarName,
     distributed::distribution_graphs::{LabelledDistributionGraph, NodeName},
-    lang::dsrv::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, SExpr, SpannedExpr, StrBinOp},
+    lang::dsrv::ast::{BoolBinOp, CompBinOp, ExprRef, ExprView, NumericalBinOp, SBinOp, StrBinOp},
 };
 
 #[cfg(test)]
@@ -80,7 +82,7 @@ impl ConstraintInputIndex {
 }
 
 pub fn dist_constraint_stream(
-    spec: UntypedDsrvSpecification,
+    spec: DsrvSpecification,
     constraints: Vec<VarName>,
     labelling_stream: PlacementLabellingStream,
     input_streams: BTreeMap<VarName, OutputStream<Value>>,
@@ -108,7 +110,7 @@ pub fn dist_constraint_stream(
 }
 
 pub fn dist_constraint_event_stream(
-    spec: UntypedDsrvSpecification,
+    spec: DsrvSpecification,
     constraints: Vec<VarName>,
     mut labelling_stream: PlacementLabellingStream,
     input_index: ConstraintInputIndex,
@@ -198,7 +200,7 @@ fn record_latest_input(latest_inputs: &mut [Value], index: usize, value: Value) 
 }
 
 pub fn dist_constraint_input_vars(
-    spec: &UntypedDsrvSpecification,
+    spec: &DsrvSpecification,
     constraints: &[VarName],
 ) -> BTreeSet<VarName> {
     let input_vars = spec.input_vars();
@@ -211,7 +213,7 @@ pub fn dist_constraint_input_vars(
 }
 
 fn collect_var_deps(
-    spec: &UntypedDsrvSpecification,
+    spec: &DsrvSpecification,
     input_vars: &BTreeSet<VarName>,
     var: &VarName,
     seen: &mut BTreeSet<VarName>,
@@ -227,77 +229,72 @@ fn collect_var_deps(
     let expr = spec
         .var_expr(var)
         .unwrap_or_else(|| panic!("Unknown variable `{var}` in distribution constraint"));
-    collect_expr_deps(spec, input_vars, &expr, seen, deps);
+    collect_expr_deps(spec, input_vars, expr.as_ref(), seen, deps);
 }
 
 fn collect_expr_deps(
-    spec: &UntypedDsrvSpecification,
+    spec: &DsrvSpecification,
     input_vars: &BTreeSet<VarName>,
-    expr: &SpannedExpr,
+    expr: ExprRef<'_>,
     seen: &mut BTreeSet<VarName>,
     deps: &mut BTreeSet<VarName>,
 ) {
-    match &expr.node {
-        SExpr::If(cond, then_expr, else_expr) => {
-            collect_expr_deps(spec, input_vars, cond, seen, deps);
-            collect_expr_deps(spec, input_vars, then_expr, seen, deps);
-            collect_expr_deps(spec, input_vars, else_expr, seen, deps);
+    for node in expr.postorder() {
+        match node.view() {
+            ExprView::If(..)
+            | ExprView::Val(_)
+            | ExprView::MonitoredAt(_, _)
+            | ExprView::BinOp(..)
+            | ExprView::Not(_)
+            | ExprView::Abs(_)
+            | ExprView::MGet(_, _)
+            | ExprView::SGet(_, _) => {}
+            ExprView::Var(var) => collect_var_deps(spec, input_vars, var, seen, deps),
+            ExprView::Dist(_, _) => {
+                panic!("dist(...) is unsupported in compact distribution constraints")
+            }
+            _ => panic!(
+                "Unsupported expression in compact distribution constraint evaluator: {:?}",
+                node.kind()
+            ),
         }
-        SExpr::Val(_) | SExpr::MonitoredAt(_, _) => {}
-        SExpr::Var(var) => collect_var_deps(spec, input_vars, var, seen, deps),
-        SExpr::BinOp(left, right, _) => {
-            collect_expr_deps(spec, input_vars, left, seen, deps);
-            collect_expr_deps(spec, input_vars, right, seen, deps);
-        }
-        SExpr::Not(expr) | SExpr::Abs(expr) | SExpr::MGet(expr, _) | SExpr::SGet(expr, _) => {
-            collect_expr_deps(spec, input_vars, expr, seen, deps)
-        }
-        SExpr::Dist(_, _) => {
-            panic!("dist(...) is unsupported in compact distribution constraints")
-        }
-        other => panic!(
-            "Unsupported expression in compact distribution constraint evaluator: {:?}",
-            other
-        ),
     }
 }
 
-fn assert_supported_constraints(spec: &UntypedDsrvSpecification, constraints: &[VarName]) {
+fn assert_supported_constraints(spec: &DsrvSpecification, constraints: &[VarName]) {
     for constraint in constraints {
         let expr = spec
             .var_expr(constraint)
             .unwrap_or_else(|| panic!("Distribution constraint `{constraint}` has no expression"));
-        assert_supported_expr(&expr);
+        assert_supported_expr(expr.as_ref());
     }
 }
 
-fn assert_supported_expr(expr: &SpannedExpr) {
-    match &expr.node {
-        SExpr::If(cond, then_expr, else_expr) => {
-            assert_supported_expr(cond);
-            assert_supported_expr(then_expr);
-            assert_supported_expr(else_expr);
+fn assert_supported_expr(expr: ExprRef<'_>) {
+    for node in expr.postorder() {
+        match node.view() {
+            ExprView::If(..)
+            | ExprView::Val(_)
+            | ExprView::Var(_)
+            | ExprView::MonitoredAt(_, _)
+            | ExprView::BinOp(..)
+            | ExprView::Not(_)
+            | ExprView::Abs(_)
+            | ExprView::MGet(_, _)
+            | ExprView::SGet(_, _) => {}
+            ExprView::Dist(_, _) => {
+                panic!("dist(...) is unsupported in compact distribution constraints")
+            }
+            _ => panic!(
+                "Unsupported expression in compact distribution constraint evaluator: {:?}",
+                node.kind()
+            ),
         }
-        SExpr::Val(_) | SExpr::Var(_) | SExpr::MonitoredAt(_, _) => {}
-        SExpr::BinOp(left, right, _) => {
-            assert_supported_expr(left);
-            assert_supported_expr(right);
-        }
-        SExpr::Not(expr) | SExpr::Abs(expr) | SExpr::MGet(expr, _) | SExpr::SGet(expr, _) => {
-            assert_supported_expr(expr)
-        }
-        SExpr::Dist(_, _) => {
-            panic!("dist(...) is unsupported in compact distribution constraints")
-        }
-        other => panic!(
-            "Unsupported expression in compact distribution constraint evaluator: {:?}",
-            other
-        ),
     }
 }
 
 struct TickEvaluator<'a> {
-    spec: &'a UntypedDsrvSpecification,
+    spec: &'a DsrvSpecification,
     labelling: &'a PlacementLabelling,
     input_index: &'a ConstraintInputIndex,
     env: &'a [Value],
@@ -319,49 +316,47 @@ impl TickEvaluator<'_> {
 
         let expr = self
             .spec
-            .exprs
-            .get(var)
+            .var_expr(var)
             .unwrap_or_else(|| panic!("Unknown variable `{var}` in distribution constraint"));
         self.stack.push(var.clone());
-        let value = self.eval_expr(expr);
+        let value = self.eval_expr(expr.as_ref());
         self.stack.pop();
         self.cache.insert(var.clone(), value.clone());
         value
     }
 
-    fn eval_expr(&mut self, expr: &SpannedExpr) -> Value {
-        match &expr.node {
-            SExpr::If(cond, then_expr, else_expr) => match self.eval_expr(cond) {
+    fn eval_expr(&mut self, expr: ExprRef<'_>) -> Value {
+        match expr.view() {
+            ExprView::If(cond, then_expr, else_expr) => match self.eval_expr(cond) {
                 Value::Bool(true) => self.eval_expr(then_expr),
                 Value::Bool(false) => self.eval_expr(else_expr),
                 _ => Value::NoVal,
             },
-            SExpr::Val(value) => value.clone(),
-            SExpr::Var(var) => self.eval_var(var),
-            SExpr::BinOp(left, right, op) => {
+            ExprView::Val(value) => value.clone(),
+            ExprView::Var(var) => self.eval_var(var),
+            ExprView::BinOp(left, right, op) => {
                 let left = self.eval_expr(left);
                 let right = self.eval_expr(right);
                 eval_binop(left, right, op)
             }
-            SExpr::Not(expr) => match self.eval_expr(expr) {
+            ExprView::Not(child) => match self.eval_expr(child) {
                 Value::Bool(value) => Value::Bool(!value),
                 _ => Value::NoVal,
             },
-            SExpr::Abs(expr) => match self.eval_expr(expr) {
+            ExprView::Abs(child) => match self.eval_expr(child) {
                 Value::Int(value) => Value::Int(value.abs()),
                 Value::Float(value) => Value::Float(value.abs()),
                 _ => Value::NoVal,
             },
-            SExpr::MGet(expr, key) | SExpr::SGet(expr, key) => match self.eval_expr(expr) {
-                Value::Map(map) => map.get(key).cloned().unwrap_or(Value::NoVal),
-                _ => Value::NoVal,
-            },
-            SExpr::MonitoredAt(var, node) => Value::Bool(self.labelling.monitors_at(var, node)),
-            SExpr::Dist(_, _) => panic!("dist(...) is unsupported in compact evaluator"),
-            other => panic!(
-                "Unsupported expression in compact distribution constraint evaluator: {:?}",
-                other
-            ),
+            ExprView::MGet(child, key) | ExprView::SGet(child, key) => {
+                match self.eval_expr(child) {
+                    Value::Map(map) => map.get(key).cloned().unwrap_or(Value::NoVal),
+                    _ => Value::NoVal,
+                }
+            }
+            ExprView::MonitoredAt(var, node) => Value::Bool(self.labelling.monitors_at(var, node)),
+            ExprView::Dist(_, _) => panic!("dist(...) is unsupported in compact evaluator"),
+            _ => panic!("unsupported expression in compact distribution constraint evaluator"),
         }
     }
 }

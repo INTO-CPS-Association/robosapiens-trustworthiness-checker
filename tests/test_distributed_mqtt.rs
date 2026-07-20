@@ -14,7 +14,7 @@ mod integration_tests {
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
     use trustworthiness_checker::io::mqtt::{MqttFactory, MqttInputBackend};
     use trustworthiness_checker::{OutputStream, dsrv_fixtures::*};
-    use trustworthiness_checker::{Specification, Value};
+    use trustworthiness_checker::Value;
     use winnow::Parser;
 
     use macro_rules_attribute::apply;

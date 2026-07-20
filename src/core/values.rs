@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Debug, fmt::Display, rc::Rc};
+use std::{any::Any, collections::BTreeMap, fmt::Debug, fmt::Display, rc::Rc};
 
 use anyhow::anyhow;
 use ecow::{EcoString, EcoVec};
@@ -15,20 +15,38 @@ pub type RuntimeFunctionCallable =
     Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static>;
 pub type RuntimeFunctionValueCallable =
     Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<Value> + 'static>;
+pub type RuntimeFunctionValueFactory = Rc<dyn Fn() -> RuntimeFunctionValueCallable + 'static>;
 
+/// A cheaply cloned handle to a function definition.
+///
+/// Keeping the implementation behind one pointer prevents the function variant from enlarging
+/// every [`Value`]. The shared allocation also provides stable definition identity.
 #[derive(Clone)]
 pub struct RuntimeFunction {
+    inner: Rc<RuntimeFunctionInner>,
+}
+
+#[derive(Clone)]
+struct RuntimeFunctionInner {
     display: EcoString,
     callable: Option<RuntimeFunctionCallable>,
     value_callable: Option<RuntimeFunctionValueCallable>,
+    value_factory: Option<RuntimeFunctionValueFactory>,
+    call_site_stateful: bool,
+    language_payload: Option<Rc<dyn Any>>,
 }
 
 impl RuntimeFunction {
     pub fn opaque(display: impl Into<EcoString>) -> Self {
         Self {
-            display: display.into(),
-            callable: None,
-            value_callable: None,
+            inner: Rc::new(RuntimeFunctionInner {
+                display: display.into(),
+                callable: None,
+                value_callable: None,
+                value_factory: None,
+                call_site_stateful: false,
+                language_payload: None,
+            }),
         }
     }
 
@@ -37,9 +55,14 @@ impl RuntimeFunction {
         callable: impl Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static,
     ) -> Self {
         Self {
-            display: display.into(),
-            callable: Some(Rc::new(callable)),
-            value_callable: None,
+            inner: Rc::new(RuntimeFunctionInner {
+                display: display.into(),
+                callable: Some(Rc::new(callable)),
+                value_callable: None,
+                value_factory: None,
+                call_site_stateful: false,
+                language_payload: None,
+            }),
         }
     }
 
@@ -50,67 +73,122 @@ impl RuntimeFunction {
         let callable: RuntimeFunctionValueCallable = Rc::new(callable);
         let stream_callable = callable.clone();
         Self {
-            display: display.into(),
-            callable: Some(Rc::new(move |args| {
-                let value = stream_callable(args)?;
-                Ok(Box::pin(futures::stream::iter(vec![value])) as OutputStream<Value>)
-            })),
-            value_callable: Some(callable),
+            inner: Rc::new(RuntimeFunctionInner {
+                display: display.into(),
+                callable: Some(Rc::new(move |args| {
+                    let value = stream_callable(args)?;
+                    Ok(Box::pin(futures::stream::iter(vec![value])) as OutputStream<Value>)
+                })),
+                value_callable: Some(callable.clone()),
+                value_factory: Some(Rc::new(move || callable.clone())),
+                call_site_stateful: false,
+                language_payload: None,
+            }),
         }
     }
 
+    /// Construct a function whose mutable execution state belongs to each call site.
+    pub(crate) fn value_factory(
+        display: impl Into<EcoString>,
+        call_site_stateful: bool,
+        factory: impl Fn() -> RuntimeFunctionValueCallable + 'static,
+    ) -> Self {
+        Self {
+            inner: Rc::new(RuntimeFunctionInner {
+                display: display.into(),
+                callable: None,
+                value_callable: None,
+                value_factory: Some(Rc::new(factory)),
+                call_site_stateful,
+                language_payload: None,
+            }),
+        }
+    }
+
+    pub(crate) fn with_language_payload<T: Any>(mut self, payload: Rc<T>) -> Self {
+        Rc::make_mut(&mut self.inner).language_payload = Some(payload);
+        self
+    }
+
+    pub(crate) fn language_payload<T: Any>(&self) -> Option<Rc<T>> {
+        Rc::clone(self.inner.language_payload.as_ref()?)
+            .downcast()
+            .ok()
+    }
+
     pub fn display_source(&self) -> &EcoString {
-        &self.display
+        &self.inner.display
     }
 
     pub fn call(&self, args: EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> {
-        let Some(callable) = &self.callable else {
+        let Some(callable) = &self.inner.callable else {
             return Err(anyhow!(
                 "Function {} is display-only and cannot be called",
-                self.display
+                self.inner.display
             ));
         };
         callable(args)
     }
 
     pub fn call_value(&self, args: EcoVec<Value>) -> anyhow::Result<Value> {
-        let Some(callable) = &self.value_callable else {
+        let Some(callable) = &self.inner.value_callable else {
             return Err(anyhow!(
                 "Function {} has no direct value callable",
-                self.display
+                self.inner.display
             ));
         };
         callable(args)
     }
 
     pub fn has_value_callable(&self) -> bool {
-        self.value_callable.is_some()
+        self.inner.value_callable.is_some()
+    }
+
+    pub(crate) fn supports_value_calls(&self) -> bool {
+        self.inner.value_callable.is_some() || self.inner.value_factory.is_some()
+    }
+
+    pub(crate) fn instantiate_value(&self) -> Option<RuntimeFunctionValueCallable> {
+        self.inner.value_factory.as_ref().map(|factory| factory())
+    }
+
+    pub(crate) fn same_definition(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub(crate) fn requires_call_site_instance(&self) -> bool {
+        self.inner.call_site_stateful
     }
 
     pub fn is_callable(&self) -> bool {
-        self.callable.is_some() || self.value_callable.is_some()
+        self.inner.callable.is_some()
+            || self.inner.value_callable.is_some()
+            || self.inner.value_factory.is_some()
     }
 }
 
 impl Debug for RuntimeFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeFunction")
-            .field("display", &self.display)
-            .field("callable", &self.callable.is_some())
-            .field("value_callable", &self.value_callable.is_some())
+            .field("display", &self.inner.display)
+            .field("callable", &self.inner.callable.is_some())
+            .field("value_callable", &self.inner.value_callable.is_some())
+            .field("value_factory", &self.inner.value_factory.is_some())
+            .field("call_site_stateful", &self.inner.call_site_stateful)
+            .field("language_payload", &self.inner.language_payload.is_some())
             .finish()
     }
 }
 
 impl Display for RuntimeFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.display)
+        write!(f, "{}", self.inner.display)
     }
 }
 
 impl PartialEq for RuntimeFunction {
     fn eq(&self, other: &Self) -> bool {
-        self.display == other.display
+        self.same_definition(other)
     }
 }
 

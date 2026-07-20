@@ -12,7 +12,7 @@ pub(in crate::dataflow) fn eval_node_at(
     op: &BoundOp,
     state: &mut DataflowState,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Value {
     match op {
         BoundOp::Unary { op, arg } => {
@@ -245,7 +245,13 @@ pub(in crate::dataflow) fn eval_node_at(
         }
 
         // Function construction and application.
-        BoundOp::Function { func } => eval_function_op(func, tick, context),
+        BoundOp::Function { func } => {
+            let NodeState::Function { function, captures } = &mut state.states[node_id.index()]
+            else {
+                unreachable!("function node has incompatible runtime state")
+            };
+            eval_function_op(func, context, function, captures)
+        }
         BoundOp::Apply { func, args } => {
             let func = context.read(state, func, tick);
             let args = args
@@ -255,13 +261,31 @@ pub(in crate::dataflow) fn eval_node_at(
             let NodeState::CallLift {
                 func_last,
                 arg_last,
+                active_function,
+                callable,
             } = &mut state.states[node_id.index()]
             else {
                 unreachable!("apply node has incompatible runtime state")
             };
             let func = stream_lift_value(func, func_last);
             let args = lift_call_args(args, arg_last);
-            eval_apply_op(func, args)
+            eval_apply_op(func, args, active_function, callable)
+        }
+        BoundOp::DirectApply { func, args } => {
+            let args = args
+                .iter()
+                .map(|arg| context.read(state, arg, tick))
+                .collect::<Vec<_>>();
+            let NodeState::PersistentCall {
+                executor,
+                values,
+                arg_last,
+            } = &mut state.states[node_id.index()]
+            else {
+                unreachable!("direct apply node has incompatible runtime state")
+            };
+            let args = lift_call_args(args, arg_last);
+            eval_direct_apply_op(func, args, context, executor, values)
         }
         BoundOp::DirectFixApply { func, args } => {
             let args = args
@@ -298,6 +322,7 @@ pub(in crate::dataflow) fn eval_node_at(
             let NodeState::CallLift {
                 func_last,
                 arg_last,
+                ..
             } = &mut state.states[node_id.index()]
             else {
                 unreachable!("partial application node has incompatible runtime state")
@@ -352,7 +377,7 @@ pub(in crate::dataflow) fn eval_nodes_at(
     nodes: &[BoundOp],
     state: &mut DataflowState,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) {
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
@@ -366,7 +391,7 @@ fn eval_lazy_if(
     op: &BoundOp,
     state: &mut DataflowState,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Value {
     let BoundOp::If {
         cond,
@@ -412,7 +437,7 @@ fn eval_branch(
     branch: &BoundPlanBody,
     state: &mut DataflowState,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Value {
     eval_nodes_at(&branch.nodes, state, tick, context);
     let output = context.read(state, &branch.output, tick);
@@ -424,7 +449,7 @@ pub(in crate::dataflow) fn try_eval_nodes_at(
     nodes: &[BoundOp],
     state: &mut DataflowState,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Result<(), DataflowEvalError> {
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
@@ -461,7 +486,7 @@ fn try_eval_lazy_if(
     op: &BoundOp,
     state: &mut DataflowState,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Result<Value, DataflowEvalError> {
     let BoundOp::If {
         cond,
@@ -536,7 +561,7 @@ fn try_eval_branch(
     branch: &BoundPlanBody,
     state: &mut DataflowState,
     tick: usize,
-    context: EvalContext<'_>,
+    context: PlanEvalContext<'_>,
 ) -> Result<Value, DataflowEvalError> {
     try_eval_nodes_at(&branch.nodes, state, tick, context)?;
     let output = context.read(state, &branch.output, tick);

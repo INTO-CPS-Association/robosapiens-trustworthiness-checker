@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::Specification;
-use trustworthiness_checker::UntypedDsrvSpecification;
+use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::Value;
 use trustworthiness_checker::VarName;
 use trustworthiness_checker::benches_common::RECONF_TOPIC;
@@ -65,8 +64,8 @@ async fn wait_for_input_stream_subscription<T: Clone + 'static>(
 /// variables present in the union of both specs.
 async fn run_reconf_bench(
     executor: Rc<LocalExecutor<'static>>,
-    spec_1: &UntypedDsrvSpecification,
-    spec_2: &UntypedDsrvSpecification,
+    spec_1: &DsrvSpecification,
+    spec_2: &DsrvSpecification,
     size: usize,
     ct: bool,
     percent: usize,
@@ -79,7 +78,7 @@ async fn run_reconf_bench(
         .collect();
     let (input_factory, tx_fans) = input_factory_dsrv_paper_bench(input_vars);
     let (output_builder, mut rx) =
-        output_builder_dsrv_paper_bench(spec_1.output_vars().into(), executor.clone());
+        output_builder_dsrv_paper_bench(spec_1.output_vars().clone(), executor.clone());
     let mut is_spec_1 = true;
 
     let _handle = executor.spawn(monitor_outputs_untyped_reconf_limited(
@@ -199,9 +198,9 @@ struct BenchConfig<'a> {
     /// Name of the Criterion benchmark group.
     group_name: &'a str,
     /// The "old" specification.
-    spec1: UntypedDsrvSpecification,
+    spec1: DsrvSpecification,
     /// The "new" specification (reconfigured to at runtime).
-    spec2: UntypedDsrvSpecification,
+    spec2: DsrvSpecification,
     /// Input values produced per iteration. Must cover all input vars in spec1 ∪ spec2.
     input_fn: Box<dyn Fn(usize) -> BTreeMap<VarName, Value> + 'a>,
 }

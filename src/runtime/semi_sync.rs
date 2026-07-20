@@ -175,7 +175,7 @@ where
         starting_history: Vec<AC::Val>,
     ) -> Self {
         let hist_len = starting_history.len();
-        let eval_stream = MS::to_async_stream(expr.clone(), ctx);
+        let eval_stream = MS::to_async_stream_for_var(&var_name, expr.clone(), ctx);
         let eval_stream: OutputStream<AC::Val> =
             Box::pin(futures::stream::iter(starting_history).chain(eval_stream.skip(hist_len)));
         Self {
@@ -1259,18 +1259,18 @@ where
 mod tests {
 
     use crate::async_test;
-    use crate::core::{Runtime, Specification};
+    use crate::core::Runtime;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::io::{controlled, map};
     use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lang::dsrv::type_checker::type_check;
     use crate::runtime::RuntimeBuilder;
-    use crate::runtime::builder::{SemiSyncValueConfig, TypedSemiSyncValueConfig};
+    use crate::runtime::builder::SemiSyncValueConfig;
     use crate::runtime::semi_sync::{SemiSyncRuntime, SemiSyncRuntimeBuilder};
     use crate::semantics::{
-        AbstractContextBuilder, StreamContext, TypedUntimedDsrvSemantics, UntimedDsrvSemantics,
+        AbstractContextBuilder, CheckedUntimedDsrvSemantics, StreamContext, UntimedDsrvSemantics,
     };
-    use crate::{InputBatch, InputEvent, InputStream, Value, dsrv_specification};
+    use crate::{InputBatch, InputEvent, InputStream, Value, dsrv_spec, dsrv_specification};
     use crate::{VarName, dsrv_fixtures::*};
     use futures::{FutureExt, stream::StreamExt};
     use macro_rules_attribute::apply;
@@ -1281,8 +1281,10 @@ mod tests {
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
     type TestRuntime = SemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics<LALRParser>>;
-    type TestTypedRuntime =
-        SemiSyncRuntime<TypedSemiSyncValueConfig, TypedUntimedDsrvSemantics<LALRParser>>;
+    type TestTypedRuntime = SemiSyncRuntime<
+        crate::runtime::builder::CheckedSemiSyncValueConfig,
+        CheckedUntimedDsrvSemantics<LALRParser>,
+    >;
 
     struct CompatibilityCase {
         name: &'static str,
@@ -1327,7 +1329,7 @@ mod tests {
         let (input, controller) = controlled(map::input_stream(case.inputs));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let mut outputs = output_handler.get_output();
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
@@ -1720,7 +1722,7 @@ mod tests {
         let (input, controller) = controlled(input);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let mut outputs = output_handler.get_output();
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
@@ -1755,7 +1757,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1795,7 +1797,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1835,7 +1837,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
         let output_handler = Box::new(NullOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
@@ -1862,7 +1864,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1903,14 +1905,14 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_dynamic()).unwrap();
+        let spec = dsrv_spec!("in x\nin e\nout z\nz = dynamic(e)");
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -1958,7 +1960,7 @@ mod tests {
         ]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
@@ -1998,7 +2000,7 @@ mod tests {
         ]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
@@ -2040,7 +2042,7 @@ mod tests {
         ]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
         let monitor: TestTypedRuntime = SemiSyncRuntimeBuilder::new()
@@ -2075,7 +2077,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2114,7 +2116,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2153,7 +2155,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2198,7 +2200,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars.clone(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 
@@ -2245,7 +2247,7 @@ mod tests {
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x)]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            spec.output_vars(),
+            spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
 

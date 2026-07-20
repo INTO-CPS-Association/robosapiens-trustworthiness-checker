@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use ecow::EcoString;
 use ecow::EcoVec;
 use tracing::debug;
@@ -9,7 +7,10 @@ use winnow::combinator::*;
 use winnow::token::literal;
 
 use super::super::core::parser::*;
-use super::ast::*;
+use super::ast::Expr as ParsedExpr;
+use super::ast::finish_root_span;
+use super::ast::{BoolBinOp, CompBinOp, Expr, NumericalBinOp, SBinOp, StrBinOp, VarOrNodeName};
+use crate::DsrvSpecification;
 use crate::core::StreamType;
 use crate::core::StreamTypeAscription;
 use crate::core::VarName;
@@ -21,47 +22,33 @@ pub use winnow::ascii::dec_uint as uint;
 pub struct CombExprParser;
 
 //Main expression parser that combines all the different expression types
-impl ExprParser<SpannedExpr> for CombExprParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SpannedExpr> {
+impl ExprParser<Expr> for CombExprParser {
+    fn parse(input: &mut &str) -> anyhow::Result<Expr> {
         debug!("Parsing expr: {}", input);
         dsrv_expression(input).map_err(|e| anyhow::anyhow!(e))
     }
 
     //Added for better errors in the language Server
     type Error = winnow::error::ContextError;
-    fn raw_parse_error(input: &mut &str) -> Result<SpannedExpr, Self::Error> {
+    fn raw_parse_error(input: &mut &str) -> Result<Expr, Self::Error> {
         dsrv_expression(input)
-    }
-}
-
-impl ExprParser<SExpr> for CombExprParser {
-    fn parse(input: &mut &str) -> anyhow::Result<SExpr> {
-        debug!("Parsing expr: {}", input);
-        dsrv_expression(input)
-            .map(|expr| expr.node)
-            .map_err(|e| anyhow::anyhow!(e))
-    }
-
-    type Error = winnow::error::ContextError;
-    fn raw_parse_error(input: &mut &str) -> Result<SExpr, Self::Error> {
-        dsrv_expression(input).map(|expr| expr.node)
     }
 }
 
 // This is the top-level parser for LOLA expressions
-pub fn dsrv_expression(s: &mut &str) -> Result<SpannedExpr> {
+pub fn dsrv_expression(s: &mut &str) -> Result<Expr> {
     sexpr_old.parse_next(s)
 }
 
-fn paren(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn paren(source: &str, s: &mut &str) -> Result<Expr> {
     delimited('(', |i: &mut &str| sexpr_with_source(source, i), ')').parse_next(s)
 }
 
 // Used for Lists in output streams
-fn sexpr_list(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn sexpr_list(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
 
-    let exprs: Vec<SpannedExpr> = alt((
+    let exprs: Vec<Expr> = alt((
         delimited(
             seq!("List", loop_ms_or_lb_or_lc, '('),
             separated(
@@ -88,11 +75,33 @@ fn sexpr_list(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::List(exprs.into()),
+        ParsedExpr::List(exprs.into()),
     ))
 }
 
-pub fn key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, SpannedExpr)> {
+fn sexpr_tuple(source: &str, s: &mut &str) -> Result<Expr> {
+    let start_rest = *s;
+    let exprs: Vec<Expr> = delimited(
+        seq!("Tuple", loop_ms_or_lb_or_lc, '('),
+        separated(
+            0..,
+            |i: &mut &str| sexpr_with_source(source, i),
+            seq!(loop_ms_or_lb_or_lc, ',', loop_ms_or_lb_or_lc),
+        ),
+        ')',
+    )
+    .parse_next(s)?;
+    let end_rest = *s;
+
+    Ok(span_wrapper_winnow(
+        source,
+        start_rest,
+        end_rest,
+        ParsedExpr::Tuple(exprs.into()),
+    ))
+}
+
+pub fn key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, Expr)> {
     seq!(
         _: loop_ms_or_lb_or_lc, string,
         _: ':',
@@ -107,7 +116,7 @@ fn object_literal_key(s: &mut &str) -> Result<EcoString> {
     alt((string.map(EcoString::from), ident.map(EcoString::from))).parse_next(s)
 }
 
-pub fn object_literal_key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, SpannedExpr)> {
+pub fn object_literal_key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString, Expr)> {
     seq!(
         _: loop_ms_or_lb_or_lc, object_literal_key,
         _: ':',
@@ -118,9 +127,9 @@ pub fn object_literal_key_sexpr(source: &str, s: &mut &str) -> Result<(EcoString
 }
 
 // Used for Maps in output streams
-fn sexpr_map(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn sexpr_map(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
-    let exprs: Vec<(EcoString, SpannedExpr)> = delimited(
+    let exprs: Vec<(EcoString, Expr)> = delimited(
         seq!("Map", loop_ms_or_lb_or_lc, '('),
         separated(
             0..,
@@ -136,13 +145,13 @@ fn sexpr_map(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Map(BTreeMap::from_iter(exprs.into_iter())),
+        ParsedExpr::MapOrdered(exprs),
     ))
 }
 
-fn sexpr_struct(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn sexpr_struct(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
-    let exprs: Vec<(EcoString, SpannedExpr)> = delimited(
+    let exprs: Vec<(EcoString, Expr)> = delimited(
         seq!("Struct", loop_ms_or_lb_or_lc, '('),
         separated(
             0..,
@@ -158,13 +167,13 @@ fn sexpr_struct(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Struct(BTreeMap::from_iter(exprs.into_iter())),
+        ParsedExpr::StructOrdered(exprs),
     ))
 }
 
-fn object_literal(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn object_literal(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
-    let exprs: Vec<(EcoString, SpannedExpr)> = delimited(
+    let exprs: Vec<(EcoString, Expr)> = delimited(
         '{',
         separated(
             0..,
@@ -180,22 +189,21 @@ fn object_literal(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::ObjectLiteral(BTreeMap::from_iter(exprs.into_iter())),
+        ParsedExpr::ObjectLiteralOrdered(exprs),
     ))
 }
 
-fn var(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn var(source: &str, s: &mut &str) -> Result<Expr> {
     let start = *s;
     let v = var_name.parse_next(s)?;
     let end = *s;
-    Ok(SpannedExpr::VarAt(
+    Ok(Expr::VarAt(
         v,
         Span::new(
             (source.len() - start.len()) as u32,
             (source.len() - end.len()) as u32,
         ),
     ))
-    // Ok(span_wrapper_winnow(source, start, end, SExpr::Var(v)))
 }
 
 fn var_name(s: &mut &str) -> Result<VarName> {
@@ -214,15 +222,14 @@ fn node_name_or_string(s: &mut &str) -> Result<NodeName> {
     alt((node_name, string.map(|name: &str| name.to_string().into()))).parse_next(s)
 }
 
-// Same as `val` but returns SExpr::Val
-fn sval(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn sval(source: &str, s: &mut &str) -> Result<Expr> {
     let start = *s;
     let v = val.parse_next(s)?;
     let end = *s;
-    Ok(span_wrapper_winnow(source, start, end, SExpr::Val(v)))
+    Ok(span_wrapper_winnow(source, start, end, ParsedExpr::Val(v)))
 }
 
-fn sindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn sindex(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, idx) = seq!((
         _: whitespace,
@@ -245,12 +252,13 @@ fn sindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::SIndex(Box::new(e), idx),
+        ParsedExpr::SIndex(Box::new(e), idx),
     ))
 }
 
-fn field_base(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn field_base(source: &str, s: &mut &str) -> Result<Expr> {
     alt((
+        |i: &mut &str| sexpr_tuple(source, i),
         |i: &mut &str| sexpr_list(source, i),
         |i: &mut &str| sexpr_map(source, i),
         |i: &mut &str| sexpr_struct(source, i),
@@ -262,9 +270,9 @@ fn field_base(source: &str, s: &mut &str) -> Result<SpannedExpr> {
     .parse_next(s)
 }
 
-fn sget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn sget(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
-    let (base, fields): (SpannedExpr, Vec<&str>) = seq!((
+    let (base, fields): (Expr, Vec<EcoString>) = seq!((
         |i: &mut &str| field_base(source, i),
         repeat(
             1..,
@@ -272,7 +280,10 @@ fn sget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
                 _: loop_ms_or_lb_or_lc,
                 _: '.',
                 _: loop_ms_or_lb_or_lc,
-                ident
+                alt((
+                    ident.map(EcoString::from),
+                    uint.map(|index: usize| index.to_string().into()),
+                ))
             )
             .map(|(field,)| field),
         ),
@@ -286,13 +297,13 @@ fn sget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
             source,
             start_rest,
             end_rest,
-            SExpr::SGet(Box::new(expr), field.into()),
+            ParsedExpr::SGet(Box::new(expr), field),
         );
     }
     Ok(expr)
 }
 
-fn ifelse(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn ifelse(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (b, s1, s2) = seq!((
         _: whitespace,
@@ -316,11 +327,11 @@ fn ifelse(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::If(Box::new(b), Box::new(s1), Box::new(s2)),
+        ParsedExpr::If(Box::new(b), Box::new(s1), Box::new(s2)),
     ))
 }
 
-fn defer(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn defer(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, st) = seq!((
         _: whitespace,
@@ -346,11 +357,11 @@ fn defer(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Defer(RuntimeExpr::automatic(Box::new(e), ascription)),
+        ParsedExpr::Defer(Box::new(e), ascription, EcoVec::new()),
     ))
 }
 
-fn update(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn update(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
 
     let (lhs, rhs) = seq!((
@@ -373,13 +384,11 @@ fn update(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Update(Box::new(lhs), Box::new(rhs)),
+        ParsedExpr::Update(Box::new(lhs), Box::new(rhs)),
     ))
-    // .map(|(lhs, rhs)| span_wrapper_winnow(SExpr::Update(Box::new(lhs), Box::new(rhs))))
-    // .parse_next(s)
 }
 
-fn is_defined(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn is_defined(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
 
     let (e,) = seq!((
@@ -398,13 +407,11 @@ fn is_defined(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::IsDefined(Box::new(e)),
+        ParsedExpr::IsDefined(Box::new(e)),
     ))
-    // .map(|(e,)| span_wrapper_winnow(SExpr::IsDefined(Box::new(e))))
-    // .parse_next(s)
 }
 
-fn when(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn when(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e,) = seq!((
         _: whitespace,
@@ -422,13 +429,11 @@ fn when(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::When(Box::new(e)),
+        ParsedExpr::When(Box::new(e)),
     ))
-    // .map(|(e,)| span_wrapper_winnow(SExpr::When(Box::new(e))))
-    // .parse_next(s)
 }
 
-fn latch(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn latch(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (lhs, rhs) = seq!((
         _: whitespace,
@@ -449,13 +454,11 @@ fn latch(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Latch(Box::new(lhs), Box::new(rhs)),
+        ParsedExpr::Latch(Box::new(lhs), Box::new(rhs)),
     ))
-    // .map(|(lhs, rhs)| span_wrapper_winnow(
-    // .parse_next(s)
 }
 
-fn init(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn init(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (lhs, rhs) = seq!((
         _: whitespace,
@@ -476,13 +479,11 @@ fn init(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Init(Box::new(lhs), Box::new(rhs)),
+        ParsedExpr::Init(Box::new(lhs), Box::new(rhs)),
     ))
-    // .map(|(lhs, rhs)| span_wrapper_winnow(SExpr::Init(Box::new(lhs), Box::new(rhs))))
-    // .parse_next(s)
 }
 
-fn dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn dynamic(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, st) = seq!((
         _: whitespace,
@@ -508,11 +509,11 @@ fn dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Dynamic(RuntimeExpr::automatic(Box::new(e), type_ascription)),
+        ParsedExpr::Dynamic(Box::new(e), type_ascription),
     ))
 }
 
-fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn restricted_dynamic(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let expr = alt((
         seq!((
@@ -530,12 +531,14 @@ fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
             _: ')',
         ))
         .map(|(keyword, e, var_set)| {
-            let runtime =
-                RuntimeExpr::explicit(Box::new(e), StreamTypeAscription::Unascribed, var_set);
             if keyword == "defer" {
-                SExpr::Defer(runtime)
+                ParsedExpr::Defer(Box::new(e), StreamTypeAscription::Unascribed, var_set)
             } else {
-                SExpr::Dynamic(runtime)
+                ParsedExpr::RestrictedDynamic(
+                    Box::new(e),
+                    StreamTypeAscription::Unascribed,
+                    var_set,
+                )
             }
         }),
         seq!((
@@ -554,12 +557,14 @@ fn restricted_dynamic(source: &str, s: &mut &str) -> Result<SpannedExpr> {
             _: ')',
         ))
         .map(|(keyword, e, st, var_set)| {
-            let runtime =
-                RuntimeExpr::explicit(Box::new(e), StreamTypeAscription::Ascribed(st), var_set);
             if keyword == "defer" {
-                SExpr::Defer(runtime)
+                ParsedExpr::Defer(Box::new(e), StreamTypeAscription::Ascribed(st), var_set)
             } else {
-                SExpr::Dynamic(runtime)
+                ParsedExpr::RestrictedDynamic(
+                    Box::new(e),
+                    StreamTypeAscription::Ascribed(st),
+                    var_set,
+                )
             }
         }),
     ))
@@ -588,7 +593,7 @@ fn var_set(_source: &str, s: &mut &str) -> Result<EcoVec<VarName>> {
     .parse_next(s)
 }
 
-fn default(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn default(source: &str, s: &mut &str) -> Result<Expr> {
     let start = *s;
     let (lhs, rhs) = seq!((
         _: whitespace,
@@ -610,11 +615,11 @@ fn default(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start,
         end,
-        SExpr::Default(Box::new(lhs), Box::new(rhs)),
+        ParsedExpr::Default(Box::new(lhs), Box::new(rhs)),
     ))
 }
 
-fn not(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn not(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e,) = seq!((
         _: whitespace,
@@ -630,13 +635,11 @@ fn not(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Not(Box::new(e)),
+        ParsedExpr::Not(Box::new(e)),
     ))
-    // .map(|(e,)| span_wrapper_winnow(SExpr::Not(Box::new(e))))
-    // .parse_next(s)
 }
 
-fn lindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn lindex(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, i) = seq!(
         _: whitespace,
@@ -658,13 +661,11 @@ fn lindex(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::LIndex(Box::new(e), Box::new(i)),
+        ParsedExpr::LIndex(Box::new(e), Box::new(i)),
     ))
-    // .map(|(e, i)| span_wrapper_winnow(SExpr::LIndex(Box::new(e), Box::new(i))))
-    // .parse_next(s)
 }
 
-fn lappend(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn lappend(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (lst, el) = seq!(
         _: whitespace,
@@ -686,13 +687,11 @@ fn lappend(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::LAppend(Box::new(lst), Box::new(el)),
+        ParsedExpr::LAppend(Box::new(lst), Box::new(el)),
     ))
-    // .map(|(lst, el)| span_wrapper_winnow(SExpr::LAppend(Box::new(lst), Box::new(el))))
-    // .parse_next(s)
 }
 
-fn lconcat(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn lconcat(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (lst1, lst2) = seq!(
         _: whitespace,
@@ -715,12 +714,11 @@ fn lconcat(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::LConcat(Box::new(lst1), Box::new(lst2)),
+        ParsedExpr::LConcat(Box::new(lst1), Box::new(lst2)),
     ))
-    // .parse_next(s)
 }
 
-fn lhead(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn lhead(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (lst,) = seq!((
         _: whitespace,
@@ -740,12 +738,11 @@ fn lhead(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::LHead(Box::new(lst)),
+        ParsedExpr::LHead(Box::new(lst)),
     ))
-    // .parse_next(s)
 }
 
-fn ltail(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn ltail(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (lst,) = seq!((
         _: whitespace,
@@ -765,12 +762,11 @@ fn ltail(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::LTail(Box::new(lst)),
+        ParsedExpr::LTail(Box::new(lst)),
     ))
-    // .parse_next(s)
 }
 
-fn llen(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn llen(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (lst,) = seq!((
         _: whitespace,
@@ -790,12 +786,11 @@ fn llen(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::LLen(Box::new(lst)),
+        ParsedExpr::LLen(Box::new(lst)),
     ))
-    // .parse_next(s)
 }
 
-fn mget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn mget(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, k) = seq!(
         _: whitespace,
@@ -818,12 +813,11 @@ fn mget(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::MGet(Box::new(e), k.into()),
+        ParsedExpr::MGet(Box::new(e), k.into()),
     ))
-    // .parse_next(s)
 }
 
-fn minsert(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn minsert(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, k, v) = seq!(
         _: whitespace,
@@ -850,12 +844,11 @@ fn minsert(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::MInsert(Box::new(e), k.into(), Box::new(v)),
+        ParsedExpr::MInsert(Box::new(e), k.into(), Box::new(v)),
     ))
-    // .parse_next(s)
 }
 
-fn mremove(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn mremove(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, k) = seq!(
         _: whitespace,
@@ -878,12 +871,11 @@ fn mremove(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::MRemove(Box::new(e), k.into()),
+        ParsedExpr::MRemove(Box::new(e), k.into()),
     ))
-    // .parse_next(s)
 }
 
-fn mhas_key(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn mhas_key(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (e, k) = seq!(
         _: whitespace,
@@ -906,16 +898,15 @@ fn mhas_key(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::MHasKey(Box::new(e), k.into()),
+        ParsedExpr::MHasKey(Box::new(e), k.into()),
     ))
-    // .parse_next(s)
 }
 
 fn var_or_nodename(s: &mut &str) -> Result<VarOrNodeName> {
     ident.map(|w: &str| VarOrNodeName(w.into())).parse_next(s)
 }
 
-fn monitored_at(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn monitored_at(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (u, v) = seq!((
         _: whitespace,
@@ -939,12 +930,11 @@ fn monitored_at(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::MonitoredAt(u, v),
+        ParsedExpr::MonitoredAt(u, v),
     ))
-    // .parse_next(s)
 }
 
-fn dist(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn dist(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (u, v) = seq!((
         _: whitespace,
@@ -967,13 +957,12 @@ fn dist(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Dist(u, v),
+        ParsedExpr::Dist(u, v),
     ))
-    // .parse_next(s)
 }
 
 /// Trigonometric functions
-fn sin(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn sin(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (v,) = seq!((
         _: whitespace,
@@ -993,12 +982,11 @@ fn sin(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Sin(Box::new(v)),
+        ParsedExpr::Sin(Box::new(v)),
     ))
-    // .parse_next(s)
 }
 
-fn cos(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn cos(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (v,) = seq!((
         _: whitespace,
@@ -1018,12 +1006,11 @@ fn cos(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Cos(Box::new(v)),
+        ParsedExpr::Cos(Box::new(v)),
     ))
-    // .parse_next(s)
 }
 
-fn tan(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn tan(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (v,) = seq!((
         _: whitespace,
@@ -1043,12 +1030,11 @@ fn tan(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Tan(Box::new(v)),
+        ParsedExpr::Tan(Box::new(v)),
     ))
-    // .parse_next(s)
 }
 
-fn abs(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn abs(source: &str, s: &mut &str) -> Result<Expr> {
     let start_rest = *s;
     let (v,) = seq!((
         _: whitespace,
@@ -1068,13 +1054,12 @@ fn abs(source: &str, s: &mut &str) -> Result<SpannedExpr> {
         source,
         start_rest,
         end_rest,
-        SExpr::Abs(Box::new(v)),
+        ParsedExpr::Abs(Box::new(v)),
     ))
-    // .parse_next(s)
 }
 
 /// Fundamental expressions of the language
-fn atom(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn atom(source: &str, s: &mut &str) -> Result<Expr> {
     // Break up the large alt into smaller groups to avoid exceeding the trait implementation limit
     delimited(
         whitespace,
@@ -1237,12 +1222,9 @@ impl BinaryPrecedences {
 /// @param current_op: The current precedence level
 ///
 /// (Inspired by https://github.com/winnow-rs/winnow/blob/main/examples/arithmetic/parser_ast.rs)
-fn binary_op(
-    source: &str,
-    current_op: BinaryPrecedences,
-) -> impl FnMut(&mut &str) -> Result<SpannedExpr> {
+fn binary_op(source: &str, current_op: BinaryPrecedences) -> impl FnMut(&mut &str) -> Result<Expr> {
     move |s: &mut &str| {
-        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<SpannedExpr> + '_> =
+        let mut next_parser: Box<dyn FnMut(&mut &str) -> Result<Expr> + '_> =
             match current_op.next() {
                 Some(next) => Box::new(binary_op(source, next)),
                 None => Box::new(|i: &mut &str| atom(source, i)),
@@ -1253,25 +1235,39 @@ fn binary_op(
         separated_foldl1(
             &mut next_parser,
             seq!(_: loop_ms_or_lb_or_lc, literal(op_lit), _: loop_ms_or_lb_or_lc),
-            move |left, _, right| Spanned {
-                node: SExpr::BinOp(Box::new(left.clone()), Box::new(right.clone()), op.clone()),
-                span: Span::new(left.span.start, right.span.end),
+            move |left, _, right| {
+                let span = Span::new(left.span().start, right.span().end);
+                finish_root_span(
+                    ParsedExpr::BinOp(Box::new(left), Box::new(right), op.clone()),
+                    span,
+                )
             },
         )
         .parse_next(s)
     }
 }
-pub fn sexpr_old(s: &mut &str) -> Result<SpannedExpr> {
+pub fn sexpr_old(s: &mut &str) -> Result<Expr> {
     let source = *s;
-    sexpr_with_source(source, s)
+    let expr = sexpr_with_source(source, s)?;
+    reject_duplicate_fields(&expr)?;
+    Ok(expr)
 }
 
-pub fn sexpr(s: &mut &str) -> Result<SpannedExpr> {
+pub fn sexpr(s: &mut &str) -> Result<Expr> {
     let source = *s;
-    sexpr_with_source(source, s)
+    let expr = sexpr_with_source(source, s)?;
+    reject_duplicate_fields(&expr)?;
+    Ok(expr)
 }
 
-pub fn sexpr_with_source(source: &str, s: &mut &str) -> Result<SpannedExpr> {
+fn reject_duplicate_fields(expr: &Expr) -> Result<()> {
+    if expr.as_ref().duplicate_key().is_some() {
+        return Err(winnow::error::ContextError::new());
+    }
+    Ok(())
+}
+
+pub fn sexpr_with_source(source: &str, s: &mut &str) -> Result<Expr> {
     delimited(
         whitespace,
         binary_op(source, BinaryPrecedences::lowest_precedence()),
@@ -1464,7 +1460,7 @@ pub(crate) fn aux_decls(s: &mut &str) -> Result<Vec<(VarName, Option<StreamType>
 }
 
 #[cfg(test)]
-fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
+fn assignment_decl(s: &mut &str) -> Result<(VarName, ParsedExpr)> {
     seq!((
         _: whitespace,
         ident,
@@ -1474,15 +1470,12 @@ fn assignment_decl(s: &mut &str) -> Result<(VarName, SExpr)> {
         sexpr_old,
         _: whitespace,
     ))
-    .map(|(name, expr)| (name.into(), expr.node))
+    .map(|(name, expr)| (name.into(), finish_root_span(expr, Span::default())))
     .parse_next(s)
 }
 
 // New for not losing source info in assignment declarations
-pub(crate) fn assignment_decl_with_source(
-    source: &str,
-    s: &mut &str,
-) -> Result<(VarName, SpannedExpr)> {
+pub(crate) fn assignment_decl_with_source(source: &str, s: &mut &str) -> Result<(VarName, Expr)> {
     seq!((
         _: whitespace,
         ident,
@@ -1499,7 +1492,7 @@ pub(crate) fn assignment_decl_with_source(
 pub(crate) fn assignment_decls_with_source(
     source: &str,
     s: &mut &str,
-) -> Result<Vec<(VarName, SpannedExpr)>> {
+) -> Result<Vec<(VarName, Expr)>> {
     separated(
         0..,
         |i: &mut &str| assignment_decl_with_source(source, i),
@@ -1508,17 +1501,14 @@ pub(crate) fn assignment_decls_with_source(
     .parse_next(s)
 }
 
-pub fn dsrv_specification(s: &mut &str) -> Result<UntypedDsrvSpecification> {
+pub fn dsrv_specification(s: &mut &str) -> Result<DsrvSpecification> {
     let source = *s;
     dsrv_specification_with_source(source, s)
 }
 
 // New for not losing source info in assignment declarations in the LOLA specification
-pub fn dsrv_specification_with_source(
-    source: &str,
-    s: &mut &str,
-) -> Result<UntypedDsrvSpecification> {
-    terminated(
+pub fn dsrv_specification_with_source(source: &str, s: &mut &str) -> Result<DsrvSpecification> {
+    let spec = terminated(
         seq!((
             _: loop_ms_or_lb_or_lc,
             input_decls,
@@ -1533,7 +1523,7 @@ pub fn dsrv_specification_with_source(
         eof,
     )
     .map(|(input_vars, output_vars, aux_vars, exprs)| {
-        UntypedDsrvSpecification::new(
+        DsrvSpecification::new(
             input_vars.iter().map(|(name, _)| name.clone()).collect(),
             output_vars.iter().map(|(name, _)| name.clone()).collect(),
             exprs.into_iter().map(|(name, expr)| (name, expr)).collect(),
@@ -1550,7 +1540,15 @@ pub fn dsrv_specification_with_source(
                 .collect::<Vec<_>>(),
         )
     })
-    .parse_next(s)
+    .parse_next(s)?;
+    if spec
+        .exprs()
+        .values()
+        .any(|expr| expr.as_ref().duplicate_key().is_some())
+    {
+        return Err(winnow::error::ContextError::new());
+    }
+    Ok(spec)
 }
 
 #[cfg(test)]
@@ -1563,31 +1561,23 @@ mod tests {
 
     use super::*;
     use test_log::test;
-    type SExpr = SpannedExpr;
-
     fn expected_spec(
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
-        exprs: BTreeMap<VarName, SpannedExpr>,
+        exprs: BTreeMap<VarName, Expr>,
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: Vec<VarName>,
-    ) -> UntypedDsrvSpecification {
-        UntypedDsrvSpecification::new(
+    ) -> DsrvSpecification {
+        DsrvSpecification::new(
             input_vars.into_iter().collect::<BTreeSet<_>>(),
             output_vars.into_iter().collect::<BTreeSet<_>>(),
-            exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.node))
-                .collect(),
+            exprs,
             type_annotations,
             aux_vars,
         )
     }
 
-    fn assert_specs_eq_ignoring_spans(
-        actual: &UntypedDsrvSpecification,
-        expected: &UntypedDsrvSpecification,
-    ) {
+    fn assert_specs_eq_ignoring_spans(actual: &DsrvSpecification, expected: &DsrvSpecification) {
         assert_eq!(actual.input_vars, expected.input_vars);
         assert_eq!(actual.output_vars, expected.output_vars);
         assert_eq!(actual.aux_vars, expected.aux_vars);
@@ -1737,14 +1727,14 @@ mod tests {
             BTreeMap::from([
                 (
                     "z".into(),
-                    SExpr::BinOp(
-                        Box::new(SExpr::Var("u".into())),
-                        Box::new(SExpr::Var("w".into())),
+                    ParsedExpr::BinOp(
+                        Box::new(ParsedExpr::Var("u".into())),
+                        Box::new(ParsedExpr::Var("w".into())),
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
-                ("u".into(), SExpr::Var("x".into())),
-                ("w".into(), SExpr::Var("y".into())),
+                ("u".into(), ParsedExpr::Var("x".into())),
+                ("w".into(), ParsedExpr::Var("y".into())),
             ]),
             BTreeMap::new(),
             vec!["u".into(), "w".into()],
@@ -1766,14 +1756,14 @@ mod tests {
             BTreeMap::from([
                 (
                     "z".into(),
-                    SExpr::BinOp(
-                        Box::new(SExpr::Var("u".into())),
-                        Box::new(SExpr::Var("w".into())),
+                    ParsedExpr::BinOp(
+                        Box::new(ParsedExpr::Var("u".into())),
+                        Box::new(ParsedExpr::Var("w".into())),
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
-                ("u".into(), SExpr::Var("x".into())),
-                ("w".into(), SExpr::Var("y".into())),
+                ("u".into(), ParsedExpr::Var("x".into())),
+                ("w".into(), ParsedExpr::Var("y".into())),
             ]),
             BTreeMap::from([
                 ("x".into(), StreamType::Int),
@@ -1799,9 +1789,9 @@ mod tests {
             vec!["z".into()],
             BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Var("x".into())),
-                    Box::new(SExpr::Var("y".into())),
+                ParsedExpr::BinOp(
+                    Box::new(ParsedExpr::Var("x".into())),
+                    Box::new(ParsedExpr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -1823,9 +1813,9 @@ mod tests {
             vec!["z".into()],
             BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Var("x".into())),
-                    Box::new(SExpr::Var("y".into())),
+                ParsedExpr::BinOp(
+                    Box::new(ParsedExpr::Var("x".into())),
+                    Box::new(ParsedExpr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -1848,9 +1838,9 @@ mod tests {
             vec!["z".into()],
             BTreeMap::from([(
                 "z".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Var("x".into())),
-                    Box::new(SExpr::Var("y".into())),
+                ParsedExpr::BinOp(
+                    Box::new(ParsedExpr::Var("x".into())),
+                    Box::new(ParsedExpr::Var("y".into())),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -1875,9 +1865,9 @@ mod tests {
             vec!["x".into()],
             BTreeMap::from([(
                 "x".into(),
-                SExpr::BinOp(
-                    Box::new(SExpr::Val(Value::Int(1))),
-                    Box::new(SExpr::SIndex(Box::new(SExpr::Var("x".into())), 1)),
+                ParsedExpr::BinOp(
+                    Box::new(ParsedExpr::Val(Value::Int(1))),
+                    Box::new(ParsedExpr::SIndex(Box::new(ParsedExpr::Var("x".into())), 1)),
                     SBinOp::NOp(NumericalBinOp::Add),
                 ),
             )]),
@@ -1904,16 +1894,16 @@ mod tests {
             BTreeMap::from([
                 (
                     "z".into(),
-                    SExpr::BinOp(
-                        Box::new(SExpr::Var("x".into())),
-                        Box::new(SExpr::Var("y".into())),
+                    ParsedExpr::BinOp(
+                        Box::new(ParsedExpr::Var("x".into())),
+                        Box::new(ParsedExpr::Var("y".into())),
                         SBinOp::NOp(NumericalBinOp::Add),
                     ),
                 ),
                 (
                     "w".into(),
-                    SExpr::Dynamic(
-                        Box::new(SExpr::Var("s".into())),
+                    ParsedExpr::Dynamic(
+                        Box::new(ParsedExpr::Var("s".into())),
                         StreamTypeAscription::Unascribed,
                     ),
                 ),
@@ -2388,7 +2378,7 @@ mod tests {
         );
         assert_eq!(
             assignment_decl(&mut "y = List()"),
-            Ok(("y".into(), SExpr::List(eco_vec![]).node))
+            Ok(("y".into(), ParsedExpr::List(eco_vec![])))
         )
     }
 
@@ -2522,8 +2512,30 @@ mod tests {
         );
         assert_eq!(
             assignment_decl(&mut "y = Map()"),
-            Ok(("y".into(), SExpr::Map(BTreeMap::new()).node))
+            Ok(("y".into(), ParsedExpr::Map(BTreeMap::new())))
         )
+    }
+
+    #[test]
+    fn keyed_expression_fields_preserve_source_order() {
+        let expr = sexpr(&mut r#"Map("z": 1, "a": 2, "m": 3)"#).unwrap();
+        let crate::ExprKind::Map(fields) = expr.as_ref().kind() else {
+            panic!("expected a map expression");
+        };
+        assert_eq!(
+            fields
+                .keys()
+                .map(|key| AsRef::<str>::as_ref(key))
+                .collect::<Vec<_>>(),
+            ["z", "a", "m"]
+        );
+    }
+
+    #[test]
+    fn keyed_expression_fields_reject_duplicates() {
+        assert!(sexpr(&mut r#"Map("x": 1, "x": 2)"#).is_err());
+        assert!(sexpr(&mut r#"Struct("x": 1, "x": 2)"#).is_err());
+        assert!(sexpr(&mut r#"{x: 1, x: 2}"#).is_err());
     }
 
     #[test]
@@ -2757,76 +2769,76 @@ mod spec_tests {
     use super::*;
     use test_log::test;
 
-    fn spec_presult_to_string(result: &Result<UntypedDsrvSpecification>) -> String {
+    fn spec_presult_to_string(result: &Result<DsrvSpecification>) -> String {
         format!("{result:?}")
     }
 
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[1], 0) + 1",
-            "Ok(UntypedDsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[1], 0) + x",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
 
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor(),
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn if_statement() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if x == 0 then y else 42",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 
     fn if_statement_newlines() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
-            "Ok(UntypedDsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 

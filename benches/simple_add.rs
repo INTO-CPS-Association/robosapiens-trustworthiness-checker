@@ -44,8 +44,6 @@ fn from_elem(c: &mut Criterion) {
               // 1000000,
     ];
 
-    let local_smol_executor = LocalSmolExecutor::new();
-
     let mut group = c.benchmark_group("simple_add");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
@@ -62,9 +60,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new("simple_add_untyped_async", size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )
@@ -75,9 +74,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new("simple_add_typed_async", size),
             &(&spec_typed),
             |b, &spec_typed| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_typed_async(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec_typed.clone(),
                         input_stream_fn(),
                     )
@@ -88,9 +88,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new("simple_add_untyped_dataflow", size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_dataflow(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )
@@ -101,9 +102,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new("simple_add_typed_dataflow", size),
             &(&spec_typed),
             |b, &spec_typed| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_typed_dataflow(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec_typed.clone(),
                         input_stream_fn(),
                         trustworthiness_checker::core::Semantics::TypedUntimed,
@@ -115,9 +117,10 @@ fn from_elem(c: &mut Criterion) {
             BenchmarkId::new("simple_add_untyped_little", size),
             &(&spec),
             |b, &spec| {
-                b.to_async(local_smol_executor.clone()).iter(|| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_little(
-                        local_smol_executor.executor.clone(),
+                        benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )
