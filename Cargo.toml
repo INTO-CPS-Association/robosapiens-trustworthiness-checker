@@ -138,9 +138,9 @@ harness = false
 name = "dup_defer"
 harness = false
 
-# [[bench]]
-# name = "dyn_paper"
-# harness = false
+[[bench]]
+name = "dyn_paper"
+harness = false
 
 [[bench]]
 name = "dsrv_paper"
