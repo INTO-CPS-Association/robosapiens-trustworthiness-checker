@@ -41,7 +41,7 @@ services:
       target: dev
       args:
         - UID=${UID:-1000}
-        - GID=${UID:-1000}
+        - GID=${GID:-1000}
         - USERNAME=${USERNAME:-devuser}
         - DSRV_LSP_URL=${DSRV_LSP_URL:-https://github.com/INTO-CPS-Association/dsrv-lsp/releases/download/dsrv-lsp-2026-06-20/dsrv-lsp}
         - DSRV_LSP_SHA256=${DSRV_LSP_SHA256:-0c60159103c5dc33cbb1a41740d6e791e03c8028fb5061a04d5458af5eb6908c}

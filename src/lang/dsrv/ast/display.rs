@@ -3,8 +3,7 @@ use std::fmt::{Debug, Display, Error};
 use crate::core::{StreamTypeAscription, VarName};
 
 use super::{
-    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr, ExprArena,
-    ExprId, ExprKind, ExprRef,
+    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr, ExprRef,
 };
 
 impl Debug for CheckedExpr {
@@ -39,25 +38,20 @@ impl serde::Serialize for Expr {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.display().to_string())
+        serializer.serialize_str(&self.to_string())
     }
 }
 
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.display().fmt(f)
+        Display::fmt(&self.as_ref(), f)
     }
 }
 
 impl Debug for ExprRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.display().fmt(f)
-    }
-}
-
-impl Display for ExprRef<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.display().fmt(f)
+        // TODO: do we need a native debug implementation
+        Display::fmt(self, f)
     }
 }
 
@@ -67,40 +61,20 @@ impl Display for CheckedDsrvSpecification {
     }
 }
 
-/// A borrowed expression formatting adapter.
-pub struct ExprDisplay<'arena> {
-    pub(super) arena: &'arena ExprArena,
-    pub(super) id: ExprId,
-}
-
-impl Display for ExprDisplay<'_> {
+impl Display for ExprRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use ExprKind::*;
-        let show = |id| ExprDisplay {
-            arena: self.arena,
-            id,
-        };
-        match &self.arena.get(self.id).node {
+        use super::ExprView::*;
+
+        match self.view() {
             Val(value) => write!(f, "{value}"),
             Var(var) => write!(f, "{var}"),
-            BinOp(lhs, rhs, op) => write!(f, "({} {op} {})", show(*lhs), show(*rhs)),
-            If(cond, yes, no) => write!(
-                f,
-                "(if {} then {} else {})",
-                show(*cond),
-                show(*yes),
-                show(*no)
-            ),
-            SIndex(expr, index) => write!(f, "{}[{index}]", show(*expr)),
-            Not(expr) => write!(f, "!{}", show(*expr)),
-            Neg(expr) => write!(f, "-{}", show(*expr)),
-            Dynamic(source, result_type, scope) | Defer(source, result_type, scope) => {
-                let name = if matches!(&self.arena.get(self.id).node, Dynamic(..)) {
-                    "dynamic"
-                } else {
-                    "defer"
-                };
-                write!(f, "{name}({}", show(*source))?;
+            BinOp(lhs, rhs, op) => write!(f, "({} {op} {})", lhs, rhs),
+            If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
+            SIndex(expr, index) => write!(f, "{}[{index}]", expr),
+            Not(expr) => write!(f, "!{expr}"),
+            Neg(expr) => write!(f, "-{expr}"),
+            Dynamic(source, result_type, scope) => {
+                write!(f, "dynamic({}", source)?;
                 if let StreamTypeAscription::Ascribed(typ) = result_type {
                     write!(f, ": {typ}")?;
                 }
@@ -114,82 +88,114 @@ impl Display for ExprDisplay<'_> {
                 }
                 write!(f, ")")
             }
-            Update(a, b) => write!(f, "update({}, {})", show(*a), show(*b)),
-            Default(a, b) => write!(f, "default({}, {})", show(*a), show(*b)),
-            IsDefined(expr) => write!(f, "is_defined({})", show(*expr)),
-            When(expr) => write!(f, "when({})", show(*expr)),
-            Latch(a, b) => write!(f, "latch({}, {})", show(*a), show(*b)),
-            Init(a, b) => write!(f, "init({}, {})", show(*a), show(*b)),
+            Defer(source, result_type, scope) => {
+                write!(f, "defer({}", source)?;
+                if let StreamTypeAscription::Ascribed(typ) = result_type {
+                    write!(f, ": {typ}")?;
+                }
+                if let DynamicExprScope::Explicit(vars) = scope {
+                    let vars = vars
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(f, ", {{{vars}}}")?;
+                }
+                write!(f, ")")
+            }
+            Update(a, b) => write!(f, "update({a}, {b})"),
+            Default(a, b) => write!(f, "default({a}, {b})"),
+            IsDefined(expr) => write!(f, "is_defined({expr})"),
+            When(expr) => write!(f, "when({expr})"),
+            Latch(a, b) => write!(f, "latch({a}, {b})"),
+            Init(a, b) => write!(f, "init({a}, {b})"),
             Lambda(params, body) => {
                 let params = params
                     .iter()
                     .map(|(name, typ)| format!("{name}: {typ}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "\\{params} -> {}", show(*body))
+                write!(f, "\\{params} -> {body}")
             }
-            Apply(function, args) | Partial(function, args) => {
-                let partial = matches!(&self.arena.get(self.id).node, Partial(_, _));
-                if partial {
-                    write!(f, "partial({}", show(*function))?;
-                } else {
-                    write!(f, "{}(", show(*function))?;
-                }
-                for (index, arg) in args.iter().enumerate() {
-                    if partial || index > 0 {
+            Apply(function, args) => {
+                write!(f, "{function}(")?;
+                for (index, arg) in args.into_iter().enumerate() {
+                    if index > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", show(*arg))?;
+                    write!(f, "{arg}")?;
                 }
                 write!(f, ")")
             }
-            Fix(function) => write!(f, "fix({})", show(*function)),
-            List(items) | Tuple(items) => {
-                let (open, close) = if matches!(&self.arena.get(self.id).node, List(_)) {
-                    ("[", "]")
-                } else {
-                    ("Tuple(", ")")
-                };
+            Partial(function, args) => {
+                write!(f, "partial({function}")?;
+                for arg in args.into_iter() {
+                    write!(f, ", ")?;
+                    write!(f, "{arg}")?;
+                }
+                write!(f, ")")
+            }
+            Fix(function) => write!(f, "fix({function})"),
+            List(items) => {
                 let items = items
-                    .iter()
-                    .map(|id| show(*id).to_string())
+                    .into_iter()
+                    .map(|item| format!("{item}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "{open}{items}{close}")
+                write!(f, "[{items}]")
             }
-            LIndex(a, b) => write!(f, "List.get({}, {})", show(*a), show(*b)),
-            LAppend(a, b) => write!(f, "List.append({}, {})", show(*a), show(*b)),
-            LConcat(a, b) => write!(f, "List.concat({}, {})", show(*a), show(*b)),
-            LHead(expr) => write!(f, "List.head({})", show(*expr)),
-            LTail(expr) => write!(f, "List.tail({})", show(*expr)),
-            LLen(expr) => write!(f, "List.len({})", show(*expr)),
-            LMap(a, b) => write!(f, "List.map({}, {})", show(*a), show(*b)),
-            LFilter(a, b) => write!(f, "List.filter({}, {})", show(*a), show(*b)),
-            LFold(a, b, c) => write!(f, "List.fold({}, {}, {})", show(*a), show(*b), show(*c)),
-            Map(fields) | Struct(fields) | ObjectLiteral(fields) => {
+            Tuple(items) => {
+                let items = items
+                    .into_iter()
+                    .map(|item| format!("{item}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Tuple({items})")
+            }
+            LIndex(a, b) => write!(f, "List.get({a}, {b})"),
+            LAppend(a, b) => write!(f, "List.append({a}, {b})"),
+            LConcat(a, b) => write!(f, "List.concat({a}, {b})"),
+            LHead(expr) => write!(f, "List.head({expr})"),
+            LTail(expr) => write!(f, "List.tail({expr})"),
+            LLen(expr) => write!(f, "List.len({expr})"),
+            LMap(a, b) => write!(f, "List.map({a}, {b})"),
+            LFilter(a, b) => write!(f, "List.filter({a}, {b})"),
+            LFold(a, b, c) => write!(f, "List.fold({a}, {b}, {c})"),
+            Map(fields) => {
                 let fields = fields
                     .iter()
-                    .map(|(key, value)| format!("{key:?}: {}", show(*value)))
+                    .map(|(key, value)| format!("{key:?}: {value}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                match &self.arena.get(self.id).node {
-                    Map(_) => write!(f, "Map({fields})"),
-                    Struct(_) => write!(f, "Struct({fields})"),
-                    ObjectLiteral(_) => write!(f, "{{{fields}}}"),
-                    _ => unreachable!(),
-                }
+                write!(f, "Map({fields})")
             }
-            MGet(expr, key) => write!(f, "Map.get({}, {key:?})", show(*expr)),
-            SGet(expr, key) => write!(f, "{}.{key}", show(*expr)),
+            Struct(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|(key, value)| format!("{key:?}: {value}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Struct({fields})")
+            }
+            ObjectLiteral(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|(key, value)| format!("{key:?}: {value}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{{{fields}}}")
+            }
+            MGet(expr, key) => write!(f, "Map.get({expr}, {key:?})"),
+            SGet(expr, key) => write!(f, "{expr}.{key}"),
             MInsert(expr, key, value) => {
-                write!(f, "Map.insert({}, {key:?}, {})", show(*expr), show(*value))
+                write!(f, "Map.insert({expr}, {key:?}, {value})")
             }
-            MRemove(expr, key) => write!(f, "Map.remove({}, {key:?})", show(*expr)),
-            MHasKey(expr, key) => write!(f, "Map.has_key({}, {key:?})", show(*expr)),
-            Sin(expr) => write!(f, "sin({})", show(*expr)),
-            Cos(expr) => write!(f, "cos({})", show(*expr)),
-            Tan(expr) => write!(f, "tan({})", show(*expr)),
-            Abs(expr) => write!(f, "abs({})", show(*expr)),
+            MRemove(expr, key) => write!(f, "Map.remove({expr}, {key:?})"),
+            MHasKey(expr, key) => write!(f, "Map.has_key({expr}, {key:?})"),
+            Sin(expr) => write!(f, "sin({expr})"),
+            Cos(expr) => write!(f, "cos({expr})"),
+            Tan(expr) => write!(f, "tan({expr})"),
+            Abs(expr) => write!(f, "abs({expr})"),
             MonitoredAt(var, node) => write!(f, "monitored_at({var}, {node})"),
             Dist(a, b) => write!(f, "dist({a}, {b})"),
         }
@@ -225,7 +231,7 @@ impl Display for DsrvSpecification {
             }
         }
         for (v, expression) in &self.exprs {
-            writeln!(f, "{v} = {}", expression.display())?;
+            writeln!(f, "{v} = {expression}")?;
         }
         Ok(())
     }

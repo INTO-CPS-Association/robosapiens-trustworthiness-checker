@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn unary_minus_display_roundtrips_for_nested_operands() {
         let expression = parse_sexpr("-(x + 1)").expect("nested negation should parse");
-        let displayed = expression.display().to_string();
+        let displayed = format!("{expression}");
         let reparsed = parse_sexpr(&displayed).expect("displayed negation should parse");
 
         assert_eq!(strip_span(&expression), strip_span(&reparsed));

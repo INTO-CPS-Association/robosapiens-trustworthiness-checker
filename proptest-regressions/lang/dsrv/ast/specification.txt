@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2064e36b2742152a9e6842e80698aefade31186dd0e1dd2a2a29f353c16addb5 # shrinks to e = Val(Bool(false))
+cc 198e3721a33bc12acdde4669dcf09f456be493820f284b3b94bb0ea55c814ae2 # shrinks to e = Val(Float(1.4007007069304762e-251))
+cc 672c36178466b178cf94118825eb85fbc6e3c0345d0f0c749ea61d50da0eca42 # shrinks to e = Val(Int(0))
+cc d41ab79f1561bf48743a12d71a0bdd99e6ea61cc5858091283ced97074492eef # shrinks to e = If(Val(Bool(false)), Val(Bool(false)), If(Val(Bool(false)), BinOp(Val(Str(" ")), If(Val(Bool(false)), Default(Val(Str("0")), Val(Str("61ClLW9JkRfb"))), Val(Str(" p_ D_F8V_"))), COp(Eq)), BinOp(Sin(Val(Float(7.724713768368154e-309))), BinOp(Val(Float(3.781837655061474e-17)), Val(Float(2.9193730592794298e-49)), NOp(Sub)), COp(Gt))))
+cc 6f9e08dd39fdc97d6c5379b1bd1ce1448add5c104df52538099de332a02cc95c # shrinks to e = Val(Str("a"))

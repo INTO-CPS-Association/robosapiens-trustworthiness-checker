@@ -105,6 +105,7 @@ impl Variant {
         let parameter_types = constructor_fields.iter().map(|field| match &field.kind {
             FieldKind::Child => quote!(Box<impl Into<#root>>),
             FieldKind::Children => quote!(#children<#root>),
+            FieldKind::BorrowedChildren => quote!(#children<#root>),
             FieldKind::KeyedChildren => quote!(impl IntoIterator<Item = (#key, #root)>),
             FieldKind::Borrowed(typ) => quote!(#typ),
             FieldKind::IntoOwned(typ) => quote!(impl Into<#typ>),
@@ -117,6 +118,9 @@ impl Variant {
             }
             match &field.kind {
                 FieldKind::Child => quote!(let #field_name: #root = (*#field_name).into();),
+                FieldKind::BorrowedChildren => quote!(
+                    let #field_name: Vec<#root> = #field_name.into_iter().collect();
+                ),
                 FieldKind::Children => quote!(
                     let #field_name: Vec<#root> = #field_name.into_iter().collect();
                 ),
@@ -134,7 +138,9 @@ impl Variant {
             let field_name = &field.name;
             match field.kind {
                 FieldKind::Child => quote!(owned_children.push(#field_name);),
-                FieldKind::Children => quote!(owned_children.extend(#field_name);),
+                FieldKind::Children | FieldKind::BorrowedChildren => {
+                    quote!(owned_children.extend(#field_name);)
+                }
                 FieldKind::KeyedChildren => quote!(owned_children.extend(#field_name.1);),
                 FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => quote!(),
             }
@@ -143,7 +149,9 @@ impl Variant {
             let field_name = &field.name;
             match &field.kind {
                 FieldKind::Child => quote!(ids.next().expect("missing fixed child ID")),
-                FieldKind::Children => quote!(ids.by_ref().collect::<#children<_>>()),
+                FieldKind::Children | FieldKind::BorrowedChildren => {
+                    quote!(ids.by_ref().collect::<#children<_>>())
+                }
                 FieldKind::KeyedChildren => quote!(#field_name.0.into_iter()
                     .zip(ids.by_ref())
                     .collect::<#keyed_children<_>>()
@@ -172,7 +180,10 @@ impl Variant {
             .fields
             .iter()
             .map(|field| {
-                if matches!(field.kind, FieldKind::Child | FieldKind::Children) {
+                if matches!(
+                    field.kind,
+                    FieldKind::Child | FieldKind::Children | FieldKind::BorrowedChildren
+                ) {
                     format_ident!("_left_{}", field.name)
                 } else {
                     format_ident!("left_{}", field.name)
@@ -183,7 +194,10 @@ impl Variant {
             .fields
             .iter()
             .map(|field| {
-                if matches!(field.kind, FieldKind::Child | FieldKind::Children) {
+                if matches!(
+                    field.kind,
+                    FieldKind::Child | FieldKind::Children | FieldKind::BorrowedChildren
+                ) {
                     format_ident!("_right_{}", field.name)
                 } else {
                     format_ident!("right_{}", field.name)
@@ -195,7 +209,7 @@ impl Variant {
             .iter()
             .zip(left.iter().zip(right.iter()))
             .filter_map(|(field, (left, right))| match &field.kind {
-                FieldKind::Child | FieldKind::Children => None,
+                FieldKind::Child | FieldKind::Children | FieldKind::BorrowedChildren => None,
                 FieldKind::KeyedChildren => Some(quote!(
                     #left.iter().map(|(key, _)| key).eq(#right.iter().map(|(key, _)| key))
                 )),
@@ -731,6 +745,7 @@ fn stored_type(
     match kind {
         FieldKind::Child => quote!(#id),
         FieldKind::Children => quote!(#children<#id>),
+        FieldKind::BorrowedChildren => quote!(#children<#id>),
         FieldKind::KeyedChildren => quote!(#keyed),
         FieldKind::Borrowed(typ) | FieldKind::IntoOwned(typ) | FieldKind::Copied(typ) => {
             quote!(#typ)
@@ -745,6 +760,9 @@ fn view_type(kind: &FieldKind, cursor: &Ident, id: &Ident, key: &Type) -> proc_m
             #cursor,
             std::iter::Copied<std::slice::Iter<'arena, #id>>
         >),
+        FieldKind::BorrowedChildren => {
+            quote!(contiguous_tree::ResolvedIdsBorrowed<'arena, #cursor>)
+        }
         FieldKind::KeyedChildren => {
             quote!(contiguous_tree::ResolvedFields<'arena, #cursor, #key>)
         }
@@ -759,6 +777,9 @@ fn resolve(kind: &FieldKind, field: &Ident, cursor: &Ident) -> proc_macro2::Toke
         FieldKind::Children => {
             quote!(contiguous_tree::ResolvedIds::new(#cursor, #field.iter().copied()))
         }
+        FieldKind::BorrowedChildren => {
+            quote!(contiguous_tree::ResolvedIdsBorrowed::new(#cursor, #field.as_slice()))
+        }
         FieldKind::KeyedChildren => {
             quote!(contiguous_tree::ResolvedFields::new(#cursor, #field.raw_slice()))
         }
@@ -770,7 +791,7 @@ fn resolve(kind: &FieldKind, field: &Ident, cursor: &Ident) -> proc_macro2::Toke
 fn record(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
     match kind {
         FieldKind::Child => quote!(ids.push(*#field);),
-        FieldKind::Children => quote!(ids.extend_slice(#field);),
+        FieldKind::Children | FieldKind::BorrowedChildren => quote!(ids.extend_slice(#field);),
         FieldKind::KeyedChildren => quote!(ids.extend_keyed(#field.raw_slice());),
         FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
             quote!(let _ = #field;)
@@ -781,7 +802,9 @@ fn record(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
 fn visit(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
     match kind {
         FieldKind::Child => quote!(visit(#field);),
-        FieldKind::Children => quote!(#field.make_mut().iter_mut().for_each(&mut visit);),
+        FieldKind::Children | FieldKind::BorrowedChildren => {
+            quote!(#field.make_mut().iter_mut().for_each(&mut visit);)
+        }
         FieldKind::KeyedChildren => quote!(for (_, child) in #field.make_mut() { visit(child); }),
         FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
             quote!(let _ = #field;)

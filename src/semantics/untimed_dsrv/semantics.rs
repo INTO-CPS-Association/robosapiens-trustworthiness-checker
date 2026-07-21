@@ -713,15 +713,12 @@ mod tests {
         let expression = checked.var_expr(&"result".into()).unwrap();
         let context = Context::<CheckedValueConfig>::new(executor, Vec::new(), Vec::new(), 0);
 
-        let values: Vec<Value> =
-            <CheckedUntimedDsrvSemantics as MonitoringSemantics<CheckedValueConfig>>::to_async_stream(
-                &expression,
-                &context,
-                None,
-            )
-            .take(1)
-            .collect::<Vec<_>>()
-            .await;
+        let values: Vec<Value> = <CheckedUntimedDsrvSemantics as MonitoringSemantics<
+            CheckedValueConfig,
+        >>::to_async_stream(&expression, &context, None)
+        .take(1)
+        .collect::<Vec<_>>()
+        .await;
 
         assert_eq!(values, [Value::Bool(true)]);
     }

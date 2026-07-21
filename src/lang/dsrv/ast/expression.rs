@@ -14,7 +14,7 @@ use std::fmt::{Debug, Display};
 use contiguous_tree::TreeCursorExt;
 use ecow::{EcoString, EcoVec};
 
-use super::{CheckedExprRef, ExprDisplay, SBinOp, TypeAnnotations};
+use super::{CheckedExprRef, SBinOp, TypeAnnotations};
 use crate::core::{StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
@@ -196,12 +196,6 @@ impl Expr {
     pub(crate) fn checked_ref<'a>(&'a self, checked: &'a TypeAnnotations) -> CheckedExprRef<'a> {
         self.as_ref().with_annotations(checked)
     }
-    pub fn display(&self) -> ExprDisplay<'_> {
-        ExprDisplay {
-            arena: self.arena(),
-            id: self.id(),
-        }
-    }
 }
 
 impl<'arena> ExprRef<'arena> {
@@ -215,13 +209,6 @@ impl<'arena> ExprRef<'arena> {
 
     pub fn span(self) -> Span {
         self.node().span
-    }
-
-    pub fn display(self) -> ExprDisplay<'arena> {
-        ExprDisplay {
-            arena: self.arena(),
-            id: self.id(),
-        }
     }
 }
 

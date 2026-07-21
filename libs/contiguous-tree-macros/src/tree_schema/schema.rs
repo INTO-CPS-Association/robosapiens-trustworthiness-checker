@@ -10,6 +10,7 @@ mod keyword {
     syn::custom_keyword!(tree);
     syn::custom_keyword!(child);
     syn::custom_keyword!(children);
+    syn::custom_keyword!(borrowed_children);
     syn::custom_keyword!(keyed_children);
     syn::custom_keyword!(data);
     syn::custom_keyword!(into_data);
@@ -24,6 +25,7 @@ mod keyword {
 pub(super) enum FieldKind {
     Child,
     Children,
+    BorrowedChildren,
     KeyedChildren,
     Borrowed(Type),
     IntoOwned(Type),
@@ -36,7 +38,10 @@ impl FieldKind {
     }
 
     fn is_collection(&self) -> bool {
-        matches!(self, Self::Children | Self::KeyedChildren)
+        matches!(
+            self,
+            Self::Children | Self::BorrowedChildren | Self::KeyedChildren
+        )
     }
 }
 
@@ -56,6 +61,9 @@ impl Parse for Field {
         } else if input.peek(keyword::children) {
             input.parse::<keyword::children>()?;
             FieldKind::Children
+        } else if input.peek(keyword::borrowed_children) {
+            input.parse::<keyword::borrowed_children>()?;
+            FieldKind::BorrowedChildren
         } else if input.peek(keyword::keyed_children) {
             input.parse::<keyword::keyed_children>()?;
             FieldKind::KeyedChildren
@@ -70,7 +78,7 @@ impl Parse for Field {
             FieldKind::Copied(parenthesized_type(input)?)
         } else {
             return Err(input.error(
-                "expected child, children, keyed_children, data(T), into_data(T), or copy(T)",
+                "expected child, children, borrowed_children, keyed_children, data(T), into_data(T), or copy(T)",
             ));
         };
         let owned_default = if input.peek(Token![=]) {
@@ -318,6 +326,10 @@ mod tests {
         }
     }
 
+    fn parse(schema: &str) {
+        assert!(syn::parse_str::<TreeSchema>(schema).is_ok())
+    }
+
     #[test]
     fn rejects_duplicate_settings() {
         assert!(
@@ -360,6 +372,13 @@ mod tests {
         assert!(
             error("pub tree Expr { Node(rest: children, first: child), }")
                 .contains("fixed children must precede")
+        );
+    }
+
+    #[test]
+    fn accepts_borrowed_children() {
+        parse(
+            "pub tree Expr {\n            internals: pub(crate),\n            metadata: m: () = (),\n            id: u32,\n            key: String,\n            children: Vec,\n            keyed_children: Vec,\n            Node(rest: borrowed_children),\n        }",
         );
     }
 }

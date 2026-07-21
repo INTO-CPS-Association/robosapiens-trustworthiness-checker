@@ -913,7 +913,8 @@ where
                                 .as_ref()
                                 .unwrap()
                                 .input_vars()
-                                .into_iter()
+                                .iter()
+                                .cloned()
                                 .collect(),
                             output_vars: output_vars.clone(),
                             planning_context: planning_context.clone(),
@@ -1009,7 +1010,8 @@ where
                                 .as_ref()
                                 .unwrap()
                                 .input_vars()
-                                .into_iter()
+                                .iter()
+                                .cloned()
                                 .collect(),
                             output_vars: output_vars.clone(),
                             planning_context: planning_context.clone(),

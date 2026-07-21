@@ -25,5 +25,3 @@ pub use contiguous_tree::TreeCursorExt;
 pub use expression::*;
 pub use operators::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp};
 pub use specification::*;
-
-pub use display::ExprDisplay;

@@ -57,7 +57,7 @@ mod transform;
 
 pub use arena::{Arena, ArenaId, IdRange};
 pub use cursor::{Children, ContextCursor, Postorder, TreeCursor, TreeCursorExt, try_zip_with};
-pub use fields::{ResolvedFields, ResolvedIds};
+pub use fields::{ResolvedFields, ResolvedIds, ResolvedIdsBorrowed};
 pub use fold::{FoldNode, fold, try_fold};
 pub use handle::{NodeAnnotations, TreeHandle, TreeStorage};
 pub use node::{ChildIds, TreeNode, TreeNodeMut, map_child_ids};

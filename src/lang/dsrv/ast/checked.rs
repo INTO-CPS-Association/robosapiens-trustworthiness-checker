@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use contiguous_tree::{ContextCursor, TreeCursorExt};
 
-use super::{Expr, ExprDisplay, ExprId, ExprKind, ExprRef, ExprView};
+use super::{Expr, ExprId, ExprKind, ExprRef, ExprView};
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::type_checker::{TCType, TypeInfo};
 
@@ -130,9 +130,5 @@ impl<'arena> CheckedExprRef<'arena> {
 
     pub fn type_info(self) -> &'arena TypeInfo {
         self.cursor.context().variable_types.as_ref()
-    }
-
-    pub fn display(self) -> ExprDisplay<'arena> {
-        self.expr().display()
     }
 }

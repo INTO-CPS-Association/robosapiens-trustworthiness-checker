@@ -50,6 +50,86 @@ where
 {
 }
 
+/// IDs from a stored collection resolved through their parent cursor.
+///
+/// This variant stores IDs as a borrowed slice and supports pattern-friendly
+/// copying while iterating.
+#[derive(Clone, Copy)]
+pub struct ResolvedIdsBorrowed<'arena, Cursor: TreeCursor> {
+    parent: Cursor,
+    ids: &'arena [Cursor::Id],
+    index: usize,
+    end: usize,
+}
+
+impl<'arena, Cursor> ResolvedIdsBorrowed<'arena, Cursor>
+where
+    Cursor: TreeCursor,
+    Cursor::Id: Copy,
+{
+    pub fn new(parent: Cursor, ids: &'arena [Cursor::Id]) -> Self {
+        let end = ids.len();
+        Self {
+            parent,
+            ids,
+            index: 0,
+            end,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.index)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<'arena, Cursor> Iterator for ResolvedIdsBorrowed<'arena, Cursor>
+where
+    Cursor: TreeCursor,
+    Cursor::Id: Copy,
+{
+    type Item = Cursor;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.end {
+            return None;
+        }
+        let id = self.ids[self.index];
+        self.index += 1;
+        Some(self.parent.child(id))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl<'arena, Cursor> DoubleEndedIterator for ResolvedIdsBorrowed<'arena, Cursor>
+where
+    Cursor: TreeCursor,
+    Cursor::Id: Copy,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.index >= self.end {
+            return None;
+        }
+        self.end -= 1;
+        let id = self.ids[self.end];
+        Some(self.parent.child(id))
+    }
+}
+
+impl<'arena, Cursor> ExactSizeIterator for ResolvedIdsBorrowed<'arena, Cursor>
+where
+    Cursor: TreeCursor,
+    Cursor::Id: Copy,
+{
+}
+
 /// Keyed child IDs resolved through their parent cursor.
 #[derive(Clone, Copy)]
 pub struct ResolvedFields<'fields, Cursor: TreeCursor, Key> {
