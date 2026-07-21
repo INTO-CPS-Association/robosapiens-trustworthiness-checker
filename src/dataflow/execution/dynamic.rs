@@ -65,7 +65,7 @@ fn tick_dynamic_plan(
     }
     active
         .executor
-        .evaluate_observing(environment_values, None, observed)
+        .evaluate_observing_deferred(environment_values, observed)
 }
 
 struct CompiledDynamicPlan {
@@ -98,8 +98,8 @@ fn compile_dynamic_plan(
         .vars()
         .expect("dynamic scope should be resolved during plan binding");
     program.inherit_dynamic_scope(allowed_vars);
-    let dependencies = program.free_vars(None);
-    let unsupported = dependencies
+    let free_vars = program.free_vars(None);
+    let unsupported = free_vars
         .iter()
         .filter(|input| !allowed_vars.contains(input))
         .cloned()
@@ -107,7 +107,8 @@ fn compile_dynamic_plan(
     if !unsupported.is_empty() {
         return Err(DataflowEvalError::DynamicRestrictedContext(unsupported));
     }
-    let dependencies = dependencies
+    let dependencies = program
+        .immediate_free_vars(None)
         .iter()
         .map(|name| {
             environment

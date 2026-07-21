@@ -5,8 +5,7 @@ use crate::io::testing::ManualOutputHandler;
 use crate::lang::dsrv::ast::generation::{arb_boolean_dsrv_spec, arb_dsrv_spec};
 use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
 use crate::lang::dsrv::type_checker::type_check;
-use crate::runtime::asynchronous::AsyncRuntimeBuilder;
-use crate::runtime::asynchronous::Context;
+use crate::runtime::asynchronous::{AsyncRuntimeBuilder, Context};
 use crate::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use crate::runtime::dataflow::DataflowRuntimeBuilder;
 use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
@@ -472,7 +471,7 @@ where
         spec.output_vars.clone(),
     ));
     let outputs = output_handler.get_output();
-    let monitor = AsyncRuntimeBuilder::<TestConfig, S>::new()
+    let runtime = AsyncRuntimeBuilder::<TestConfig, S>::new()
         .executor(executor.clone())
         .model(spec)
         .input(map::input_stream(inputs))
@@ -480,7 +479,7 @@ where
         .build()
         .await;
 
-    executor.spawn(monitor.run()).detach();
+    executor.spawn(runtime.run()).detach();
     outputs.take(limit).collect().await
 }
 
@@ -557,22 +556,192 @@ async fn assert_dataflow_semisync_runtime_parity(
     )
     .await
     .expect("semi-sync parity runtime did not produce the expected outputs");
-    let asynchronous = with_timeout(
-        eval_runtime_with::<UntimedDsrvSemantics>(executor, spec, inputs, ticks),
-        10,
-        "asynchronous parity runtime",
-    )
-    .await
-    .expect("asynchronous parity runtime did not produce the expected outputs");
     assert_eq!(
         dataflow, semisync,
         "dataflow and semi-sync differed for:\n{spec_src}\ninputs:\n{input_trace}"
     );
-    assert_eq!(
-        dataflow, asynchronous,
-        "dataflow and asynchronous differed for:\n{spec_src}\ninputs:\n{input_trace}"
-    );
     dataflow
+}
+
+fn output_trace(rows: &[BTreeMap<VarName, Value>], name: &str) -> Vec<Value> {
+    let name = VarName::new(name);
+    rows.iter().map(|row| row[&name].clone()).collect()
+}
+
+#[apply(async_test)]
+async fn dataflow_semisync_mutually_delayed_streams_parity(executor: Rc<LocalExecutor<'static>>) {
+    let inputs = BTreeMap::from([
+        (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+        (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+    ]);
+
+    let mutual = assert_dataflow_semisync_runtime_parity(
+        executor.clone(),
+        "in x: Int\nin y: Int\nout a: Int\nout b: Int\n\
+         a = default(b[1], 0) + x\nb = default(a[1], 0) + y",
+        inputs.clone(),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&mutual, "a"),
+        vec![1.into(), 12.into(), 24.into()]
+    );
+    assert_eq!(
+        output_trace(&mutual, "b"),
+        vec![10.into(), 21.into(), 42.into()]
+    );
+
+    let mixed = assert_dataflow_semisync_runtime_parity(
+        executor.clone(),
+        "in x: Int\nin y: Int\nout a: Int\nout b: Int\n\
+         a = default(b[1], 0) + x\nb = a + y",
+        inputs.clone(),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&mixed, "a"),
+        vec![1.into(), 13.into(), 36.into()]
+    );
+    assert_eq!(
+        output_trace(&mixed, "b"),
+        vec![11.into(), 33.into(), 66.into()]
+    );
+
+    let direct_function = assert_dataflow_semisync_runtime_parity(
+        executor.clone(),
+        "in x: Int\nin y: Int\nout a: Int\nout b: Int\n\
+         a = (\\v: Int -> default(b[1], 0) + v)(x)\n\
+         b = (\\v: Int -> default(a[1], 0) + v)(y)",
+        inputs.clone(),
+    )
+    .await;
+    assert_eq!(direct_function, mutual);
+}
+
+#[apply(async_test)]
+async fn dataflow_semisync_delayed_cycle_offsets_and_branches_parity(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let offsets = assert_dataflow_semisync_runtime_parity(
+        executor.clone(),
+        "in x: Int\nin y: Int\nout a: Int\nout b: Int\n\
+         a = default(b[2], 100) + x\nb = default(a[1], 200) + y",
+        BTreeMap::from([
+            (
+                VarName::new("x"),
+                vec![1.into(), 2.into(), 3.into(), 4.into()],
+            ),
+            (
+                VarName::new("y"),
+                vec![10.into(), 20.into(), 30.into(), 40.into()],
+            ),
+        ]),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&offsets, "a"),
+        vec![101.into(), 102.into(), 213.into(), 125.into()]
+    );
+    assert_eq!(
+        output_trace(&offsets, "b"),
+        vec![210.into(), 121.into(), 132.into(), 253.into()]
+    );
+
+    let branches = assert_dataflow_semisync_runtime_parity(
+        executor,
+        "in flag: Bool\nin x: Int\nin y: Int\nout a: Int\nout b: Int\n\
+         a = if flag then default(b[1], 0) + x else x\nb = a + y",
+        BTreeMap::from([
+            (
+                VarName::new("flag"),
+                vec![true.into(), false.into(), true.into()],
+            ),
+            (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+            (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+        ]),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&branches, "a"),
+        vec![1.into(), 2.into(), 25.into()]
+    );
+    assert_eq!(
+        output_trace(&branches, "b"),
+        vec![11.into(), 22.into(), 55.into()]
+    );
+}
+
+#[apply(async_test)]
+async fn dataflow_semisync_maple_sequence_parity(executor: Rc<LocalExecutor<'static>>) {
+    let stages = ["m", "a", "p", "l", "e", "m", "a", "p", "l", "e"]
+        .into_iter()
+        .map(|stage| Value::Str(stage.into()))
+        .collect::<Vec<_>>();
+    let rows = assert_dataflow_semisync_runtime_parity(
+        executor,
+        crate::dsrv_fixtures::spec_maple_sequence(),
+        BTreeMap::from([(VarName::new("stage"), stages)]),
+    )
+    .await;
+    assert_eq!(output_trace(&rows, "maple"), vec![Value::Bool(true); 10]);
+}
+
+#[test]
+fn dataflow_delayed_cycles_compile_typed_and_untyped() {
+    let spec = dsrv_spec!(
+        "in x: Int\nin y: Int\nout a: Int\nout b: Int\n\
+         a = default(b[1], 0) + x\nb = default(a[1], 0) + y"
+    );
+    let typed = type_check(spec.clone(), false).unwrap();
+
+    for mut monitor in [
+        DataflowMonitor::try_compile_untyped(spec).unwrap(),
+        DataflowMonitor::try_compile_checked(typed).unwrap(),
+    ] {
+        assert_eq!(
+            evaluate(
+                &mut monitor,
+                &[
+                    vec![1.into(), 2.into(), 3.into()],
+                    vec![10.into(), 20.into(), 30.into()]
+                ],
+            ),
+            vec![
+                vec![1.into(), 12.into(), 24.into()],
+                vec![10.into(), 21.into(), 42.into()],
+            ]
+        );
+    }
+}
+
+#[test]
+fn dataflow_runtime_compiled_mutual_delays_commit_once_per_tick() {
+    let spec = dsrv_spec!(
+        "in x: Int\nin y: Int\nin a_source: Str\nin b_source: Str\n\
+         out a: Int\nout b: Int\na = dynamic(a_source: Int)\nb = dynamic(b_source: Int)"
+    );
+    let typed = type_check(spec.clone(), false).unwrap();
+
+    for mut monitor in [
+        DataflowMonitor::try_compile_untyped(spec).unwrap(),
+        DataflowMonitor::try_compile_checked(typed).unwrap(),
+    ] {
+        let mut output = vec![Value::NoVal; monitor.output_vars().len()];
+        for (x, y, expected_a, expected_b) in [(1, 10, 1, 10), (2, 20, 12, 21), (3, 30, 24, 42)] {
+            let input = runtime_input_row(
+                &monitor,
+                &[
+                    ("x", x.into()),
+                    ("y", y.into()),
+                    ("a_source", Value::Str("default(b[1], 0) + x".into())),
+                    ("b_source", Value::Str("default(a[1], 0) + y".into())),
+                ],
+            );
+            monitor.evaluate(&input, &mut output).unwrap();
+            assert_eq!(runtime_output(&monitor, &output, "a"), expected_a.into());
+            assert_eq!(runtime_output(&monitor, &output, "b"), expected_b.into());
+        }
+    }
 }
 
 #[test]

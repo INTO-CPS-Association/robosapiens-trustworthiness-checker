@@ -154,6 +154,15 @@ impl UnboundPlanBody {
         inputs
     }
 
+    pub(in crate::dataflow) fn immediate_free_vars(
+        &self,
+        recursive_output: Option<&VarName>,
+    ) -> BTreeSet<VarName> {
+        let mut inputs = BTreeSet::new();
+        self.collect_immediate_free_vars(&mut inputs, recursive_output);
+        inputs
+    }
+
     fn collect_free_vars(
         &self,
         inputs: &mut BTreeSet<VarName>,
@@ -174,6 +183,47 @@ impl UnboundPlanBody {
                 UnboundOp::Function { func }
                 | UnboundOp::DirectApply { func, .. }
                 | UnboundOp::DirectFixApply { func, .. } => {
+                    let mut captures = func.plan.body.free_vars(recursive_output);
+                    for param in &func.params {
+                        captures.remove(param);
+                    }
+                    inputs.extend(captures);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_immediate_free_vars(
+        &self,
+        inputs: &mut BTreeSet<VarName>,
+        recursive_output: Option<&VarName>,
+    ) {
+        collect_ref_input(&self.output, inputs, recursive_output);
+        for op in &self.nodes {
+            match op {
+                UnboundOp::SIndex { offset, .. } if *offset > 0 => {}
+                _ => op.for_each_operand(|operand| {
+                    collect_ref_input(operand, inputs, recursive_output)
+                }),
+            }
+            match op {
+                UnboundOp::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    then_branch.collect_immediate_free_vars(inputs, recursive_output);
+                    else_branch.collect_immediate_free_vars(inputs, recursive_output);
+                }
+                UnboundOp::DirectApply { func, .. } => {
+                    let mut captures = func.plan.body.immediate_free_vars(recursive_output);
+                    for param in &func.params {
+                        captures.remove(param);
+                    }
+                    inputs.extend(captures);
+                }
+                UnboundOp::Function { func } | UnboundOp::DirectFixApply { func, .. } => {
                     let mut captures = func.plan.body.free_vars(recursive_output);
                     for param in &func.params {
                         captures.remove(param);

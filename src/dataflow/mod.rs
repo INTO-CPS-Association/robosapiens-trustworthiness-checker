@@ -127,14 +127,18 @@
 //! - `Node(NodeId)` reads an earlier operation result in this body.
 //!
 //! `compiler::compile::LoweredProgram::build` collects every body's statically visible free
-//! variables and rejects names absent from the specification. A temporary
-//! [`crate::lang::core::DepGraph`] is built from the lowered bodies rather than directly from the
-//! AST because lowering has already resolved function parameters and captures. A `dynamic` or
-//! `defer` source operand is visible here, but dependencies in its eventual source string are not.
-//! `DepGraph::topological_streams` orders dependencies before their consumers and reports a
-//! same-tick cycle. Inputs are graph leaves already present in the environment and do not need plans.
-//! A stream's own name is excluded from this graph because only a positive delayed self-reference
-//! is legal, and that dependency belongs to persistent history rather than the current environment.
+//! variables and rejects names absent from the specification. It separately collects immediate
+//! free variables for scheduling: an operand read through a positive `SIndex` is historical and
+//! therefore does not add a same-tick edge. A temporary [`crate::lang::core::DepGraph`] is built
+//! from those immediate dependencies rather than directly from the AST because lowering has already
+//! resolved function parameters and captures. A `dynamic` or `defer` source operand is visible here,
+//! but dependencies in its eventual source string are not until that source is compiled. Direct
+//! external operands of positive delays are historical; dependencies needed to compute a compound
+//! delay operand remain conservatively ordered in the current tick. `DepGraph::topological_streams`
+//! orders immediate dependencies before their consumers and reports a same-tick cycle. Inputs are
+//! graph leaves already present in the environment and do not need plans. Positive delayed
+//! self-references and direct mutually delayed stream cycles belong to persistent history rather
+//! than this graph.
 //!
 //! `LoweredProgram::into_monitor` consumes the graph and bodies. It assigns a slot to every declared
 //! input followed by every computed stream in the initial dependency order, binds each body,
@@ -188,8 +192,9 @@
 //! is an index into that operation vector and its matching result/state vectors. The positive
 //! self-reference has become `RecursiveSIndex`; it reads previous-output history during the forward
 //! pass. Only after `Add` produces the body output does `execution::interpreter::commit_recursive_delays` push
-//! that output into the marked delay. An ordinary `SIndex` over another operand can read and push
-//! its operand immediately when its node is evaluated.
+//! that output into the marked delay. A positive ordinary `SIndex` also reads history during the
+//! forward pass, but only marks its current operand for capture. The monitor pushes that operand
+//! after every stream has produced its current-tick value.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/plan-body.svg")]
@@ -208,19 +213,24 @@
 //!
 //! - `nodes: Vec<Value>` is the current result of each operation. A forward pass overwrites these
 //!   slots on every evaluation, so later nodes can resolve `DataRef::Node` in constant time.
-//! - `states: Vec<NodeState>` retains only cross-tick data. Stateless operations use
-//!   `NodeState::Stateless`; delays, lifted operators, lazy branches, and dynamic nodes use matching
-//!   variants with their histories or nested state.
+//! - `states: Vec<NodeState>` retains the operator-specific lifting and cross-tick data; delays,
+//!   lifted operators, lazy branches, functions, and dynamic nodes use matching variants with their
+//!   histories or nested state.
 //!
 //! `PlanExecutor::evaluate` creates an `execution::plan_executor::PlanEvalContext` containing the shared environment
 //! row, its layout, and an optional recursive-function callback. Static plans call
 //! `execution::interpreter::eval_nodes_at`; plans marked fallible call `execution::interpreter::try_eval_nodes_at`, which
 //! handles dynamic nodes and delegates ordinary operations to the same evaluator. The executor then
-//! reads `PlanBody::output`, commits recursive delays, and returns one stream value.
+//! reads `PlanBody::output`, commits recursive self-delays, and returns one stream value. Standalone
+//! and nested executors commit their staged ordinary delays before returning; top-level stream
+//! executors defer that commit to their monitor.
 //!
 //! Finally, `DataflowMonitor` runs its executors in topological order and writes each result to its
-//! stable environment slot. The environment row is replaced on the next
-//! monitor tick, but each executor's `DataflowState` remains. A monitor containing runtime-compiled
+//! stable environment slot. Once the final row is available, it commits every staged ordinary delay
+//! against that row. This second phase lets mutually delayed streams capture each other's current
+//! values without introducing a same-tick scheduling cycle. Runtime-compiled plans and persistent
+//! direct-function executors participate in the same commit through their nested state. The
+//! environment row is replaced on the next monitor tick, but each executor's `DataflowState` remains. A monitor containing runtime-compiled
 //! expressions snapshots those states before evaluation so a newly discovered order can retry the
 //! same tick without advancing temporal state twice. An evaluation error permanently fails the
 //! monitor because successfully rolling back an arbitrary user-visible failure is not part of the
@@ -240,10 +250,11 @@
 //! | 4 | 40 | `[10, 20, 30]` | 10 |
 //!
 //! An offset of zero lifts the current value without allocating a ring. Positive offsets store
-//! `Deferred` as a sample; when a stored `NoVal` emerges, ordinary output lifting applies. An
-//! ordinary delay reads and pushes its operand during node evaluation. A `RecursiveSIndex` reads
-//! during the forward pass, but `execution::interpreter::commit_recursive_delays` cannot push the
-//! enclosing stream value until its output has been computed.
+//! `Deferred` as a sample; when a stored `NoVal` emerges, ordinary output lifting applies. A
+//! positive ordinary delay reads history and stages a capture during node evaluation, then pushes
+//! its operand during the post-row commit. A `RecursiveSIndex` similarly reads during the forward
+//! pass, but `execution::interpreter::commit_recursive_delays` pushes the enclosing stream value as
+//! soon as its output has been computed.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/history-retention.svg")]
@@ -257,10 +268,11 @@
 //! last values or flags. Offsets are converted from `u64` to `usize` and allocated eagerly; the
 //! compiler does not yet impose a configurable maximum history size.
 //!
-//! These structures encode the scheduling invariants visible in the diagrams: a stream reads an
-//! environment slot whose producer was scheduled earlier, a plan node reads an earlier node slot,
-//! lazy branches advance independent state, function calls reset isolated frames, and recursive
-//! delays are committed only after their enclosing output is known.
+//! These structures encode the scheduling invariants visible in the diagrams: an immediate stream
+//! read observes a producer scheduled earlier, a historical stream read observes retained state and
+//! captures from the completed row, a plan node reads an earlier node slot, lazy branches advance
+//! independent state, function calls reset isolated frames, and recursive delays are committed only
+//! after their enclosing output is known.
 //!
 //! # `if` handling
 //!

@@ -33,14 +33,17 @@ pub(in crate::dataflow) fn eval_node_at(
         }
         BoundOp::If { .. } => eval_lazy_if(node_id, op, state, tick, context),
         BoundOp::SIndex { input, offset } => {
-            let current = context.read(state, input, tick);
-            let NodeState::Delay(history) = &mut state.states[node_id.index()] else {
-                unreachable!("delay node has incompatible runtime state")
-            };
             if *offset == 0 {
+                let current = context.read(state, input, tick);
+                let NodeState::Delay(history) = &mut state.states[node_id.index()] else {
+                    unreachable!("delay node has incompatible runtime state")
+                };
                 history.lift_current(current)
             } else {
-                history.read_and_push(current)
+                let NodeState::Delay(history) = &mut state.states[node_id.index()] else {
+                    unreachable!("delay node has incompatible runtime state")
+                };
+                history.read_and_stage()
             }
         }
         BoundOp::RecursiveSIndex { .. } => {
@@ -563,7 +566,11 @@ fn try_eval_branch(
     tick: usize,
     context: PlanEvalContext<'_>,
 ) -> Result<Value, DataflowEvalError> {
-    try_eval_nodes_at(&branch.nodes, state, tick, context)?;
+    let snapshot = state.clone();
+    if let Err(error) = try_eval_nodes_at(&branch.nodes, state, tick, context) {
+        *state = snapshot;
+        return Err(error);
+    }
     let output = context.read(state, &branch.output, tick);
     commit_recursive_delays(&branch.recursive_delays, state, &output);
     Ok(output)
@@ -579,6 +586,67 @@ pub(in crate::dataflow) fn commit_recursive_delays(
             unreachable!("recursive delay node has incompatible runtime state")
         };
         history.push(output.clone());
+    }
+}
+
+pub(in crate::dataflow) fn commit_staged_delays(
+    body: &BoundPlanBody,
+    state: &mut DataflowState,
+    context: PlanEvalContext<'_>,
+) {
+    for (index, op) in body.nodes.iter().enumerate() {
+        match op {
+            BoundOp::SIndex { input, offset } if *offset > 0 => {
+                let current = context.read(state, input, 0);
+                let NodeState::Delay(history) = &mut state.states[index] else {
+                    unreachable!("delay node has incompatible runtime state")
+                };
+                history.commit_pending(current);
+            }
+            BoundOp::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let NodeState::LazyIf(lazy_if) = &mut state.states[index] else {
+                    unreachable!("if node has incompatible runtime state")
+                };
+                commit_staged_delays(then_branch, &mut lazy_if.then_state, context);
+                commit_staged_delays(else_branch, &mut lazy_if.else_state, context);
+            }
+            BoundOp::DirectApply { func, .. } => {
+                let NodeState::PersistentCall {
+                    executor, values, ..
+                } = &mut state.states[index]
+                else {
+                    unreachable!("direct application node has incompatible runtime state")
+                };
+                let capture_count = func.capture_sources.len();
+                for (slot, source) in values[..capture_count]
+                    .iter_mut()
+                    .zip(&func.capture_sources)
+                {
+                    *slot = context.inputs[source.index()].clone();
+                }
+                executor.commit_delays(values);
+            }
+            BoundOp::Dynamic(_) => {
+                let NodeState::Dynamic(dynamic) = &mut state.states[index] else {
+                    unreachable!("dynamic node has incompatible runtime state")
+                };
+                dynamic.environment_values = context
+                    .inputs
+                    .iter()
+                    .cloned()
+                    .zip(&mut dynamic.environment_last)
+                    .map(|(value, last)| stream_lift_value(value, last))
+                    .collect();
+                if let Some(active) = &mut dynamic.active {
+                    active.executor.commit_delays(&dynamic.environment_values);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

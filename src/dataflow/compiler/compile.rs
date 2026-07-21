@@ -77,8 +77,8 @@ impl LoweredProgram {
             let mut body =
                 build(var).ok_or_else(|| DataflowCompileError::MissingExpression(var.clone()))?;
             body.configure_dynamic_scope(var, input_vars, stream_vars);
-            let inputs = body.free_vars(Some(var));
-            let unsupported = inputs
+            let free_vars = body.free_vars(Some(var));
+            let unsupported = free_vars
                 .iter()
                 .filter(|input| !available.contains(*input))
                 .cloned()
@@ -89,7 +89,7 @@ impl LoweredProgram {
                     inputs: unsupported,
                 });
             }
-            dependencies.insert(var.clone(), inputs);
+            dependencies.insert(var.clone(), body.immediate_free_vars(Some(var)));
             plans.insert(var.clone(), body);
         }
         Ok(Self {

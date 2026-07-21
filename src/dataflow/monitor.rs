@@ -112,6 +112,7 @@ impl DataflowMonitor {
             self.failed = true;
             return Err(error);
         }
+        self.commit_delays();
 
         for (value, &stream_id) in output.iter_mut().zip(&self.output_ids) {
             *value = self.environment_values[stream_id.index()].clone();
@@ -122,6 +123,12 @@ impl DataflowMonitor {
     fn reset_environment(&mut self, input: &[Value]) {
         self.environment_values.fill(Value::NoVal);
         self.environment_values[..input.len()].clone_from_slice(input);
+    }
+
+    fn commit_delays(&mut self) {
+        for executor in &mut self.stream_executors {
+            executor.commit_delays(&self.environment_values);
+        }
     }
 
     fn evaluate_transactionally(&mut self, input: &[Value]) -> Result<(), DataflowEvalError> {
@@ -176,8 +183,8 @@ impl DataflowMonitor {
 
     fn evaluate_static_streams(&mut self) -> Result<(), DataflowEvalError> {
         for &executor_index in &self.evaluation_order {
-            let value =
-                self.stream_executors[executor_index].evaluate(&self.environment_values, None)?;
+            let value = self.stream_executors[executor_index]
+                .evaluate_observing_deferred(&self.environment_values, None)?;
             self.environment_values[self.stream_ids[executor_index].index()] = value;
         }
         Ok(())
@@ -189,11 +196,8 @@ impl DataflowMonitor {
         let mut observed = vec![Vec::new(); self.stream_executors.len()];
         for &executor_index in &self.evaluation_order {
             let dependencies = RefCell::new(Vec::new());
-            let value = self.stream_executors[executor_index].evaluate_observing(
-                &self.environment_values,
-                None,
-                Some(&dependencies),
-            )?;
+            let value = self.stream_executors[executor_index]
+                .evaluate_observing_deferred(&self.environment_values, Some(&dependencies))?;
             self.environment_values[self.stream_ids[executor_index].index()] = value;
             observed[executor_index] = dependencies.into_inner();
         }

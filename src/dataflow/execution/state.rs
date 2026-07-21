@@ -104,6 +104,7 @@ pub(in crate::dataflow) struct SIndexValueHistory {
     next: usize,
     filled: usize,
     output_last: Option<Value>,
+    pending: bool,
 }
 
 impl SIndexValueHistory {
@@ -113,6 +114,7 @@ impl SIndexValueHistory {
             next: 0,
             filled: 0,
             output_last: None,
+            pending: false,
         }
     }
 
@@ -133,10 +135,21 @@ impl SIndexValueHistory {
         self.filled = self.filled.saturating_add(1).min(self.values.len());
     }
 
-    pub(in crate::dataflow) fn read_and_push(&mut self, value: Value) -> Value {
+    pub(in crate::dataflow) fn read_and_stage(&mut self) -> Value {
+        debug_assert!(
+            !self.pending,
+            "delay was evaluated more than once before commit"
+        );
+        self.pending = true;
         let previous = self.read();
-        self.push(value);
         super::value_ops::stream_lift_value(previous, &mut self.output_last)
+    }
+
+    pub(in crate::dataflow) fn commit_pending(&mut self, value: Value) {
+        if self.pending {
+            self.pending = false;
+            self.push(value);
+        }
     }
 
     pub(in crate::dataflow) fn lift_current(&mut self, value: Value) -> Value {
@@ -147,6 +160,7 @@ impl SIndexValueHistory {
         self.next = 0;
         self.filled = 0;
         self.output_last = None;
+        self.pending = false;
     }
 }
 

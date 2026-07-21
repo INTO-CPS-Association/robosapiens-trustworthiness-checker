@@ -60,10 +60,30 @@ impl PlanExecutor {
         inputs: &[Value],
         recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
     ) -> Result<Value, DataflowEvalError> {
-        self.evaluate_observing(inputs, recursive_call, None)
+        let value = self.evaluate_deferred(inputs, recursive_call, None)?;
+        self.commit_delays(inputs);
+        Ok(value)
     }
 
-    pub(in crate::dataflow) fn evaluate_observing(
+    pub(in crate::dataflow) fn evaluate_observing_deferred(
+        &mut self,
+        inputs: &[Value],
+        dynamic_dependencies: Option<&RefCell<Vec<EnvironmentId>>>,
+    ) -> Result<Value, DataflowEvalError> {
+        self.evaluate_deferred(inputs, None, dynamic_dependencies)
+    }
+
+    pub(in crate::dataflow) fn commit_delays(&mut self, inputs: &[Value]) {
+        let context = PlanEvalContext {
+            inputs,
+            environment: &self.plan.environment,
+            recursive_call: None,
+            dynamic_dependencies: None,
+        };
+        commit_staged_delays(&self.plan.body, &mut self.state, context);
+    }
+
+    fn evaluate_deferred(
         &mut self,
         inputs: &[Value],
         recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,

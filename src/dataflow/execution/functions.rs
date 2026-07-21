@@ -167,7 +167,7 @@ pub(in crate::dataflow) fn eval_direct_apply_op(
     }
 
     executor
-        .evaluate(values, None)
+        .evaluate_observing_deferred(values, None)
         .expect("direct function plans cannot contain fallible dynamic operators")
 }
 
