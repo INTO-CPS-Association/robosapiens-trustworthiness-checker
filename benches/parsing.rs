@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use trustworthiness_checker::dsrv_specification;
-use trustworthiness_checker::lang::dsrv::lalr_parser::parse_str;
+
+use trustworthiness_checker::lang::dsrv::parser::parse_str;
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -117,21 +117,7 @@ fn parse_small_varied_inputs(c: &mut Criterion) {
     let sizes = [10, 100, 500, 1000, 2000, 5000, 10000];
     for size in sizes {
         let input = create_small_varied_expressions(&mut rng, size);
-        // pre-validate that all parsers accept the input
         assert!(parse_str(input.as_str()).is_ok());
-        let inp = &mut input.as_str();
-        assert!(dsrv_specification(inp).is_ok());
-
-        group.bench_with_input(
-            BenchmarkId::new("parsing_winnow", size),
-            &input,
-            |b, input| {
-                b.iter(|| {
-                    let inp = &mut input.as_str();
-                    let _ = dsrv_specification(inp);
-                })
-            },
-        );
         group.bench_with_input(
             BenchmarkId::new("parsing_lalrpop", size),
             &input,
@@ -173,24 +159,6 @@ fn parse_growing_complexity_input(c: &mut Criterion) {
         let input = create_growing_complexity_expression(&mut rng, size);
         // pre-validate that all parsers accept the input
         assert!(parse_str(input.as_str()).is_ok());
-        if size <= 10 {
-            let inp = &mut input.as_str();
-            assert!(dsrv_specification(inp).is_ok());
-        }
-
-        // parsing with winnow gets very slow for complex inputs
-        if size <= 10 {
-            group.bench_with_input(
-                BenchmarkId::new("parsing_winnow", size),
-                &input,
-                |b, input| {
-                    b.iter(|| {
-                        let inp = &mut input.as_str();
-                        let _ = dsrv_specification(inp);
-                    })
-                },
-            );
-        }
         group.bench_with_input(
             BenchmarkId::new("parsing_lalrpop", size),
             &input,

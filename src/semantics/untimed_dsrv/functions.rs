@@ -8,7 +8,6 @@ use crate::core::OutputStream;
 use crate::core::RuntimeFunction;
 use crate::core::StreamType;
 use crate::core::Value;
-use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::{CheckedExpr, Expr, ExprKind, ExprRef, ExprView, TypeAnnotations};
 use crate::semantics::{AsyncConfig, StreamContext};
 use async_stream::stream;
@@ -43,9 +42,8 @@ enum EvalBinding {
     Stream(SharedOutput<Value>),
 }
 
-struct UntimedFunctionDef<AC, Parser>
+struct UntimedFunctionDef<AC>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     params: EcoVec<(VarName, StreamType)>,
@@ -53,7 +51,6 @@ where
     captures: EcoVec<(VarName, SharedOutput<Value>)>,
     temporal: bool,
     context: Rc<AC::Ctx>,
-    _parser: std::marker::PhantomData<Parser>,
 }
 
 struct UntimedFunctionInstance {
@@ -61,9 +58,8 @@ struct UntimedFunctionInstance {
     capture_drivers: Vec<OutputStream<Value>>,
 }
 
-impl<AC, Parser> UntimedFunctionDef<AC, Parser>
+impl<AC> UntimedFunctionDef<AC>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     fn instantiate(
@@ -88,7 +84,7 @@ where
                     .map(|((name, _), stream)| (name.clone(), stream.clone())),
             );
         Ok(UntimedFunctionInstance {
-            output: evaluate_scope::<Parser, AC>(body, &self.context),
+            output: evaluate_scope::<AC>(body, &self.context),
             capture_drivers: self
                 .captures
                 .iter()
@@ -118,7 +114,6 @@ where
             captures,
             temporal: self.temporal,
             context: Rc::clone(&self.context),
-            _parser: std::marker::PhantomData,
         }))
     }
 }
@@ -311,14 +306,13 @@ fn eval_function_once(
     }
 }
 
-pub(super) fn make_function<AC, Parser>(
+pub(super) fn make_function<AC>(
     display: EcoString,
     params: EcoVec<(VarName, StreamType)>,
     body: ScopedExpr,
     ctx: &AC::Ctx,
 ) -> Value
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     let callable_ctx = Rc::new(ctx.subcontext(0));
@@ -337,7 +331,7 @@ where
                 .map(|stream| (name, SharedOutput::new(stream)))
         })
         .collect();
-    let definition = Rc::new(UntimedFunctionDef::<AC, Parser> {
+    let definition = Rc::new(UntimedFunctionDef::<AC> {
         params: params.clone(),
         body: body.clone(),
         captures,
@@ -354,7 +348,6 @@ where
             )
         }),
         context: Rc::clone(&callable_ctx),
-        _parser: std::marker::PhantomData,
     });
     let runtime_function = RuntimeFunction::native(display, move |args| {
         let arguments = args
@@ -362,7 +355,7 @@ where
             .map(|value| value_expression(value, &body))
             .collect();
         let body = body.clone().bind(&params, arguments)?;
-        Ok(evaluate_scope::<Parser, AC>(body, &callable_ctx))
+        Ok(evaluate_scope::<AC>(body, &callable_ctx))
     })
     .with_language_payload(definition);
     Value::Function(runtime_function)
@@ -381,14 +374,13 @@ fn partial_function(
     Value::Function(runtime_function)
 }
 
-fn partial_tree_function<AC, Parser>(
+fn partial_tree_function<AC>(
     function: RuntimeFunction,
-    definition: Rc<UntimedFunctionDef<AC, Parser>>,
+    definition: Rc<UntimedFunctionDef<AC>>,
     applied: &[SharedOutput<Value>],
     display: EcoString,
 ) -> anyhow::Result<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     let partial_definition = definition.partially_apply(applied)?;
@@ -400,13 +392,12 @@ where
     ))
 }
 
-fn reject_temporal_collection_function<AC, Parser>(function: &RuntimeFunction, operation: &str)
+fn reject_temporal_collection_function<AC>(function: &RuntimeFunction, operation: &str)
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     if function
-        .language_payload::<UntimedFunctionDef<AC, Parser>>()
+        .language_payload::<UntimedFunctionDef<AC>>()
         .is_some_and(|definition| definition.temporal)
     {
         panic!("temporal functions are not supported by {operation}");
@@ -431,13 +422,12 @@ fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
     Value::Function(runtime_function)
 }
 
-pub(super) fn eval_apply<AC, Parser>(
+pub(super) fn eval_apply<AC>(
     func_expr: ScopedExpr,
     args: EcoVec<ScopedExpr>,
     ctx: &AC::Ctx,
 ) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     // A syntactic lambda keeps tree semantics: its arguments retain their
@@ -450,13 +440,13 @@ where
             .scope(body)
             .bind(params, args)
             .expect("Function application failed");
-        return evaluate_scope::<Parser, AC>(body, ctx);
+        return evaluate_scope::<AC>(body, ctx);
     }
 
-    let mut func_stream = evaluate_scope::<Parser, AC>(func_expr, ctx);
+    let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
     let arg_sources = args
         .into_iter()
-        .map(|arg| SharedOutput::new(evaluate_scope::<Parser, AC>(arg, ctx)))
+        .map(|arg| SharedOutput::new(evaluate_scope::<AC>(arg, ctx)))
         .collect::<Vec<_>>();
     let mut arg_streams = arg_sources
         .iter()
@@ -470,7 +460,7 @@ where
             };
             if let Value::Function(function) = &func_value
                 && let Some(definition) =
-                    function.language_payload::<UntimedFunctionDef<AC, Parser>>()
+                    function.language_payload::<UntimedFunctionDef<AC>>()
             {
                 let changed = active_tree_function
                     .as_ref()
@@ -529,20 +519,19 @@ where
     })
 }
 
-pub(super) fn eval_partial<AC, Parser>(
+pub(super) fn eval_partial<AC>(
     func_expr: ScopedExpr,
     args: EcoVec<ScopedExpr>,
     ctx: &AC::Ctx,
 ) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     let display: EcoString = format!("partial({}, ...)", func_expr.expr).into();
-    let mut func_stream = evaluate_scope::<Parser, AC>(func_expr, ctx);
+    let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
     let arg_sources = args
         .into_iter()
-        .map(|arg| SharedOutput::new(evaluate_scope::<Parser, AC>(arg, ctx)))
+        .map(|arg| SharedOutput::new(evaluate_scope::<AC>(arg, ctx)))
         .collect::<Vec<_>>();
     let mut arg_streams = arg_sources
         .iter()
@@ -556,7 +545,7 @@ where
             };
             if let Value::Function(function) = &func_value
                 && let Some(definition) =
-                    function.language_payload::<UntimedFunctionDef<AC, Parser>>()
+                    function.language_payload::<UntimedFunctionDef<AC>>()
             {
                 let changed = active_tree_partial
                     .as_ref()
@@ -603,13 +592,12 @@ where
     })
 }
 
-pub(super) fn eval_fix<AC, Parser>(func_expr: ScopedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+pub(super) fn eval_fix<AC>(func_expr: ScopedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     let display: EcoString = format!("fix({})", func_expr.expr).into();
-    let mut func_stream = evaluate_scope::<Parser, AC>(func_expr, ctx);
+    let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
     Box::pin(stream! {
         while let Some(func_value) = func_stream.next().await {
             match func_value {
@@ -622,24 +610,23 @@ where
     })
 }
 
-pub(super) fn eval_list_map<AC, Parser>(
+pub(super) fn eval_list_map<AC>(
     func_expr: ScopedExpr,
     list_expr: ScopedExpr,
     ctx: &AC::Ctx,
 ) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
-    let mut func_stream = evaluate_scope::<Parser, AC>(func_expr, ctx);
-    let mut list_stream = evaluate_scope::<Parser, AC>(list_expr, ctx);
+    let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
+    let mut list_stream = evaluate_scope::<AC>(list_expr, ctx);
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
             match (func_value, list_value) {
                 (Value::NoVal, _) | (_, Value::NoVal) => yield Value::NoVal,
                 (Value::Deferred, _) | (_, Value::Deferred) => yield Value::Deferred,
                 (Value::Function(function), Value::List(values)) => {
-                    reject_temporal_collection_function::<AC, Parser>(&function, "List.map");
+                    reject_temporal_collection_function::<AC>(&function, "List.map");
                     let mut mapped = EcoVec::new();
                     for value in values {
                         mapped.push(eval_function_once(function.clone(), EcoVec::from(vec![value])).await);
@@ -652,24 +639,23 @@ where
     })
 }
 
-pub(super) fn eval_list_filter<AC, Parser>(
+pub(super) fn eval_list_filter<AC>(
     func_expr: ScopedExpr,
     list_expr: ScopedExpr,
     ctx: &AC::Ctx,
 ) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
-    let mut func_stream = evaluate_scope::<Parser, AC>(func_expr, ctx);
-    let mut list_stream = evaluate_scope::<Parser, AC>(list_expr, ctx);
+    let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
+    let mut list_stream = evaluate_scope::<AC>(list_expr, ctx);
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
             match (func_value, list_value) {
                 (Value::NoVal, _) | (_, Value::NoVal) => yield Value::NoVal,
                 (Value::Deferred, _) | (_, Value::Deferred) => yield Value::Deferred,
                 (Value::Function(function), Value::List(values)) => {
-                    reject_temporal_collection_function::<AC, Parser>(&function, "List.filter");
+                    reject_temporal_collection_function::<AC>(&function, "List.filter");
                     let mut filtered = EcoVec::new();
                     for value in values {
                         match eval_function_once(function.clone(), EcoVec::from(vec![value.clone()])).await {
@@ -686,26 +672,25 @@ where
     })
 }
 
-pub(super) fn eval_list_fold<AC, Parser>(
+pub(super) fn eval_list_fold<AC>(
     func_expr: ScopedExpr,
     init_expr: ScopedExpr,
     list_expr: ScopedExpr,
     ctx: &AC::Ctx,
 ) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
-    let mut func_stream = mc::stream_lift_base(evaluate_scope::<Parser, AC>(func_expr, ctx));
-    let mut init_stream = mc::stream_lift_base(evaluate_scope::<Parser, AC>(init_expr, ctx));
-    let mut list_stream = mc::stream_lift_base(evaluate_scope::<Parser, AC>(list_expr, ctx));
+    let mut func_stream = mc::stream_lift_base(evaluate_scope::<AC>(func_expr, ctx));
+    let mut init_stream = mc::stream_lift_base(evaluate_scope::<AC>(init_expr, ctx));
+    let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
     Box::pin(stream! {
         while let (Some(func_value), Some(init), Some(list_value)) = (func_stream.next().await, init_stream.next().await, list_stream.next().await) {
             match (func_value, init, list_value) {
                 (Value::NoVal, _, _) | (_, Value::NoVal, _) | (_, _, Value::NoVal) => yield Value::NoVal,
                 (Value::Deferred, _, _) | (_, Value::Deferred, _) | (_, _, Value::Deferred) => yield Value::Deferred,
                 (Value::Function(function), mut acc, Value::List(values)) => {
-                    reject_temporal_collection_function::<AC, Parser>(&function, "List.fold");
+                    reject_temporal_collection_function::<AC>(&function, "List.fold");
                     for value in values {
                         acc = eval_function_once(function.clone(), EcoVec::from(vec![acc, value])).await;
                     }

@@ -129,6 +129,7 @@ pub enum SemanticError {
     UndeclaredVariable(String, Option<Span>),
     MissingTypeAnnotation(String, Option<Span>),
     MissingTypeAscription(String, Option<Span>),
+    UnsupportedDistributionConstraint(String, Option<Span>),
     UnsupportedLiteral(String, Option<Span>),
     UnsupportedExpression(String, Option<Span>),
     InvalidRuntimeScope(String, Option<Span>),
@@ -161,7 +162,8 @@ impl SemanticError {
             | Self::MissingTypeAscription(_, span)
             | Self::UnsupportedLiteral(_, span)
             | Self::UnsupportedExpression(_, span)
-            | Self::InvalidRuntimeScope(_, span) => *span,
+            | Self::InvalidRuntimeScope(_, span)
+            | Self::UnsupportedDistributionConstraint(_, span) => *span,
             Self::UnresolvedType(error) => error.span(),
         }
     }
@@ -175,7 +177,8 @@ impl SemanticError {
             | Self::MissingTypeAscription(_, error_span)
             | Self::UnsupportedLiteral(_, error_span)
             | Self::UnsupportedExpression(_, error_span)
-            | Self::InvalidRuntimeScope(_, error_span) => {
+            | Self::InvalidRuntimeScope(_, error_span)
+            | Self::UnsupportedDistributionConstraint(_, error_span) => {
                 error_span.get_or_insert(span);
             }
             Self::UnresolvedType(error) => error.set_span_if_absent(span),

@@ -49,10 +49,12 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec = trustworthiness_checker::dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+    let spec =
+        trustworthiness_checker::lang::dsrv::parser::parse_str(spec_simple_add_monitor()).unwrap();
     let spec_typed =
-        trustworthiness_checker::dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-    let spec_typed = type_check(spec_typed.clone()).expect("Type check failed");
+        trustworthiness_checker::lang::dsrv::parser::parse_str(spec_simple_add_monitor_typed())
+            .unwrap();
+    let spec_typed = type_check(spec_typed.clone(), false).expect("Type check failed");
 
     for size in sizes {
         let input_stream_fn = || simple_add_input_stream(size);

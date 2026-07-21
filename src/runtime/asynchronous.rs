@@ -1141,7 +1141,7 @@ where
                 let expr = model.var_expr(&var).unwrap_or_else(|| {
                     panic!("Failed to find expression for var {}", var.name().as_str())
                 });
-                let stream = S::to_async_stream_for_var(&var, expr, &context);
+                let stream = S::to_async_stream(&expr, &context, Some(var.clone()));
                 if tx.send(stream).is_err() {
                     warn!(?var, "Failed to send stream for var to requester");
                 }
@@ -1261,8 +1261,8 @@ mod tests {
 
     #[apply(async_test)]
     async fn runtime_propagates_input_errors(executor: Rc<LocalExecutor<'static>>) {
-        let mut source = spec_simple_add_monitor();
-        let spec = crate::dsrv_specification(&mut source).unwrap();
+        let source = spec_simple_add_monitor();
+        let spec = crate::lang::dsrv::parser::parse_str(source).unwrap();
         let output = Box::new(NullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),

@@ -14,7 +14,7 @@ use tc_core::io::InputController;
 use tc_core::io::testing::{ManualInputController, ManualOutputHandler, channel};
 use tc_core::runtime::RuntimeBuilder;
 use tc_core::runtime::builder::GeneralRuntimeBuilder;
-use tc_core::{DsrvSpecification, InputEvent, Value, VarName, dsrv_specification};
+use tc_core::{DsrvSpecification, InputEvent, Value, VarName, lang::dsrv::parser::parse_str};
 
 type OutputBatch = BTreeMap<VarName, Value>;
 
@@ -273,8 +273,7 @@ fn build_runtime(
     let runtime_executor = executor.clone();
 
     smol::block_on(executor.run(async move {
-        let mut model_input = model.as_str();
-        let spec: DsrvSpecification = dsrv_specification(&mut model_input)
+        let spec: DsrvSpecification = parse_str(model.as_str())
             .map_err(|err| anyhow::anyhow!("example model could not be parsed: {err:?}"))?;
         let input_vars = spec.input_vars().clone();
         let (input, input_controller) = channel();

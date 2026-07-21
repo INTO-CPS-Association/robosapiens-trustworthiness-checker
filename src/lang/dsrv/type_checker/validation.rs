@@ -16,6 +16,7 @@ struct AstValidationContext<'spec> {
     globals: &'spec BTreeSet<VarName>,
     bindings: Vec<VarName>,
     owner: &'spec VarName,
+    distributed: bool,
 }
 
 impl AstValidationContext<'_> {
@@ -25,7 +26,10 @@ impl AstValidationContext<'_> {
 }
 
 /// Validate invariants that gradual type fallback must never suppress.
-pub(crate) fn validate_specification(spec: &DsrvSpecification) -> SemanticResult<()> {
+pub(crate) fn validate_specification(
+    spec: &DsrvSpecification,
+    distributed: bool,
+) -> SemanticResult<()> {
     let globals = spec
         .input_vars
         .iter()
@@ -40,6 +44,7 @@ pub(crate) fn validate_specification(spec: &DsrvSpecification) -> SemanticResult
             globals: &globals,
             bindings: Vec::new(),
             owner,
+            distributed,
         };
         if let Err(error) = validate_expression(expression, &mut context) {
             errors.push(error);
@@ -82,6 +87,14 @@ fn validate_expression(
         ExprView::Map(fields) | ExprView::Struct(fields) | ExprView::ObjectLiteral(fields) => {
             validate_unique_fields(expression, &fields)?;
             validate_children(expression, context)
+        }
+        ExprView::Dist(_, _) | ExprView::MonitoredAt(_, _) if !context.distributed => {
+            // TODO: do we want to handle distribution constraint this way, or
+            // silently ignore them outside of the distributed runtime
+            return Err(SemanticError::UnsupportedDistributionConstraint(
+                format!("distributed expression cannot be used in non-distributed contexts"),
+                Some(expression.span()),
+            ));
         }
         _ => validate_children(expression, context),
     }
@@ -238,7 +251,7 @@ mod tests {
                           z = if true then z else dynamic(source: Int, {missing})"
         );
 
-        let errors = type_check_gradual(specification)
+        let errors = type_check_gradual(specification, false)
             .expect_err("an unresolved type cycle must not bypass AST validation");
 
         assert!(errors.iter().any(|error| matches!(
@@ -252,7 +265,7 @@ mod tests {
     fn validation_respects_lambda_bindings() {
         let specification = dsrv_spec!("out z: Int\nz = (\\x: Int -> x)(1)");
 
-        validate_specification(&specification).expect("lambda parameter should be in scope");
+        validate_specification(&specification, false).expect("lambda parameter should be in scope");
     }
 
     #[test]

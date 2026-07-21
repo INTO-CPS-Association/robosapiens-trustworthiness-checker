@@ -251,7 +251,7 @@ mod tests {
     use crate::VarName;
     use crate::distributed::scheduling::planning_context::PlanningContextSnapshot;
     use crate::dsrv_fixtures::TestDistConfig;
-    use crate::lang::dsrv::{lalr_parser::LALRParser, parser::dsrv_specification};
+    use crate::lang::dsrv::parser::parse_str;
     use crate::semantics::distributed::semantics::DistributedSemantics;
     use macro_rules_attribute::apply;
     use petgraph::graph::DiGraph;
@@ -296,8 +296,8 @@ d2 = h2
 d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
 "#
         .trim();
-        let mut s = src;
-        dsrv_specification(&mut s).expect("aux SAT test spec should parse")
+        let s = src;
+        parse_str(s).expect("aux SAT test spec should parse")
     }
 
     fn planning_snapshot(c1: bool, c2: bool, c3: bool) -> PlanningContextSnapshot {
@@ -326,22 +326,20 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
     async fn static_sat_planner_handles_aux_constraints(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let solver = SatMonitoredAtDistConstraintSolver::<
-            DistributedSemantics<LALRParser>,
-            TestDistConfig,
-        >::new(
-            vec!["d1".into(), "d2".into(), "d3".into()],
-            vec![
-                "s1".into(),
-                "s2".into(),
-                "s3".into(),
-                "d1".into(),
-                "d2".into(),
-                "d3".into(),
-            ],
-            aux_spec(),
-            Some(planning_snapshot(true, false, false)),
-        );
+        let solver =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::new(
+                vec!["d1".into(), "d2".into(), "d3".into()],
+                vec![
+                    "s1".into(),
+                    "s2".into(),
+                    "s3".into(),
+                    "d1".into(),
+                    "d2".into(),
+                    "d3".into(),
+                ],
+                aux_spec(),
+                Some(planning_snapshot(true, false, false)),
+            );
 
         let planner = StaticOptimizedSchedulerPlannerSat::new(solver);
         let graph = graph_abc();
@@ -371,22 +369,20 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
     async fn dynamic_sat_planner_handles_aux_constraints(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let solver = SatMonitoredAtDistConstraintSolver::<
-            DistributedSemantics<LALRParser>,
-            TestDistConfig,
-        >::new(
-            vec!["d1".into(), "d2".into(), "d3".into()],
-            vec![
-                "s1".into(),
-                "s2".into(),
-                "s3".into(),
-                "d1".into(),
-                "d2".into(),
-                "d3".into(),
-            ],
-            aux_spec(),
-            None,
-        );
+        let solver =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::new(
+                vec!["d1".into(), "d2".into(), "d3".into()],
+                vec![
+                    "s1".into(),
+                    "s2".into(),
+                    "s3".into(),
+                    "d1".into(),
+                    "d2".into(),
+                    "d3".into(),
+                ],
+                aux_spec(),
+                None,
+            );
 
         let planner = DynamicOptimizedSchedulerPlannerSat::new(solver);
         let graph = graph_abc();

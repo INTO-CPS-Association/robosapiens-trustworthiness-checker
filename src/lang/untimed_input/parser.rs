@@ -62,6 +62,12 @@ mod tests {
     use super::*;
     use crate::{Value, lang::untimed_input::parser::value_assignment};
 
+    fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(
+        result: &std::result::Result<T, E>,
+    ) -> String {
+        format!("{result:?}")
+    }
+
     #[test]
     fn test_value_assignment() -> Result<(), ContextError> {
         assert_eq!(

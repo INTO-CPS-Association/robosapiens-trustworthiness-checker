@@ -93,6 +93,7 @@ impl Display for ExprDisplay<'_> {
             ),
             SIndex(expr, index) => write!(f, "{}[{index}]", show(*expr)),
             Not(expr) => write!(f, "!{}", show(*expr)),
+            Neg(expr) => write!(f, "-{}", show(*expr)),
             Dynamic(source, result_type, scope) | Defer(source, result_type, scope) => {
                 let name = if matches!(&self.arena.get(self.id).node, Dynamic(..)) {
                     "dynamic"

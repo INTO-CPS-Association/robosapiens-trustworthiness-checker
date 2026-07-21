@@ -269,7 +269,7 @@ mod tests {
     use crate::io::testing::LimitedNullOutputHandler;
     use crate::io::testing::ManualOutputHandler;
     use crate::lang::dsrv::type_checker::{type_check, type_check_gradual};
-    use crate::{DsrvSpecification, Value, async_test, dsrv_specification};
+    use crate::{DsrvSpecification, Value, async_test, lang::dsrv::parser::parse_str};
 
     use super::*;
 
@@ -279,8 +279,8 @@ mod tests {
         inputs: BTreeMap<VarName, Vec<Value>>,
         limit: usize,
     ) {
-        let mut spec_src = spec_src;
-        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let spec_src = spec_src;
+        let spec = parse_str(spec_src).unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -321,8 +321,8 @@ mod tests {
     async fn dataflow_synchronous_controller_acknowledges_processed_ticks(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_src = "in x\nout z\nz = x + 1";
-        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let spec_src = "in x\nout z\nz = x + 1";
+        let spec = parse_str(spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -375,8 +375,8 @@ mod tests {
     async fn typed_dataflow_runtime_evaluates_simple_arithmetic(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_src = "in x: Int\nin y: Int\nout z: Int\nz = x + y";
-        let spec = type_check(dsrv_specification(&mut spec_src).unwrap()).unwrap();
+        let spec_src = "in x: Int\nin y: Int\nout z: Int\nz = x + y";
+        let spec = type_check(parse_str(spec_src).unwrap(), false).unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -404,8 +404,8 @@ mod tests {
     async fn gradual_typed_dataflow_runtime_uses_value_fallback(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_src = "in x: Any\nin y: Any\nout z: Any\nz = x + y";
-        let spec = type_check_gradual(dsrv_specification(&mut spec_src).unwrap()).unwrap();
+        let spec_src = "in x: Any\nin y: Any\nout z: Any\nz = x + y";
+        let spec = type_check_gradual(parse_str(spec_src).unwrap(), false).unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -433,8 +433,8 @@ mod tests {
     async fn gradual_typed_dataflow_runtime_casts_untyped_input(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_src = "in x\nout z\nz = x + 1";
-        let spec = type_check_gradual(dsrv_specification(&mut spec_src).unwrap()).unwrap();
+        let spec_src = "in x\nout z\nz = x + 1";
+        let spec = type_check_gradual(parse_str(spec_src).unwrap(), false).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -474,8 +474,8 @@ mod tests {
     async fn dataflow_runtime_drains_outputs_after_input_finishes(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_src = "in x\nout z\nz = x + 10";
-        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let spec_src = "in x\nout z\nz = x + 10";
+        let spec = parse_str(spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -514,8 +514,8 @@ mod tests {
     async fn dataflow_runtime_flushes_full_and_partial_internal_batches(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_src = "in x\nout z\nz = x + 1";
-        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let spec_src = "in x\nout z\nz = x + 1";
+        let spec = parse_str(spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -550,8 +550,8 @@ mod tests {
     async fn dataflow_runtime_preserves_logical_ticks_inside_transport_batches(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_src = "in x\nin y\nout z\nz = 42";
-        let spec = dsrv_specification(&mut spec_src).unwrap();
+        let spec_src = "in x\nin y\nout z\nz = 42";
+        let spec = parse_str(spec_src).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),

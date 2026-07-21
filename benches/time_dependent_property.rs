@@ -15,7 +15,7 @@ use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics};
 use trustworthiness_checker::io::testing::{ManualOutputHandler, NullOutputHandler};
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
-use trustworthiness_checker::{DsrvSpecification, Value, VarName, dsrv_specification};
+use trustworthiness_checker::{DsrvSpecification, Value, VarName, lang::dsrv::parser::parse_str};
 use trustworthiness_checker::{InputStream, io::map};
 
 #[global_allocator]
@@ -41,8 +41,8 @@ impl AsyncExecutor for LocalSmolExecutor {
 }
 
 fn dsrv_time_dependent_spec() -> DsrvSpecification {
-    dsrv_specification(
-        &mut r#"
+    parse_str(
+        r#"
 in x: Float
 out always_x: Bool
 aux above: Bool

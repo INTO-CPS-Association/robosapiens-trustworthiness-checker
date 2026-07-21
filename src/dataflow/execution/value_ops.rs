@@ -216,6 +216,11 @@ pub(in crate::dataflow) fn lift_unary_with_state(
             Value::Bool(v) => Value::Bool(!v),
             other => panic!("invalid NOT operand {:?}", other),
         },
+        DataflowUnaryOp::Neg => match value {
+            Value::Int(v) => Value::Int(-v),
+            Value::Float(v) => Value::Float(-v),
+            other => panic!("invalid unary minus operand {:?}", other),
+        },
         DataflowUnaryOp::Sin => match value {
             Value::Float(v) => Value::Float(v.sin()),
             other => panic!("invalid sin operand {:?}", other),
@@ -335,6 +340,22 @@ pub(in crate::dataflow) fn compare_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_negation_handles_both_numeric_types_and_stream_markers() {
+        for (input, expected) in [
+            (Value::Int(7), Value::Int(-7)),
+            (Value::Float(1.5), Value::Float(-1.5)),
+            (Value::NoVal, Value::NoVal),
+            (Value::Deferred, Value::Deferred),
+        ] {
+            let mut last = None;
+            assert_eq!(
+                lift_unary_with_state(DataflowUnaryOp::Neg, input, &mut last),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn propagated_special_prioritizes_no_val_over_deferred() {

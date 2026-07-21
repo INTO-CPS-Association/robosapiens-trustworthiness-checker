@@ -41,9 +41,12 @@ impl TypeContext<'_> {
     }
 }
 
-pub fn check_specification(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+pub fn check_specification(
+    spec: DsrvSpecification,
+    distributed: bool,
+) -> SemanticResult<CheckedDsrvSpecification> {
     let spec = spec.into_compact_arena();
-    super::validation::validate_specification(&spec)?;
+    super::validation::validate_specification(&spec, distributed)?;
     let mut errors = Vec::new();
     let mut context = TypeContext {
         types: Cow::Owned(spec.type_annotations().clone()),
@@ -275,6 +278,17 @@ fn check(
                 expr,
             )?;
             (TCType::Bool, None)
+        }
+        ExprView::Neg(value) => {
+            let typ = check(value, expected, context)?;
+            if !matches!(typ, TCType::Int | TCType::Float) {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::OperatorTypeMismatch,
+                    "unary minus requires a number",
+                ));
+            }
+            (typ, None)
         }
         ExprView::Lambda(params, body) => {
             let frame_start = context.bindings.len();
@@ -788,7 +802,8 @@ fn check(
             }
             (typ, None)
         }
-        ExprView::MonitoredAt(_, _) | ExprView::Dist(_, _) => (TCType::Bool, None),
+        ExprView::MonitoredAt(_, _) => (TCType::Bool, None),
+        ExprView::Dist(_, _) => (TCType::Int, None),
     };
     if let Some(expected) = expected {
         require(typ.clone(), expected, expr)?;

@@ -222,15 +222,23 @@ macro_rules! __sexpr_node {
 #[macro_export]
 macro_rules! dsrv_spec {
     (strict $source:literal) => {{
-        $crate::lang::dsrv::type_checker::type_check($crate::dsrv_spec!($source))
+        $crate::lang::dsrv::type_checker::type_check($crate::dsrv_spec!($source), false)
             .expect("test DSRV specification should type check")
     }};
     (gradual $source:literal) => {{
-        $crate::lang::dsrv::type_checker::type_check_gradual($crate::dsrv_spec!($source))
+        $crate::lang::dsrv::type_checker::type_check_gradual($crate::dsrv_spec!($source), false)
+            .expect("test DSRV specification should type check gradually")
+    }};
+    (strict distributed $source:literal) => {{
+        $crate::lang::dsrv::type_checker::type_check($crate::dsrv_spec!($source), true)
+            .expect("test DSRV specification should type check")
+    }};
+    (gradual distributed $source:literal) => {{
+        $crate::lang::dsrv::type_checker::type_check_gradual($crate::dsrv_spec!($source), true)
             .expect("test DSRV specification should type check gradually")
     }};
     ($source:literal) => {{
-        $crate::lang::dsrv::lalr_parser::parse_str($source)
+        $crate::lang::dsrv::parser::parse_str($source)
             .expect("test DSRV specification should parse")
     }};
 }

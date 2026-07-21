@@ -705,39 +705,6 @@ mod integration_tests {
         );
     }
 
-    /// Test CLI with different parser modes
-    #[apply(async_test)]
-    async fn test_combinator_parser() {
-        let output = run_cli(&[
-            &fixture_path("simple_add_typed.dsrv"),
-            "--input-file",
-            &fixture_path("simple_add_typed.input"),
-            "--output-stdout",
-            "--parser",
-            "combinator",
-        ])
-        .await
-        .expect("Failed to run CLI");
-
-        assert!(
-            output.status.success(),
-            "CLI command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("3"),
-            "Expected output '3' not found in: {}",
-            stdout
-        );
-        assert!(
-            stdout.contains("7"),
-            "Expected output '7' not found in: {}",
-            stdout
-        );
-    }
-
     /// Test CLI with different language modes
     #[apply(async_test)]
     async fn test_dsrv_language() {

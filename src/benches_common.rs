@@ -18,8 +18,7 @@ use crate::io::InputStreamFactory;
 use crate::io::testing::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::io::{OutputHandlerBuilder, OutputHandlerSpec};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
-use crate::lang::dsrv::lalr_parser::LALRParser;
-use crate::lang::dsrv::lalr_parser::parse_str;
+use crate::lang::dsrv::parser::parse_str;
 use crate::lang::dsrv::type_checker::type_check;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
@@ -43,7 +42,7 @@ pub fn function_binding_benchmark(terms: usize, checked: bool) -> impl FnMut() -
     let source = format!("in n: Int\nout result: Int\nresult = (\\x: Int -> {expression})(n)");
     let parsed = parse_str(&source).expect("function binding fixture should parse");
     let runtime_expr = if checked {
-        type_check(parsed)
+        type_check(parsed, false)
             .expect("function binding fixture should type check")
             .var_expr(&VarName::new("result"))
             .unwrap()
@@ -195,17 +194,15 @@ pub async fn monitor_outputs_untyped_reconf_limited(
     output_handler_builder: OutputHandlerBuilder,
     use_context_transfer: bool,
 ) {
-    let builder: ReconfSemiSyncRuntimeBuilder<
-        SemiSyncValueConfig,
-        UntimedDsrvSemantics<LALRParser>,
-        LALRParser,
-    > = ReconfSemiSyncRuntimeBuilder::new()
-        .executor(executor)
-        .model(spec)
-        .input_factory(input_factory)
-        .output_builder(output_handler_builder)
-        .reconf_topic(RECONF_TOPIC.into())
-        .use_context_transfer(use_context_transfer);
+    let builder: ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics> =
+        ReconfSemiSyncRuntimeBuilder::new()
+            .parse_spec(parse_str)
+            .executor(executor)
+            .model(spec)
+            .input_factory(input_factory)
+            .output_builder(output_handler_builder)
+            .reconf_topic(RECONF_TOPIC.into())
+            .use_context_transfer(use_context_transfer);
     let monitor = Box::new(builder).build().await;
     monitor.run().await.expect("Error running monitor");
 }
@@ -254,7 +251,7 @@ pub async fn monitor_outputs_typed_async(
         spec.output_vars().clone(),
     ));
     let async_monitor =
-        AsyncRuntimeBuilder::<CheckedValueConfig, CheckedUntimedDsrvSemantics<LALRParser>>::new()
+        AsyncRuntimeBuilder::<CheckedValueConfig, CheckedUntimedDsrvSemantics>::new()
             .executor(executor.clone())
             .model(spec)
             .input(input_stream)

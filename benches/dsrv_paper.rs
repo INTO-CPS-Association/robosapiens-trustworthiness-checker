@@ -206,15 +206,15 @@ struct BenchConfig<'a> {
 }
 
 fn simple_and(c: &mut Criterion) {
-    let spec_1 = trustworthiness_checker::dsrv_specification(
-        &mut "in x: Bool
+    let spec_1 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+        "in x: Bool
               in y: Bool
               out z: Bool
               z = x && y",
     )
     .unwrap();
-    let spec_2 = trustworthiness_checker::dsrv_specification(
-        &mut "in x: Bool
+    let spec_2 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+        "in x: Bool
               in y: Bool
               out z: Bool
               z = x && y && true",
@@ -237,14 +237,14 @@ fn simple_and(c: &mut Criterion) {
 }
 
 fn rec_moving_average(c: &mut Criterion) {
-    let spec_n3 = trustworthiness_checker::dsrv_specification(
-        &mut "in x
+    let spec_n3 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+        "in x
               out y
               y = default(y[1], 0) + (x - default(x[3], 0)) / 3",
     )
     .unwrap();
-    let spec_n5 = trustworthiness_checker::dsrv_specification(
-        &mut "in x
+    let spec_n5 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+        "in x
               out y
               y = default(y[1], 0) + (x - default(x[5], 0)) / 5",
     )
@@ -262,8 +262,8 @@ fn rec_moving_average(c: &mut Criterion) {
 
 fn sindex(c: &mut Criterion) {
     for i in [1, 10, 100] {
-        let spec1 = trustworthiness_checker::dsrv_specification(
-            &mut format!(
+        let spec1 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+            format!(
                 "in x
               out y
               y = x[{}]",
@@ -272,8 +272,8 @@ fn sindex(c: &mut Criterion) {
             .as_str(),
         )
         .unwrap();
-        let spec2 = trustworthiness_checker::dsrv_specification(
-            &mut format!(
+        let spec2 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+            format!(
                 "in x
               out y
               y = x[{}] + 0",
@@ -296,8 +296,8 @@ fn sindex(c: &mut Criterion) {
 }
 
 fn maple_index(c: &mut Criterion) {
-    let spec1 = trustworthiness_checker::dsrv_specification(
-        &mut "in stage : Str\n
+    let spec1 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+        "in stage : Str\n
      out m: Bool\n
      out a: Bool\n
      out p: Bool\n
@@ -312,8 +312,8 @@ fn maple_index(c: &mut Criterion) {
      maple = m || a || p || l || e",
     )
     .unwrap();
-    let spec2 = trustworthiness_checker::dsrv_specification(
-        &mut "in stage : Str\n
+    let spec2 = trustworthiness_checker::lang::dsrv::parser::parse_str(
+        "in stage : Str\n
      out m: Bool\n
      out a: Bool\n
      out p: Bool\n

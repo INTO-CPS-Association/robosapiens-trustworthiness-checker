@@ -7,23 +7,26 @@ use macro_rules_attribute::apply;
 use petgraph::graph::DiGraph;
 use smol::{LocalExecutor, stream::StreamExt};
 use trustworthiness_checker::VarName;
+use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
     OutputStream, Value,
     core::Runtime,
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
-    dsrv_specification,
     io::testing::ManualOutputHandler,
+    lang::dsrv::parser::parse_str,
     runtime::RuntimeBuilder,
     runtime::distributed::DistAsyncRuntimeBuilder,
     semantics::distributed::semantics::DistributedSemantics,
 };
-use trustworthiness_checker::{async_test, lang::dsrv::lalr_parser::LALRParser};
-use winnow::Parser;
-
-type TestDistSemantics = DistributedSemantics<LALRParser>;
+type TestDistSemantics = DistributedSemantics;
 type TestDistRuntimeBuilder = DistAsyncRuntimeBuilder<TestDistConfig, TestDistSemantics>;
+
+fn parse_spec(source: &str) -> trustworthiness_checker::DsrvSpecification {
+    let input = source;
+    parse_str(input).unwrap()
+}
 
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
@@ -60,7 +63,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     tuple_element = Tuple(x, y).1\n
     w = monitored_at(x, B)";
     let var_names = BTreeSet::from(["tuple_element".into(), "w".into(), "y".into(), "z".into()]);
-    let spec = dsrv_specification.parse(spec).unwrap();
+    let spec = parse_spec(spec);
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -151,7 +154,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(x, y)";
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
-    let spec = dsrv_specification.parse(spec).unwrap();
+    let spec = parse_spec(spec);
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -238,7 +241,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(A, C)";
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
-    let spec = dsrv_specification.parse(spec).unwrap();
+    let spec = parse_spec(spec);
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -325,7 +328,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(x, C)";
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
-    let spec = dsrv_specification.parse(spec).unwrap();
+    let spec = parse_spec(spec);
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 
@@ -412,7 +415,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     z = x + 2\n
     w = dist(x, z)";
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
-    let spec = dsrv_specification.parse(spec).unwrap();
+    let spec = parse_spec(spec);
 
     let mut output_handler = ManualOutputHandler::new(executor.clone(), var_names);
 

@@ -10,16 +10,16 @@ use trustworthiness_checker::core::{
 };
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::io::{file, map};
-use trustworthiness_checker::lang::core::parser::SpecParser;
-use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{
-    InputStream, Value, dsrv_spec, dsrv_specification, parse_file, runtime::RuntimeBuilder,
+    InputStream, Value, dsrv_spec, lang::dsrv::parser::parse_str, parse_file,
+    runtime::RuntimeBuilder,
 };
 use trustworthiness_checker::{VarName, async_test, sexpr};
+use winnow::Parser;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TestConfiguration {
@@ -98,8 +98,8 @@ async fn run_typed_runtime_with_spec(
     input_stream: BTreeMap<VarName, Vec<Value>>,
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
-    let mut spec_input = spec_str;
-    let spec = dsrv_specification(&mut spec_input).unwrap();
+    let spec_input = spec_str;
+    let spec = parse_str(spec_input).unwrap();
     let input_stream = map::input_stream(input_stream);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
@@ -128,8 +128,8 @@ async fn run_typed_lalr_runtime_with_spec(
     input_stream: BTreeMap<VarName, Vec<Value>>,
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
-    let mut spec_input = spec_str;
-    let spec = LALRParser::parse(&mut spec_input)?;
+    let spec_input = spec_str;
+    let spec = parse_str(spec_input)?;
     let input_stream = map::input_stream(input_stream);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
@@ -158,8 +158,8 @@ async fn run_untyped_lalr_runtime_with_spec(
     input_stream: BTreeMap<VarName, Vec<Value>>,
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
-    let mut spec_input = spec_str;
-    let spec = LALRParser::parse(&mut spec_input)?;
+    let spec_input = spec_str;
+    let spec = parse_str(spec_input)?;
     let input_stream = map::input_stream(input_stream);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
@@ -218,8 +218,8 @@ async fn run_gradual_typed_runtime_with_spec(
     input_stream: BTreeMap<VarName, Vec<Value>>,
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
-    let mut spec_input = spec_str;
-    let spec = dsrv_specification(&mut spec_input).unwrap();
+    let spec_input = spec_str;
+    let spec = parse_str(spec_input).unwrap();
     let input_stream = map::input_stream(input_stream);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
@@ -543,17 +543,17 @@ fn test_gradual_type_check_accepts_spec_rejected_by_strict() {
     // gradual checker infers them.
     let spec = dsrv_spec!("in gsx\nout gsz\ngsz = gsx + 1");
     assert!(
-        type_check(spec.clone()).is_err(),
+        type_check(spec.clone(), false).is_err(),
         "strict checker should reject missing annotations"
     );
-    type_check_gradual(spec).expect("gradual checker should accept the spec");
+    type_check_gradual(spec, false).expect("gradual checker should accept the spec");
 }
 
 #[test]
 fn test_gradual_type_check_rejects_annotated_mismatch() {
     // A concrete static mismatch must remain an error under gradual typing.
     let spec = dsrv_spec!("out gbz: Bool\ngbz = 1 + 1");
-    assert!(type_check_gradual(spec).is_err());
+    assert!(type_check_gradual(spec, false).is_err());
 }
 
 #[apply(async_test)]
@@ -1068,9 +1068,17 @@ out echoed: Struct<x: Int, y: Int, ...>
 selected = Map.get(payload, "x")
 echoed = payload
 "#;
-    let mut spec_input = spec;
-    let spec = dsrv_specification(&mut spec_input).unwrap();
-    let input_data = parse_file(untimed_input_file, "fixtures/object_literal_extra.input").await?;
+    let spec_input = spec;
+    let spec = parse_str(spec_input).unwrap();
+    let input_data = parse_file(
+        |contents| {
+            untimed_input_file
+                .parse(contents)
+                .map_err(|error| error.to_string())
+        },
+        "fixtures/object_literal_extra.input",
+    )
+    .await?;
     let input_stream = file::input_stream(input_data, spec.input_vars().clone());
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
@@ -1140,7 +1148,7 @@ out robot: Struct<id: Int, ...>
 robot = {"id": 1, "label": "robot"}
 "#
     );
-    type_check(spec)
+    type_check(spec, false)
         .expect("object literal with extra fields should type-check as a permissive struct");
 
     let cases = [
@@ -1200,9 +1208,9 @@ x = values.x
     ];
 
     for (spec_src, expected_error) in cases {
-        let mut spec_src = spec_src;
-        let spec = dsrv_specification(&mut spec_src).unwrap();
-        let errors = type_check(spec).expect_err("object literal should not type-check");
+        let spec_src = spec_src;
+        let spec = parse_str(spec_src).unwrap();
+        let errors = type_check(spec, false).expect_err("object literal should not type-check");
         assert!(
             errors
                 .iter()
@@ -1260,9 +1268,9 @@ s = latch(Struct("id": 1), Struct("id": 2))
     ];
 
     for spec_src in cases {
-        let mut spec_src = spec_src;
-        let spec = dsrv_specification(&mut spec_src).unwrap();
-        type_check(spec).unwrap_or_else(|errors| {
+        let spec_src = spec_src;
+        let spec = parse_str(spec_src).unwrap();
+        type_check(spec, false).unwrap_or_else(|errors| {
             panic!("expected spec to type-check, got {errors:?}\n{spec_src}")
         });
     }
@@ -1421,7 +1429,8 @@ robot = Struct("id": 7)
 "#
     );
 
-    let errors = type_check(spec).expect_err("Struct constructor should not type-check as a Map");
+    let errors =
+        type_check(spec, false).expect_err("Struct constructor should not type-check as a Map");
     assert!(
         errors.iter().any(|err| format!("{err:?}")
             .contains("Struct constructor requires an expected Struct type")),
@@ -2921,7 +2930,7 @@ async fn test_simple_add_monitor_does_not_go_away(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
-        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = parse_str(spec_simple_add_monitor_typed()).unwrap();
 
         // Create fresh input streams for each test iteration
         let input_stream = integer_pair_input_stream();
@@ -2976,7 +2985,7 @@ async fn test_simple_add_monitor_large_input(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
-        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = parse_str(spec_simple_add_monitor_typed()).unwrap();
 
         // Create fresh input streams for each test iteration (100 elements)
         let input_stream = trustworthiness_checker::dsrv_fixtures::simple_add_input_stream(100);
@@ -3046,7 +3055,7 @@ pub fn constraint_style_input_stream() -> InputStream<Value> {
 #[apply(async_test)]
 async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = parse_str(spec_simple_add_monitor_typed()).unwrap();
 
         let input_stream = integer_pair_input_stream();
 
@@ -3089,7 +3098,7 @@ async fn test_simple_add_monitor_untyped_spec(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor()).unwrap();
 
         let input_stream = integer_pair_input_stream();
 
@@ -3284,7 +3293,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 #[apply(async_test)]
 async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::async_configurations() {
-        let spec_untyped = dsrv_specification(&mut spec_simple_add_monitor_typed_float()).unwrap();
+        let spec_untyped = parse_str(spec_simple_add_monitor_typed_float()).unwrap();
 
         let input_stream = float_pair_input_stream();
 
@@ -3619,9 +3628,9 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 #[apply(async_test)]
 async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let mut spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int)";
+        let spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int)";
         let input_stream = dynamic_expression_input_stream();
-        let spec = dsrv_specification(&mut spec_str).unwrap();
+        let spec = parse_str(spec_str).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -3748,7 +3757,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 #[apply(async_test)]
 async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_specification(&mut spec_maple_sequence()).unwrap();
+        let spec_untyped = parse_str(spec_maple_sequence()).unwrap();
 
         let input_stream = maple_valid_input_stream(10);
 
@@ -4245,7 +4254,7 @@ async fn test_benchmark_regression_long_add_defer(
     let _guard = subscriber.set_default(); // active only in this scope
 
     for config in TestConfiguration::untyped_configurations() {
-        let spec = dsrv_specification(&mut spec_add_defer()).unwrap();
+        let spec = parse_str(spec_add_defer()).unwrap();
 
         let input_stream = add_defer_input_stream(SIZE);
 
@@ -4347,17 +4356,13 @@ mod reconf_tests {
     use trustworthiness_checker::io::{
         InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec,
     };
-    use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
     use trustworthiness_checker::semantics::UntimedDsrvSemantics;
     use trustworthiness_checker::stream_utils::{Fanout, FanoutSender};
 
-    type TestRuntimeBuilder = ReconfSemiSyncRuntimeBuilder<
-        SemiSyncValueConfig,
-        UntimedDsrvSemantics<LALRParser>,
-        LALRParser,
-    >;
+    type TestRuntimeBuilder =
+        ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics>;
 
     const RECONF_TOPIC: &str = "RECONF_ME";
 
@@ -4405,7 +4410,7 @@ mod reconf_tests {
     async fn test_reconf_simple_add_no_reconf(ex: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, without actually sending a
         // reconfiguration, to check that the basic input/output works as expected.
-        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let expected = vec![Value::NoVal, Value::Int(3), Value::Int(5), Value::Int(7)];
@@ -4419,6 +4424,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
+                .parse_spec(parse_str)
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4459,7 +4465,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_typed_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor_typed()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
         let expected = vec![
@@ -4561,7 +4567,7 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_typed_reconf_type_error_is_reported(ex: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor_typed()).unwrap();
         let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
 
         let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
@@ -4614,7 +4620,7 @@ mod reconf_tests {
     async fn test_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure but do
         // not introduce/remove any streams
-        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
         let expected = vec![
@@ -4639,6 +4645,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
+                .parse_spec(parse_str)
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4743,7 +4750,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure to a
         // spec that does not require a y stream
 
-        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -4767,6 +4774,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
+                .parse_spec(parse_str)
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4859,7 +4867,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the acc spec, where we reconfigure to
         // run the simple_add spec, which includes an extra input stream
 
-        let spec = dsrv_specification(&mut spec_acc_monitor()).unwrap();
+        let spec = parse_str(spec_acc_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -4885,6 +4893,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
+                .parse_spec(parse_str)
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4974,7 +4983,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have two output streams,
         // and reconfigure into having one
 
-        let spec = dsrv_specification(&mut spec_assignment2_monitor()).unwrap();
+        let spec = parse_str(spec_assignment2_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(2), Value::Int(3)];
@@ -4990,6 +4999,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
+                .parse_spec(parse_str)
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -5078,7 +5088,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have one output streams,
         // and reconfigure into having two
 
-        let spec = dsrv_specification(&mut spec_assignment_monitor()).unwrap();
+        let spec = parse_str(spec_assignment_monitor()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(4), Value::Int(5)];
@@ -5094,6 +5104,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
+                .parse_spec(parse_str)
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -5182,7 +5193,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
         // new one.
 
-        let spec = dsrv_specification(&mut spec_sindex()).unwrap();
+        let spec = parse_str(spec_sindex()).unwrap();
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let in_len = xs.len();
         let expected = vec![
@@ -5203,6 +5214,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
+                .parse_spec(parse_str)
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -5280,7 +5292,7 @@ mod reconf_tests {
         // Runs twice: once with context transfer, once without.
 
         for use_context_transfer in [true, false] {
-            let mut first_spec = "in x\n\
+            let first_spec = "in x\n\
             out y\n\
             out z\n\
             y = x\n\
@@ -5290,7 +5302,7 @@ mod reconf_tests {
             out z\n\
             y = x\n\
             z = y[1] + 1";
-            let spec = dsrv_specification(&mut first_spec).unwrap();
+            let spec = parse_str(first_spec).unwrap();
             let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
             let in_len = xs.len();
             let expected = if use_context_transfer {
@@ -5321,6 +5333,7 @@ mod reconf_tests {
                 .aux_info(vec![]);
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
+                    .parse_spec(parse_str)
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_factory(input_factory)
@@ -5411,7 +5424,7 @@ mod reconf_tests {
         // Runs twice: once with context transfer, once without.
 
         for use_context_transfer in [true, false] {
-            let spec = dsrv_specification(&mut spec_acc_monitor()).unwrap();
+            let spec = parse_str(spec_acc_monitor()).unwrap();
             let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
             let in_len = xs.len();
             let expected = if use_context_transfer {
@@ -5442,6 +5455,7 @@ mod reconf_tests {
                 .aux_info(vec![]);
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
+                    .parse_spec(parse_str)
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_factory(input_factory)

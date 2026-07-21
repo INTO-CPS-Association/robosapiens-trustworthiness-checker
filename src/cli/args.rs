@@ -77,24 +77,6 @@ pub fn resolve_runtime(
     }
 }
 
-/// Parser implementation strategies for specification parsing
-///
-/// Different parsing approaches available for processing specification files,
-/// each with different performance and feature characteristics.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
-#[strum(serialize_all = "kebab-case")]
-pub enum ParserMode {
-    /// Parser combinator implementation using the Winnow library
-    ///
-    /// Provides flexible, composable parsing with good error messages.
-    Combinator,
-    /// LALR(1) parser implementation using lalrpop
-    ///
-    /// Generates efficient parsers from grammar definitions.
-    /// Recommended for most use cases.
-    Lalr,
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
 pub enum MstloAlgorithm {
@@ -308,8 +290,6 @@ pub struct Cli {
     #[arg(long, help = "Write tracing logs to this file")]
     pub log_file: Option<String>,
 
-    #[arg(long, help = "Parser mode to use for model parsing", default_value_t = ParserMode::Lalr)]
-    pub parser: ParserMode,
     #[arg(long, help = "Specification language to use", default_value_t = Language::DSRV)]
     pub language: Language,
     #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::GradualTypedUntimed)]

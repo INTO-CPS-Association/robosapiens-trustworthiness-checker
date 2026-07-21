@@ -60,7 +60,6 @@ mod tests {
     use super::*;
     use crate::async_test;
     use crate::dsrv_fixtures::TestDistConfig;
-    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{
@@ -92,13 +91,13 @@ mod tests {
             .node_names(vec!["A".into(), "B".into(), "C".into()])
             .build();
         let exp = vec![Value::Int(2), Value::Int(4)];
-        let res_stream =
-            crate::semantics::untimed_dsrv::combinators::dynamic::<TestDistConfig, LALRParser>(
-                &ctx,
-                e,
-                crate::lang::dsrv::ast::DynamicExprScope::Automatic,
-                10,
-            );
+        let res_stream = crate::semantics::untimed_dsrv::combinators::dynamic::<TestDistConfig>(
+            &ctx,
+            e,
+            crate::lang::dsrv::ast::DynamicExprScope::Automatic,
+            None,
+            10,
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         assert_eq!(res, exp);

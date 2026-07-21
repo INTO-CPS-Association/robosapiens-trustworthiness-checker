@@ -12,9 +12,11 @@ mod keyword {
     syn::custom_keyword!(children);
     syn::custom_keyword!(keyed_children);
     syn::custom_keyword!(data);
+    syn::custom_keyword!(into_data);
     syn::custom_keyword!(copy);
     syn::custom_keyword!(metadata);
     syn::custom_keyword!(internals);
+    syn::custom_keyword!(owned_constructors);
     syn::custom_keyword!(id);
     syn::custom_keyword!(key);
 }
@@ -24,6 +26,7 @@ pub(super) enum FieldKind {
     Children,
     KeyedChildren,
     Borrowed(Type),
+    IntoOwned(Type),
     Copied(Type),
 }
 
@@ -40,6 +43,7 @@ impl FieldKind {
 pub(super) struct Field {
     pub(super) name: Ident,
     pub(super) kind: FieldKind,
+    pub(super) owned_default: Option<Expr>,
 }
 
 impl Parse for Field {
@@ -58,15 +62,36 @@ impl Parse for Field {
         } else if input.peek(keyword::data) {
             input.parse::<keyword::data>()?;
             FieldKind::Borrowed(parenthesized_type(input)?)
+        } else if input.peek(keyword::into_data) {
+            input.parse::<keyword::into_data>()?;
+            FieldKind::IntoOwned(parenthesized_type(input)?)
         } else if input.peek(keyword::copy) {
             input.parse::<keyword::copy>()?;
             FieldKind::Copied(parenthesized_type(input)?)
         } else {
-            return Err(
-                input.error("expected child, children, keyed_children, data(T), or copy(T)")
-            );
+            return Err(input.error(
+                "expected child, children, keyed_children, data(T), into_data(T), or copy(T)",
+            ));
         };
-        Ok(Self { name, kind })
+        let owned_default = if input.peek(Token![=]) {
+            input.parse::<Token![=]>()?;
+            if !matches!(
+                kind,
+                FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_)
+            ) {
+                return Err(
+                    input.error("owned constructor defaults are only supported for data fields")
+                );
+            }
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            name,
+            kind,
+            owned_default,
+        })
     }
 }
 
@@ -134,6 +159,7 @@ impl Variant {
 pub(crate) struct TreeSchema {
     pub(super) visibility: Visibility,
     pub(super) internals: Visibility,
+    pub(super) owned_constructors: Option<Visibility>,
     pub(super) root: Ident,
     pub(super) metadata_name: Ident,
     pub(super) metadata: Type,
@@ -155,6 +181,7 @@ impl Parse for TreeSchema {
 
         let mut metadata = None;
         let mut internals = None;
+        let mut owned_constructors = None;
         let mut id = None;
         let mut key = None;
         let mut children = None;
@@ -181,6 +208,17 @@ impl Parse for TreeSchema {
                     ));
                 }
                 set_once(&mut internals, visibility, &name)?;
+            } else if content.peek(keyword::owned_constructors) {
+                let name: Ident = content.parse()?;
+                content.parse::<Token![:]>()?;
+                let visibility: Visibility = content.parse()?;
+                if matches!(visibility, Visibility::Inherited) {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        "owned_constructors requires an explicit visibility",
+                    ));
+                }
+                set_once(&mut owned_constructors, visibility, &name)?;
             } else if content.peek(keyword::id) {
                 parse_type_setting(&content, &mut id)?;
             } else if content.peek(keyword::key) {
@@ -208,6 +246,7 @@ impl Parse for TreeSchema {
         Ok(Self {
             visibility,
             internals: internals.ok_or_else(|| content.error("missing internals setting"))?,
+            owned_constructors,
             root,
             metadata_name: metadata
                 .as_ref()
@@ -292,6 +331,10 @@ mod tests {
         assert!(
             error("pub tree Expr { internals: , }")
                 .contains("internals requires an explicit visibility")
+        );
+        assert!(
+            error("pub tree Expr { owned_constructors: , }")
+                .contains("owned_constructors requires an explicit visibility")
         );
     }
 

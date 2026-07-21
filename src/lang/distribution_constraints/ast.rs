@@ -95,8 +95,8 @@ impl DistConstraintExprBuilder {
     }
 }
 
-// These constructors keep expression construction concise for the Winnow
-// parser and tests. Each operation produces one self-contained tree.
+// These constructors keep expression construction concise for parsers and tests.
+// Each operation produces one self-contained tree.
 #[allow(non_snake_case, clippy::boxed_local)]
 impl DistConstraintExpr {
     fn leaf(kind: DistConstraintExprKind) -> Self {

@@ -31,6 +31,7 @@ impl EnvironmentId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DataflowUnaryOp {
     Not,
+    Neg,
     Sin,
     Cos,
     Tan,

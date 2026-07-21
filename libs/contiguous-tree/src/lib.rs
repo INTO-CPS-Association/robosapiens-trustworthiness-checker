@@ -81,6 +81,7 @@ mod tests {
     crate::tree_schema! {
         pub tree Fixture {
             internals: pub(crate),
+            owned_constructors: pub(crate),
             metadata: offset: u32 = 0,
             id: u32,
             key: EcoString,
@@ -92,15 +93,62 @@ mod tests {
             Unary(value: child),
             Sequence(values: children),
             Record(fields: keyed_children),
+            Mixed(label: data(EcoString), first: child, rest: children, flag: copy(bool)),
         }
+    }
+
+    #[test]
+    fn owned_constructors_cover_fields_and_preserve_schema_child_order() {
+        let leaf = Fixture::Leaf("leaf".into());
+        let offset = Fixture::Offset(2);
+        let unary = Fixture::Unary(Box::new(leaf));
+        let sequence = Fixture::Sequence(eco_vec![unary, offset]);
+        let fixture = Fixture::Record(eco_vec![("value".into(), sequence)]);
+
+        assert_eq!(fixture.as_ref().postorder().count(), 5);
+        let FixtureView::Record(fields) = fixture.as_ref().view() else {
+            panic!("expected record root");
+        };
+        let FixtureView::Sequence(mut values) = fields.get("value").unwrap().view() else {
+            panic!("expected sequence child");
+        };
+        let FixtureView::Unary(leaf) = values.next().unwrap().view() else {
+            panic!("expected unary child first");
+        };
+        assert!(matches!(leaf.view(), FixtureView::Leaf(value) if value == "leaf"));
+        assert!(matches!(
+            values.next().unwrap().view(),
+            FixtureView::Offset(2)
+        ));
+
+        let mixed = Fixture::Mixed(
+            "ordered".into(),
+            Box::new(Fixture::Offset(1)),
+            eco_vec![Fixture::Offset(2), Fixture::Offset(3)],
+            true,
+        );
+        let FixtureView::Mixed(label, first, rest, flag) = mixed.as_ref().view() else {
+            panic!("expected mixed root");
+        };
+        assert_eq!(label, "ordered");
+        assert!(matches!(first.view(), FixtureView::Offset(1)));
+        assert_eq!(
+            rest.map(|child| match child.view() {
+                FixtureView::Offset(value) => value,
+                _ => panic!("expected offset"),
+            })
+            .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(flag);
     }
 
     #[test]
     fn generated_schema_covers_every_field_shape() {
         let mut builder = FixtureBuilder::with_capacity(6);
         let leaf = builder.Leaf("leaf".into());
-        let offset = builder.Offset(2);
         let unary = builder.Unary(leaf);
+        let offset = builder.Offset(2);
         let sequence = builder.Sequence(eco_vec![unary, offset]);
         let record = builder.Record([(EcoString::from("value"), sequence)].into_iter().collect());
         let fixture = Fixture::new(FixtureHandle::new(builder.finish_arena(), record));

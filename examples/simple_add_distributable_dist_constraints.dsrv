@@ -11,6 +11,6 @@ out w {
   aggregation    average
 }
 out v
-  locality 
+  locality
 w = x + y
 v = z + w

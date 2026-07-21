@@ -2,12 +2,6 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, anyhow};
 use mstlo::parse_stl;
-use winnow::{
-    Parser, Result as WinnowResult,
-    ascii::line_ending,
-    combinator::{opt, terminated},
-    token::{rest, take_till},
-};
 
 use super::MstloSpecification;
 use crate::VarName;
@@ -35,9 +29,7 @@ struct ParsedProperty<'a> {
 /// [`mstlo::parse_stl`], so it accepts the same runtime syntax as MSTLO itself,
 /// e.g. `x > 5`, `G[0, 10](x > $threshold)`, and `x > 5 && y < 3`.
 pub fn parse_named_properties(input: &str) -> anyhow::Result<MstloSpecification> {
-    let parsed_file = property_file.parse(input).map_err(|err| {
-        anyhow!("MSTLO property file could not be parsed as named properties: {err}")
-    })?;
+    let parsed_file = property_file(input);
 
     if let Some(line_no) = parsed_file.invalid_line {
         return Err(anyhow!(
@@ -78,29 +70,29 @@ pub fn parse_named_properties(input: &str) -> anyhow::Result<MstloSpecification>
     Ok(MstloSpecification::new(formulae))
 }
 
-fn property_file<'a>(input: &mut &'a str) -> WinnowResult<ParsedFile<'a>> {
-    let lines: Vec<&'a str> = winnow::combinator::repeat(0.., physical_line).parse_next(input)?;
-
+fn property_file(input: &str) -> ParsedFile<'_> {
     let mut properties = Vec::new();
-    let mut current_property: Option<ParsedProperty<'a>> = None;
+    let mut current_property: Option<ParsedProperty<'_>> = None;
     let mut invalid_line = None;
 
-    for (idx, raw_line) in lines.into_iter().enumerate() {
+    for (idx, raw_line) in input.lines().enumerate() {
         let line_no = idx + 1;
-        let line = uncommented_line.parse(raw_line).unwrap_or("").trim();
+        let line = raw_line
+            .split_once('#')
+            .map_or(raw_line, |(line, _)| line)
+            .trim();
         if line.is_empty() {
             continue;
         }
 
-        let mut property_line = line;
-        if let Ok((name, formula)) = property_header.parse_next(&mut property_line) {
+        if let Some((name, formula)) = line.split_once(':') {
             if let Some(property) = current_property.take() {
                 properties.push(property);
             }
             current_property = Some(ParsedProperty {
                 line_no,
-                name,
-                formula: formula.to_owned(),
+                name: name.trim(),
+                formula: formula.trim().to_owned(),
             });
         } else if let Some(property) = current_property.as_mut() {
             if !property.formula.is_empty() {
@@ -117,31 +109,10 @@ fn property_file<'a>(input: &mut &'a str) -> WinnowResult<ParsedFile<'a>> {
         properties.push(property);
     }
 
-    Ok(ParsedFile {
+    ParsedFile {
         properties,
         invalid_line,
-    })
-}
-
-fn physical_line<'a>(input: &mut &'a str) -> WinnowResult<&'a str> {
-    let line = take_till(0.., ['\r', '\n']).parse_next(input)?;
-    if line.is_empty() {
-        line_ending.parse_next(input)?;
-    } else {
-        opt(line_ending).parse_next(input)?;
     }
-
-    Ok(line)
-}
-
-fn uncommented_line<'a>(input: &mut &'a str) -> WinnowResult<&'a str> {
-    terminated(take_till(0.., ['#']), opt(('#', rest))).parse_next(input)
-}
-
-fn property_header<'a>(input: &mut &'a str) -> WinnowResult<(&'a str, &'a str)> {
-    (take_till(0.., [':']), ':', rest)
-        .map(|(name, _, formula): (&str, char, &str)| (name.trim(), formula.trim()))
-        .parse_next(input)
 }
 
 pub async fn parse_file(path: &str) -> anyhow::Result<MstloSpecification> {
@@ -195,6 +166,42 @@ mod tests {
             formula.output_vars(),
             BTreeSet::from([VarName::new("gt"), VarName::new("lt")])
         );
+    }
+
+    #[test]
+    fn parses_crlf_property_files() {
+        let formula =
+            parse_named_properties("# comment\r\ngt: x > 5\r\n\r\nlt: y < 3\r\n").unwrap();
+
+        assert_eq!(
+            formula.output_vars(),
+            BTreeSet::from([VarName::new("gt"), VarName::new("lt")])
+        );
+    }
+
+    #[test]
+    fn property_wrapper_preserves_continuations_and_strips_comments() {
+        let parsed = property_file(
+            "first: x > 5 # ignored: text\n  && y < 3 # trailing comment\nsecond: z > 0",
+        );
+
+        assert_eq!(parsed.invalid_line, None);
+        assert_eq!(parsed.properties.len(), 2);
+        assert_eq!(parsed.properties[0].line_no, 1);
+        assert_eq!(parsed.properties[0].name, "first");
+        assert_eq!(parsed.properties[0].formula, "x > 5\n&& y < 3");
+        assert_eq!(parsed.properties[1].name, "second");
+        assert_eq!(parsed.properties[1].formula, "z > 0");
+    }
+
+    #[test]
+    fn property_wrapper_splits_headers_at_first_colon() {
+        let parsed = property_file("property: formula:with:colons");
+
+        assert_eq!(parsed.invalid_line, None);
+        assert_eq!(parsed.properties.len(), 1);
+        assert_eq!(parsed.properties[0].name, "property");
+        assert_eq!(parsed.properties[0].formula, "formula:with:colons");
     }
 
     #[test]

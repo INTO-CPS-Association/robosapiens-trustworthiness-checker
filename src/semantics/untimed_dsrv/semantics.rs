@@ -7,63 +7,99 @@ use super::functions::{
     ScopedExpr, eval_apply, eval_fix, eval_list_filter, eval_list_fold, eval_list_map,
     eval_partial, make_function,
 };
-use crate::core::OutputStream;
+use super::typed_combinators as typed;
+use crate::VarName;
 use crate::core::Value;
-use crate::lang::core::parser::ExprParser;
+use crate::core::{
+    OutputStream, PartialStreamValue, from_typed_partial_stream, to_typed_partial_stream,
+};
 use crate::lang::dsrv::ast::{
     BoolBinOp, CheckedExpr, CompBinOp, Expr, ExprRef, ExprView, NumericalBinOp, SBinOp, StrBinOp,
 };
 use crate::lang::dsrv::type_checker::TCType;
-use crate::semantics::{AsyncConfig, MonitoringSemantics};
+use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use tracing::debug;
 
 #[cfg(test)]
 use ecow::EcoVec;
 
 #[derive(Clone)]
-pub struct UntimedDsrvSemantics<Parser>
-where
-    Parser: ExprParser<Expr> + 'static,
-{
-    _parser: std::marker::PhantomData<Parser>,
-}
+pub struct UntimedDsrvSemantics;
 
-pub(crate) fn evaluate<Parser, AC>(expr: Expr, ctx: &AC::Ctx) -> OutputStream<Value>
+pub(crate) fn evaluate<AC>(expr: Expr, owner: Option<VarName>, ctx: &AC::Ctx) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
-    evaluate_scope::<Parser, AC>(ScopedExpr::unchecked(expr), ctx)
+    let expression = if let Some(owner) = owner {
+        ScopedExpr::unchecked(expr).with_owner(owner)
+    } else {
+        ScopedExpr::unchecked(expr)
+    };
+    evaluate_scope::<AC>(expression, ctx)
 }
 
-pub(crate) fn evaluate_checked<Parser, AC>(expr: CheckedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
-where
-    Parser: ExprParser<Expr> + 'static,
-    AC: AsyncConfig<Val = Value>,
-{
-    super::typed_execution::evaluate_checked::<Parser, AC>(expr, ctx)
-}
-
-pub(super) fn evaluate_scope<Parser, AC>(expr: ScopedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
-where
-    Parser: ExprParser<Expr> + 'static,
-    AC: AsyncConfig<Val = Value>,
-{
-    evaluate_ref::<Parser, AC>(expr.as_ref(), &expr, ctx)
-}
-
-fn evaluate_ref<Parser, AC>(
-    node: ExprRef<'_>,
-    expr: &ScopedExpr,
+pub(crate) fn evaluate_checked<AC>(
+    expr: CheckedExpr,
+    owner: Option<VarName>,
     ctx: &AC::Ctx,
 ) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
+    AC: AsyncConfig<Val = Value>,
+{
+    let expression = if let Some(owner) = owner {
+        ScopedExpr::checked(expr).with_owner(owner)
+    } else {
+        ScopedExpr::checked(expr)
+    };
+    checked_typed_dispatch_stream::<AC>(expression, ctx)
+}
+
+pub(super) fn evaluate_scope<AC>(expr: ScopedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    let owner = expr.owner().cloned();
+    evaluate_ref::<AC>(expr.as_ref(), &expr, owner, ctx)
+}
+
+pub(super) fn evaluate_scoped_typed<T, AC>(
+    expr: ScopedExpr,
+    ctx: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<T>>
+where
+    T: TryFrom<Value> + std::fmt::Debug + 'static,
+    <T as TryFrom<Value>>::Error: std::fmt::Debug,
+    AC: AsyncConfig<Val = Value>,
+{
+    to_typed_partial_stream(evaluate_ref::<AC>(
+        expr.as_ref(),
+        &expr,
+        expr.owner().cloned(),
+        ctx,
+    ))
+}
+
+pub(super) fn evaluate_ref<'a, AC>(
+    node: ExprRef<'a>,
+    expression: &ScopedExpr,
+    owner: Option<VarName>,
+    ctx: &AC::Ctx,
+) -> OutputStream<Value>
+where
     AC: AsyncConfig<Val = Value>,
 {
     debug!("Creating async stream for expression: {:?}", node);
-    let own_child = |child| expr.scope(child);
-    let evaluate = |child| evaluate_ref::<Parser, AC>(child, expr, ctx);
+    let owner = owner.or_else(|| expression.owner().cloned());
+    let evaluate = |child| {
+        let child_expression = expression.scope(child);
+        evaluate_ref::<AC>(
+            child_expression.as_ref(),
+            &child_expression,
+            owner.clone(),
+            ctx,
+        )
+    };
+    let own_child = |child| expression.scope(child);
     match node.view() {
         ExprView::Val(v) => {
             debug!("Constant value: {:?}", v);
@@ -137,45 +173,38 @@ where
             let x = evaluate(x);
             mc::not(x)
         }
+        ExprView::Neg(x) => {
+            debug!("Performing numeric negation");
+            let x = evaluate(x);
+            mc::neg(x)
+        }
         ExprView::Var(v) => {
             debug!("Accessing variable: {:?}", v);
-            if let Some(stream) = expr.resolve_stream(v) {
+            if let Some(stream) = expression.resolve_stream(v) {
                 return stream;
             }
-            match expr.resolve(v) {
-                Some(bound) => evaluate_scope::<Parser, AC>(bound, ctx),
+            match expression.resolve(v) {
+                Some(bound) => evaluate_ref::<AC>(bound.as_ref(), &bound, owner.clone(), ctx),
                 None => mc::var::<AC>(ctx, v.clone()),
             }
         }
         ExprView::Dynamic(source, _, scope) => {
-            let dynamic_type = expr.typ(node).cloned().and_then(|expected| {
-                expr.shared_type_info()
+            let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
+                expression
+                    .shared_type_info()
                     .map(|info| (Rc::clone(info), expected))
             });
             let e = evaluate(source);
-            dynamic::dynamic_checked::<AC, Parser>(
-                ctx,
-                e,
-                scope.clone(),
-                expr.owner().cloned(),
-                1,
-                dynamic_type,
-            )
+            dynamic::dynamic_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
         }
         ExprView::Defer(source, _, scope) => {
-            let dynamic_type = expr.typ(node).cloned().and_then(|expected| {
-                expr.shared_type_info()
+            let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
+                expression
+                    .shared_type_info()
                     .map(|info| (Rc::clone(info), expected))
             });
             let e = evaluate(source);
-            dynamic::defer_checked::<AC, Parser>(
-                ctx,
-                e,
-                scope.clone(),
-                expr.owner().cloned(),
-                1,
-                dynamic_type,
-            )
+            dynamic::defer_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
         }
         ExprView::Update(e1, e2) => {
             let e1 = evaluate(e1);
@@ -258,35 +287,28 @@ where
                 .join(", ");
             let body = own_child(body);
             let display = format!("\\{} -> {}", params_display, body.expr).into();
-            mc::val(make_function::<AC, Parser>(
-                display,
-                params.clone(),
-                body,
-                ctx,
-            ))
+            mc::val(make_function::<AC>(display, params.clone(), body, ctx))
         }
-        ExprView::Apply(func, args) => eval_apply::<AC, Parser>(
+        ExprView::Apply(func, args) => eval_apply::<AC>(
             own_child(func),
             args.into_iter().map(&own_child).collect(),
             ctx,
         ),
-        ExprView::Fix(func) => eval_fix::<AC, Parser>(own_child(func), ctx),
-        ExprView::Partial(func, args) => eval_partial::<AC, Parser>(
+        ExprView::Fix(func) => eval_fix::<AC>(own_child(func), ctx),
+        ExprView::Partial(func, args) => eval_partial::<AC>(
             own_child(func),
             args.into_iter().map(&own_child).collect(),
             ctx,
         ),
-        ExprView::LMap(func, list) => {
-            eval_list_map::<AC, Parser>(own_child(func), own_child(list), ctx)
-        }
+        ExprView::LMap(func, list) => eval_list_map::<AC>(own_child(func), own_child(list), ctx),
         ExprView::LFilter(func, list) => {
-            eval_list_filter::<AC, Parser>(own_child(func), own_child(list), ctx)
+            eval_list_filter::<AC>(own_child(func), own_child(list), ctx)
         }
         ExprView::LFold(func, init, list) => {
-            eval_list_fold::<AC, Parser>(own_child(func), own_child(init), own_child(list), ctx)
+            eval_list_fold::<AC>(own_child(func), own_child(init), own_child(list), ctx)
         }
         ExprView::Map(map) | ExprView::Struct(map) | ExprView::ObjectLiteral(map) => {
-            let checked_type = expr.typ(node);
+            let checked_type = expression.typ(node);
             let map: BTreeMap<_, _> = map
                 .iter()
                 .filter(|(name, _)| field_survives_checked_projection(checked_type, name))
@@ -299,7 +321,7 @@ where
             mc::mget(map, k.clone())
         }
         ExprView::SGet(value, key) => {
-            let value_type = expr.typ(value).cloned();
+            let value_type = expression.typ(value).cloned();
             let value = evaluate(value);
             match (value_type, key.parse::<usize>()) {
                 (Some(TCType::Tuple(_)), Ok(index)) | (None, Ok(index)) => mc::tget(value, index),
@@ -353,21 +375,262 @@ fn field_survives_checked_projection(typ: Option<&TCType>, name: &str) -> bool {
     }
 }
 
-impl<Parser, AC> MonitoringSemantics<AC> for UntimedDsrvSemantics<Parser>
+fn evaluate_float<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
 where
-    Parser: ExprParser<Expr> + 'static,
+    AC: AsyncConfig<Val = Value>,
+{
+    from_typed_partial_stream(evaluate_float_typed::<AC>(expression, context))
+}
+
+fn evaluate_float_typed<AC>(
+    expression: ScopedExpr,
+    context: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<f64>>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    let node = expression.as_ref();
+    match node.view() {
+        ExprView::Val(Value::Float(value)) => typed::val(*value),
+        ExprView::Var(name) => {
+            if let Some(stream) = expression.resolve_stream(name) {
+                crate::core::to_typed_stream(stream)
+            } else {
+                match expression.resolve(name) {
+                    Some(bound) => evaluate_float_typed::<AC>(bound, context),
+                    None => crate::core::to_typed_stream(
+                        context.var(name).expect("checked variable must exist"),
+                    ),
+                }
+            }
+        }
+        ExprView::BinOp(left, right, SBinOp::NOp(operator)) => {
+            let left = evaluate_float_typed::<AC>(expression.scope(left), context);
+            let right = evaluate_float_typed::<AC>(expression.scope(right), context);
+            match operator {
+                NumericalBinOp::Add => typed::add(left, right),
+                NumericalBinOp::Sub => typed::sub(left, right),
+                NumericalBinOp::Mul => typed::mul(left, right),
+                NumericalBinOp::Div => typed::div(left, right),
+                NumericalBinOp::Mod => typed::rem(left, right),
+            }
+        }
+        ExprView::Default(input, default) => typed::default(
+            evaluate_float_typed::<AC>(expression.scope(input), context),
+            evaluate_float_typed::<AC>(expression.scope(default), context),
+        ),
+        ExprView::SIndex(input, index) => typed::sindex(
+            evaluate_float_typed::<AC>(expression.scope(input), context),
+            index,
+        ),
+        ExprView::If(condition, then_expr, else_expr) => typed::if_stream(
+            evaluate_bool_typed::<AC>(expression.scope(condition), context),
+            evaluate_float_typed::<AC>(expression.scope(then_expr), context),
+            evaluate_float_typed::<AC>(expression.scope(else_expr), context),
+        ),
+        ExprView::Neg(value) => {
+            typed::neg(evaluate_float_typed::<AC>(expression.scope(value), context))
+        }
+        ExprView::Sin(value) => {
+            typed::sin(evaluate_float_typed::<AC>(expression.scope(value), context))
+        }
+        ExprView::Cos(value) => {
+            typed::cos(evaluate_float_typed::<AC>(expression.scope(value), context))
+        }
+        ExprView::Tan(value) => {
+            typed::tan(evaluate_float_typed::<AC>(expression.scope(value), context))
+        }
+        ExprView::Abs(value) => {
+            typed::abs(evaluate_float_typed::<AC>(expression.scope(value), context))
+        }
+        _ => evaluate_typed::<f64, AC>(expression, context),
+    }
+}
+
+fn evaluate_int<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    from_typed_partial_stream(evaluate_int_typed::<AC>(expression, context))
+}
+
+fn evaluate_int_typed<AC>(
+    expression: ScopedExpr,
+    context: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<i64>>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    let node = expression.as_ref();
+    match node.view() {
+        ExprView::Val(Value::Int(value)) => typed::val(*value),
+        ExprView::Var(name) => {
+            if let Some(stream) = expression.resolve_stream(name) {
+                crate::core::to_typed_stream(stream)
+            } else {
+                match expression.resolve(name) {
+                    Some(bound) => evaluate_int_typed::<AC>(bound, context),
+                    None => crate::core::to_typed_stream(
+                        context.var(name).expect("checked variable must exist"),
+                    ),
+                }
+            }
+        }
+        ExprView::BinOp(left, right, SBinOp::NOp(operator)) => {
+            let left = evaluate_int_typed::<AC>(expression.scope(left), context);
+            let right = evaluate_int_typed::<AC>(expression.scope(right), context);
+            match operator {
+                NumericalBinOp::Add => typed::add(left, right),
+                NumericalBinOp::Sub => typed::sub(left, right),
+                NumericalBinOp::Mul => typed::mul(left, right),
+                NumericalBinOp::Div => typed::div(left, right),
+                NumericalBinOp::Mod => typed::rem(left, right),
+            }
+        }
+        ExprView::Default(input, default) => typed::default(
+            evaluate_int_typed::<AC>(expression.scope(input), context),
+            evaluate_int_typed::<AC>(expression.scope(default), context),
+        ),
+        ExprView::SIndex(input, index) => typed::sindex(
+            evaluate_int_typed::<AC>(expression.scope(input), context),
+            index,
+        ),
+        ExprView::If(condition, then_expr, else_expr) => typed::if_stream(
+            evaluate_bool_typed::<AC>(expression.scope(condition), context),
+            evaluate_int_typed::<AC>(expression.scope(then_expr), context),
+            evaluate_int_typed::<AC>(expression.scope(else_expr), context),
+        ),
+        ExprView::Neg(value) => {
+            typed::neg(evaluate_int_typed::<AC>(expression.scope(value), context))
+        }
+        _ => evaluate_typed::<i64, AC>(expression, context),
+    }
+}
+
+fn evaluate_bool<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    from_typed_partial_stream(evaluate_bool_typed::<AC>(expression, context))
+}
+
+fn evaluate_bool_typed<AC>(
+    expression: ScopedExpr,
+    context: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<bool>>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    let node = expression.as_ref();
+    match node.view() {
+        ExprView::Val(Value::Bool(value)) => typed::val(*value),
+        ExprView::Var(name) => {
+            if let Some(stream) = expression.resolve_stream(name) {
+                crate::core::to_typed_stream(stream)
+            } else {
+                match expression.resolve(name) {
+                    Some(bound) => evaluate_bool_typed::<AC>(bound, context),
+                    None => crate::core::to_typed_stream(
+                        context.var(name).expect("checked variable must exist"),
+                    ),
+                }
+            }
+        }
+        ExprView::Not(input) => {
+            typed::not(evaluate_bool_typed::<AC>(expression.scope(input), context))
+        }
+        ExprView::BinOp(left, right, SBinOp::BOp(operator)) => {
+            let left = evaluate_bool_typed::<AC>(expression.scope(left), context);
+            let right = evaluate_bool_typed::<AC>(expression.scope(right), context);
+            match operator {
+                BoolBinOp::And => typed::and(left, right),
+                BoolBinOp::Or => typed::or(left, right),
+                BoolBinOp::Impl => typed::implies(left, right),
+            }
+        }
+        ExprView::BinOp(left, right, SBinOp::COp(operator))
+            if matches!(expression.typ(left), Some(TCType::Int)) =>
+        {
+            let left = evaluate_int_typed::<AC>(expression.scope(left), context);
+            let right = evaluate_int_typed::<AC>(expression.scope(right), context);
+            match operator {
+                CompBinOp::Eq => typed::compare(left, right, |left, right| left == right),
+                CompBinOp::Le => typed::compare(left, right, |left, right| left <= right),
+                CompBinOp::Lt => typed::compare(left, right, |left, right| left < right),
+                CompBinOp::Ge => typed::compare(left, right, |left, right| left >= right),
+                CompBinOp::Gt => typed::compare(left, right, |left, right| left > right),
+            }
+        }
+        ExprView::BinOp(left, right, SBinOp::COp(operator))
+            if matches!(expression.typ(left), Some(TCType::Float)) =>
+        {
+            let left = evaluate_float_typed::<AC>(expression.scope(left), context);
+            let right = evaluate_float_typed::<AC>(expression.scope(right), context);
+            match operator {
+                CompBinOp::Eq => typed::compare(left, right, |left, right| left == right),
+                CompBinOp::Le => typed::compare(left, right, |left, right| left <= right),
+                CompBinOp::Lt => typed::compare(left, right, |left, right| left < right),
+                CompBinOp::Ge => typed::compare(left, right, |left, right| left >= right),
+                CompBinOp::Gt => typed::compare(left, right, |left, right| left > right),
+            }
+        }
+        ExprView::Default(input, default) => typed::default(
+            evaluate_bool_typed::<AC>(expression.scope(input), context),
+            evaluate_bool_typed::<AC>(expression.scope(default), context),
+        ),
+        ExprView::SIndex(input, index) => typed::sindex(
+            evaluate_bool_typed::<AC>(expression.scope(input), context),
+            index,
+        ),
+        ExprView::If(condition, then_expr, else_expr) => typed::if_stream(
+            evaluate_bool_typed::<AC>(expression.scope(condition), context),
+            evaluate_bool_typed::<AC>(expression.scope(then_expr), context),
+            evaluate_bool_typed::<AC>(expression.scope(else_expr), context),
+        ),
+        _ => evaluate_typed::<bool, AC>(expression, context),
+    }
+}
+
+fn evaluate_typed<T, AC>(
+    expression: ScopedExpr,
+    context: &AC::Ctx,
+) -> OutputStream<PartialStreamValue<T>>
+where
+    T: TryFrom<Value> + std::fmt::Debug + 'static,
+    <T as TryFrom<Value>>::Error: std::fmt::Debug,
+    AC: AsyncConfig<Val = Value>,
+{
+    evaluate_scoped_typed::<T, AC>(expression, context)
+}
+
+fn evaluate_untyped<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    evaluate_ref::<AC>(expression.as_ref(), &expression, None, context)
+}
+
+fn checked_typed_dispatch_stream<AC>(
+    expression: ScopedExpr,
+    context: &AC::Ctx,
+) -> OutputStream<Value>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    match expression.typ(expression.as_ref()) {
+        Some(TCType::Int) => evaluate_int::<AC>(expression, context),
+        Some(TCType::Bool) => evaluate_bool::<AC>(expression, context),
+        Some(TCType::Float) => evaluate_float::<AC>(expression, context),
+        _ => evaluate_untyped::<AC>(expression, context),
+    }
+}
+
+impl<AC> MonitoringSemantics<AC> for UntimedDsrvSemantics
+where
     AC: AsyncConfig<Val = Value, Expr = Expr>,
 {
-    fn to_async_stream(expr: Expr, ctx: &AC::Ctx) -> OutputStream<Value> {
-        evaluate::<Parser, AC>(expr, ctx)
-    }
-
-    fn to_async_stream_for_var(
-        var: &crate::VarName,
-        expr: Expr,
-        ctx: &AC::Ctx,
-    ) -> OutputStream<Value> {
-        evaluate_scope::<Parser, AC>(ScopedExpr::unchecked(expr).with_owner(var.clone()), ctx)
+    fn to_async_stream(expr: &Expr, ctx: &AC::Ctx, owner: Option<VarName>) -> OutputStream<Value> {
+        evaluate::<AC>(expr.clone(), owner, ctx)
     }
 }
 
@@ -377,28 +640,18 @@ where
 /// and support type-checking of
 /// expressions introduced by `dynamic` and `defer` at runtime.
 #[derive(Clone)]
-pub struct CheckedUntimedDsrvSemantics<Parser>(std::marker::PhantomData<Parser>)
-where
-    Parser: ExprParser<Expr> + 'static;
+pub struct CheckedUntimedDsrvSemantics;
 
-impl<Parser, AC> MonitoringSemantics<AC> for CheckedUntimedDsrvSemantics<Parser>
+impl<AC> MonitoringSemantics<AC> for CheckedUntimedDsrvSemantics
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value, Expr = CheckedExpr>,
 {
-    fn to_async_stream(expr: CheckedExpr, ctx: &AC::Ctx) -> OutputStream<Value> {
-        evaluate_checked::<Parser, AC>(expr, ctx)
-    }
-
-    fn to_async_stream_for_var(
-        var: &crate::VarName,
-        expr: CheckedExpr,
+    fn to_async_stream(
+        expr: &CheckedExpr,
         ctx: &AC::Ctx,
+        owner: Option<VarName>,
     ) -> OutputStream<Value> {
-        super::typed_execution::evaluate_scoped::<Parser, AC>(
-            ScopedExpr::checked(expr).with_owner(var.clone()),
-            ctx,
-        )
+        evaluate_checked::<AC>(expr.clone(), owner, ctx)
     }
 }
 
@@ -409,9 +662,10 @@ mod tests {
     use crate::core::StreamTypeAscription;
     use crate::dsrv_fixtures::TestConfig;
     use crate::lang::dsrv::ast::Expr;
-    use crate::lang::dsrv::lalr_parser::LALRParser;
+    use crate::lang::dsrv::parser::parse_sexpr;
     use crate::lang::dsrv::type_checker::type_check;
     use crate::runtime::asynchronous::Context;
+    use crate::runtime::builder::CheckedValueConfig;
     use crate::semantics::StreamContext;
     use ecow::eco_vec;
     use futures::stream::{self, StreamExt};
@@ -423,8 +677,8 @@ mod tests {
     fn checked_lexical_frame_preserves_node_annotations() {
         let source =
             "in property: Str\nout result: Int\nresult = (\\p: Str -> dynamic(p : Int))(property)";
-        let spec = crate::lang::dsrv::lalr_parser::parse_str(source).unwrap();
-        let checked = type_check(spec).unwrap();
+        let spec = crate::lang::dsrv::parser::parse_str(source).unwrap();
+        let checked = type_check(spec, false).unwrap();
         let expression = ScopedExpr::checked(checked.var_expr(&"result".into()).unwrap());
         let ExprView::Apply(function, mut args) = expression.as_ref().view() else {
             panic!("expected application");
@@ -451,16 +705,61 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn checked_float_arithmetic_and_comparison_are_specialised(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let specification = crate::dsrv_spec!("out result: Bool\nresult = (1.5 + 2.0) < 4.0");
+        let checked = type_check(specification, false).unwrap();
+        let expression = checked.var_expr(&"result".into()).unwrap();
+        let context = Context::<CheckedValueConfig>::new(executor, Vec::new(), Vec::new(), 0);
+
+        let values: Vec<Value> =
+            <CheckedUntimedDsrvSemantics as MonitoringSemantics<CheckedValueConfig>>::to_async_stream(
+                &expression,
+                &context,
+                None,
+            )
+            .take(1)
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(values, [Value::Bool(true)]);
+    }
+
+    #[apply(async_test)]
+    async fn checked_float_default_repeats_known_values_across_no_val(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let specification =
+            crate::dsrv_spec!("in x: Float\nout result: Float\nresult = default(x, 2.0)");
+        let checked = type_check(specification, false).unwrap();
+        let expression = checked.var_expr(&"result".into()).unwrap();
+        let input = Box::pin(futures::stream::iter([Value::Float(1.0), Value::NoVal]));
+        let mut context =
+            Context::<CheckedValueConfig>::new(executor, vec!["x".into()], vec![input], 0);
+
+        let output = <CheckedUntimedDsrvSemantics as MonitoringSemantics<CheckedValueConfig>>::to_async_stream(
+            &expression,
+            &context,
+            None,
+        );
+        context.run().await;
+        let values: Vec<Value> = output.collect::<Vec<_>>().await;
+
+        assert_eq!(values, [Value::Float(1.0), Value::Float(1.0)]);
+    }
+
+    #[apply(async_test)]
     async fn lexical_function_arguments_keep_temporal_state(executor: Rc<LocalExecutor<'static>>) {
-        let mut source = "(\\f: (Int -> Int) -> f(x))(\\v: Int -> v[1])";
-        let expression = LALRParser::parse(&mut source).unwrap();
+        let source = "(\\f: (Int -> Int) -> f(x))(\\v: Int -> v[1])";
+        let expression = parse_sexpr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["x".into()],
             vec![Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]))],
             2,
         );
-        let output = evaluate::<LALRParser, TestConfig>(expression, &context);
+        let output = to_stream(expression, &context);
         context.run().await;
 
         assert_eq!(
@@ -473,8 +772,8 @@ mod tests {
     async fn first_class_function_values_keep_per_call_site_state(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut source = "(if choose then \\v: Int -> v[1] else \\v: Int -> v[1])(x)";
-        let expression = LALRParser::parse(&mut source).unwrap();
+        let source = "(if choose then \\v: Int -> v[1] else \\v: Int -> v[1])(x)";
+        let expression = parse_sexpr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into()],
@@ -484,7 +783,7 @@ mod tests {
             ],
             2,
         );
-        let output = evaluate::<LALRParser, TestConfig>(expression, &context);
+        let output = to_stream(expression, &context);
         context.run().await;
 
         assert_eq!(
@@ -497,8 +796,8 @@ mod tests {
     async fn first_class_functions_share_arguments_and_update_captures(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut source = "(if choose then \\v: Int -> v[1] + bias else \\v: Int -> v + v)(x)";
-        let expression = LALRParser::parse(&mut source).unwrap();
+        let source = "(if choose then \\v: Int -> v[1] + bias else \\v: Int -> v + v)(x)";
+        let expression = parse_sexpr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into(), "bias".into()],
@@ -509,7 +808,7 @@ mod tests {
             ],
             2,
         );
-        let output = evaluate::<LALRParser, TestConfig>(expression, &context);
+        let output = to_stream(expression, &context);
         context.run().await;
 
         assert_eq!(
@@ -522,8 +821,8 @@ mod tests {
     async fn first_class_function_capture_ports_advance_each_tick(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut source = "(if choose then \\v: Int -> bias[1] else \\v: Int -> bias[1])(x)";
-        let expression = LALRParser::parse(&mut source).unwrap();
+        let source = "(if choose then \\v: Int -> bias[1] else \\v: Int -> bias[1])(x)";
+        let expression = parse_sexpr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into(), "bias".into()],
@@ -534,7 +833,7 @@ mod tests {
             ],
             2,
         );
-        let output = evaluate::<LALRParser, TestConfig>(expression, &context);
+        let output = to_stream(expression, &context);
         context.run().await;
 
         assert_eq!(
@@ -545,8 +844,8 @@ mod tests {
 
     #[apply(async_test)]
     async fn partial_functions_preserve_stream_bindings(executor: Rc<LocalExecutor<'static>>) {
-        let mut source = "partial(\\a: Int, b: Int -> a[1] + b, x)(y)";
-        let expression = LALRParser::parse(&mut source).unwrap();
+        let source = "partial(\\a: Int, b: Int -> a[1] + b, x)(y)";
+        let expression = parse_sexpr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["x".into(), "y".into()],
@@ -556,7 +855,7 @@ mod tests {
             ],
             2,
         );
-        let output = evaluate::<LALRParser, TestConfig>(expression, &context);
+        let output = to_stream(expression, &context);
         context.run().await;
 
         assert_eq!(
@@ -569,8 +868,8 @@ mod tests {
     async fn first_class_function_switching_starts_a_new_instance(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut source = "(if choose then \\v: Int -> v[1] else \\v: Int -> v[1])(x)";
-        let expression = LALRParser::parse(&mut source).unwrap();
+        let source = "(if choose then \\v: Int -> v[1] else \\v: Int -> v[1])(x)";
+        let expression = parse_sexpr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into()],
@@ -592,7 +891,7 @@ mod tests {
             ],
             2,
         );
-        let output = evaluate::<LALRParser, TestConfig>(expression, &context);
+        let output = to_stream(expression, &context);
         context.run().await;
 
         assert_eq!(
@@ -608,9 +907,7 @@ mod tests {
     }
 
     fn to_stream(expr: Expr, ctx: &Context<TestConfig>) -> OutputStream<Value> {
-        <UntimedDsrvSemantics<LALRParser> as MonitoringSemantics<TestConfig>>::to_async_stream(
-            expr, ctx,
-        )
+        <UntimedDsrvSemantics as MonitoringSemantics<TestConfig>>::to_async_stream(&expr, ctx, None)
     }
     // ============================================================================
     // DEFER TESTS

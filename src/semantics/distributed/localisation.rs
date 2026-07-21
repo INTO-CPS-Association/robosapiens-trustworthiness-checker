@@ -221,10 +221,9 @@ mod tests {
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
     use crate::lang::dsrv::ast::Expr;
     use crate::lang::dsrv::span::strip_span;
-    use crate::{dsrv_specification, sexpr};
+    use crate::sexpr;
     use proptest::prelude::*;
     use test_log::test;
-    use winnow::Parser;
 
     use super::*;
     use crate::lang::dsrv::ast::generation::arb_boolean_dsrv_spec;
@@ -308,8 +307,7 @@ mod tests {
 
     #[test]
     fn test_localise_specification_simple_add() {
-        let spec = dsrv_specification
-            .parse(spec_simple_add_decomposable())
+        let spec = crate::lang::dsrv::parser::parse_str(spec_simple_add_decomposable())
             .expect("Failed to parse specification");
 
         let local_spec1 = spec.localise(&vec!["w".into()]);
@@ -346,9 +344,8 @@ mod tests {
     fn test_localise_spec_with_aux() {
         // Tests that localisation correctly handles auxiliary variables
         // Note that these must be specified similarly to output variables
-        let spec = dsrv_specification
-            .parse(
-                "   in x
+        let spec = crate::lang::dsrv::parser::parse_str(
+            "   in x
                     in y
                     in z
                     out w
@@ -357,8 +354,8 @@ mod tests {
                     w = x + y
                     tmp = z + w
                     v = tmp",
-            )
-            .expect("Failed to parse specification");
+        )
+        .expect("Failed to parse specification");
 
         let local_spec1 = spec.localise(&vec!["w".into()]);
         let local_spec2 = spec.localise(&vec!["v".into()]);

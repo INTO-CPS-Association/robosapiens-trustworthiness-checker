@@ -84,17 +84,17 @@
 //! This executable version exercises compilation and the public monitor interface directly:
 //!
 //! ```
-//! use trustworthiness_checker::{Value, VarName, dsrv_specification};
+//! use trustworthiness_checker::{Value, VarName, lang::dsrv::parser::parse_str};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
-//! let mut source = "in x: Int\n\
+//! let source = "in x: Int\n\
 //!     out alert: Bool\n\
 //!     out total: Int\n\
 //!     out scaled: Int\n\
 //!     alert = total > 20\n\
 //!     total = default(total[1], 0) + scaled\n\
 //!     scaled = x * 2";
-//! let spec = dsrv_specification(&mut source).expect("valid DSRV specification");
+//! let spec = parse_str(source).expect("valid DSRV specification");
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).expect("valid dataflow");
 //! let outputs = monitor.output_vars().to_vec();
 //! let output_index = |name: &str| {
@@ -356,14 +356,13 @@
 //!
 //! ```
 //! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
-//! use trustworthiness_checker::lang::core::parser::SpecParser;
-//! use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
+//! use trustworthiness_checker::lang::dsrv::parser::parse_str;
 //!
-//! let mut source = "in bias: Int\nin n: Int\nout direct: Int\nout recursive: Int\n\
+//! let source = "in bias: Int\nin n: Int\nout direct: Int\nout recursive: Int\n\
 //!     direct = (\\x: Int -> x + bias)(n)\n\
 //!     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)";
-//! let spec = <LALRParser as SpecParser<DsrvSpecification>>::parse(&mut source).unwrap();
+//! let spec = parse_str(source).unwrap();
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let output_vars = monitor.output_vars().to_vec();
@@ -449,7 +448,7 @@
 //! ## Runtime compilation and state
 //!
 //! At evaluation, `execution::dynamic::eval_dynamic_value` compares the string with
-//! `execution::state::DynamicState::active`. A new string is parsed with [`LALRParser`], optionally type
+//! `execution::state::DynamicState::active`. A new string is parsed as a DSRV expression, optionally type
 //! checked using the `TypeInfo` and result type retained by a typed `DynamicSpec`, lowered by
 //! `compiler::lower`, checked against the resolved allow-list, and bound to the existing environment
 //! layout. Its free variables become the active scheduling edges for the containing stream. The
@@ -478,12 +477,12 @@
 //! when the source changes:
 //!
 //! ```
-//! use trustworthiness_checker::{Value, VarName, dsrv_specification};
+//! use trustworthiness_checker::{Value, VarName, lang::dsrv::parser::parse_str};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
-//! let mut source = "in source: Str\nin x: Int\nout z: Int\n\
+//! let source = "in source: Str\nin x: Int\nout z: Int\n\
 //!                   z = dynamic(source: Int)";
-//! let spec = dsrv_specification(&mut source).unwrap();
+//! let spec = parse_str(source).unwrap();
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let row = |source: Value, x: i64| {
@@ -523,12 +522,12 @@
 //! </figure>
 //!
 //! ```
-//! use trustworthiness_checker::{Value, VarName, dsrv_specification};
+//! use trustworthiness_checker::{Value, VarName, lang::dsrv::parser::parse_str};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
-//! let mut source = "in source: Str\nin x: Int\nout z: Int\n\
+//! let source = "in source: Str\nin x: Int\nout z: Int\n\
 //!                   z = defer(source: Int)";
-//! let spec = dsrv_specification(&mut source).unwrap();
+//! let spec = parse_str(source).unwrap();
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let row = |source: Value, x: i64| {
@@ -565,9 +564,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::core::{RuntimeFunction, StreamType, Value};
-use crate::lang::core::parser::ExprParser;
 use crate::lang::dsrv::ast::{DsrvSpecification, Expr};
-use crate::lang::dsrv::lalr_parser::LALRParser;
 use crate::lang::dsrv::type_checker::{TCType, TypeInfo};
 use crate::{Specification, VarName};
 use ecow::{EcoString, EcoVec};

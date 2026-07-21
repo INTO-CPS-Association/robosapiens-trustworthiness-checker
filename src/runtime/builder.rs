@@ -7,7 +7,7 @@ use std::{
 use futures::future::LocalBoxFuture;
 use mstlo::{Algorithm, SynchronizationStrategy, Variables};
 use smol::LocalExecutor;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::ExecutionPolicy;
 use crate::io::{MsgTypeMapping, TopicMapping};
@@ -15,17 +15,15 @@ use crate::{
     DsrvSpecification, InputStream, Runtime, Specification, Value, VarName,
     cli::{
         adapters::DistributionModeBuilder,
-        args::{MstloAlgorithm, MstloSynchronizationStrategy, ParserMode},
+        args::{MstloAlgorithm, MstloSynchronizationStrategy},
     },
     core::{OutputHandler, RuntimeSpec, Semantics, StreamData, StreamType},
     define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputStreamFactory, OutputHandlerBuilder},
-    lang::core::parser::SpecParser,
     lang::dsrv::{
         ast::{CheckedDsrvSpecification, CheckedExpr, Expr},
-        lalr_parser::LALRParser,
-        parser::CombExprParser,
+        parser::parse_str,
         type_checker::{type_check, type_check_gradual},
     },
     lang::mstlo::MstloSpecification,
@@ -271,37 +269,20 @@ impl<
 struct TypeCheckingBuilder<Builder>(Builder);
 struct GradualTypeCheckingBuilder<Builder>(Builder);
 
-#[derive(Clone)]
-struct TypeCheckingSpecParser<P>(std::marker::PhantomData<P>);
-
-#[derive(Clone)]
-struct GradualTypeCheckingSpecParser<P>(std::marker::PhantomData<P>);
-
-impl<P> SpecParser<CheckedDsrvSpecification> for TypeCheckingSpecParser<P>
-where
-    P: SpecParser<DsrvSpecification>,
-{
-    fn parse(input: &mut &str) -> anyhow::Result<CheckedDsrvSpecification> {
-        let spec = P::parse(input)?;
-        type_check(spec).map_err(|errors| {
-            anyhow::anyhow!("Reconfigured spec failed type checking: {:?}", errors)
-        })
-    }
+fn parse_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecification> {
+    let spec = parse_str(input)?;
+    type_check(spec, false)
+        .map_err(|errors| anyhow::anyhow!("Reconfigured spec failed type checking: {:?}", errors))
 }
 
-impl<P> SpecParser<CheckedDsrvSpecification> for GradualTypeCheckingSpecParser<P>
-where
-    P: SpecParser<DsrvSpecification>,
-{
-    fn parse(input: &mut &str) -> anyhow::Result<CheckedDsrvSpecification> {
-        let spec = P::parse(input)?;
-        type_check_gradual(spec).map_err(|errors| {
-            anyhow::anyhow!(
-                "Reconfigured spec failed gradual type checking: {:?}",
-                errors
-            )
-        })
-    }
+fn parse_gradually_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecification> {
+    let spec = parse_str(input)?;
+    type_check_gradual(spec, false).map_err(|errors| {
+        anyhow::anyhow!(
+            "Reconfigured spec failed gradual type checking: {:?}",
+            errors
+        )
+    })
 }
 
 impl<
@@ -321,7 +302,7 @@ impl<
     }
 
     fn model(self, model: DsrvSpecification) -> Self {
-        let model = type_check(model).expect("Model failed to type check");
+        let model = type_check(model, false).expect("Model failed to type check");
         Self(self.0.model(model))
     }
 
@@ -355,7 +336,7 @@ impl<
     }
 
     fn model(self, model: DsrvSpecification) -> Self {
-        let model = type_check_gradual(model).expect("Model failed to gradual type check");
+        let model = type_check_gradual(model, false).expect("Model failed to gradual type check");
         Self(self.0.model(model))
     }
 
@@ -591,7 +572,6 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub distribution_mode: DistributionMode,
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
     pub scheduler_mode: SchedulerCommunication,
-    pub parser: ParserMode,
     pub reconf_topic: String,
     pub use_context_transfer: bool,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
@@ -646,10 +626,6 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             scheduler_mode: scheduler_mode.into(),
             ..self
         }
-    }
-
-    pub fn parser(self, parser: ParserMode) -> Self {
-        Self { parser, ..self }
     }
 
     pub fn var_msg_types(self, var_msg_types: BTreeMap<VarName, String>) -> Self {
@@ -776,7 +752,6 @@ impl RuntimeBuilder<LangSpecification, Value> for GeneralRuntimeBuilder<LangSpec
             var_msg_types: None,
             topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
-            parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
             use_context_transfer: true,
             mstlo_algorithm: Algorithm::default(),
@@ -836,7 +811,6 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     distribution_mode: self.distribution_mode,
                     distribution_mode_builder: self.distribution_mode_builder,
                     scheduler_mode: self.scheduler_mode,
-                    parser: self.parser,
                     reconf_topic: self.reconf_topic,
                     use_context_transfer: self.use_context_transfer,
                     var_msg_types: self.var_msg_types,
@@ -865,7 +839,6 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     distribution_mode: DistributionMode::CentralMonitor,
                     distribution_mode_builder: None,
                     scheduler_mode: self.scheduler_mode,
-                    parser: self.parser,
                     reconf_topic: self.reconf_topic,
                     use_context_transfer: self.use_context_transfer,
                     var_msg_types: self.var_msg_types,
@@ -901,7 +874,6 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
             var_msg_types: None,
             topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
-            parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
             use_context_transfer: true,
             mstlo_algorithm: Algorithm::default(),
@@ -965,7 +937,6 @@ impl RuntimeBuilder<MstloSpecification, Value>
             var_msg_types: None,
             topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
-            parser: ParserMode::Lalr,
             reconf_topic: "reconf".to_string(),
             use_context_transfer: true,
             mstlo_algorithm: Algorithm::default(),
@@ -1062,7 +1033,6 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
     fn create_common_builder(
         runtime: RuntimeSpec,
         semantics: Semantics,
-        parser: ParserMode,
         executor: Option<Rc<LocalExecutor<'static>>>,
         model: Option<DsrvSpecification>,
         distribution_mode: DistributionMode,
@@ -1078,302 +1048,270 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
         );
-        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> = match (
-            runtime, semantics, parser,
-        ) {
-            (RuntimeSpec::Async, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(AsyncRuntimeBuilder::<
-                    ValueConfig,
-                    UntimedDsrvSemantics<LALRParser>,
-                >::new())
-            }
-            (RuntimeSpec::Async, Semantics::Untimed, ParserMode::Combinator) => {
-                Box::new(AsyncRuntimeBuilder::<
-                    ValueConfig,
-                    UntimedDsrvSemantics<CombExprParser>,
-                >::new())
-            }
-            (RuntimeSpec::Dataflow(policy), Semantics::Untimed, ParserMode::Lalr) => Box::new(
-                DataflowRuntimeBuilder::<DsrvSpecification>::new().execution_policy(policy),
-            ),
-            (RuntimeSpec::Dataflow(policy), Semantics::TypedUntimed, ParserMode::Lalr) => {
-                Box::new(TypeCheckingBuilder(
-                    DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-                        .execution_policy(policy),
-                ))
-            }
-            (RuntimeSpec::Dataflow(policy), Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
-                Box::new(GradualTypeCheckingBuilder(
-                    DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-                        .execution_policy(policy),
-                ))
-            }
-            (RuntimeSpec::SemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-                Box::new(SemiSyncRuntimeBuilder::<
+        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
+            match (runtime, semantics) {
+                (RuntimeSpec::Async, Semantics::Untimed) => {
+                    Box::new(AsyncRuntimeBuilder::<ValueConfig, UntimedDsrvSemantics>::new())
+                }
+                (RuntimeSpec::Dataflow(policy), Semantics::Untimed) => Box::new(
+                    DataflowRuntimeBuilder::<DsrvSpecification>::new().execution_policy(policy),
+                ),
+                (RuntimeSpec::Dataflow(policy), Semantics::TypedUntimed) => {
+                    Box::new(TypeCheckingBuilder(
+                        DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+                            .execution_policy(policy),
+                    ))
+                }
+                (RuntimeSpec::Dataflow(policy), Semantics::GradualTypedUntimed) => {
+                    Box::new(GradualTypeCheckingBuilder(
+                        DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+                            .execution_policy(policy),
+                    ))
+                }
+                (RuntimeSpec::SemiSync, Semantics::Untimed) => Box::new(SemiSyncRuntimeBuilder::<
                     SemiSyncValueConfig,
-                    UntimedDsrvSemantics<LALRParser>,
-                >::new())
-            }
-            (RuntimeSpec::SemiSync, Semantics::TypedUntimed, ParserMode::Lalr) => {
-                Box::new(TypeCheckingBuilder(SemiSyncRuntimeBuilder::<
-                    CheckedSemiSyncValueConfig,
-                    CheckedUntimedDsrvSemantics<LALRParser>,
-                >::new()))
-            }
-            (RuntimeSpec::SemiSync, Semantics::TypedUntimed, ParserMode::Combinator) => {
-                Box::new(TypeCheckingBuilder(SemiSyncRuntimeBuilder::<
-                    CheckedSemiSyncValueConfig,
-                    CheckedUntimedDsrvSemantics<CombExprParser>,
-                >::new()))
-            }
-            (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
-                Box::new(GradualTypeCheckingBuilder(SemiSyncRuntimeBuilder::<
-                    CheckedSemiSyncValueConfig,
-                    CheckedUntimedDsrvSemantics<LALRParser>,
-                >::new()))
-            }
-            (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed, ParserMode::Combinator) => {
-                Box::new(GradualTypeCheckingBuilder(SemiSyncRuntimeBuilder::<
-                    CheckedSemiSyncValueConfig,
-                    CheckedUntimedDsrvSemantics<CombExprParser>,
-                >::new()))
-            }
-            (RuntimeSpec::ReconfSemiSync, Semantics::Untimed, ParserMode::Lalr) => {
-                let mut builder = ReconfSemiSyncRuntimeBuilder::<
-                    SemiSyncValueConfig,
-                    UntimedDsrvSemantics<LALRParser>,
-                    LALRParser,
-                >::new();
-                builder = builder.reconf_topic(reconf_topic);
-                builder = builder.use_context_transfer(use_context_transfer);
-                builder = builder
-                    .input_factory(input_factory.expect(
+                    UntimedDsrvSemantics,
+                >::new()),
+                (RuntimeSpec::SemiSync, Semantics::TypedUntimed) => {
+                    Box::new(TypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                        CheckedSemiSyncValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()))
+                }
+                (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed) => {
+                    Box::new(GradualTypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                        CheckedSemiSyncValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()))
+                }
+                (RuntimeSpec::ReconfSemiSync, Semantics::Untimed) => {
+                    let mut builder = ReconfSemiSyncRuntimeBuilder::<
+                        SemiSyncValueConfig,
+                        UntimedDsrvSemantics,
+                    >::new()
+                    .parse_spec(parse_str);
+                    builder = builder.reconf_topic(reconf_topic);
+                    builder = builder.use_context_transfer(use_context_transfer);
+                    builder = builder.input_factory(input_factory.expect(
                         "Input stream builder required for ReconfigurableSemiSync runtime",
                     ));
-                builder =
-                    builder.output_builder(output_handler_builder.expect(
+                    builder = builder.output_builder(output_handler_builder.expect(
                         "Output handler builder required for ReconfigurableSemiSync runtime",
                     ));
-                Box::new(builder)
-            }
-            (RuntimeSpec::ReconfSemiSync, Semantics::TypedUntimed, ParserMode::Lalr) => {
-                let mut builder = ReconfSemiSyncRuntimeBuilder::<
-                    CheckedSemiSyncValueConfig,
-                    CheckedUntimedDsrvSemantics<LALRParser>,
-                    TypeCheckingSpecParser<LALRParser>,
-                >::new();
-                builder = builder.reconf_topic(reconf_topic);
-                builder = builder
-                    .input_factory(input_factory.expect(
+                    Box::new(builder)
+                }
+                (RuntimeSpec::ReconfSemiSync, Semantics::TypedUntimed) => {
+                    let mut builder = ReconfSemiSyncRuntimeBuilder::<
+                        CheckedSemiSyncValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()
+                    .parse_spec(parse_checked_spec);
+                    builder = builder.reconf_topic(reconf_topic);
+                    builder = builder.input_factory(input_factory.expect(
                         "Input stream builder required for ReconfigurableSemiSync runtime",
                     ));
-                builder =
-                    builder.output_builder(output_handler_builder.expect(
+                    builder = builder.output_builder(output_handler_builder.expect(
                         "Output handler builder required for ReconfigurableSemiSync runtime",
                     ));
-                Box::new(TypeCheckingBuilder(builder))
-            }
-            (RuntimeSpec::ReconfSemiSync, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
-                let mut builder = ReconfSemiSyncRuntimeBuilder::<
-                    CheckedSemiSyncValueConfig,
-                    CheckedUntimedDsrvSemantics<LALRParser>,
-                    GradualTypeCheckingSpecParser<LALRParser>,
-                >::new();
-                builder = builder.reconf_topic(reconf_topic);
-                builder = builder
-                    .input_factory(input_factory.expect(
+                    Box::new(TypeCheckingBuilder(builder))
+                }
+                (RuntimeSpec::ReconfSemiSync, Semantics::GradualTypedUntimed) => {
+                    let mut builder = ReconfSemiSyncRuntimeBuilder::<
+                        CheckedSemiSyncValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()
+                    .parse_spec(parse_gradually_checked_spec);
+                    builder = builder.reconf_topic(reconf_topic);
+                    builder = builder.input_factory(input_factory.expect(
                         "Input stream builder required for ReconfigurableSemiSync runtime",
                     ));
-                builder =
-                    builder.output_builder(output_handler_builder.expect(
+                    builder = builder.output_builder(output_handler_builder.expect(
                         "Output handler builder required for ReconfigurableSemiSync runtime",
                     ));
-                Box::new(GradualTypeCheckingBuilder(builder))
-            }
-            (RuntimeSpec::Async, Semantics::TypedUntimed, ParserMode::Lalr) => {
-                Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
-                    CheckedValueConfig,
-                    CheckedUntimedDsrvSemantics<LALRParser>,
-                >::new()))
-            }
-            (RuntimeSpec::Async, Semantics::TypedUntimed, ParserMode::Combinator) => {
-                Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
-                    CheckedValueConfig,
-                    CheckedUntimedDsrvSemantics<CombExprParser>,
-                >::new()))
-            }
-            (RuntimeSpec::Async, Semantics::GradualTypedUntimed, ParserMode::Lalr) => {
-                Box::new(GradualTypeCheckingBuilder(AsyncRuntimeBuilder::<
-                    CheckedValueConfig,
-                    CheckedUntimedDsrvSemantics<LALRParser>,
-                >::new()))
-            }
-            (RuntimeSpec::Async, Semantics::GradualTypedUntimed, ParserMode::Combinator) => {
-                Box::new(GradualTypeCheckingBuilder(AsyncRuntimeBuilder::<
-                    CheckedValueConfig,
-                    CheckedUntimedDsrvSemantics<CombExprParser>,
-                >::new()))
-            }
-            (RuntimeSpec::Distributed, Semantics::Untimed, _) => {
-                debug!(
-                    "Setting up distributed runtime with distribution_mode = {:?}",
-                    distribution_mode
-                );
-                if matches!(parser, ParserMode::Lalr) {
-                    warn!(
-                        "LALR parser not supported for DUPs with Distributed Runtime. Defaulting to Combinator parser."
+                    Box::new(GradualTypeCheckingBuilder(builder))
+                }
+                (RuntimeSpec::Async, Semantics::TypedUntimed) => {
+                    Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
+                        CheckedValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()))
+                }
+                (RuntimeSpec::Async, Semantics::GradualTypedUntimed) => {
+                    Box::new(GradualTypeCheckingBuilder(AsyncRuntimeBuilder::<
+                        CheckedValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()))
+                }
+                (RuntimeSpec::Distributed, Semantics::Untimed) => {
+                    debug!(
+                        "Setting up distributed runtime with distribution_mode = {:?}",
+                        distribution_mode
+                    );
+
+                    let builder =
+                        DistAsyncRuntimeBuilder::<DistValueConfig, DistributedSemantics>::new();
+
+                    let builder = builder.scheduler_mode(scheduler_mode);
+                    let builder = match distribution_mode {
+                        DistributionMode::CentralMonitor => builder,
+                        DistributionMode::LocalMonitor(_) => {
+                            todo!("Local monitor not implemented here yet")
+                        }
+                        DistributionMode::DistributedCentralised(locations) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_centralised_dist_graph(locations)
+                        }
+                        DistributionMode::DistributedRandom(locations) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_random_dist_graph(locations)
+                        }
+                        DistributionMode::DistributedOptimizedStatic(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
+                        }
+                        DistributionMode::DistributedOptimizedDynamic(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
+                        }
+                        DistributionMode::DistributedOptimizedStaticSat(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder
+                                .mqtt_optimized_static_dist_graph_sat(locations, dist_constraints)
+                        }
+                        DistributionMode::DistributedOptimizedDynamicSat(
+                            locations,
+                            dist_constraints,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder
+                                .mqtt_optimized_dynamic_dist_graph_sat(locations, dist_constraints)
+                        }
+                        DistributionMode::DistributedRosCentralised(locations, topic) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.ros_centralised_dist_graph(locations, topic)
+                        }
+                        DistributionMode::DistributedRosRandom(locations, topic) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.ros_random_dist_graph(locations, topic)
+                        }
+                        DistributionMode::DistributedRosOptimizedStatic(
+                            locations,
+                            dist_constraints,
+                            topic,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.ros_optimized_static_dist_graph(
+                                locations,
+                                dist_constraints,
+                                topic,
+                            )
+                        }
+                        DistributionMode::DistributedRosOptimizedDynamic(
+                            locations,
+                            dist_constraints,
+                            topic,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.ros_optimized_dynamic_dist_graph(
+                                locations,
+                                dist_constraints,
+                                topic,
+                            )
+                        }
+                        DistributionMode::DistributedRosOptimizedStaticSat(
+                            locations,
+                            dist_constraints,
+                            topic,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.ros_optimized_static_dist_graph_sat(
+                                locations,
+                                dist_constraints,
+                                topic,
+                            )
+                        }
+                        DistributionMode::DistributedRosOptimizedDynamicSat(
+                            locations,
+                            dist_constraints,
+                            topic,
+                        ) => {
+                            let locations = locations
+                                .into_iter()
+                                .map(|loc| (loc.clone().into(), loc))
+                                .collect();
+                            builder.ros_optimized_dynamic_dist_graph_sat(
+                                locations,
+                                dist_constraints,
+                                topic,
+                            )
+                        }
+                        DistributionMode::DistributedPredefinedStatic(graph) => {
+                            builder.static_dist_graph(graph)
+                        }
+                        DistributionMode::DistributedPredefinedOptimized(
+                            graph,
+                            dist_constraints,
+                        ) => builder.predefined_optimized_dist_graph(graph, dist_constraints),
+                        DistributionMode::DistributedPredefinedOptimizedSat(
+                            graph,
+                            dist_constraints,
+                        ) => builder.predefined_optimized_dist_graph_sat(graph, dist_constraints),
+                    };
+
+                    let builder = builder.maybe_var_msg_types(var_msg_types.clone());
+                    let builder = builder.maybe_topic_mapping(topic_mapping.clone());
+
+                    Box::new(builder)
+                }
+                (runtime, semantics) => {
+                    panic!(
+                        "Unsupported runtime: {:?} and semantics: {:?} combination",
+                        runtime, semantics
                     );
                 }
-
-                let builder = DistAsyncRuntimeBuilder::<
-                    DistValueConfig,
-                    DistributedSemantics<CombExprParser>,
-                >::new();
-
-                let builder = builder.scheduler_mode(scheduler_mode);
-                let builder = match distribution_mode {
-                    DistributionMode::CentralMonitor => builder,
-                    DistributionMode::LocalMonitor(_) => {
-                        todo!("Local monitor not implemented here yet")
-                    }
-                    DistributionMode::DistributedCentralised(locations) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.mqtt_centralised_dist_graph(locations)
-                    }
-                    DistributionMode::DistributedRandom(locations) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.mqtt_random_dist_graph(locations)
-                    }
-                    DistributionMode::DistributedOptimizedStatic(locations, dist_constraints) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.mqtt_optimized_static_dist_graph(locations, dist_constraints)
-                    }
-                    DistributionMode::DistributedOptimizedDynamic(locations, dist_constraints) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.mqtt_optimized_dynamic_dist_graph(locations, dist_constraints)
-                    }
-                    DistributionMode::DistributedOptimizedStaticSat(
-                        locations,
-                        dist_constraints,
-                    ) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.mqtt_optimized_static_dist_graph_sat(locations, dist_constraints)
-                    }
-                    DistributionMode::DistributedOptimizedDynamicSat(
-                        locations,
-                        dist_constraints,
-                    ) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.mqtt_optimized_dynamic_dist_graph_sat(locations, dist_constraints)
-                    }
-                    DistributionMode::DistributedRosCentralised(locations, topic) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.ros_centralised_dist_graph(locations, topic)
-                    }
-                    DistributionMode::DistributedRosRandom(locations, topic) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.ros_random_dist_graph(locations, topic)
-                    }
-                    DistributionMode::DistributedRosOptimizedStatic(
-                        locations,
-                        dist_constraints,
-                        topic,
-                    ) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.ros_optimized_static_dist_graph(locations, dist_constraints, topic)
-                    }
-                    DistributionMode::DistributedRosOptimizedDynamic(
-                        locations,
-                        dist_constraints,
-                        topic,
-                    ) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.ros_optimized_dynamic_dist_graph(locations, dist_constraints, topic)
-                    }
-                    DistributionMode::DistributedRosOptimizedStaticSat(
-                        locations,
-                        dist_constraints,
-                        topic,
-                    ) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.ros_optimized_static_dist_graph_sat(
-                            locations,
-                            dist_constraints,
-                            topic,
-                        )
-                    }
-                    DistributionMode::DistributedRosOptimizedDynamicSat(
-                        locations,
-                        dist_constraints,
-                        topic,
-                    ) => {
-                        let locations = locations
-                            .into_iter()
-                            .map(|loc| (loc.clone().into(), loc))
-                            .collect();
-                        builder.ros_optimized_dynamic_dist_graph_sat(
-                            locations,
-                            dist_constraints,
-                            topic,
-                        )
-                    }
-                    DistributionMode::DistributedPredefinedStatic(graph) => {
-                        builder.static_dist_graph(graph)
-                    }
-                    DistributionMode::DistributedPredefinedOptimized(graph, dist_constraints) => {
-                        builder.predefined_optimized_dist_graph(graph, dist_constraints)
-                    }
-                    DistributionMode::DistributedPredefinedOptimizedSat(
-                        graph,
-                        dist_constraints,
-                    ) => builder.predefined_optimized_dist_graph_sat(graph, dist_constraints),
-                };
-
-                let builder = builder.maybe_var_msg_types(var_msg_types.clone());
-                let builder = builder.maybe_topic_mapping(topic_mapping.clone());
-
-                Box::new(builder)
-            }
-            (runtime, semantics, parser) => {
-                panic!(
-                    "Unsupported runtime: {:?}, semantics: {:?} and parser: {:?} combination",
-                    runtime, semantics, parser
-                );
-            }
-        };
+            };
 
         let builder = match executor {
             Some(ex) => builder.executor(ex),
@@ -1427,7 +1365,6 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,
-                self.parser,
                 self.executor,
                 self.model,
                 distribution_mode,

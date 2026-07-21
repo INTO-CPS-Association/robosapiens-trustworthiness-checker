@@ -400,12 +400,11 @@ mod tests {
     use super::*;
     use crate::DsrvSpecification;
     use crate::dsrv_fixtures::*;
-    use crate::lang::core::parser::SpecParser;
     use crate::lang::dsrv::ast::Expr;
-    use crate::lang::dsrv::lalr_parser::LALRParser;
+    use crate::lang::dsrv::parser::parse_str;
 
     fn test_parser(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
-        <LALRParser as SpecParser<DsrvSpecification>>::parse(input)
+        parse_str(input)
     }
 
     fn specs() -> BTreeMap<&'static str, &'static str> {

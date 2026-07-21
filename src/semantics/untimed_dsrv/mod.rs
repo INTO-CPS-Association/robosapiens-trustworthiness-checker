@@ -6,4 +6,3 @@ mod functions;
 pub mod semantics;
 mod shared_output;
 mod typed_combinators;
-mod typed_execution;

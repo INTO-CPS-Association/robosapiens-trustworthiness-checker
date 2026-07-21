@@ -117,7 +117,7 @@ pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
 
 pub fn arb_int_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
     let leaf = prop_oneof![
-        any::<i64>().prop_map(Expr::Val),
+        (0..=i64::MAX).prop_map(Expr::Val),
         proptest::sample::select(vars.clone()).prop_map(|x| Expr::Var(x.clone())),
     ];
     leaf.prop_recursive(5, 50, 10, move |inner| {
@@ -153,6 +153,7 @@ pub fn arb_int_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
                 inner.clone()
             )
                 .prop_map(|(c, t, e)| Expr::If(Box::new(c), Box::new(t), Box::new(e),)),
+            inner.clone().prop_map(|value| Expr::Neg(Box::new(value))),
         ]
     })
 }
@@ -160,7 +161,8 @@ pub fn arb_int_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
 pub fn arb_float_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
     let leaf = prop_oneof![
         any::<f64>()
-            .prop_filter("finite non-integer float", |x| x.is_finite()
+            .prop_filter("finite positive non-integer float", |x| x.is_finite()
+                && x.is_sign_positive()
                 && x.fract() != 0.0)
             .prop_map(Expr::Val),
         proptest::sample::select(vars.clone()).prop_map(|x| Expr::Var(x.clone())),
@@ -202,6 +204,7 @@ pub fn arb_float_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
             inner.clone().prop_map(|a| Expr::Cos(Box::new(a))),
             inner.clone().prop_map(|a| Expr::Tan(Box::new(a))),
             inner.clone().prop_map(|a| Expr::Abs(Box::new(a))),
+            inner.clone().prop_map(|value| Expr::Neg(Box::new(value))),
         ]
     })
 }

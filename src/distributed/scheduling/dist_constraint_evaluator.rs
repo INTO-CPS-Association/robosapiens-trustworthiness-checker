@@ -246,6 +246,7 @@ fn collect_expr_deps(
             | ExprView::MonitoredAt(_, _)
             | ExprView::BinOp(..)
             | ExprView::Not(_)
+            | ExprView::Neg(_)
             | ExprView::Abs(_)
             | ExprView::MGet(_, _)
             | ExprView::SGet(_, _) => {}
@@ -279,6 +280,7 @@ fn assert_supported_expr(expr: ExprRef<'_>) {
             | ExprView::MonitoredAt(_, _)
             | ExprView::BinOp(..)
             | ExprView::Not(_)
+            | ExprView::Neg(_)
             | ExprView::Abs(_)
             | ExprView::MGet(_, _)
             | ExprView::SGet(_, _) => {}
@@ -341,6 +343,11 @@ impl TickEvaluator<'_> {
             }
             ExprView::Not(child) => match self.eval_expr(child) {
                 Value::Bool(value) => Value::Bool(!value),
+                _ => Value::NoVal,
+            },
+            ExprView::Neg(child) => match self.eval_expr(child) {
+                Value::Int(value) => Value::Int(-value),
+                Value::Float(value) => Value::Float(-value),
                 _ => Value::NoVal,
             },
             ExprView::Abs(child) => match self.eval_expr(child) {
@@ -453,7 +460,8 @@ mod tests {
     use macro_rules_attribute::apply;
 
     use crate::{
-        async_test, distributed::distribution_graphs::DistributionGraph, dsrv_specification,
+        async_test, distributed::distribution_graphs::DistributionGraph,
+        lang::dsrv::parser::parse_str,
     };
 
     use super::*;
@@ -478,12 +486,12 @@ mod tests {
     async fn dist_constraint_evaluator_evaluate_guarded_monitored_at(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let mut src = r#"
+        let src = r#"
 in gate
 out distX
 distX = if gate then monitored_at(x, "B") else true
 "#;
-        let spec = dsrv_specification(&mut src).unwrap();
+        let spec = parse_str(src).unwrap();
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_streams = BTreeMap::from([(
@@ -508,12 +516,12 @@ distX = if gate then monitored_at(x, "B") else true
     async fn dist_constraint_evaluator_re_evaluate_on_input_change_after_labelling(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let mut src = r#"
+        let src = r#"
 in gate
 out distX
 distX = if gate then monitored_at(x, "A") else true
 "#;
-        let spec = dsrv_specification(&mut src).unwrap();
+        let spec = parse_str(src).unwrap();
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_streams = BTreeMap::from([(
@@ -540,12 +548,12 @@ distX = if gate then monitored_at(x, "A") else true
     async fn dist_constraint_evaluator_keep_latest_real_input_on_noval(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let mut src = r#"
+        let src = r#"
 in gate
 out distX
 distX = gate
 "#;
-        let spec = dsrv_specification(&mut src).unwrap();
+        let spec = parse_str(src).unwrap();
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_streams = BTreeMap::from([(
@@ -572,12 +580,12 @@ distX = gate
     async fn dist_constraint_evaluator_emits_repeated_false_for_fresh_input(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let mut src = r#"
+        let src = r#"
 in gate
 out distX
 distX = gate && monitored_at(x, "A")
 "#;
-        let spec = dsrv_specification(&mut src).unwrap();
+        let spec = parse_str(src).unwrap();
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_index = ConstraintInputIndex::new(vec!["gate".into()]);
@@ -605,11 +613,11 @@ distX = gate && monitored_at(x, "A")
     async fn dist_constraint_evaluator_support_input_independent_monitored_at(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let mut src = r#"
+        let src = r#"
 out distX
 distX = monitored_at(x, "B")
 "#;
-        let spec = dsrv_specification(&mut src).unwrap();
+        let spec = parse_str(src).unwrap();
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_index = ConstraintInputIndex::new(Vec::<VarName>::new());
@@ -633,12 +641,12 @@ distX = monitored_at(x, "B")
     async fn dist_constraint_evaluator_evaluate_each_input_batch(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let mut src = r#"
+        let src = r#"
 in gate
 out distX
 distX = if gate then monitored_at(x, "A") else true
 "#;
-        let spec = dsrv_specification(&mut src).unwrap();
+        let spec = parse_str(src).unwrap();
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_index = ConstraintInputIndex::new(vec!["gate".into()]);
@@ -666,11 +674,11 @@ distX = if gate then monitored_at(x, "A") else true
     #[test]
     #[should_panic(expected = "dist(...) is unsupported")]
     fn dist_constraint_evaluator_panic_on_dist() {
-        let mut src = r#"
+        let src = r#"
 out distX
 distX = dist(A, B) == 1
 "#;
-        let spec = dsrv_specification(&mut src).unwrap();
+        let spec = parse_str(src).unwrap();
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::repeat(labelling));
         let _ = dist_constraint_stream(

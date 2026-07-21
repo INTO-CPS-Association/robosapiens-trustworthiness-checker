@@ -1,6 +1,6 @@
 //! Type-specialised scalar stream combinators used by checked expressions.
 
-use std::ops::{Add, Div, Mul, Rem, Sub};
+use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 
 use futures::{StreamExt, stream};
 
@@ -94,6 +94,15 @@ binary!(sub, Sub, sub);
 binary!(mul, Mul, mul);
 binary!(div, Div, div);
 binary!(rem, Rem, rem);
+
+pub(super) fn neg<T>(
+    input: OutputStream<PartialStreamValue<T>>,
+) -> OutputStream<PartialStreamValue<T>>
+where
+    T: StreamData + Neg<Output = T>,
+{
+    lift1(input, T::neg)
+}
 
 pub(super) fn not(
     input: OutputStream<PartialStreamValue<bool>>,

@@ -3,7 +3,7 @@ use super::super::plan::*;
 use super::super::*;
 use super::plan_executor::{PlanEvalContext, PlanExecutor};
 use super::state::*;
-use crate::lang::dsrv::type_checker::check_expression;
+use crate::lang::dsrv::{parser::parse_sexpr, type_checker::check_expression};
 
 pub(in crate::dataflow) fn eval_dynamic_value(
     current: Value,
@@ -78,12 +78,10 @@ fn compile_dynamic_plan(
     spec: &BoundDynamicSpec,
     environment: &Rc<EnvironmentLayout>,
 ) -> Result<CompiledDynamicPlan, DataflowEvalError> {
-    let mut source_ref = source.as_ref();
-    let expr =
-        LALRParser::parse(&mut source_ref).map_err(|error| DataflowEvalError::DynamicParse {
-            expression: source.clone(),
-            message: error.to_string(),
-        })?;
+    let expr = parse_sexpr(source.as_ref()).map_err(|error| DataflowEvalError::DynamicParse {
+        expression: source.clone(),
+        message: error.to_string(),
+    })?;
     let mut program = if let Some((type_info, typ)) = &spec.typed {
         let expr = check_expression(expr, typ, type_info).map_err(|errors| {
             DataflowEvalError::DynamicType {

@@ -8,8 +8,8 @@ use winnow::{
     token::{literal, take_until, take_while},
 };
 
-use crate::{Specification, Value};
-use std::{collections::BTreeMap, fmt::Debug};
+use crate::Value;
+use std::collections::BTreeMap;
 use winnow::Parser;
 pub use winnow::ascii::dec_int as integer;
 pub use winnow::ascii::float;
@@ -23,19 +23,6 @@ pub fn ident<'a>(input: &mut &'a str) -> Result<<&'a str as Stream>::Slice, Cont
         take_while(1.., ('A'..='Z', 'a'..='z', '0'..='9', '_')),
     )
     .parse_next(input)
-}
-
-pub trait ExprParser<Expr>: Clone {
-    fn parse(input: &mut &str) -> anyhow::Result<Expr>;
-    type Error;
-    fn raw_parse_error(input: &mut &str) -> Result<Expr, Self::Error>;
-}
-pub trait SpecParser<Spec: Specification>: Clone + 'static {
-    fn parse(input: &mut &str) -> anyhow::Result<Spec>;
-}
-
-pub fn presult_to_string<T: Debug, E: Debug>(e: &Result<T, E>) -> String {
-    format!("{:?}", e)
 }
 
 // Used for Lists in input streams (can only be Values)

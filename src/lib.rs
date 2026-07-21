@@ -12,10 +12,7 @@ pub mod dataflow;
 pub mod io;
 pub use io::file::parse_file;
 pub mod lang;
-pub use lang::dsrv::{
-    ast::{DsrvSpecification, ExprKind, TreeCursorExt},
-    parser::dsrv_specification,
-};
+pub use lang::dsrv::ast::{DsrvSpecification, ExprKind, TreeCursorExt};
 pub mod distributed;
 pub mod dsrv_fixtures;
 pub mod macros;

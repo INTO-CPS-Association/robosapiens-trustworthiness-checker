@@ -10,8 +10,6 @@ mod checked;
 // Specifications and their checked metadata.
 mod specification;
 
-// Construction establishes the invariants consumed by analysis.
-mod construction;
 // Semantic queries over expressions.
 mod analysis;
 
@@ -28,5 +26,4 @@ pub use expression::*;
 pub use operators::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp};
 pub use specification::*;
 
-pub(crate) use construction::finish_root_span;
 pub use display::ExprDisplay;

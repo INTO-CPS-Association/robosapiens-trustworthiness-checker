@@ -1,10 +1,9 @@
 use std::rc::Rc;
 
 use super::combinators::stream_lift_base;
-use super::semantics::{evaluate, evaluate_checked};
+use super::{functions::ScopedExpr, semantics::evaluate_scope};
 use crate::core::Value;
-use crate::lang::core::parser::ExprParser;
-use crate::lang::dsrv::ast::{DynamicExprScope, Expr};
+use crate::lang::dsrv::ast::DynamicExprScope;
 use crate::lang::dsrv::type_checker::{TCType, TypeInfo, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{OutputStream, VarName};
@@ -12,20 +11,20 @@ use async_stream::stream;
 use futures::StreamExt;
 use tracing::{debug, info};
 
-pub fn dynamic<AC, Parser>(
+pub fn dynamic<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
     scope: DynamicExprScope,
+    owner: Option<VarName>,
     history_length: usize,
 ) -> OutputStream<AC::Val>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
-    dynamic_checked::<AC, Parser>(ctx, eval_stream, scope, None, history_length, None)
+    dynamic_checked::<AC>(ctx, eval_stream, scope, owner, history_length, None)
 }
 
-pub(crate) fn dynamic_checked<AC, Parser>(
+pub(crate) fn dynamic_checked<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
     scope: DynamicExprScope,
@@ -34,7 +33,6 @@ pub(crate) fn dynamic_checked<AC, Parser>(
     checked: Option<(Rc<TypeInfo>, TCType)>,
 ) -> OutputStream<AC::Val>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     // `dynamic` propagates `Deferred` from its property stream even when an
@@ -44,7 +42,7 @@ where
     // Create a subcontext with a history window length
     let mut subcontext = match scope {
         DynamicExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
-        DynamicExprScope::Automatic => match owner {
+        DynamicExprScope::Automatic => match owner.as_ref() {
             Some(owner) => ctx.subcontext_excluding(&owner, history_length),
             None => ctx.subcontext(history_length),
         },
@@ -105,18 +103,26 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expr = Parser::parse(&mut s.as_ref())
+                    let expr = crate::lang::dsrv::parser::parse_sexpr(s.as_ref())
                         .expect("Invalid dynamic str");
                     let eval_output_stream = if let Some((type_info, expected)) = checked.clone() {
                         let expr = check_expression(expr, &expected, &type_info)
-                        .unwrap_or_else(|errors| {
-                            panic!("Dynamic expression failed type checking: {errors:?}")
-                        });
+                            .unwrap_or_else(|errors| {
+                                panic!("Dynamic expression failed type checking: {errors:?}")
+                            });
                         debug!("Dynamic evaluated to checked expression {:?}", expr);
-                        evaluate_checked::<Parser, AC>(expr, &subcontext)
+                        let expression = match owner.as_ref() {
+                            Some(owner) => ScopedExpr::checked(expr.clone()).with_owner(owner.clone()),
+                            None => ScopedExpr::checked(expr),
+                        };
+                        evaluate_scope::<AC>(expression, &subcontext)
                     } else {
                         debug!("Dynamic evaluated to expression {:?}", expr);
-                        evaluate::<Parser, AC>(expr, &subcontext)
+                        let expression = match owner.as_ref() {
+                            Some(owner) => ScopedExpr::unchecked(expr.clone()).with_owner(owner.clone()),
+                            None => ScopedExpr::unchecked(expr),
+                        };
+                        evaluate_scope::<AC>(expression, &subcontext)
                     };
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
@@ -138,20 +144,20 @@ where
     })
 }
 
-pub fn defer<AC, Parser>(
+pub fn defer<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
     scope: DynamicExprScope,
+    owner: Option<VarName>,
     history_length: usize,
 ) -> OutputStream<AC::Val>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
-    defer_checked::<AC, Parser>(ctx, eval_stream, scope, None, history_length, None)
+    defer_checked::<AC>(ctx, eval_stream, scope, owner, history_length, None)
 }
 
-pub(crate) fn defer_checked<AC, Parser>(
+pub(crate) fn defer_checked<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
     scope: DynamicExprScope,
@@ -160,13 +166,12 @@ pub(crate) fn defer_checked<AC, Parser>(
     checked: Option<(Rc<TypeInfo>, TCType)>,
 ) -> OutputStream<AC::Val>
 where
-    Parser: ExprParser<Expr> + 'static,
     AC: AsyncConfig<Val = Value>,
 {
     // Create a subcontext with a history window length
     let mut subcontext = match scope {
         DynamicExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
-        DynamicExprScope::Automatic => match owner {
+        DynamicExprScope::Automatic => match owner.as_ref() {
             Some(owner) => ctx.subcontext_excluding(&owner, history_length),
             None => ctx.subcontext(history_length),
         },
@@ -190,18 +195,26 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expr = Parser::parse(&mut s.as_ref())
+                    let expr = crate::lang::dsrv::parser::parse_sexpr(s.as_ref())
                         .expect("Invalid defer str");
                     let tmp_stream = if let Some((type_info, expected)) = checked.clone() {
                         let expr = check_expression(expr, &expected, &type_info)
-                        .unwrap_or_else(|errors| {
-                            panic!("Deferred expression failed type checking: {errors:?}")
-                        });
+                            .unwrap_or_else(|errors| {
+                                panic!("Deferred expression failed type checking: {errors:?}")
+                            });
                         debug!("Defer evaluated to checked expression {:?}", expr);
-                        evaluate_checked::<Parser, AC>(expr, &subcontext)
+                        let expression = match owner.as_ref() {
+                            Some(owner) => ScopedExpr::checked(expr.clone()).with_owner(owner.clone()),
+                            None => ScopedExpr::checked(expr),
+                        };
+                        evaluate_scope::<AC>(expression, &subcontext)
                     } else {
                         debug!("Defer evaluated to expression {:?}", expr);
-                        evaluate::<Parser, AC>(expr, &subcontext)
+                        let expression = match owner.as_ref() {
+                            Some(owner) => ScopedExpr::unchecked(expr.clone()).with_owner(owner.clone()),
+                            None => ScopedExpr::unchecked(expr),
+                        };
+                        evaluate_scope::<AC>(expression, &subcontext)
                     };
                     let mut tmp_stream = stream_lift_base(tmp_stream);
                     // Advance the subcontext to make a new set of input values

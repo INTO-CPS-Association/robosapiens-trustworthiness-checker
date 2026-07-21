@@ -77,9 +77,12 @@ fn can_widen_gradual_error(error: &SemanticError) -> bool {
     }
 }
 
-pub fn type_check_gradual(mut spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+pub fn type_check_gradual(
+    mut spec: DsrvSpecification,
+    distributed: bool,
+) -> SemanticResult<CheckedDsrvSpecification> {
     spec = spec.into_compact_arena();
-    super::validation::validate_specification(&spec)?;
+    super::validation::validate_specification(&spec, distributed)?;
     let mut types = spec.type_annotations.clone();
     for input in &spec.input_vars {
         types.entry(input.clone()).or_insert(StreamType::Any);
@@ -164,10 +167,21 @@ pub fn type_check_gradual(mut spec: DsrvSpecification) -> SemanticResult<Checked
 mod tests {
     use super::*;
     use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
+    use crate::lang::dsrv::parser::parse_str;
     use crate::{Value, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;
+
+    #[test]
+    fn gradual_type_check_infers_unary_minus_result_type() {
+        let checked = type_check_gradual(parse_str("out z\nz = -1").unwrap(), false)
+            .expect("gradual checking should infer numeric negation");
+        assert_eq!(
+            checked.type_annotations().get(&VarName::new("z")),
+            Some(&StreamType::Int)
+        );
+    }
 
     #[test]
     fn test_gradual_type_check_infers_unannotated_output() {
@@ -196,7 +210,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("gradual type check should infer y");
+        let typed = type_check_gradual(spec, false).expect("gradual type check should infer y");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
         assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
     }
@@ -226,7 +240,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("gradual type check should accept untyped x");
+        let typed =
+            type_check_gradual(spec, false).expect("gradual type check should accept untyped x");
         assert_eq!(typed.type_annotations().get(&x), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
         assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
@@ -258,7 +273,8 @@ mod tests {
             type_annotations,
         };
 
-        let typed = type_check_gradual(spec).expect("gradual type check should preserve aux vars");
+        let typed =
+            type_check_gradual(spec, false).expect("gradual type check should preserve aux vars");
 
         assert_eq!(typed.aux_vars(), &BTreeSet::from([u.clone()]));
         assert_eq!(typed.stream_vars(), &BTreeSet::from([z.clone(), u]));
@@ -282,7 +298,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        assert!(type_check(spec).is_err());
+        assert!(type_check(spec, false).is_err());
     }
 
     // --- Gradual typing: inference order, consistency, and casts ---
@@ -326,7 +342,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("dependency chain should be inferred");
+        let typed = type_check_gradual(spec, false).expect("dependency chain should be inferred");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Int));
         assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
@@ -352,7 +368,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("empty containers should fall back to Any");
+        let typed =
+            type_check_gradual(spec, false).expect("empty containers should fall back to Any");
         assert_eq!(
             typed.type_annotations().get(&xs),
             Some(&StreamType::List(Box::new(StreamType::Any)))
@@ -385,7 +402,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let errors = type_check_gradual(spec).expect_err("NoVal literal AST should be rejected");
+        let errors =
+            type_check_gradual(spec, false).expect_err("NoVal literal AST should be rejected");
         assert!(matches!(
             errors.as_slice(),
             [SemanticError::UnsupportedLiteral(_, _)]
@@ -413,7 +431,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        assert!(type_check_gradual(spec).is_err());
+        assert!(type_check_gradual(spec, false).is_err());
     }
 
     #[test]
@@ -438,7 +456,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        assert!(type_check_gradual(spec).is_err());
+        assert!(type_check_gradual(spec, false).is_err());
     }
 
     #[test]
@@ -460,7 +478,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("Any annotation should accept any value");
+        let typed =
+            type_check_gradual(spec, false).expect("Any annotation should accept any value");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Any));
         // The expression keeps its precise type; only the declaration is Any.
         assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Str);
@@ -493,7 +512,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let errors = type_check_gradual(spec).expect_err("contradiction should fail");
+        let errors = type_check_gradual(spec, false).expect_err("contradiction should fail");
         assert!(!errors.is_empty());
     }
 
@@ -523,7 +542,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let errors = type_check_gradual(spec).expect_err("contradiction should fail");
+        let errors = type_check_gradual(spec, false).expect_err("contradiction should fail");
         assert!(!errors.is_empty());
     }
 
@@ -552,7 +571,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("heterogeneous list should widen to Any");
+        let typed =
+            type_check_gradual(spec, false).expect("heterogeneous list should widen to Any");
         assert_eq!(typed.type_annotations().get(&xs), Some(&StreamType::Any));
         assert_eq!(typed.var_expr(&xs).unwrap().typ(), &TCType::Any);
     }
@@ -582,7 +602,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let errors = type_check_gradual(spec).expect_err("homogeneous annotation should fail");
+        let errors =
+            type_check_gradual(spec, false).expect_err("homogeneous annotation should fail");
         assert!(!errors.is_empty());
     }
 
@@ -611,7 +632,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("heterogeneous map should widen to Any");
+        let typed = type_check_gradual(spec, false).expect("heterogeneous map should widen to Any");
         assert_eq!(typed.type_annotations().get(&m), Some(&StreamType::Any));
         assert_eq!(typed.var_expr(&m).unwrap().typ(), &TCType::Any);
     }
@@ -641,7 +662,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let errors = type_check_gradual(spec).expect_err("homogeneous annotation should fail");
+        let errors =
+            type_check_gradual(spec, false).expect_err("homogeneous annotation should fail");
         assert!(!errors.is_empty());
     }
 
@@ -668,7 +690,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("struct fields should be inferred");
+        let typed = type_check_gradual(spec, false).expect("struct fields should be inferred");
         assert_eq!(
             typed.type_annotations().get(&robot),
             Some(&StreamType::Struct(
@@ -719,7 +741,8 @@ mod tests {
             aux_vars: BTreeSet::from([robot]),
         };
 
-        let typed = type_check_gradual(spec).expect("field access should use inferred struct type");
+        let typed =
+            type_check_gradual(spec, false).expect("field access should use inferred struct type");
         assert_eq!(typed.type_annotations().get(&name), Some(&StreamType::Str));
         assert_eq!(typed.var_expr(&name).unwrap().typ(), &TCType::Str);
     }
@@ -761,7 +784,8 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let errors = type_check_gradual(spec).expect_err("field annotation mismatch should fail");
+        let errors =
+            type_check_gradual(spec, false).expect_err("field annotation mismatch should fail");
         assert!(!errors.is_empty());
     }
 
@@ -795,7 +819,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("heterogeneous if should widen to Any");
+        let typed = type_check_gradual(spec, false).expect("heterogeneous if should widen to Any");
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));
         assert_eq!(typed.var_expr(&z).unwrap().typ(), &TCType::Any);
     }
@@ -818,7 +842,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("passthrough should type check");
+        let typed = type_check_gradual(spec, false).expect("passthrough should type check");
         assert_eq!(typed.type_annotations().get(&x), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Any));
         assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Any);
@@ -850,7 +874,7 @@ mod tests {
             aux_vars: BTreeSet::new(),
         };
 
-        let typed = type_check_gradual(spec).expect("Any + Any widens to Any");
+        let typed = type_check_gradual(spec, false).expect("Any + Any widens to Any");
         assert_eq!(typed.type_annotations().get(&a), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&b), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));

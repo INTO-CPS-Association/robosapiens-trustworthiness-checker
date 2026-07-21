@@ -450,8 +450,8 @@ mod tests {
                 },
             },
         },
-        dsrv_specification,
         io::{config::TopicMapping, mqtt::dist_graph_provider::StaticDistGraphProvider},
+        lang::dsrv::parser::parse_str,
         stream_utils::channel_to_output_stream,
     };
 
@@ -497,14 +497,14 @@ mod tests {
     }
 
     fn scheduler_constraint_spec() -> DsrvSpecification {
-        let mut src = r#"
+        let src = r#"
 in gate
 out work
 out distX
 work = gate
 distX = gate && monitored_at(work, "A")
 "#;
-        dsrv_specification(&mut src).unwrap()
+        parse_str(src).unwrap()
     }
 
     fn graph_with_work_at_b() -> Rc<LabelledDistributionGraph> {

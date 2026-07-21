@@ -323,7 +323,6 @@ mod tests {
         spec_simple_add_aux_monitor, spec_simple_add_aux_typed_monitor, spec_simple_add_monitor,
         spec_simple_add_monitor_typed,
     };
-    use crate::dsrv_specification;
     use crate::lang::dsrv::ast::NumericalBinOp;
     use crate::lang::dsrv::ast::generation::{
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
@@ -333,13 +332,14 @@ mod tests {
         SBinOp,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
-    use crate::lang::dsrv::lalr_parser::parse_sexpr;
-    use crate::lang::dsrv::parser::sexpr as parse_sexpr_comb;
+    use crate::lang::dsrv::parser::parse_sexpr;
+    use crate::lang::dsrv::parser::parse_str;
+
     use crate::lang::dsrv::type_checker::{TCType, type_check};
 
     fn checked_expression(source: &str) -> CheckedExpr {
-        let spec = crate::lang::dsrv::lalr_parser::parse_str(source).unwrap();
-        type_check(spec)
+        let spec = crate::lang::dsrv::parser::parse_str(source).unwrap();
+        type_check(spec, false)
             .unwrap()
             .var_expr(&VarName::new("y"))
             .unwrap()
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn specification_roots_share_one_arena_and_disjoint_ranges() {
-        let specification = crate::lang::dsrv::lalr_parser::parse_str(
+        let specification = crate::lang::dsrv::parser::parse_str(
             "in x: Int\nout first: Int\nout second: Int\nfirst = x + 1\nsecond = x + 2",
         )
         .unwrap();
@@ -464,7 +464,7 @@ mod tests {
                 vec![ids[2], ids[0], ids[1]],
             ),
             (
-                ExprKind::Map(BTreeMap::from([("a".into(), ids[1]), ("b".into(), ids[3])]).into()),
+                ExprKind::Map(eco_vec![("a".into(), ids[1]), ("b".into(), ids[3])].into()),
                 vec![ids[1], ids[3]],
             ),
         ];
@@ -625,9 +625,8 @@ mod tests {
     }
 
     #[test]
-    fn winnow_builds_nested_expressions_in_one_compact_arena() {
-        let mut source = "1 + 2 + 3 + 4";
-        let expr = parse_sexpr_comb(&mut source).unwrap();
+    fn parser_builds_nested_expressions_in_one_compact_arena() {
+        let expr = parse_sexpr("1 + 2 + 3 + 4").unwrap();
 
         assert_eq!(expr.arena().len(), 7);
         assert_eq!(
@@ -699,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_display_simple_add() {
-        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor()).unwrap();
         let res = format!("{}", spec);
         let expected = "in x\nin y\nout z\nz = (x + y)\n";
         assert_eq!(res, expected);
@@ -707,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_display_simple_add_typed() {
-        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor_typed()).unwrap();
         let res = format!("{}", spec);
         let expected = "in x: Int\nin y: Int\nout z: Int\nz = (x + y)\n";
         assert_eq!(res, expected);
@@ -715,7 +714,7 @@ mod tests {
 
     #[test]
     fn test_display_simple_add_aux() {
-        let spec = dsrv_specification(&mut spec_simple_add_aux_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_aux_monitor()).unwrap();
         let res = format!("{}", spec);
         let expected = "in x\nin y\nout z\naux u\naux w\nu = x\nw = y\nz = (u + w)";
         assert_eq!(
@@ -726,7 +725,7 @@ mod tests {
 
     #[test]
     fn test_display_simple_add_aux_typed() {
-        let spec = dsrv_specification(&mut spec_simple_add_aux_typed_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_aux_typed_monitor()).unwrap();
         let res = format!("{}", spec);
         let expected =
             "in x: Int\nin y: Int\nout z: Int\naux u: Int\naux w: Int\nu = x\nw = y\nz = (u + w)";
@@ -736,35 +735,29 @@ mod tests {
         );
     }
 
-    fn assert_display_roundtrips_both_parsers(expr: &Expr) {
+    fn assert_display_roundtrips(expr: &Expr) {
         let formatted = format!("{}", expr);
-
-        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
-        assert_eq!(strip_span(&parsed_lalr), strip_span(expr));
-
-        let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
-        assert_eq!(strip_span(&parsed_comb), strip_span(expr));
+        let parsed = parse_sexpr(&formatted).expect("parser should parse display output");
+        assert_eq!(strip_span(&parsed), strip_span(expr));
     }
 
     #[test]
-    fn test_display_parse_roundtrip_dynamic_type_ascriptions_both_parsers() {
-        assert_display_roundtrips_both_parsers(&Expr::Dynamic(
+    fn test_display_parse_roundtrip_dynamic_type_ascriptions() {
+        assert_display_roundtrips(&Expr::Dynamic(
             Box::new(Expr::Var("x".into())),
             StreamTypeAscription::Ascribed(StreamType::Int),
         ));
-        assert_display_roundtrips_both_parsers(&Expr::RestrictedDynamic(
+        assert_display_roundtrips(&Expr::RestrictedDynamic(
             Box::new(Expr::Var("x".into())),
             StreamTypeAscription::Ascribed(StreamType::Int),
             eco_vec!["x".into(), "y".into()],
         ));
-        assert_display_roundtrips_both_parsers(&Expr::Defer(
+        assert_display_roundtrips(&Expr::Defer(
             Box::new(Expr::Var("x".into())),
             StreamTypeAscription::Ascribed(StreamType::Int),
             EcoVec::new(),
         ));
-        assert_display_roundtrips_both_parsers(&Expr::Defer(
+        assert_display_roundtrips(&Expr::Defer(
             Box::new(Expr::Var("x".into())),
             StreamTypeAscription::Ascribed(StreamType::Int),
             eco_vec!["x".into(), "y".into()],
@@ -772,28 +765,23 @@ mod tests {
     }
 
     #[test]
-    fn test_display_parse_roundtrip_list_literal_both_parsers() {
+    fn test_display_parse_roundtrip_list_literal() {
         let expr = Expr::List(eco_vec![Expr::Val(1), Expr::Val(2)]);
         assert_eq!(format!("{}", expr), "[1, 2]");
-        assert_display_roundtrips_both_parsers(&expr);
+        assert_display_roundtrips(&expr);
     }
 
     #[test]
-    fn test_display_parse_roundtrip_map_key_quoting_mget_both_parsers() {
+    fn test_display_parse_roundtrip_map_key_quoting_mget() {
         let expr = Expr::MGet(Box::new(Expr::Var("records".into())), "target".into());
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
-
-        let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
-        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
-    fn test_display_parse_roundtrip_map_key_quoting_minsert_both_parsers() {
+    fn test_display_parse_roundtrip_map_key_quoting_minsert() {
         let expr = Expr::MInsert(
             Box::new(Expr::Var("m".into())),
             "key".into(),
@@ -803,52 +791,32 @@ mod tests {
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
-
-        let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
-        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
-    fn test_display_parse_roundtrip_map_key_quoting_mremove_both_parsers() {
+    fn test_display_parse_roundtrip_map_key_quoting_mremove() {
         let expr = Expr::MRemove(Box::new(Expr::Var("m".into())), "key".into());
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
-
-        let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
-        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
-    fn test_display_parse_roundtrip_map_key_quoting_mhas_key_both_parsers() {
+    fn test_display_parse_roundtrip_map_key_quoting_mhas_key() {
         let expr = Expr::MHasKey(Box::new(Expr::Var("m".into())), "key".into());
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
-
-        let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
-        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 
     #[test]
-    fn test_display_parse_roundtrip_map_literal_key_quoting_both_parsers() {
+    fn test_display_parse_roundtrip_map_literal_key_quoting() {
         let expr = Expr::Map(BTreeMap::from([("quoted".into(), Expr::Val(true))]));
         let formatted = format!("{}", expr);
 
         let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
-
-        let mut input = formatted.as_str();
-        let parsed_comb =
-            parse_sexpr_comb(&mut input).expect("Combinator parser should parse display output");
-        assert_eq!(strip_span(&parsed_comb), strip_span(&expr));
     }
 }

@@ -4,7 +4,6 @@ use crate::io::map;
 use crate::io::testing::ManualOutputHandler;
 use crate::lang::dsrv::ast::generation::{arb_boolean_dsrv_spec, arb_dsrv_spec};
 use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
-use crate::lang::dsrv::lalr_parser::LALRParser;
 use crate::lang::dsrv::type_checker::type_check;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::asynchronous::Context;
@@ -12,10 +11,12 @@ use crate::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use crate::runtime::dataflow::DataflowRuntimeBuilder;
 use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use crate::semantics::UntimedDsrvSemantics;
-use crate::{DsrvSpecification, async_test, dsrv_spec, dsrv_specification};
+use crate::{
+    DsrvSpecification, async_test, dsrv_spec,
+    lang::dsrv::parser::{parse_sexpr, parse_str},
+};
 use crate::{
     core::{InputEvent, OutputStream, Runtime},
-    lang::core::parser::ExprParser,
     semantics::{MonitoringSemantics, StreamContext},
 };
 use futures::{StreamExt, stream};
@@ -142,9 +143,9 @@ fn arb_runtime_compiled_program(
              z = {property}\n\
              sum = x + y"
             );
-            let mut spec_input = spec_source.as_str();
-            let spec = dsrv_specification(&mut spec_input)
-                .expect("generated dynamic/defer specification must parse");
+            let spec_input = spec_source.as_str();
+            let spec =
+                parse_str(spec_input).expect("generated dynamic/defer specification must parse");
             let rows = rows
                 .into_iter()
                 .map(|(x, y, [action, expression])| {
@@ -176,7 +177,8 @@ fn arb_runtime_compiled_program(
 }
 
 fn evaluate_runtime_compiled_property(spec: DsrvSpecification, rows: &[DynamicInputRow]) {
-    let typed_spec = type_check(spec.clone()).expect("generated specification must type check");
+    let typed_spec =
+        type_check(spec.clone(), false).expect("generated specification must type check");
     let mut monitors = [
         DataflowMonitor::try_compile_untyped(spec)
             .expect("generated untyped specification must compile"),
@@ -247,7 +249,7 @@ proptest! {
     fn valid_dataflow_program_evaluation_is_total(
         (spec, rows) in arb_valid_dataflow_program_and_inputs()
     ) {
-        let typed_spec = type_check(spec.clone()).expect("generator must produce a typed program");
+        let typed_spec = type_check(spec.clone(), false).expect("generator must produce a typed program");
         let mut augmented_spec = spec.clone();
         let unused = VarName::new("unused");
         augmented_spec.aux_vars.insert(unused.clone());
@@ -372,8 +374,7 @@ fn evaluate_events(
 }
 
 fn parse_expr(src: &str) -> Expr {
-    let mut src = src;
-    <LALRParser as ExprParser<Expr>>::parse(&mut src).expect("expression should parse")
+    parse_sexpr(src).expect("expression should parse")
 }
 
 async fn eval_with<S>(
@@ -393,7 +394,8 @@ where
         .map(|(_, values)| Box::pin(stream::iter(values)) as OutputStream<Value>)
         .collect::<Vec<_>>();
     let mut ctx = Context::<TestConfig>::new(executor, var_names, streams, 8);
-    let output = S::to_async_stream(parse_expr(src), &ctx);
+    let expr = parse_expr(src);
+    let output = S::to_async_stream(&expr, &ctx, None);
     ctx.run().await;
     output.collect().await
 }
@@ -434,8 +436,8 @@ fn eval_dataflow(src: &str, vars: Vec<(&str, Vec<Value>)>) -> Vec<Value> {
         .chain(["out result".to_owned(), format!("result = {src}")])
         .collect::<Vec<_>>()
         .join("\n");
-    let mut spec_src = spec_src.as_str();
-    let spec = dsrv_specification(&mut spec_src).unwrap();
+    let spec_src = spec_src.as_str();
+    let spec = parse_str(spec_src).unwrap();
     let inputs = vars
         .into_iter()
         .map(|(name, values)| (VarName::new(name), values))
@@ -451,8 +453,7 @@ async fn assert_matches_current(
     src: &str,
     vars: Vec<(&str, Vec<Value>)>,
 ) {
-    let expected =
-        eval_with::<UntimedDsrvSemantics<LALRParser>>(executor.clone(), src, vars.clone()).await;
+    let expected = eval_with::<UntimedDsrvSemantics>(executor.clone(), src, vars.clone()).await;
     let actual = eval_dataflow(src, vars);
     assert_eq!(actual, expected, "dataflow differed for `{src}`");
 }
@@ -517,14 +518,13 @@ async fn eval_semisync_runtime(
         spec.output_vars.clone(),
     ));
     let outputs = output_handler.get_output();
-    let runtime =
-        SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics<LALRParser>>::new()
-            .executor(executor.clone())
-            .model(spec)
-            .input(map::input_stream(inputs))
-            .output(output_handler)
-            .build()
-            .await;
+    let runtime = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(map::input_stream(inputs))
+        .output(output_handler)
+        .build()
+        .await;
 
     executor.spawn(runtime.run()).detach();
     outputs.take(limit).collect().await
@@ -540,8 +540,8 @@ async fn assert_dataflow_semisync_runtime_parity(
         inputs.values().all(|values| values.len() == ticks),
         "parity test inputs must describe complete logical rows"
     );
-    let mut source = spec_src;
-    let spec = dsrv_specification(&mut source).unwrap();
+    let source = spec_src;
+    let spec = parse_str(source).unwrap();
     let input_trace = format!("{inputs:#?}");
     let dataflow = with_timeout(
         eval_dataflow_runtime(executor.clone(), spec.clone(), inputs.clone(), ticks),
@@ -558,7 +558,7 @@ async fn assert_dataflow_semisync_runtime_parity(
     .await
     .expect("semi-sync parity runtime did not produce the expected outputs");
     let asynchronous = with_timeout(
-        eval_runtime_with::<UntimedDsrvSemantics<LALRParser>>(executor, spec, inputs, ticks),
+        eval_runtime_with::<UntimedDsrvSemantics>(executor, spec, inputs, ticks),
         10,
         "asynchronous parity runtime",
     )
@@ -633,7 +633,7 @@ fn dataflow_compilers_accept_zero_stream_indices() {
 
     DataflowMonitor::try_compile_untyped(spec.clone())
         .expect("untyped compilation should accept a zero stream index");
-    let typed = type_check(spec).expect("zero stream index should type check");
+    let typed = type_check(spec, false).expect("zero stream index should type check");
     DataflowMonitor::try_compile_checked(typed)
         .expect("typed compilation should accept a zero stream index");
 }
@@ -997,7 +997,7 @@ fn dataflow_automatic_dynamic_scope_can_introduce_a_computed_dependency() {
         "in x: Int\nin source: Str\nout before: Int\naux intermediate: Int\n\
                         before = dynamic(source: Int)\nintermediate = x + 1"
     );
-    let typed = type_check(spec.clone()).unwrap();
+    let typed = type_check(spec.clone(), false).unwrap();
     for mut monitor in [
         DataflowMonitor::try_compile_untyped(spec).unwrap(),
         DataflowMonitor::try_compile_checked(typed).unwrap(),
@@ -1023,7 +1023,7 @@ fn dataflow_multiple_dynamics_reorder_atomically_when_dependencies_reverse() {
         "in x: Int\nin a_source: Str\nin b_source: Str\nout a: Int\nout b: Int\n\
                         a = dynamic(a_source: Int)\nb = dynamic(b_source: Int)"
     );
-    let typed = type_check(spec.clone()).unwrap();
+    let typed = type_check(spec.clone(), false).unwrap();
     for mut monitor in [
         DataflowMonitor::try_compile_untyped(spec).unwrap(),
         DataflowMonitor::try_compile_checked(typed).unwrap(),
@@ -1149,9 +1149,8 @@ fn dataflow_defer_reorders_once_and_ignores_later_definitions() {
 
 #[test]
 fn dataflow_nested_dynamic_cannot_escape_parent_scope() {
-    let mut spec_src =
-        "in source: Str\nin secret: Int\nout z: Int\nz = dynamic(source: Int, {source})";
-    let spec = dsrv_specification(&mut spec_src).unwrap();
+    let spec_src = "in source: Str\nin secret: Int\nout z: Int\nz = dynamic(source: Int, {source})";
+    let spec = parse_str(spec_src).unwrap();
     let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (
@@ -1293,10 +1292,10 @@ async fn dataflow_lifts_sparse_binary_inputs_across_rows(executor: Rc<LocalExecu
 
 #[test]
 fn dataflow_event_batch_matches_sparse_rows_for_recursive_sum() {
-    let mut spec_src =
+    let spec_src =
         "in x: Int\nin y: Int\nout z: Int\nz = default(z[1], 0) + default(x, 0) + default(y, 0)";
-    let spec = dsrv_specification(&mut spec_src).unwrap();
-    let spec = type_check(spec).unwrap();
+    let spec = parse_str(spec_src).unwrap();
+    let spec = type_check(spec, false).unwrap();
     let mut row_monitor = DataflowMonitor::try_compile_checked(spec.clone()).unwrap();
     let mut event_monitor = DataflowMonitor::try_compile_checked(spec).unwrap();
 
@@ -1572,7 +1571,7 @@ fn typed_and_untyped_dataflow_preserve_explicit_defer_scopes() {
     let untyped = DataflowMonitor::try_compile_untyped(spec.clone())
         .expect("untyped explicit defer should compile");
     let typed = DataflowMonitor::try_compile_checked(
-        type_check(spec).expect("typed explicit defer should type check"),
+        type_check(spec, false).expect("typed explicit defer should type check"),
     )
     .expect("typed explicit defer should compile");
 
@@ -2765,9 +2764,8 @@ async fn dataflow_semisync_stateful_helper_presence_matrix_parity(
 async fn dataflow_dynamic_recursive_function_uses_lazy_base_case(
     executor: Rc<LocalExecutor<'static>>,
 ) {
-    let mut source =
-        "in n: Int\nin bias: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let spec = dsrv_specification(&mut source).unwrap();
+    let source = "in n: Int\nin bias: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
+    let spec = parse_str(source).unwrap();
     let rows = eval_dataflow_runtime(
         executor,
         spec,
@@ -2994,8 +2992,7 @@ async fn dataflow_async_new_property_uses_current_global_tick(
         ),
     ]);
     let dataflow = eval_dataflow_runtime(executor.clone(), spec.clone(), inputs.clone(), 3).await;
-    let asynchronous =
-        eval_runtime_with::<UntimedDsrvSemantics<LALRParser>>(executor, spec, inputs, 3).await;
+    let asynchronous = eval_runtime_with::<UntimedDsrvSemantics>(executor, spec, inputs, 3).await;
     assert_eq!(dataflow, asynchronous);
 }
 
@@ -3023,7 +3020,7 @@ async fn dataflow_runtime_matches_recursive_accumulator(executor: Rc<LocalExecut
         vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()],
     )]);
 
-    let expected = eval_runtime_with::<UntimedDsrvSemantics<LALRParser>>(
+    let expected = eval_runtime_with::<UntimedDsrvSemantics>(
         executor.clone(),
         spec.clone(),
         inputs.clone(),
@@ -3056,12 +3053,8 @@ async fn dataflow_stateful_lifting_matches_current(executor: Rc<LocalExecutor<'s
     )];
 
     for expression in ["default(x, 0)", "is_defined(x)", "when(x)"] {
-        let expected = eval_with::<UntimedDsrvSemantics<LALRParser>>(
-            executor.clone(),
-            expression,
-            vars.clone(),
-        )
-        .await;
+        let expected =
+            eval_with::<UntimedDsrvSemantics>(executor.clone(), expression, vars.clone()).await;
         let actual = eval_dataflow(expression, vars.clone());
         assert_eq!(actual, expected, "dataflow differed for `{expression}`");
     }

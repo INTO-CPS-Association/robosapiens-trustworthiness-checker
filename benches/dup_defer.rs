@@ -48,10 +48,11 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec = trustworthiness_checker::dsrv_specification(&mut spec_add_defer()).unwrap();
-    let dynamic_spec =
-        trustworthiness_checker::dsrv_specification(&mut "in x\nin y\nin e\nout z\nz = dynamic(e)")
-            .unwrap();
+    let spec = trustworthiness_checker::lang::dsrv::parser::parse_str(spec_add_defer()).unwrap();
+    let dynamic_spec = trustworthiness_checker::lang::dsrv::parser::parse_str(
+        "in x\nin y\nin e\nout z\nz = dynamic(e)",
+    )
+    .unwrap();
 
     for size in sizes {
         let input_stream_fn = || add_defer_input_stream(size);
@@ -146,7 +147,7 @@ fn from_elem(c: &mut Criterion) {
 fn dataflow_dynamic_phases(c: &mut Criterion) {
     fn compile(operator: &str) -> DataflowMonitor {
         let source = format!("in x\nin y\nin e\nout z\nz = {operator}(e)");
-        let spec = trustworthiness_checker::dsrv_specification(&mut source.as_str()).unwrap();
+        let spec = trustworthiness_checker::lang::dsrv::parser::parse_str(source.as_str()).unwrap();
         DataflowMonitor::try_compile_untyped(spec).unwrap()
     }
 

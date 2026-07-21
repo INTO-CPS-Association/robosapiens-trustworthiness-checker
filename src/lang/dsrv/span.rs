@@ -81,16 +81,6 @@ impl<T> Deref for Spanned<T> {
     }
 }
 
-pub fn offset(source: &str, rest_start: &str, rest_end: &str) -> Span {
-    let start = source.len() - rest_start.len();
-    let end = source.len() - rest_end.len();
-    Span::new(start as u32, end as u32)
-}
-
-pub fn span_wrapper_winnow(source: &str, start_rest: &str, end_rest: &str, expr: Expr) -> Expr {
-    crate::lang::dsrv::ast::finish_root_span(expr, offset(source, start_rest, end_rest))
-}
-
 pub(crate) fn strip_span(expr: &Expr) -> String {
     let child = |id| strip_span(&expr.child(id));
     let children = |ids: &[crate::lang::dsrv::ast::ExprId]| {
@@ -133,6 +123,7 @@ pub(crate) fn strip_span(expr: &Expr) -> String {
         ExprKind::Latch(a, b) => format!("Latch({}, {})", child(*a), child(*b)),
         ExprKind::Init(a, b) => format!("Init({}, {})", child(*a), child(*b)),
         ExprKind::Not(e) => format!("Not({})", child(*e)),
+        ExprKind::Neg(e) => format!("Neg({})", child(*e)),
         ExprKind::IsDefined(e) => format!("IsDefined({})", child(*e)),
         ExprKind::When(e) => format!("When({})", child(*e)),
         ExprKind::Lambda(params, body) => format!("Lambda({params:?}, {})", child(*body)),

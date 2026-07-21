@@ -1,21 +1,15 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use anyhow::{self};
 
 use tracing::debug;
-use winnow::{Parser, error::ContextError};
 
-pub async fn parse_file<O: Clone + Debug>(
-    // The for<'a> syntax is a higher-ranked trait bound which is
-    // necessary to specify that the lifetime of the string passed
-    // into the parser does not need to outlive this function call
-    // (i.e. it needs to admit arbitrarily short lifetimes)
-    // see: https://doc.rust-lang.org/nomicon/hrtb.html
-    mut parser: impl for<'a> Parser<&'a str, O, ContextError>,
+pub async fn parse_file<O: Debug, E: Display>(
+    parser: impl FnOnce(&str) -> Result<O, E>,
     file: &str,
 ) -> anyhow::Result<O> {
     let contents = smol::fs::read_to_string(file).await?;
-    let result = parser.parse(contents.as_str()).map_err(|e| {
+    let result = parser(contents.as_str()).map_err(|e| {
         anyhow::anyhow!(e.to_string()).context(format!("Failed to parse file {}", file))
     });
     debug!(result=?result, "Parsed file with result");
@@ -34,6 +28,12 @@ mod tests {
     use futures::StreamExt;
     use macro_rules_attribute::apply;
 
+    fn parse_untimed(contents: &str) -> Result<crate::io::file::UntimedInputFileData, String> {
+        let mut input = contents;
+        crate::lang::untimed_input::untimed_input_file(&mut input)
+            .map_err(|error| error.to_string())
+    }
+
     async fn values(data: crate::io::file::UntimedInputFileData, var: &str) -> Vec<Value> {
         let input = file::input_stream(data, std::collections::BTreeSet::from([var.into()]));
         crate::into_tick_stream(input)
@@ -46,10 +46,9 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_parse_file() {
-        let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/simple_add.input";
         let input = file::input_stream(
-            parse_file(parser, file).await.unwrap(),
+            parse_file(parse_untimed, file).await.unwrap(),
             std::collections::BTreeSet::from(["x".into()]),
         );
         let x_vals = crate::into_tick_stream(input)
@@ -61,10 +60,9 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_parse_json_object_literal_file() {
-        let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/object_literal.input";
         let input = file::input_stream(
-            parse_file(parser, file).await.unwrap(),
+            parse_file(parse_untimed, file).await.unwrap(),
             std::collections::BTreeSet::from(["payload".into()]),
         );
         let payload_vals = crate::into_tick_stream(input)
@@ -88,9 +86,8 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_parse_boolean_file() {
-        let parser = crate::lang::untimed_input::untimed_input_file;
         let file = "fixtures/maple_sequence_true.input";
-        let data = parse_file(parser, file).await.unwrap();
+        let data = parse_file(parse_untimed, file).await.unwrap();
         let m_vals = values(data.clone(), "m").await;
         assert_eq!(
             m_vals,

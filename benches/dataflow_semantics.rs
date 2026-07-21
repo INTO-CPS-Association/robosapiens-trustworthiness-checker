@@ -9,15 +9,15 @@ use trustworthiness_checker::core::Runtime;
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::io::testing::LimitedNullOutputHandler;
-use trustworthiness_checker::lang::core::parser::SpecParser;
 use trustworthiness_checker::lang::dsrv::ast::CheckedDsrvSpecification;
-use trustworthiness_checker::lang::dsrv::lalr_parser::LALRParser;
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder;
 use trustworthiness_checker::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use trustworthiness_checker::semantics::UntimedDsrvSemantics;
-use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName, dsrv_specification};
+use trustworthiness_checker::{
+    DsrvSpecification, InputStream, Value, VarName, lang::dsrv::parser::parse_str,
+};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -69,14 +69,13 @@ async fn monitor_recursive_outputs_semisync(
         spec.output_vars().clone(),
         output_limit,
     ));
-    let monitor =
-        SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics<LALRParser>>::new()
-            .executor(executor.clone())
-            .model(spec)
-            .input(input_stream)
-            .output(output_handler)
-            .build()
-            .await;
+    let monitor = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(input_stream)
+        .output(output_handler)
+        .build()
+        .await;
     monitor.run().await.expect("Error running monitor");
 }
 
@@ -114,7 +113,7 @@ async fn monitor_recursive_outputs_typed_semisync(
     ));
     let monitor = SemiSyncRuntimeBuilder::<
         trustworthiness_checker::runtime::builder::CheckedSemiSyncValueConfig,
-        trustworthiness_checker::semantics::CheckedUntimedDsrvSemantics<LALRParser>,
+        trustworthiness_checker::semantics::CheckedUntimedDsrvSemantics,
     >::new()
     .executor(executor.clone())
     .model(spec)
@@ -147,81 +146,79 @@ async fn monitor_recursive_outputs_typed_dataflow(
 }
 
 fn recursive_spec() -> DsrvSpecification {
-    let mut spec = "in x\n\
+    let spec = "in x\n\
                     in y\n\
                     out z\n\
                     z = if x % 5 == 0 then default(z[1], 0) + y * 3 else default(z[1], 0) + x + y";
-    dsrv_specification(&mut spec).expect("recursive benchmark spec should parse")
+    parse_str(spec).expect("recursive benchmark spec should parse")
 }
 
 fn typed_recursive_spec() -> CheckedDsrvSpecification {
-    let mut spec = "in x: Int\n\
+    let spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
                     z = if x % 5 == 0 then default(z[1], 0) + y * 3 else default(z[1], 0) + x + y";
-    let spec = dsrv_specification(&mut spec).expect("typed recursive benchmark spec should parse");
-    type_check(spec).expect("typed recursive benchmark spec should type check")
+    let spec = parse_str(spec).expect("typed recursive benchmark spec should parse");
+    type_check(spec, false).expect("typed recursive benchmark spec should type check")
 }
 
 fn arithmetic_spec() -> DsrvSpecification {
-    let mut spec = "in x\n\
+    let spec = "in x\n\
                     in y\n\
                     out z\n\
                     z = (x + y) * 3 - (x % 7)";
-    dsrv_specification(&mut spec).expect("arithmetic benchmark spec should parse")
+    parse_str(spec).expect("arithmetic benchmark spec should parse")
 }
 
 fn typed_arithmetic_spec() -> CheckedDsrvSpecification {
-    let mut spec = "in x: Int\n\
+    let spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
                     z = (x + y) * 3 - (x % 7)";
-    let spec = dsrv_specification(&mut spec).expect("typed arithmetic benchmark spec should parse");
-    type_check(spec).expect("typed arithmetic benchmark spec should type check")
+    let spec = parse_str(spec).expect("typed arithmetic benchmark spec should parse");
+    type_check(spec, false).expect("typed arithmetic benchmark spec should type check")
 }
 
 fn if_arithmetic_spec() -> DsrvSpecification {
-    let mut spec = "in x\n\
+    let spec = "in x\n\
                     in y\n\
                     out z\n\
                     z = if x % 5 == 0 then y * 3 else x + y";
-    dsrv_specification(&mut spec).expect("if arithmetic benchmark spec should parse")
+    parse_str(spec).expect("if arithmetic benchmark spec should parse")
 }
 
 fn typed_if_arithmetic_spec() -> CheckedDsrvSpecification {
-    let mut spec = "in x: Int\n\
+    let spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
                     z = if x % 5 == 0 then y * 3 else x + y";
-    let spec =
-        dsrv_specification(&mut spec).expect("typed if arithmetic benchmark spec should parse");
-    type_check(spec).expect("typed if arithmetic benchmark spec should type check")
+    let spec = parse_str(spec).expect("typed if arithmetic benchmark spec should parse");
+    type_check(spec, false).expect("typed if arithmetic benchmark spec should type check")
 }
 
 fn stream_dependency_spec() -> DsrvSpecification {
-    let mut spec = "in x\n\
+    let spec = "in x\n\
                     in y\n\
                     out w\n\
                     aux z\n\
                     z = (x + y) * 3 - (x % 7)\n\
                     w = z + (z % 5)";
-    dsrv_specification(&mut spec).expect("stream dependency benchmark spec should parse")
+    parse_str(spec).expect("stream dependency benchmark spec should parse")
 }
 
 fn typed_stream_dependency_spec() -> CheckedDsrvSpecification {
-    let mut spec = "in x: Int\n\
+    let spec = "in x: Int\n\
                     in y: Int\n\
                     out w: Int\n\
                     aux z: Int\n\
                     z = (x + y) * 3 - (x % 7)\n\
                     w = z + (z % 5)";
-    let spec =
-        dsrv_specification(&mut spec).expect("typed stream dependency benchmark spec should parse");
-    type_check(spec).expect("typed stream dependency benchmark spec should type check")
+    let spec = parse_str(spec).expect("typed stream dependency benchmark spec should parse");
+    type_check(spec, false).expect("typed stream dependency benchmark spec should type check")
 }
 
 fn function_heavy_spec() -> DsrvSpecification {
-    let mut spec = "in n\n\
+    let spec = "in n\n\
                     in bias\n\
                     out direct\n\
                     out mapped\n\
@@ -235,11 +232,11 @@ fn function_heavy_spec() -> DsrvSpecification {
                     sum = List.fold(\\acc: Int, x: Int -> acc + x + bias, 0, xs)\n\
                     addBias = partial(\\x: Int, y: Int -> x + y, bias)\n\
                     partialResult = addBias(n)";
-    LALRParser::parse(&mut spec).expect("function-heavy benchmark spec should parse")
+    parse_str(spec).expect("function-heavy benchmark spec should parse")
 }
 
 fn typed_function_heavy_spec() -> CheckedDsrvSpecification {
-    let mut spec = "in n: Int\n\
+    let spec = "in n: Int\n\
                     in bias: Int\n\
                     out direct: Int\n\
                     out mapped: List<Int>\n\
@@ -249,45 +246,42 @@ fn typed_function_heavy_spec() -> CheckedDsrvSpecification {
                     direct = (\\x: Int -> x + bias)(n)\n\
                     mapped = List.map(\\x: Int -> x + bias, xs)\n\
                     sum = List.fold(\\acc: Int, x: Int -> acc + x + bias, 0, xs)";
-    let spec =
-        LALRParser::parse(&mut spec).expect("typed function-heavy benchmark spec should parse");
-    type_check(spec).expect("typed function-heavy benchmark spec should type check")
+    let spec = parse_str(spec).expect("typed function-heavy benchmark spec should parse");
+    type_check(spec, false).expect("typed function-heavy benchmark spec should type check")
 }
 
 fn recursive_function_if_spec() -> DsrvSpecification {
-    let mut spec = "in n\n\
+    let spec = "in n\n\
                     in bias\n\
                     out recursive\n\
                     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)";
-    LALRParser::parse(&mut spec).expect("recursive function-if benchmark spec should parse")
+    parse_str(spec).expect("recursive function-if benchmark spec should parse")
 }
 
 fn typed_recursive_function_if_spec() -> CheckedDsrvSpecification {
-    let mut spec = "in n: Int\n\
+    let spec = "in n: Int\n\
                     in bias: Int\n\
                     out recursive: Int\n\
                     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else (self(k - 1) + 1))(n)";
-    let spec = LALRParser::parse(&mut spec)
-        .expect("typed recursive function-if benchmark spec should parse");
-    type_check(spec).expect("typed recursive function-if benchmark spec should type check")
+    let spec = parse_str(spec).expect("typed recursive function-if benchmark spec should parse");
+    type_check(spec, false).expect("typed recursive function-if benchmark spec should type check")
 }
 
 fn direct_function_if_spec() -> DsrvSpecification {
-    let mut spec = "in n\n\
+    let spec = "in n\n\
                     in bias\n\
                     out direct\n\
                     direct = (\\k: Int -> if k == 0 then bias else k + bias)(n)";
-    LALRParser::parse(&mut spec).expect("direct function-if benchmark spec should parse")
+    parse_str(spec).expect("direct function-if benchmark spec should parse")
 }
 
 fn typed_direct_function_if_spec() -> CheckedDsrvSpecification {
-    let mut spec = "in n: Int\n\
+    let spec = "in n: Int\n\
                     in bias: Int\n\
                     out direct: Int\n\
                     direct = (\\k: Int -> if k == 0 then bias else k + bias)(n)";
-    let spec =
-        LALRParser::parse(&mut spec).expect("typed direct function-if benchmark spec should parse");
-    type_check(spec).expect("typed direct function-if benchmark spec should type check")
+    let spec = parse_str(spec).expect("typed direct function-if benchmark spec should parse");
+    type_check(spec, false).expect("typed direct function-if benchmark spec should type check")
 }
 
 fn recursive_inputs(size: usize) -> InputStream<Value> {

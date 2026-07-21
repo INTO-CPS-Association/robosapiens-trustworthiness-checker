@@ -86,6 +86,86 @@ impl Variant {
         }
     }
 
+    fn owned_constructor(
+        &self,
+        visibility: &syn::Visibility,
+        kind: &Ident,
+        root: &Ident,
+        key: &Type,
+        children: &Type,
+        keyed_children: &Type,
+    ) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        let constructor_fields = self
+            .fields
+            .iter()
+            .filter(|field| field.owned_default.is_none())
+            .collect::<Vec<_>>();
+        let field_names = constructor_fields.iter().map(|field| &field.name);
+        let parameter_types = constructor_fields.iter().map(|field| match &field.kind {
+            FieldKind::Child => quote!(Box<impl Into<#root>>),
+            FieldKind::Children => quote!(#children<#root>),
+            FieldKind::KeyedChildren => quote!(impl IntoIterator<Item = (#key, #root)>),
+            FieldKind::Borrowed(typ) => quote!(#typ),
+            FieldKind::IntoOwned(typ) => quote!(impl Into<#typ>),
+            FieldKind::Copied(typ) => quote!(#typ),
+        });
+        let prepared = self.fields.iter().map(|field| {
+            let field_name = &field.name;
+            if let Some(default) = &field.owned_default {
+                return quote!(let #field_name = #default;);
+            }
+            match &field.kind {
+                FieldKind::Child => quote!(let #field_name: #root = (*#field_name).into();),
+                FieldKind::Children => quote!(
+                    let #field_name: Vec<#root> = #field_name.into_iter().collect();
+                ),
+                FieldKind::KeyedChildren => quote!(
+                    let (#field_name, children): (Vec<#key>, Vec<#root>) =
+                        #field_name.into_iter().unzip();
+                    let #field_name = (#field_name, children);
+                ),
+                FieldKind::Borrowed(_) => quote!(),
+                FieldKind::IntoOwned(typ) => quote!(let #field_name: #typ = #field_name.into();),
+                FieldKind::Copied(_) => quote!(),
+            }
+        });
+        let appended = self.fields.iter().map(|field| {
+            let field_name = &field.name;
+            match field.kind {
+                FieldKind::Child => quote!(owned_children.push(#field_name);),
+                FieldKind::Children => quote!(owned_children.extend(#field_name);),
+                FieldKind::KeyedChildren => quote!(owned_children.extend(#field_name.1);),
+                FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => quote!(),
+            }
+        });
+        let stored = self.fields.iter().map(|field| {
+            let field_name = &field.name;
+            match &field.kind {
+                FieldKind::Child => quote!(ids.next().expect("missing fixed child ID")),
+                FieldKind::Children => quote!(ids.by_ref().collect::<#children<_>>()),
+                FieldKind::KeyedChildren => quote!(#field_name.0.into_iter()
+                    .zip(ids.by_ref())
+                    .collect::<#keyed_children<_>>()
+                    .into()),
+                FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
+                    quote!(#field_name)
+                }
+            }
+        });
+        quote! {
+            #visibility fn #name(#( #field_names: #parameter_types ),*) -> Self {
+                #( #prepared )*
+                let mut owned_children = Vec::new();
+                #( #appended )*
+                Self::__merge_owned_children(owned_children, |ids| {
+                    let mut ids = ids.iter().copied();
+                    #kind::#name( #( #stored ),* )
+                })
+            }
+        }
+    }
+
     fn payload_equality_arm(&self, kind: &Ident) -> proc_macro2::TokenStream {
         let name = &self.name;
         let left = self
@@ -119,7 +199,9 @@ impl Variant {
                 FieldKind::KeyedChildren => Some(quote!(
                     #left.iter().map(|(key, _)| key).eq(#right.iter().map(|(key, _)| key))
                 )),
-                FieldKind::Borrowed(_) | FieldKind::Copied(_) => Some(quote!(#left == #right)),
+                FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
+                    Some(quote!(#left == #right))
+                }
             });
         quote! {
             (
@@ -184,6 +266,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
     let TreeSchema {
         visibility,
         internals,
+        owned_constructors,
         root,
         metadata_name,
         metadata,
@@ -257,6 +340,39 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         .collect::<Vec<_>>();
     let keyed_fields_definition =
         keyed_fields::expand(&visibility, &key, &id, &keyed_fields, &keyed_children);
+    let owned_constructor_impl = owned_constructors.map(|constructor_visibility| {
+        let methods = variants.iter().map(|variant| {
+            variant.owned_constructor(
+                &constructor_visibility,
+                &kind,
+                &root,
+                &key,
+                &children,
+                &keyed_children,
+            )
+        });
+        quote! {
+            #[doc(hidden)]
+            #[allow(non_snake_case, clippy::boxed_local)]
+            impl #root {
+                fn __merge_owned_children(
+                    children: impl IntoIterator<Item = Self>,
+                    make: impl FnOnce(&[#id]) -> #kind,
+                ) -> Self {
+                    let children: Vec<_> = children.into_iter().collect();
+                    let capacity = children.iter()
+                        .map(|child| contiguous_tree::TreeCursorExt::postorder(child.as_ref()).len())
+                        .sum::<usize>() + 1;
+                    let mut arena = #arena::with_capacity(capacity);
+                    let ids = children.iter().map(|child| arena.clone_tree(child)).collect::<Vec<_>>();
+                    let root = arena.alloc(make(&ids), #metadata_default);
+                    Self::new(#handle::new(arena, root))
+                }
+
+                #( #methods )*
+            }
+        }
+    });
 
     quote! {
         #[doc = #id_doc]
@@ -601,6 +717,8 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         impl #builder {
             #( #builder_methods )*
         }
+
+        #owned_constructor_impl
     }
 }
 
@@ -614,7 +732,9 @@ fn stored_type(
         FieldKind::Child => quote!(#id),
         FieldKind::Children => quote!(#children<#id>),
         FieldKind::KeyedChildren => quote!(#keyed),
-        FieldKind::Borrowed(typ) | FieldKind::Copied(typ) => quote!(#typ),
+        FieldKind::Borrowed(typ) | FieldKind::IntoOwned(typ) | FieldKind::Copied(typ) => {
+            quote!(#typ)
+        }
     }
 }
 
@@ -628,7 +748,7 @@ fn view_type(kind: &FieldKind, cursor: &Ident, id: &Ident, key: &Type) -> proc_m
         FieldKind::KeyedChildren => {
             quote!(contiguous_tree::ResolvedFields<'arena, #cursor, #key>)
         }
-        FieldKind::Borrowed(typ) => quote!(&'arena #typ),
+        FieldKind::Borrowed(typ) | FieldKind::IntoOwned(typ) => quote!(&'arena #typ),
         FieldKind::Copied(typ) => quote!(#typ),
     }
 }
@@ -642,7 +762,7 @@ fn resolve(kind: &FieldKind, field: &Ident, cursor: &Ident) -> proc_macro2::Toke
         FieldKind::KeyedChildren => {
             quote!(contiguous_tree::ResolvedFields::new(#cursor, #field.raw_slice()))
         }
-        FieldKind::Borrowed(_) => quote!(#field),
+        FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) => quote!(#field),
         FieldKind::Copied(_) => quote!(*#field),
     }
 }
@@ -652,7 +772,9 @@ fn record(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
         FieldKind::Child => quote!(ids.push(*#field);),
         FieldKind::Children => quote!(ids.extend_slice(#field);),
         FieldKind::KeyedChildren => quote!(ids.extend_keyed(#field.raw_slice());),
-        FieldKind::Borrowed(_) | FieldKind::Copied(_) => quote!(let _ = #field;),
+        FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
+            quote!(let _ = #field;)
+        }
     }
 }
 
@@ -661,6 +783,8 @@ fn visit(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
         FieldKind::Child => quote!(visit(#field);),
         FieldKind::Children => quote!(#field.make_mut().iter_mut().for_each(&mut visit);),
         FieldKind::KeyedChildren => quote!(for (_, child) in #field.make_mut() { visit(child); }),
-        FieldKind::Borrowed(_) | FieldKind::Copied(_) => quote!(let _ = #field;),
+        FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
+            quote!(let _ = #field;)
+        }
     }
 }

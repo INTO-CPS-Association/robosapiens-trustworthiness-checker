@@ -17,17 +17,17 @@ use trustworthiness_checker::cli::adapters::{DistributionModeBuilder, input_fact
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::{AggregationSemantics, InputAggregation, OutputHandlerBuilder};
-use trustworthiness_checker::lang::dsrv::lalr_parser::parse_file as lalr_parse_file;
+use trustworthiness_checker::lang::dsrv::parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
-use trustworthiness_checker::{self as tc, Specification, io::file::parse_file};
+use trustworthiness_checker::{self as tc, Specification};
 use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, InputAggregationMode, Language, OutputMode, ParserMode, resolve_runtime,
+    Cli, InputAggregationMode, Language, OutputMode, resolve_runtime,
 };
 
 #[global_allocator]
@@ -72,26 +72,6 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.runtime(runtime);
 
-    let parser_was_explicit = matches
-        .value_source("parser")
-        .is_some_and(|source| source == ValueSource::CommandLine);
-
-    let effective_parser =
-        if matches!(cli.language, Language::DSRV) && matches!(runtime, RuntimeSpec::Distributed) {
-            if parser_was_explicit && !matches!(cli.parser, ParserMode::Combinator) {
-                cmd.error(
-                    ErrorKind::ArgumentConflict,
-                    "--parser combinator is required when --runtime distributed is used",
-                )
-                .exit();
-            }
-            ParserMode::Combinator
-        } else {
-            cli.parser
-        };
-
-    let builder = builder.parser(effective_parser);
-
     let builder = builder.reconf_topic(cli.reconf_topic.clone());
 
     let builder = builder.use_context_transfer(!cli.no_context_transfer);
@@ -122,19 +102,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let builder = builder.distribution_mode(distribution_mode);
 
     let model: LangSpecification = match cli.language {
-        Language::DSRV => match effective_parser {
-            ParserMode::Combinator => parse_file(
-                tc::lang::dsrv::parser::dsrv_specification,
-                cli.model.as_str(),
-            )
+        Language::DSRV => lalr_parse_file(cli.model.as_str())
             .await
             .map(LangSpecification::from)
             .context("Model file could not be parsed")?,
-            ParserMode::Lalr => lalr_parse_file(cli.model.as_str())
-                .await
-                .map(LangSpecification::from)
-                .context("Model file could not be parsed")?,
-        },
         Language::MSTLO => tc::lang::mstlo::parse_file(cli.model.as_str())
             .await
             .map(LangSpecification::from)

@@ -74,6 +74,7 @@ fn lower_expr(expr: ExprRef<'_>, builder: &mut PlanBuilder<'_>) -> UnboundRef {
             })
         }
         ExprView::Not(arg) => lower_unary(builder, DataflowUnaryOp::Not, arg),
+        ExprView::Neg(arg) => lower_unary(builder, DataflowUnaryOp::Neg, arg),
         ExprView::Sin(arg) => lower_unary(builder, DataflowUnaryOp::Sin, arg),
         ExprView::Cos(arg) => lower_unary(builder, DataflowUnaryOp::Cos, arg),
         ExprView::Tan(arg) => lower_unary(builder, DataflowUnaryOp::Tan, arg),

@@ -1,7 +1,6 @@
 use crate::{
     InputStream, Value,
     io::map,
-    lang::dsrv::lalr_parser::LALRParser,
     runtime::{
         asynchronous::AsyncRuntime,
         builder::{DistValueConfig, ValueConfig},
@@ -17,7 +16,7 @@ pub type TestConfig = ValueConfig;
 pub type TestDistConfig = DistValueConfig;
 
 // Default semantics to use in tests
-pub type TestSemantics = UntimedDsrvSemantics<LALRParser>;
+pub type TestSemantics = UntimedDsrvSemantics;
 
 // Default monitor runner to use in tests
 pub type TestRuntime = AsyncRuntime<TestConfig, TestSemantics>;

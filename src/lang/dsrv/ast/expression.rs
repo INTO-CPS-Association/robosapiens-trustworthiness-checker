@@ -9,6 +9,8 @@
 //! Type checking does not construct another AST. [`CheckedExprRef`] traverses
 //! the same expression tree while carrying immutable [`TypeAnnotations`].
 
+use std::fmt::{Debug, Display};
+
 use contiguous_tree::TreeCursorExt;
 use ecow::{EcoString, EcoVec};
 
@@ -17,7 +19,6 @@ use crate::core::{StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::span::Span;
-use std::fmt::{Debug, Display};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum DynamicExprScope {
@@ -30,6 +31,7 @@ pub enum DynamicExprScope {
 contiguous_tree::tree_schema! {
     pub tree Expr {
         internals: pub(crate),
+        owned_constructors: pub(crate),
         metadata: span: Span = Span::default(),
         id: u32,
         key: EcoString,
@@ -38,19 +40,19 @@ contiguous_tree::tree_schema! {
 
         If(condition: child, then_expr: child, else_expr: child),
         SIndex(input: child, offset: copy(u64)),
-        Val(value: data(Value)),
+        Val(value: into_data(Value)),
         BinOp(left: child, right: child, operator: data(SBinOp)),
         Var(variable: data(VarName)),
 
         Dynamic(
             source: child,
             result_type: data(StreamTypeAscription),
-            scope: data(DynamicExprScope),
+            scope: data(DynamicExprScope) = DynamicExprScope::Automatic,
         ),
         Defer(
             source: child,
             result_type: data(StreamTypeAscription),
-            scope: data(DynamicExprScope),
+            scope: into_data(DynamicExprScope),
         ),
         Update(value: child, update: child),
         Default(value: child, default: child),
@@ -59,6 +61,7 @@ contiguous_tree::tree_schema! {
         Latch(value: child, trigger: child),
         Init(value: child, initial: child),
         Not(value: child),
+        Neg(value: child),
 
         Lambda(parameters: data(EcoVec<(VarName, StreamType)>), body: child),
         Apply(function: child, arguments: children),
@@ -93,6 +96,42 @@ contiguous_tree::tree_schema! {
 
         MonitoredAt(variable: data(VarName), node: data(NodeName)),
         Dist(left: data(VarOrNodeName), right: data(VarOrNodeName)),
+    }
+}
+
+impl ExprBuilder {
+    pub(crate) fn for_source(source: &str) -> Self {
+        Self::with_capacity(source.len() / 4)
+    }
+
+    pub fn finish(self, root: ExprId) -> Expr {
+        Expr::new(ExprHandle::new(self.arena, root))
+    }
+}
+
+// Programmatic construction helpers that are not schema variant constructors.
+#[allow(non_snake_case)]
+impl Expr {
+    pub(crate) fn with_span(node: ExprKind, span: Span) -> Self {
+        let mut arena = ExprArena::with_capacity(1);
+        let root = arena.alloc(node, span);
+        Self::new(ExprHandle::new(arena, root))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn RestrictedDynamic<E: Into<Self>>(
+        source: Box<E>,
+        result_type: StreamTypeAscription,
+        vars: EcoVec<VarName>,
+    ) -> Self {
+        Self::__merge_owned_children([(*source).into()], |ids| {
+            ExprKind::Dynamic(ids[0], result_type, DynamicExprScope::Explicit(vars))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn MapOrdered(items: impl IntoIterator<Item = (EcoString, Self)>) -> Self {
+        Self::Map(items)
     }
 }
 
@@ -142,7 +181,11 @@ impl DynamicExprScope {
 
 impl From<EcoVec<VarName>> for DynamicExprScope {
     fn from(vars: EcoVec<VarName>) -> Self {
-        Self::Explicit(vars)
+        if vars.is_empty() {
+            Self::Automatic
+        } else {
+            Self::Explicit(vars)
+        }
     }
 }
 
@@ -273,8 +316,7 @@ mod tests {
                     Expr::List(vec![Expr::Val(1), Expr::Val(2)].into()),
                 ),
             ]
-            .into_iter()
-            .collect(),
+            .into_iter(),
         );
 
         let node_count = expression.as_ref().fold(|node| match node.cursor().kind() {
@@ -292,7 +334,7 @@ mod tests {
 
     #[test]
     fn generated_views_resolve_collections_and_keyed_children() {
-        let object = Expr::ObjectLiteral([("answer".into(), Expr::Val(42))].into_iter().collect());
+        let object = Expr::ObjectLiteral([("answer".into(), Expr::Val(42))]);
         let ExprView::ObjectLiteral(fields) = object.as_ref().view() else {
             unreachable!()
         };

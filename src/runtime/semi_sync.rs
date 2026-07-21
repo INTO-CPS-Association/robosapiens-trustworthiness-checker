@@ -175,7 +175,7 @@ where
         starting_history: Vec<AC::Val>,
     ) -> Self {
         let hist_len = starting_history.len();
-        let eval_stream = MS::to_async_stream_for_var(&var_name, expr.clone(), ctx);
+        let eval_stream = MS::to_async_stream(&expr, ctx, Some(var_name.clone()));
         let eval_stream: OutputStream<AC::Val> =
             Box::pin(futures::stream::iter(starting_history).chain(eval_stream.skip(hist_len)));
         Self {
@@ -1262,7 +1262,6 @@ mod tests {
     use crate::core::Runtime;
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::io::{controlled, map};
-    use crate::lang::dsrv::lalr_parser::LALRParser;
     use crate::lang::dsrv::type_checker::type_check;
     use crate::runtime::RuntimeBuilder;
     use crate::runtime::builder::SemiSyncValueConfig;
@@ -1270,7 +1269,9 @@ mod tests {
     use crate::semantics::{
         AbstractContextBuilder, CheckedUntimedDsrvSemantics, StreamContext, UntimedDsrvSemantics,
     };
-    use crate::{InputBatch, InputEvent, InputStream, Value, dsrv_spec, dsrv_specification};
+    use crate::{
+        InputBatch, InputEvent, InputStream, Value, dsrv_spec, lang::dsrv::parser::parse_str,
+    };
     use crate::{VarName, dsrv_fixtures::*};
     use futures::{FutureExt, stream::StreamExt};
     use macro_rules_attribute::apply;
@@ -1280,10 +1281,10 @@ mod tests {
 
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
-    type TestRuntime = SemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics<LALRParser>>;
+    type TestRuntime = SemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics>;
     type TestTypedRuntime = SemiSyncRuntime<
         crate::runtime::builder::CheckedSemiSyncValueConfig,
-        CheckedUntimedDsrvSemantics<LALRParser>,
+        CheckedUntimedDsrvSemantics,
     >;
 
     struct CompatibilityCase {
@@ -1305,8 +1306,8 @@ mod tests {
     }
 
     fn external_input_context() -> super::SemiSyncContext<SemiSyncValueConfig> {
-        let mut source = "in x\nout z\nz = x";
-        let spec = dsrv_specification(&mut source).unwrap();
+        let source = "in x\nout z\nz = x";
+        let spec = parse_str(source).unwrap();
         super::SemiSyncContextBuilder::<SemiSyncValueConfig>::new()
             .variables(BTreeMap::from([(
                 "x".into(),
@@ -1324,8 +1325,8 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
         case: CompatibilityCase,
     ) {
-        let mut source = case.specification;
-        let spec = dsrv_specification(&mut source).unwrap();
+        let source = case.specification;
+        let spec = parse_str(source).unwrap();
         let (input, controller) = controlled(map::input_stream(case.inputs));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -1712,8 +1713,8 @@ mod tests {
 
     #[apply(async_test)]
     async fn sparse_event_ticks_preserve_exact_output_order(executor: Rc<LocalExecutor<'static>>) {
-        let mut source = "in x\nin y\nout ox\nout oy\nox = x\noy = y";
-        let spec = dsrv_specification(&mut source).unwrap();
+        let source = "in x\nin y\nout ox\nout oy\nox = x\noy = y";
+        let spec = parse_str(source).unwrap();
         let input: InputStream<Value> =
             Box::pin(futures::stream::iter([Ok(InputBatch::events(vec![
                 InputEvent::new("x".into(), Value::Int(1)),
@@ -1750,7 +1751,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_simple_add(executor: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
@@ -1789,8 +1790,8 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_typed_simple_add(executor: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_simple_add_monitor_typed()).unwrap();
-        let spec = type_check(spec).expect("typed simple add spec should type check");
+        let spec = parse_str(spec_simple_add_monitor_typed()).unwrap();
+        let spec = type_check(spec, false).expect("typed simple add spec should type check");
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
@@ -1830,7 +1831,7 @@ mod tests {
     async fn test_simple_add_null_handler(executor: Rc<LocalExecutor<'static>>) {
         // Testing that the monitor works with a NullOutputHandler
         // (to avoid previous regressions)
-        let spec = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let spec = parse_str(spec_simple_add_monitor()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
@@ -1857,8 +1858,8 @@ mod tests {
         // Tests that monitor correctly shuts down when there are multiple outputs that depend
         // on each other
         // (There was a bug where output stream cancellation did not propagate properly)
-        let mut spec = "in x\nout a\nout b\na = x\nb = a + 1";
-        let spec = dsrv_specification(&mut spec).unwrap();
+        let spec = "in x\nout a\nout b\na = x\nb = a + 1";
+        let spec = parse_str(spec).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x)]));
@@ -1947,11 +1948,11 @@ mod tests {
     async fn multiple_runtime_compiled_outputs_complete_each_tick(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut source = "in x: Int\nin y: Int\nin left_source: Str\nin right_source: Str\n\
+        let source = "in x: Int\nin y: Int\nin left_source: Str\nin right_source: Str\n\
                           out left: Int\nout right: Int\n\
                           left = dynamic(left_source: Int)\n\
                           right = defer(right_source: Int)";
-        let spec = dsrv_specification(&mut source).unwrap();
+        let spec = parse_str(source).unwrap();
         let input_stream = map::input_stream(BTreeMap::from([
             ("x".into(), vec![Value::Int(1)]),
             ("y".into(), vec![Value::Int(10)]),
@@ -1989,8 +1990,8 @@ mod tests {
     async fn dynamic_deferred_property_keeps_installed_history_on_global_timeline(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_source = "in x: Int\nin e: Str\nout z: Int\nz = dynamic(e: Int)";
-        let spec = dsrv_specification(&mut spec_source).unwrap();
+        let spec_source = "in x: Int\nin e: Str\nout z: Int\nz = dynamic(e: Int)";
+        let spec = parse_str(spec_source).unwrap();
         let input_stream = map::input_stream(BTreeMap::from([
             ("x".into(), vec![1.into(), 2.into(), 3.into()]),
             (
@@ -2030,9 +2031,9 @@ mod tests {
     async fn typed_dynamic_deferred_property_keeps_installed_history_on_global_timeline(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let mut spec_source = "in x: Int\nin e: Str\nout z: Int\nz = dynamic(e: Int)";
-        let spec = dsrv_specification(&mut spec_source).unwrap();
-        let spec = type_check(spec).expect("dynamic regression spec should type check");
+        let spec_source = "in x: Int\nin e: Str\nout z: Int\nz = dynamic(e: Int)";
+        let spec = parse_str(spec_source).unwrap();
+        let spec = type_check(spec, false).expect("dynamic regression spec should type check");
         let input_stream = map::input_stream(BTreeMap::from([
             ("x".into(), vec![1.into(), 2.into(), 3.into()]),
             (
@@ -2070,7 +2071,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_defer_single(executor: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_defer()).unwrap();
+        let spec = parse_str(spec_defer()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), Value::Deferred, Value::Deferred];
@@ -2109,7 +2110,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_defer_multiple(executor: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_defer()).unwrap();
+        let spec = parse_str(spec_defer()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -2148,7 +2149,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_defer_delayed(executor: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_defer()).unwrap();
+        let spec = parse_str(spec_defer()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, Value::Deferred, "x + 3".into()];
@@ -2187,7 +2188,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_defer_sindex(executor: Rc<LocalExecutor<'static>>) {
-        let spec = dsrv_specification(&mut spec_defer()).unwrap();
+        let spec = parse_str(spec_defer()).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into(), 3.into(), 4.into()];
         let e = vec![
@@ -2240,8 +2241,8 @@ mod tests {
         // was causing a deadlock
 
         // Naming is important here... Regression was caused by waiting for a before b
-        let mut spec = "in x\nout a\naux b\nb = x\na = b";
-        let spec = dsrv_specification(&mut spec).unwrap();
+        let spec = "in x\nout a\naux b\nb = x\na = b";
+        let spec = parse_str(spec).unwrap();
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x)]));
@@ -2294,7 +2295,7 @@ mod tests {
     //     for time_index in 1..CHANNEL_SIZE {
     //         // Note: z has time index of `time_index` which means we should maintain history for it
     //         let spec_str = format!("in x\nout z\nz = default(z[{}], 0) + x", time_index);
-    //         let spec = dsrv_specification(&mut spec_str.as_str()).unwrap();
+    //         let spec = parse_str(spec_str.as_str()).unwrap();
     //         let x_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
     //             (0..CHANNEL_SIZE).map(|x| (x as i64).into()),
     //         ));

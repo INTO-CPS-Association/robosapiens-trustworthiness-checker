@@ -4,7 +4,7 @@ use crate::{
     io::{
         InputStreamFactory, MsgTypeMapping, OutputHandlerBuilder, OutputHandlerSpec, TopicMapping,
     },
-    lang::core::{DependencyGraphExpr, DependencyGraphSpec, parser::SpecParser},
+    lang::core::{DependencyGraphExpr, DependencyGraphSpec},
     runtime::{
         RuntimeBuilder,
         semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncRuntime, SemiSyncRuntimeBuilder},
@@ -37,14 +37,13 @@ struct ReconfInput {
 }
 
 #[derive(Clone)]
-pub struct ReconfSemiSyncRuntimeBuilder<AC, MS, P>
+pub struct ReconfSemiSyncRuntimeBuilder<AC, MS>
 where
     AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
     AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
-    P: SpecParser<AC::Spec>,
 {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<AC::Spec>,
@@ -55,23 +54,19 @@ where
     starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
     known_topic_mapping: TopicMapping,
     known_type_info: MsgTypeMapping,
-    _marker: (
-        std::marker::PhantomData<MS>,
-        std::marker::PhantomData<AC>,
-        std::marker::PhantomData<P>,
-    ),
+    parse_spec: Option<fn(&str) -> anyhow::Result<AC::Spec>>,
+    _marker: (std::marker::PhantomData<MS>, std::marker::PhantomData<AC>),
 }
 
-impl<AC, MS, P> RuntimeBuilder<AC::Spec, AC::Val> for ReconfSemiSyncRuntimeBuilder<AC, MS, P>
+impl<AC, MS> RuntimeBuilder<AC::Spec, AC::Val> for ReconfSemiSyncRuntimeBuilder<AC, MS>
 where
     AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
-    P: SpecParser<AC::Spec>,
 {
-    type Runtime = ReconfSemiSyncRuntime<AC, MS, P>;
+    type Runtime = ReconfSemiSyncRuntime<AC, MS>;
 
     fn new() -> Self {
         Self {
@@ -84,11 +79,8 @@ where
             starting_history: None,
             known_topic_mapping: BTreeMap::new(),
             known_type_info: BTreeMap::new(),
-            _marker: (
-                std::marker::PhantomData,
-                std::marker::PhantomData,
-                std::marker::PhantomData,
-            ),
+            parse_spec: None,
+            _marker: (std::marker::PhantomData, std::marker::PhantomData),
         }
     }
 
@@ -177,21 +169,25 @@ where
                 input_stream: Some(input_stream),
                 self_builder: self,
                 use_context_transfer,
-                _marker: (std::marker::PhantomData, std::marker::PhantomData),
+                _marker: std::marker::PhantomData,
             }
         })
     }
 }
 
-impl<AC, MS, P> ReconfSemiSyncRuntimeBuilder<AC, MS, P>
+impl<AC, MS> ReconfSemiSyncRuntimeBuilder<AC, MS>
 where
     AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
-    P: SpecParser<AC::Spec>,
 {
+    pub fn parse_spec(mut self, parse_spec: fn(&str) -> anyhow::Result<AC::Spec>) -> Self {
+        self.parse_spec = Some(parse_spec);
+        self
+    }
+
     pub fn input_factory(self, input_factory: InputStreamFactory) -> Self {
         Self {
             input_factory: Some(input_factory),
@@ -248,32 +244,30 @@ where
     }
 }
 
-pub struct ReconfSemiSyncRuntime<AC, MS, P>
+pub struct ReconfSemiSyncRuntime<AC, MS>
 where
     AC: AsyncConfig<Ctx = SemiSyncContext<AC>>,
     AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
-    P: SpecParser<AC::Spec>,
 {
     semi_sync_monitor: Option<SemiSyncRuntime<AC, MS>>,
     /// Opening happens while building so transports are subscribed before the runtime is spawned.
     /// The result is retained so setup failures can still be returned from `run_boxed`.
     input_stream: Option<anyhow::Result<InputStream<AC::Val>>>,
-    self_builder: ReconfSemiSyncRuntimeBuilder<AC, MS, P>,
+    self_builder: ReconfSemiSyncRuntimeBuilder<AC, MS>,
     use_context_transfer: bool,
-    _marker: (std::marker::PhantomData<MS>, std::marker::PhantomData<P>),
+    _marker: std::marker::PhantomData<MS>,
 }
 
-impl<AC, MS, P> ReconfSemiSyncRuntime<AC, MS, P>
+impl<AC, MS> ReconfSemiSyncRuntime<AC, MS>
 where
     AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
-    P: SpecParser<AC::Spec>,
 {
     fn setup_input_stream(&mut self) -> anyhow::Result<InputTickStream<AC::Val>> {
         let input = self
@@ -443,7 +437,12 @@ where
             .known_type_info
             .extend(deserialized.type_info.clone());
 
-        let parsed = P::parse(&mut deserialized.spec.as_str());
+        let parsed = (self
+            .self_builder
+            .parse_spec
+            .expect("reconfiguration parser is not configured"))(
+            deserialized.spec.as_str()
+        );
         info!("Parsed as: {:?}", parsed);
         let parsed =
             parsed.map_err(|err| anyhow!("Failed to parse reconfiguration command: {:?}", err))?;
@@ -684,15 +683,15 @@ mod input_tick_tests {
         OutputStream, Runtime, Value, VarName,
         core::OutputHandler,
         io::{InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec},
-        lang::dsrv::{lalr_parser::LALRParser, parser::dsrv_specification},
+        lang::dsrv::parser::parse_str,
         runtime::{
             RuntimeBuilder, builder::SemiSyncValueConfig, semi_sync::SemiSyncRuntimeBuilder,
         },
         semantics::UntimedDsrvSemantics,
     };
 
-    type TestSemantics = UntimedDsrvSemantics<LALRParser>;
-    type TestRuntime = ReconfSemiSyncRuntime<SemiSyncValueConfig, TestSemantics, LALRParser>;
+    type TestSemantics = UntimedDsrvSemantics;
+    type TestRuntime = ReconfSemiSyncRuntime<SemiSyncValueConfig, TestSemantics>;
 
     struct FailingOutputHandler;
 
@@ -710,7 +709,7 @@ mod input_tick_tests {
     async fn reconfigurable_input_setup_errors_are_returned(
         executor: std::rc::Rc<smol::LocalExecutor<'static>>,
     ) {
-        let spec = dsrv_specification(&mut "in x\nout z\nz = x").unwrap();
+        let spec = parse_str("in x\nout z\nz = x").unwrap();
         let input_factory = InputStreamFactory::mqtt(Some(BTreeMap::new()), None);
         let (output_sender, _output_receiver) =
             bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
@@ -718,15 +717,15 @@ mod input_tick_tests {
             .executor(executor.clone())
             .output_var_names(spec.output_vars().clone());
 
-        let runtime =
-            ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics, LALRParser>::new()
-                .executor(executor)
-                .model(spec)
-                .input_factory(input_factory)
-                .output_builder(output_builder)
-                .reconf_topic("reconfigure".into())
-                .build()
-                .await;
+        let runtime = ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics>::new()
+            .parse_spec(parse_str)
+            .executor(executor)
+            .model(spec)
+            .input_factory(input_factory)
+            .output_builder(output_builder)
+            .reconf_topic("reconfigure".into())
+            .build()
+            .await;
 
         let error = runtime
             .run()
@@ -743,7 +742,7 @@ mod input_tick_tests {
     async fn reconfigurable_output_errors_are_returned(
         executor: std::rc::Rc<smol::LocalExecutor<'static>>,
     ) {
-        let spec = dsrv_specification(&mut "in x\nout z\nz = x").unwrap();
+        let spec = parse_str("in x\nout z\nz = x").unwrap();
         let monitor = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics>::new()
             .executor(executor.clone())
             .model(spec.clone())
@@ -760,7 +759,7 @@ mod input_tick_tests {
             input_stream: Some(Ok(Box::pin(futures::stream::pending()))),
             self_builder,
             use_context_transfer: true,
-            _marker: (std::marker::PhantomData, std::marker::PhantomData),
+            _marker: std::marker::PhantomData,
         };
 
         let run_result = tc_testutils::streams::with_timeout(
@@ -779,14 +778,13 @@ mod input_tick_tests {
 }
 
 #[async_trait(?Send)]
-impl<AC, MS, P> Runtime for ReconfSemiSyncRuntime<AC, MS, P>
+impl<AC, MS> Runtime for ReconfSemiSyncRuntime<AC, MS>
 where
     AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
     AC::Expr: DependencyGraphExpr + PartialEq + Debug,
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
-    P: SpecParser<AC::Spec>,
 {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         // TODO: Refactor inner loop to function

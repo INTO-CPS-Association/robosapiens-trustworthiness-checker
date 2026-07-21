@@ -4,6 +4,7 @@ use std::rc::Rc;
 use async_stream::stream;
 use smol::LocalExecutor;
 use tracing::{debug_span, warn};
+use winnow::Parser;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::InputAggregation;
@@ -307,11 +308,18 @@ impl InputStreamFactory {
         let _open = debug_span!("open input stream").entered();
         let stream = match &self.kind {
             InputFactoryKind::File { path } => {
-                let data = tc::parse_file(tc::lang::untimed_input::untimed_input_file, path)
-                    .await
-                    .map_err(|error| {
-                        anyhow::anyhow!(error).context("Input file could not be parsed")
-                    })?;
+                let data = tc::parse_file(
+                    |contents| {
+                        tc::lang::untimed_input::untimed_input_file
+                            .parse(contents)
+                            .map_err(|error| error.to_string())
+                    },
+                    path,
+                )
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(error).context("Input file could not be parsed")
+                })?;
                 tc::io::file::input_stream(data, input_vars)
             }
             InputFactoryKind::Ros {
@@ -442,7 +450,7 @@ impl InputStreamFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::dsrv::parser::dsrv_specification;
+    use crate::lang::dsrv::parser::parse_str;
     use crate::{Value, VarName, async_test, dsrv_fixtures::spec_simple_add_monitor};
     use futures::StreamExt;
     use macro_rules_attribute::apply;
@@ -492,7 +500,7 @@ mod tests {
         // the provided channel.
         // (Notice that we are transmitting through the opened manual input stream even though we do not
         // call `sender_channel` directly.)
-        let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let model = parse_str(spec_simple_add_monitor()).unwrap();
 
         let (tx_x, fx) = Fanout::new();
         let (tx_y, fy) = Fanout::new();
@@ -551,7 +559,7 @@ mod tests {
     async fn test_manual_input_factory_multi_conc(ex: Rc<LocalExecutor<'static>>) {
         // Tests that two manual input streams opened from cloned factories can each
         // receive values through the same user channel.
-        let model = dsrv_specification(&mut spec_simple_add_monitor()).unwrap();
+        let model = parse_str(spec_simple_add_monitor()).unwrap();
 
         let (tx_x, fx) = Fanout::new();
         let (tx_y, fy) = Fanout::new();
@@ -594,7 +602,7 @@ mod tests {
     async fn test_manual_input_factory_sequential_rebuild(ex: Rc<LocalExecutor<'static>>) {
         // Tests that after dropping one stream, a new stream opened from a
         // clone still receives values through the same user channel.
-        let model = dsrv_specification(&mut "in x\nout z\nz = x").unwrap();
+        let model = parse_str("in x\nout z\nz = x").unwrap();
 
         let (tx_x, fx) = Fanout::new();
         let (_tx_y, fy) = Fanout::new();
