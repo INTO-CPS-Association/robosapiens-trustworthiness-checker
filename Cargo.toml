@@ -130,9 +130,9 @@ harness = false
 name = "dataflow_semantics"
 harness = false
 
-# [[bench]]
-# name = "maple_sequence"
-# harness = false
+[[bench]]
+name = "maple_sequence"
+harness = false
 
 [[bench]]
 name = "dup_defer"
