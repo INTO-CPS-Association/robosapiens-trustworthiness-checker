@@ -2,9 +2,9 @@ name: Rust only workflow
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -56,6 +56,13 @@ jobs:
             cargo bench --profile bench-fast --package "$package" --bench "$benchmark" -- --output-format bencher 2>&1 |
               tee -a benchmark-output.txt
           done < benchmark-targets.tsv
+
+      - name: Validate benchmark history
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git fetch origin benchmark-data
+          git show FETCH_HEAD:benchmarks/data.js > /tmp/benchmark-data.js
+          python scripts/validate_benchmark_data.py /tmp/benchmark-data.js
 
       - name: Update benchmark history
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -10,8 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 ENTRY_NAME = "RoboSAPIENS Criterion benchmarks"
+SCRIPT_PREFIX = "window.BENCHMARK_DATA = "
 
 
 def git(*args: str) -> str:
@@ -27,7 +27,15 @@ def commit_metadata(sha: str, repository_url: str) -> tuple[dict[str, Any], int]
         "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%cI%x00%B",
         sha,
     ).split("\0", 6)
-    commit_sha, author_name, author_email, committer_name, committer_email, timestamp, message = fields
+    (
+        commit_sha,
+        author_name,
+        author_email,
+        committer_name,
+        committer_email,
+        timestamp,
+        message,
+    ) = fields
     date = int(datetime.fromisoformat(timestamp).timestamp() * 1000)
     return (
         {
@@ -72,11 +80,21 @@ def migrate(reports_root: Path, repository_url: str) -> dict[str, Any]:
         if not benches:
             continue
         commit, date = commit_metadata(sha, repository_url)
-        entries.append({"commit": commit, "date": date, "tool": "cargo", "benches": benches})
+        entries.append(
+            {"commit": commit, "date": date, "tool": "cargo", "benches": benches}
+        )
 
     entries.sort(key=lambda entry: (entry["date"], entry["commit"]["id"]))
     last_update = max((entry["date"] for entry in entries), default=0)
-    return {"lastUpdate": last_update, "entries": {ENTRY_NAME: entries}}
+    return {
+        "lastUpdate": last_update,
+        "repoUrl": repository_url.rstrip("/"),
+        "entries": {ENTRY_NAME: entries},
+    }
+
+
+def serialize(data: dict[str, Any]) -> str:
+    return SCRIPT_PREFIX + json.dumps(data, indent=2) + "\n"
 
 
 def main() -> None:
@@ -93,9 +111,7 @@ def main() -> None:
 
     data = migrate(args.reports_root, args.repository_url)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        "window.BENCHMARK_DATA = " + json.dumps(data, indent=2) + ";\n"
-    )
+    args.output.write_text(serialize(data))
     count = len(data["entries"][ENTRY_NAME])
     print(f"Wrote {count} historical runs to {args.output}")
 
