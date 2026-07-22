@@ -18,7 +18,17 @@
       </nav>
     </header>
     <div id="metadata" class="metadata" aria-live="polite"></div>
-    <p class="dashboard-hint">Hover for exact values; click a point or bar to open its commit.</p>
+    <div class="dashboard-controls">
+      <p class="dashboard-hint">Hover for exact values; click a point to open its commit.</p>
+      <details id="view-options" class="view-options" hidden>
+        <summary>View options</summary>
+        <label>
+          <input id="include-superseded" type="checkbox">
+          Include superseded benchmark epochs
+        </label>
+        <p>Superseded runtime measurements remain available but are excluded by default because they are not directly comparable with the current implementation.</p>
+      </details>
+    </div>
     <main id="charts" class="charts"></main>
     <p id="empty-state" class="empty-state" hidden>No matching benchmark history was found.</p>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>

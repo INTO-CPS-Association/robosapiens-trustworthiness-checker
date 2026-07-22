@@ -110,7 +110,7 @@ const IMPORTANT_SECTIONS = [
         fullWidth: true,
         title: "Typed compilation pipeline — 1,024 assignments",
         description:
-          "Stacked staged compilation time. The total explicitly runs parsing, type checking, dependency graph construction and dataflow compilation; the remaining compilation segment is derived after subtracting the preceding phases.",
+          "Stacked area showing staged compilation time over benchmark history. The total explicitly runs parsing, type checking, dependency graph construction and dataflow compilation; the remaining compilation segment is derived after subtracting the preceding phases.",
         phases: [
           {
             label: "LALR parsing",
@@ -184,13 +184,23 @@ const IMPORTANT_SECTIONS = [
 ];
 
 const COLORS = ["#0969da", "#cf222e", "#1a7f37", "#8250df"];
+const AREA_COLORS = [
+  "rgba(9, 105, 218, 0.45)",
+  "rgba(207, 34, 46, 0.45)",
+  "rgba(26, 127, 55, 0.45)",
+  "rgba(130, 80, 223, 0.45)",
+];
 const TIME_FACTORS = { ns: 1, us: 1e3, "µs": 1e3, ms: 1e6, s: 1e9 };
+// First comparable post-redesign benchmark run, at commit 867f298ac7.
+const CURRENT_ASYNC_EPOCH_START = Date.parse("2026-07-07T11:02:02Z");
 const chartsElement = document.getElementById("charts");
 const emptyState = document.getElementById("empty-state");
 const metadataElement = document.getElementById("metadata");
 const page = document.documentElement.dataset.page;
 const benchmarkData = window.BENCHMARK_DATA;
 const chartInstances = [];
+const query = new URLSearchParams(window.location.search);
+let includeSuperseded = query.get("include-superseded") === "true";
 
 function benchmarkRuns() {
   return Object.values(benchmarkData.entries).flat();
@@ -220,8 +230,75 @@ function readableDuration(nanoseconds) {
 }
 
 function dateAndCommit(run) {
-  const date = new Date(run.date).toISOString().slice(0, 10);
-  return `${date} · ${run.commit.id.slice(0, 8)}`;
+  const date = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(new Date(run.date));
+  return `${date} UTC · ${run.commit.id.slice(0, 8)}`;
+}
+
+function isAsyncRuntimeBenchmark(name) {
+  return (
+    name.includes("_async/") ||
+    /^dyn_paper\/dyn_paper_(?:0|25|50|75|100)\//.test(name)
+  );
+}
+
+function isSupersededMeasurement(run, name) {
+  return isAsyncRuntimeBenchmark(name) && run.date < CURRENT_ASYNC_EPOCH_START;
+}
+
+function benchmarkValue(run, name) {
+  const benchmark = benchmarkFor(run, name);
+  if (!benchmark || (!includeSuperseded && isSupersededMeasurement(run, name))) return null;
+  return valueInNanoseconds(benchmark);
+}
+
+function axisDate(run, includeDay) {
+  return new Intl.DateTimeFormat(undefined, {
+    day: includeDay ? "numeric" : undefined,
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(run.date));
+}
+
+function selectedTickIndices(runs, limit = 8) {
+  if (runs.length <= limit) return new Set(runs.map((_run, index) => index));
+
+  const monthBoundaries = [0];
+  let previousMonth = "";
+  runs.forEach((run, index) => {
+    const date = new Date(run.date);
+    const month = `${date.getUTCFullYear()}-${date.getUTCMonth()}`;
+    if (index > 0 && month !== previousMonth) monthBoundaries.push(index);
+    previousMonth = month;
+  });
+  monthBoundaries.push(runs.length - 1);
+
+  const candidates = [...new Set(monthBoundaries)];
+  if (candidates.length <= limit) return new Set(candidates);
+
+  return new Set(
+    Array.from({ length: limit }, (_unused, index) =>
+      candidates[Math.round((index * (candidates.length - 1)) / (limit - 1))],
+    ),
+  );
+}
+
+function xAxisOptions(runs) {
+  const visibleTicks = selectedTickIndices(runs);
+  return {
+    gridLines: { drawOnChartArea: false },
+    ticks: {
+      autoSkip: false,
+      callback: (_value, index) =>
+        visibleTicks.has(index) ? axisDate(runs[index], index === 0 || index === runs.length - 1) : "",
+      maxRotation: 0,
+      minRotation: 0,
+    },
+  };
 }
 
 function cardSources(cardDefinition) {
@@ -324,8 +401,7 @@ function renderLineCard(cardDefinition, runs, availableNames) {
         datasets: series.map(({ label, name }, index) => ({
           label,
           data: relevantRuns.map((run) => {
-            const benchmark = benchmarkFor(run, name);
-            return benchmark ? valueInNanoseconds(benchmark) : null;
+            return benchmarkValue(run, name);
           }),
           backgroundColor: "transparent",
           borderColor: COLORS[index % COLORS.length],
@@ -344,7 +420,7 @@ function renderLineCard(cardDefinition, runs, availableNames) {
         hover: interaction.hover,
         onClick: interaction.onClick,
         scales: {
-          xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 8, maxRotation: 0 } }],
+          xAxes: [xAxisOptions(relevantRuns)],
           yAxes: [
             {
               scaleLabel: { display: true, labelString: "Time per iteration" },
@@ -379,21 +455,47 @@ function renderStackedPipeline(cardDefinition, runs) {
   const datasets = cardDefinition.phases.map(({ label }, index) => ({
     label,
     data: phaseValues[index],
-    backgroundColor: COLORS[index % COLORS.length],
+    backgroundColor: AREA_COLORS[index % AREA_COLORS.length],
     borderColor: COLORS[index % COLORS.length],
-    borderWidth: 1,
+    borderWidth: 1.5,
+    fill: true,
+    lineTension: 0,
+    pointHitRadius: 8,
+    pointHoverRadius: 4,
+    pointRadius: relevantRuns.length <= 20 ? 2 : 0,
+    spanGaps: false,
   }));
   datasets.push({
     label: "Remaining dataflow compilation (derived)",
     data: remainingValues,
-    backgroundColor: COLORS[cardDefinition.phases.length % COLORS.length],
+    backgroundColor: AREA_COLORS[cardDefinition.phases.length % AREA_COLORS.length],
     borderColor: COLORS[cardDefinition.phases.length % COLORS.length],
-    borderWidth: 1,
+    borderWidth: 2,
+    fill: true,
+    lineTension: 0,
+    pointHitRadius: 8,
+    pointHoverRadius: 4,
+    pointRadius: relevantRuns.length <= 20 ? 2 : 0,
+    spanGaps: false,
   });
+
+  interaction.tooltips.callbacks.label = (item, data) => {
+    const value = Number(item.yLabel);
+    const total = valueInNanoseconds(
+      benchmarkFor(relevantRuns[item.index], cardDefinition.total.name),
+    );
+    const percentage = total > 0 ? ` (${((value / total) * 100).toFixed(1)}%)` : "";
+    return `${data.datasets[item.datasetIndex].label}: ${readableDuration(value)}${percentage}`;
+  };
+  interaction.tooltips.callbacks.afterBody = (items) => {
+    const run = relevantRuns[items[0].index];
+    const total = valueInNanoseconds(benchmarkFor(run, cardDefinition.total.name));
+    return [`Complete typed pipeline: ${readableDuration(total)}`, run.commit.message.split("\n")[0]];
+  };
 
   chartInstances.push(
     new Chart(canvas.getContext("2d"), {
-      type: "bar",
+      type: "line",
       data: {
         labels: relevantRuns.map(dateAndCommit),
         datasets,
@@ -404,12 +506,7 @@ function renderStackedPipeline(cardDefinition, runs) {
         hover: interaction.hover,
         onClick: interaction.onClick,
         scales: {
-          xAxes: [
-            {
-              stacked: true,
-              ticks: { autoSkip: true, maxTicksLimit: 8, maxRotation: 0 },
-            },
-          ],
+          xAxes: [xAxisOptions(relevantRuns)],
           yAxes: [
             {
               stacked: true,
@@ -475,19 +572,42 @@ if (!benchmarkData || !benchmarkData.entries) {
   const latest = new Date(benchmarkData.lastUpdate);
   metadataElement.textContent = `${runs.length} recorded runs · ${availableNames.length} benchmarks · updated ${latest.toLocaleString()}`;
 
-  if (page === "important") {
-    renderImportant(runs, available);
-  } else {
-    const filter = document.getElementById("benchmark-filter");
-    const applyFilter = () => {
-      const query = filter.value.trim().toLowerCase();
+  const viewOptions = document.getElementById("view-options");
+  const supersededToggle = document.getElementById("include-superseded");
+  const hasSupersededMeasurements = runs.some((run) =>
+    run.benches.some((benchmark) => isSupersededMeasurement(run, benchmark.name)),
+  );
+  viewOptions.hidden = !hasSupersededMeasurements;
+  supersededToggle.checked = includeSuperseded;
+
+  const rerender = () => {
+    if (page === "important") {
+      renderImportant(runs, available);
+    } else {
+      const filter = document.getElementById("benchmark-filter");
+      const filterQuery = filter.value.trim().toLowerCase();
       renderAll(
-        query ? availableNames.filter((name) => name.toLowerCase().includes(query)) : availableNames,
+        filterQuery
+          ? availableNames.filter((name) => name.toLowerCase().includes(filterQuery))
+          : availableNames,
         runs,
         available,
       );
-    };
-    filter.addEventListener("input", applyFilter);
-    applyFilter();
+    }
+  };
+
+  supersededToggle.addEventListener("change", () => {
+    includeSuperseded = supersededToggle.checked;
+    if (includeSuperseded) query.set("include-superseded", "true");
+    else query.delete("include-superseded");
+    const queryString = query.toString();
+    const nextUrl = `${window.location.pathname}${queryString ? `?${queryString}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", nextUrl);
+    rerender();
+  });
+
+  if (page !== "important") {
+    document.getElementById("benchmark-filter").addEventListener("input", rerender);
   }
+  rerender();
 }

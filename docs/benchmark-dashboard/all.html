@@ -18,7 +18,17 @@
       </nav>
     </header>
     <div id="metadata" class="metadata" aria-live="polite"></div>
-    <p class="dashboard-hint">Hover for exact values; click a point to open its commit.</p>
+    <div class="dashboard-controls">
+      <p class="dashboard-hint">Hover for exact values; click a point to open its commit.</p>
+      <details id="view-options" class="view-options" hidden>
+        <summary>View options</summary>
+        <label>
+          <input id="include-superseded" type="checkbox">
+          Include superseded benchmark epochs
+        </label>
+        <p>Superseded runtime measurements remain available but are excluded by default because they are not directly comparable with the current implementation.</p>
+      </details>
+    </div>
     <label class="search">
       <span>Filter benchmarks</span>
       <input id="benchmark-filter" type="search" placeholder="e.g. dataflow, threshold, dynamic" autocomplete="off">
